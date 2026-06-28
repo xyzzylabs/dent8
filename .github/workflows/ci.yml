@@ -23,6 +23,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       # The Postgres adapter is feature-gated; compile-check + lint it too.
       - run: cargo clippy -p dent8-store-postgres --features adapter --all-targets -- -D warnings
+      # The CLI's Postgres backend is feature-gated; compile-check + lint it too.
+      - run: cargo clippy -p dent8-cli --features postgres --all-targets -- -D warnings
       # The asymmetric (signed) anchor is feature-gated; lint + test it too.
       - run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
       - run: cargo test --workspace
