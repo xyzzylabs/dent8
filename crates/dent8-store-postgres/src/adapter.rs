@@ -699,6 +699,79 @@ mod tests {
         assert!(matches!(dup, Err(StoreError::Conflict(_))));
     }
 
+    /// An `Asserted` event on a distinct subject, so N of them are all independently
+    /// admissible (no per-predicate uniqueness conflict between them).
+    fn assert_on_subject(
+        event_id: &str,
+        claim_id: &str,
+        subject_key: &str,
+        source: &str,
+        authority: AuthorityLevel,
+    ) -> ClaimEvent {
+        let mut event = assert_event(event_id, claim_id, "v", source, authority);
+        event.subject = EntityRef::new("repo", subject_key).expect("subject");
+        event
+    }
+
+    /// Genuinely concurrent appends (each its own transaction on the shared pool) must
+    /// serialize into ONE consistent global hash chain: the transaction-scoped advisory lock
+    /// makes the chain-head read-modify-write atomic, so the assigned `global_sequence`s are a
+    /// gap-free, duplicate-free `1..=N`, the whole chain verifies, and every claim's
+    /// projection equals the fold of its log. This is the adapter's multi-writer guarantee
+    /// (the CLI's snapshot-minted `event:{n}` ids are a separate, documented single-writer
+    /// caveat — here every event id is distinct, the case the adapter must handle cleanly).
+    #[tokio::test]
+    async fn concurrent_appends_keep_one_consistent_global_chain() {
+        const N: usize = 12;
+        let Some(_) = database_url() else {
+            eprintln!("skipping: DATABASE_URL unset");
+            return;
+        };
+        let (_guard, store) = fresh_store().await;
+
+        let mut handles = Vec::with_capacity(N);
+        for i in 0..N {
+            let store = store.clone();
+            handles.push(tokio::spawn(async move {
+                store
+                    .append(assert_on_subject(
+                        &format!("e{i}"),
+                        &format!("claim:{i}"),
+                        &format!("proj{i}"),
+                        "source:owner",
+                        AuthorityLevel::High,
+                    ))
+                    .await
+            }));
+        }
+
+        let mut sequences = Vec::with_capacity(N);
+        for handle in handles {
+            let receipt = handle
+                .await
+                .expect("task joined")
+                .expect("each append admitted");
+            sequences.push(receipt.global_sequence);
+        }
+
+        // No gaps, no duplicates — the advisory lock serialized the chain head.
+        sequences.sort_unstable();
+        assert_eq!(sequences, (1..=N as u64).collect::<Vec<_>>());
+        // The single global chain verifies end-to-end under the concurrent interleaving.
+        assert!(store.verify_chain().await.expect("verify chain"));
+        // And every claim's materialized projection still equals the fold of its log.
+        for i in 0..N {
+            let claim = ClaimId::new(format!("claim:{i}")).unwrap();
+            assert!(
+                store
+                    .verify_projection(&claim)
+                    .await
+                    .expect("verify projection"),
+                "projection != fold for claim:{i}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn materialization_tracks_projection_and_edges() {
         let Some(_) = database_url() else {

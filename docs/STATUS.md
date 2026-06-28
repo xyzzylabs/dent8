@@ -208,12 +208,15 @@ subject+predicate.
   file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
   build (selected in `load_store`/`append_events`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
-  as the file path) — verified end-to-end against live Postgres. **v0 concurrency caveat:**
-  the Postgres path mints event/claim ids optimistically from a snapshot, so two writers
-  racing one DB are safely serialized and conflict-rejected (no corruption) but one may get a
-  *retryable* write conflict — treat it as effectively single-writer until DB-assigned ids
-  land (hardening). Authz (source→authority ceilings) is built (`dent8 authority`, above); the
-  remaining product gap is cryptographic caller identity and the witness service.
+  as the file path) — verified end-to-end against live Postgres. **Concurrency:** the *adapter*
+  is **tested** multi-writer-safe — a DB-gated test fires 12 genuinely concurrent appends and
+  asserts they serialize (via a transaction-scoped advisory lock) into one gap-free,
+  duplicate-free global chain that verifies, with every projection still `== fold(log)`. The
+  remaining **v0 caveat is CLI-level**: the CLI mints `event:{n}` ids from a snapshot count, so
+  two CLI *processes* racing one DB can pick the same id — safely caught as a *retryable* write
+  conflict (no corruption), but it means the CLI is effectively single-writer until snapshot-
+  independent ids land. Authz (source→authority ceilings) is built (`dent8 authority`, above);
+  the remaining product gap is cryptographic caller identity and the witness service.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
   tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
