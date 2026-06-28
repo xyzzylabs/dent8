@@ -4,6 +4,8 @@
 facts from silently overriding trusted state, and can replay exactly *why* an agent
 believed something.
 
+![dent8 demo: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt.](demo.gif)
+
 See it run: **`cargo run -p dent8-cli -- demo`** — a high-authority fact is asserted, a
 low-authority source is rejected when it tries to override it, and an integrity receipt
 explains the result with a verified hash chain.
