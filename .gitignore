@@ -1,0 +1,15 @@
+/target/
+
+# Local runtime configuration.
+.env
+.env.*
+!.env.example
+
+# The CLI's default file-backed event log (DENT8_LOG).
+/dent8-log.jsonl
+dent8-log.jsonl
+
+# Editor and OS noise.
+.DS_Store
+*.swp
+

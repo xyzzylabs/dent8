@@ -1,0 +1,36 @@
+[package]
+name = "dent8-core"
+description = "Core claim-event model and invariants for dent8."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "dent8_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip`: parse f64 to the shortest round-tripping form so canonicalization is
+# idempotent for floats. Without it `to_string(from_str(x)) != x` for ~10% of f64 values,
+# which would make `CanonicalJson`'s re-canonicalizing deserialize change a legitimately
+# written value on reload — a false hash-chain tamper alarm. See ADR 0004 item 6.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+sha2 = "0.10"
+hex = "0.4"
+# Asymmetric (publicly-verifiable) tree-head signatures — opt-in so the default build and
+# the CLI keep the symmetric HMAC anchor without pulling a signature stack.
+ed25519-dalek = { version = "2", optional = true }
+
+[features]
+signed-anchor = ["dep:ed25519-dalek"]
+
+[dev-dependencies]
+proptest = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[lints]
+workspace = true
+

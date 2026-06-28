@@ -1,0 +1,22 @@
+[package]
+name = "dent8-store"
+description = "Storage and replay boundaries for dent8 claim events."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "dent8_store"
+path = "src/lib.rs"
+
+[dependencies]
+dent8-core = { path = "../dent8-core" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
+

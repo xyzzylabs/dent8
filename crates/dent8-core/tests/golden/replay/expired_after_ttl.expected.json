@@ -1,0 +1,9 @@
+{
+  "chain_head": "b058d2232d6562b601f7d1315d5e4828f873db68a3490630c9a6661cc20f4aac",
+  "lifecycle": "Expired",
+  "value": "text:feature-x",
+  "authority": "Medium",
+  "superseded_by": null,
+  "contradicted_by": [],
+  "corroboration": 1
+}

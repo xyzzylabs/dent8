@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      # The workspace is kept clippy-clean; treat any warning as an error in CI.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The Postgres adapter is feature-gated; compile-check + lint it too.
+      - run: cargo clippy -p dent8-store-postgres --features adapter --all-targets -- -D warnings
+      # The asymmetric (signed) anchor is feature-gated; lint + test it too.
+      - run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo test -p dent8-core --features signed-anchor
+
+  postgres:
+    name: M2b adapter (live Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: dent8
+          POSTGRES_DB: dent8
+        ports:
+          - 5432:5432
+        # Gate the job on the DB actually accepting connections.
+        options: >-
+          --health-cmd "pg_isready -U postgres -d dent8"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      # The adapter's integration tests run only when DATABASE_URL is set (they skip
+      # otherwise — see crates/dent8-store-postgres/src/adapter.rs).
+      DATABASE_URL: postgres://postgres:dent8@localhost:5432/dent8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The integration tests share one database; they self-serialize (a process-static
+      # mutex) and retry the initial connection, so no special flags are needed.
+      - run: cargo test -p dent8-store-postgres --features adapter

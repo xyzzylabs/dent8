@@ -1,0 +1,26 @@
+# Local Postgres for the dent8 v0 adapter (M2b). A throwaway, stock `postgres:16` —
+# dent8 needs no extensions (no pgvector, no graph engine); the adapter's `migrate()`
+# creates the one `dent8_event_log` table itself, so there are no init scripts.
+#
+#   docker compose up -d
+#   DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \
+#     cargo test -p dent8-store-postgres --features adapter
+#   docker compose down
+#
+# The adapter's integration tests TRUNCATE on each run, so no volume is attached: the
+# container is disposable and `down` leaves nothing behind. Add a named volume under the
+# service if you want a persistent local dev database instead.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dent8
+      POSTGRES_DB: dent8
+    ports:
+      - "5432:5432"
+    healthcheck:
+      # Don't let the test race the server's startup — wait until it accepts connections.
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dent8"]
+      interval: 2s
+      timeout: 5s
+      retries: 15

@@ -1,0 +1,1474 @@
+use dent8_core::{
+    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
+    ClaimLifecycle, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId,
+    EvidenceKind, Predicate, Provenance, RetractionReason, SupersessionReason, TimestampMillis,
+    Ttl,
+};
+use dent8_store::{
+    AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt, LineageIssue,
+    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_entity,
+};
+use dent8_store_postgres::INITIAL_SCHEMA_SQL;
+
+mod mcp;
+
+fn main() {
+    let code = run(std::env::args().skip(1));
+    std::process::exit(code);
+}
+
+fn run(args: impl IntoIterator<Item = String>) -> i32 {
+    let args = args.into_iter().collect::<Vec<_>>();
+    match args.as_slice() {
+        [] => {
+            print_help();
+            0
+        }
+        [arg] if arg == "--help" || arg == "-h" => {
+            print_help();
+            0
+        }
+        [command] if command == "--version" || command == "-V" => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            0
+        }
+        [command, backend] if command == "schema" && backend == "postgres" => {
+            print!("{INITIAL_SCHEMA_SQL}");
+            0
+        }
+        [command] if command == "demo" => {
+            demo();
+            0
+        }
+        [command, kind, key, predicate, value, authority, source] if command == "assert" => {
+            cmd_assert(kind, key, predicate, value, authority, source)
+        }
+        [command, kind, key, predicate, value, authority, source] if command == "supersede" => {
+            cmd_supersede(kind, key, predicate, value, authority, source)
+        }
+        [command, kind, key, predicate, authority, source] if command == "retract" => {
+            cmd_retract(kind, key, predicate, authority, source)
+        }
+        [command, kind, key, predicate, value, authority, source] if command == "contradict" => {
+            cmd_contradict(kind, key, predicate, value, authority, source)
+        }
+        [command, kind, key, predicate] if command == "explain" => {
+            cmd_explain(kind, key, predicate)
+        }
+        [command, kind, key, predicate] if command == "replay" => cmd_replay(kind, key, predicate),
+        [command] if command == "assert" => {
+            eprintln!(
+                "usage: dent8 assert <subject-kind> <subject-key> <predicate> <value> \
+                 <authority> <source>\n  e.g.  dent8 assert repo myproj database postgres high owner"
+            );
+            2
+        }
+        [command] if command == "supersede" => {
+            eprintln!(
+                "usage: dent8 supersede <subject-kind> <subject-key> <predicate> <new-value> \
+                 <authority> <source>\n  e.g.  dent8 supersede repo myproj database mysql high owner"
+            );
+            2
+        }
+        [command] if command == "retract" => {
+            eprintln!(
+                "usage: dent8 retract <subject-kind> <subject-key> <predicate> <authority> \
+                 <source>\n  e.g.  dent8 retract repo myproj database high owner"
+            );
+            2
+        }
+        [command] if command == "contradict" => {
+            eprintln!(
+                "usage: dent8 contradict <subject-kind> <subject-key> <predicate> <opposing-value> \
+                 <authority> <source>\n  e.g.  dent8 contradict repo myproj database mysql low scanner"
+            );
+            2
+        }
+        [command] if command == "explain" => {
+            eprintln!("usage: dent8 explain <subject-kind> <subject-key> <predicate>");
+            2
+        }
+        [command] if command == "replay" => {
+            eprintln!("usage: dent8 replay <subject-kind> <subject-key> <predicate>");
+            2
+        }
+        [command, subcommand] if command == "mcp" && subcommand == "serve" => mcp::serve(),
+        _ => {
+            print_help();
+            2
+        }
+    }
+}
+
+fn print_help() {
+    println!(
+        "\
+dent8 - a memory firewall for coding agents
+
+Usage:
+  dent8 demo              run the firewall + replay/explain loop (in-memory)
+  dent8 assert <kind> <key> <predicate> <value> <authority> <source>
+                          assert a fact through the firewall, persisted to the log
+  dent8 supersede <kind> <key> <predicate> <new-value> <authority> <source>
+                          revise the believed fact (rejected if it can't out-rank it)
+  dent8 retract <kind> <key> <predicate> <authority> <source>
+                          remove the believed fact (rejected if it can't out-rank it)
+  dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>
+                          flag a conflict (dissent): contest the fact, keep both
+  dent8 explain <kind> <key> <predicate>
+                          explain the believed fact, with an integrity receipt
+  dent8 replay <kind> <key> <predicate>
+                          replay the full event history (why the fact is what it is)
+  dent8 schema postgres   print the Postgres schema
+  dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
+
+`assert`/`explain` persist to a JSON-lines log (DENT8_LOG, default ./dent8-log.jsonl)
+and compose across invocations. authority is one of: low | medium | high | canonical.
+The operational, transactional backend is Postgres (M2b). See docs/STATUS.md."
+    );
+}
+
+/// A runnable, self-contained demonstration of the firewall + replay/explain loop,
+/// driven by the coding-agent predicate policy registry: a high-authority project fact
+/// is asserted; a low-authority source is rejected by the predicate's authority floor; a
+/// competing claim is rejected by uniqueness; and a `branch.status` fact goes stale on
+/// its registered default TTL.
+fn demo() {
+    let registry = PredicateRegistry::coding_agent();
+    let mut store = InMemoryEventStore::new();
+    let now = TimestampMillis::from_unix_millis(4_000_000);
+
+    println!("dent8 firewall demo — coding-agent policy registry (in-memory backend)\n");
+
+    // [1] A trusted, high-authority project fact. repo.database requires High authority.
+    match admit(
+        &mut store,
+        &registry,
+        assert_event(
+            "event:1",
+            "claim:database",
+            "repo",
+            "myproj",
+            "database",
+            "postgres",
+            "source:owner",
+            AuthorityLevel::High,
+        ),
+        now,
+    ) {
+        Ok(receipt) => println!(
+            "[1] assert    repo:myproj database = \"postgres\"  (authority=High, source=owner)\n    \
+             -> ACCEPTED  seq={}  hash={}",
+            receipt.global_sequence,
+            short(&receipt.event_hash),
+        ),
+        Err(error) => println!("[1] unexpected rejection: {error}"),
+    }
+
+    // [2] A low-authority source cannot even register the fact: repo.database's policy
+    // floor is High, so the assertion is rejected before it reaches the log.
+    match admit(
+        &mut store,
+        &registry,
+        assert_event(
+            "event:2",
+            "claim:attacker",
+            "repo",
+            "myproj",
+            "database",
+            "mysql",
+            "source:web-scrape",
+            AuthorityLevel::Low,
+        ),
+        now,
+    ) {
+        Ok(_) => println!("\n[2] low-authority assert unexpectedly ACCEPTED (bug)"),
+        Err(error) => println!(
+            "\n[2] assert    repo:myproj database = \"mysql\"     (authority=Low, source=web-scrape)\n    \
+             -> REJECTED: {error}"
+        ),
+    }
+
+    // [3] The trusted fact is unchanged and explainable.
+    println!("\n[3] explain   repo:myproj database");
+    print_receipt(&store, "claim:database", now);
+
+    // [4] Freshness comes from the predicate's policy: branch.status carries a default
+    // TTL, so a CI status goes stale on its own (no explicit TTL set on the assertion).
+    let _ = admit(
+        &mut store,
+        &registry,
+        assert_event(
+            "event:3",
+            "claim:branch",
+            "branch",
+            "main",
+            "status",
+            "ci-green",
+            "source:ci",
+            AuthorityLevel::Low,
+        ),
+        now,
+    );
+    println!(
+        "\n[4] assert    branch:main status = \"ci-green\"   (branch.status default TTL applied)\n    \
+         explain as-of now=4_000_000 (past the 1h TTL)"
+    );
+    print_receipt(&store, "claim:branch", now);
+
+    // [5] Uniqueness: even a high-authority *competing* assertion is rejected — there may
+    // be only one believed repo.database. Revise it with a supersession, don't duplicate.
+    match admit(
+        &mut store,
+        &registry,
+        assert_event(
+            "event:4",
+            "claim:rival",
+            "repo",
+            "myproj",
+            "database",
+            "mariadb",
+            "source:owner",
+            AuthorityLevel::High,
+        ),
+        now,
+    ) {
+        Ok(_) => println!("\n[5] competing assert unexpectedly ACCEPTED (bug)"),
+        Err(error) => println!(
+            "\n[5] assert    repo:myproj database = \"mariadb\"   (authority=High, source=owner)\n    \
+             -> REJECTED: {error}"
+        ),
+    }
+
+    println!(
+        "\nEvery decision above came from a registered predicate policy: repo.database\n\
+         requires High authority and is unique; branch.status carries a default freshness.\n\
+         Trusted facts cannot be silently overridden or duplicated, and volatile facts expire."
+    );
+}
+
+/// The registry-aware write path used by the demo: apply the predicate's default TTL,
+/// enforce its policy (authority floor + uniqueness, freshness-aware as of `now`), then
+/// write through the firewall.
+fn admit(
+    store: &mut InMemoryEventStore,
+    registry: &PredicateRegistry,
+    mut event: ClaimEvent,
+    now: TimestampMillis,
+) -> Result<AppendReceipt, StoreError> {
+    apply_policy_defaults(registry, &mut event);
+    enforce_policy(registry, store, &event, now)?;
+    store.append(event)
+}
+
+fn print_receipt(store: &InMemoryEventStore, claim_id: &str, now: TimestampMillis) {
+    let claim = ClaimId::new(claim_id).expect("claim id");
+    match store.explain(&claim, now) {
+        Ok(Some(r)) => println!("{}", format_receipt(&r)),
+        Ok(None) => println!("    (no such claim)"),
+        Err(error) => println!("    replay failed: {error}"),
+    }
+}
+
+fn display_value(value: &ClaimValue) -> String {
+    match value {
+        ClaimValue::Text(text) => format!("\"{text}\""),
+        ClaimValue::Json(json) => format!("json:{}", json.as_str()),
+        ClaimValue::Redacted => "<redacted>".to_string(),
+    }
+}
+
+/// The read-time headline verdict for an explained fact: a terminal fact is no longer
+/// believed; a still-`Active` fact past its TTL is **stale** (threat-model T4) — an agent
+/// must not act on it as current. Fresh `Active` facts get no annotation. The receipt body
+/// (value, `expires_at`) is always shown for the audit trail.
+fn read_annotation(lifecycle: ClaimLifecycle, fresh: bool) -> String {
+    if lifecycle.is_terminal() {
+        format!("  [no longer believed — {lifecycle:?}]")
+    } else if !fresh {
+        "  [stale — TTL elapsed]".to_string()
+    } else {
+        String::new()
+    }
+}
+
+fn format_receipt(r: &IntegrityReceipt) -> String {
+    let value = display_value(&r.value);
+    let superseded = r
+        .superseded_by
+        .as_ref()
+        .map_or_else(|| "-".to_string(), ToString::to_string);
+    let expires_at = r
+        .expires_at
+        .map_or_else(|| "never".to_string(), |at| at.as_unix_millis().to_string());
+    format!(
+        "    value         : {value}\n    \
+         lifecycle     : {:?}\n    \
+         authority     : {:?}\n    \
+         fresh         : {}\n    \
+         expires_at    : {expires_at}\n    \
+         evidence      : {}\n    \
+         corroboration : {}\n    \
+         superseded_by : {superseded}\n    \
+         contradicted  : {}\n    \
+         replay pos    : {}\n    \
+         event_hash    : {}\n    \
+         chain verified: {}",
+        r.lifecycle,
+        r.authority,
+        r.fresh,
+        r.evidence_count,
+        r.corroboration,
+        r.contradicted_by.len(),
+        r.replay_position,
+        short(&r.event_hash),
+        r.chain_verified,
+    )
+}
+
+fn short(hash: &str) -> String {
+    format!("{}…", &hash[..hash.len().min(12)])
+}
+
+// ---- Persistent file-backed commands -------------------------------------------------
+//
+// `dent8 assert …` and `dent8 explain …` persist to a JSON-lines event log (one
+// serialized `ClaimEvent` per line) so commands compose across separate invocations.
+// Each invocation rehydrates the store via the trusted-reload path, runs the firewall +
+// registry on a new write, and appends the admitted event. This is a *local* dev store;
+// the operational, transactional backend is Postgres (M2b).
+
+const DEFAULT_LOG: &str = "dent8-log.jsonl";
+
+fn log_path() -> String {
+    std::env::var("DENT8_LOG").unwrap_or_else(|_| DEFAULT_LOG.to_string())
+}
+
+fn now_millis() -> TimestampMillis {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |delta| delta.as_millis());
+    TimestampMillis::from_unix_millis(i64::try_from(ms).unwrap_or(i64::MAX))
+}
+
+fn parse_authority(value: &str) -> Option<AuthorityLevel> {
+    match value.to_ascii_lowercase().as_str() {
+        "low" => Some(AuthorityLevel::Low),
+        "medium" => Some(AuthorityLevel::Medium),
+        "high" => Some(AuthorityLevel::High),
+        "canonical" => Some(AuthorityLevel::Canonical),
+        _ => None,
+    }
+}
+
+/// Rehydrate the durable log via the trusted-reload path (no re-arbitration of
+/// already-admitted events). A missing file is an empty log.
+///
+/// Because the trusted path performs no policy checks, this *also* re-validates the
+/// invariant the writer is supposed to maintain — at most one fresh believed claim per
+/// unique predicate — so a torn write or external edit that orphaned a believed claim is
+/// rejected loudly rather than silently masked by `explain`.
+fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("cannot read {path}: {error}")),
+    };
+    let mut events = Vec::new();
+    for (line_no, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event: ClaimEvent = serde_json::from_str(line)
+            .map_err(|error| format!("{path}:{}: corrupt event: {error}", line_no + 1))?;
+        events.push(event);
+    }
+    let store = InMemoryEventStore::from_trusted_events(events)
+        .map_err(|error| format!("cannot load {path}: {error}"))?;
+    validate_unique_log(&store, now_millis()).map_err(|error| format!("{path}: {error}"))?;
+    Ok(store)
+}
+
+/// The next event/claim sequence: one past the **highest** `event:{n}` id actually
+/// present, not the log line-count — so a lost or surgically-removed line cannot make a
+/// later command mint a colliding id (which would wedge the command and the reload).
+fn next_seq(store: &InMemoryEventStore) -> usize {
+    store.scan_events(&EventFilter::default()).map_or_else(
+        |_| store.len(),
+        |events| {
+            events
+                .iter()
+                .filter_map(|event| event.event_id.as_str().strip_prefix("event:"))
+                .filter_map(|n| n.parse::<usize>().ok())
+                .max()
+                .map_or(0, |max| max + 1)
+        },
+    )
+}
+
+/// Reject a log that already violates per-predicate uniqueness (more than one *fresh*
+/// believed claim for a `unique` predicate). A legitimate stale + fresh pair is allowed
+/// (only one is fresh); two fresh believed claims signal corruption (a torn write or an
+/// external edit), which the trusted-reload path would otherwise accept silently.
+fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Result<(), String> {
+    let registry = PredicateRegistry::coding_agent();
+    let all = store
+        .scan_events(&EventFilter::default())
+        .map_err(|error| error.to_string())?;
+    let mut seen = std::collections::HashSet::new();
+    for event in &all {
+        if !seen.insert(event.subject.clone()) {
+            continue;
+        }
+        let filter = EventFilter {
+            subject: Some(event.subject.clone()),
+            ..EventFilter::default()
+        };
+        let entity = replay_entity(&store.scan_events(&filter).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        // A supersession whose replacement is *missing* (dangling) or *cyclic* silently
+        // drops the fact — the symmetric corruption to a duplicated belief, which the
+        // >1-fresh check below never catches (0 fresh). Flag only those. NOT
+        // `SupersededByInvalidated`: a successor that was legitimately retracted or expired
+        // (e.g. assert -> supersede -> retract) is a valid history, not corruption.
+        if let Some(issue) = entity.lineage_issues().into_iter().find(|issue| {
+            matches!(
+                issue,
+                LineageIssue::DanglingSupersession { .. } | LineageIssue::SupersessionCycle { .. }
+            )
+        }) {
+            return Err(format!(
+                "corrupt log: {} entity has a broken supersession lineage ({issue:?}) \
+                 (possible external edit)",
+                event.subject.kind()
+            ));
+        }
+        let fresh: Vec<_> = entity
+            .believed()
+            .filter(|state| !state.is_expired_at(now))
+            .collect();
+        for state in &fresh {
+            let group: Vec<_> = fresh
+                .iter()
+                .filter(|other| other.predicate == state.predicate)
+                .collect();
+            if group.len() <= 1
+                || !registry
+                    .policy_for(&event.subject, &state.predicate)
+                    .is_some_and(|policy| policy.unique)
+            {
+                continue;
+            }
+            // A *surfaced* conflict (ADR 0009) is exactly the `Contested` claims plus the
+            // contradictors they name; everything in that set is audited. Any *other*
+            // believed claim is silent duplication — corruption a single contradiction must
+            // not launder. So account for the contested claims + their contradictors, and
+            // reject if any believed claim is left unaccounted-for.
+            let mut accounted: Vec<&ClaimId> = Vec::new();
+            for s in &group {
+                if s.lifecycle == ClaimLifecycle::Contested {
+                    accounted.push(&s.claim_id);
+                    accounted.extend(s.contradicted_by.iter());
+                }
+            }
+            let unaccounted = group
+                .iter()
+                .filter(|s| !accounted.contains(&&s.claim_id))
+                .count();
+            if unaccounted > 0 {
+                return Err(format!(
+                    "corrupt log: {}.{} has {unaccounted} fresh believed claim(s) not \
+                     explained by a contest for a unique predicate (possible torn write or \
+                     external edit)",
+                    event.subject.kind(),
+                    state.predicate.as_str(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Append admitted events to the durable log as JSON lines in a **single write** so a
+/// multi-event operation (e.g. a supersession's replacement + supersession events) lands
+/// all-or-nothing at the file boundary. This is best-effort file atomicity for the dev
+/// store; true transactional atomicity is the Postgres backend (M2b).
+fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), String> {
+    use std::io::Write;
+    let mut buffer = String::new();
+    for event in events {
+        let line = serde_json::to_string(event).map_err(|error| format!("serialize: {error}"))?;
+        buffer.push_str(&line);
+        buffer.push('\n');
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("cannot open {path}: {error}"))?;
+    file.write_all(buffer.as_bytes())
+        .map_err(|error| format!("cannot write {path}: {error}"))
+}
+
+/// Build a validated `ClaimEvent` from CLI strings, returning a friendly error rather than
+/// panicking on malformed input (unlike the demo's fixed-string builder). The `kind` and
+/// `value` distinguish an assertion from a supersession; `claim_id` is the *subject* claim
+/// of the event (the new claim for an assertion, the incumbent for a supersession).
+#[allow(clippy::too_many_arguments)]
+fn build_event(
+    event_id: &str,
+    claim_id: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    kind: ClaimEventKind,
+    value: Option<ClaimValue>,
+    source: &str,
+    authority: AuthorityLevel,
+    now: TimestampMillis,
+) -> Result<ClaimEvent, String> {
+    Ok(ClaimEvent {
+        event_id: ClaimEventId::new(event_id).map_err(|e| format!("event id: {e}"))?,
+        claim_id: ClaimId::new(claim_id).map_err(|e| format!("claim id: {e}"))?,
+        kind,
+        subject: EntityRef::new(subject_kind, subject_key).map_err(|e| format!("subject: {e}"))?,
+        predicate: Predicate::new(predicate).map_err(|e| format!("predicate: {e}"))?,
+        value,
+        confidence: Confidence::from_millis(900).map_err(|e| format!("confidence: {e}"))?,
+        authority: Authority {
+            level: authority,
+            issuer: None,
+            scope: None,
+        },
+        ttl: Ttl::Never,
+        provenance: Provenance {
+            source: dent8_core::SourceId::new(source).map_err(|e| format!("source: {e}"))?,
+            actor: ActorId::new("actor:cli").map_err(|e| format!("actor: {e}"))?,
+            tool: Some("dent8-cli".to_string()),
+            run_id: None,
+            input_digest: None,
+            recorded_at: now,
+        },
+        evidence: vec![Evidence {
+            id: EvidenceId::new("evidence:cli").map_err(|e| format!("evidence id: {e}"))?,
+            kind: EvidenceKind::UserStatement,
+            locator: format!("cli:{source}"),
+            digest: None,
+            summary: None,
+        }],
+        observed_at: None,
+        valid_from: None,
+    })
+}
+
+/// A failed operation: `Invalid` is a malformed request (CLI exit 2 / MCP tool error),
+/// `Rejected` is a well-formed request the firewall or store refused (CLI exit 1 / MCP
+/// tool error). Carrying the distinction lets the CLI keep its exit codes while the MCP
+/// server reports both as tool errors.
+enum OpError {
+    Invalid(String),
+    Rejected(String),
+}
+
+impl OpError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Invalid(message) | Self::Rejected(message) => message,
+        }
+    }
+}
+
+/// Assert a fact through the firewall + registry and persist it. The shared core behind
+/// both `dent8 assert` and the MCP `assert` tool — one firewall/persistence path.
+fn op_assert(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    value: &str,
+    authority: AuthorityLevel,
+    source: &str,
+) -> Result<String, OpError> {
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let now = now_millis();
+    // A fresh claim per assertion (keyed by sequence); the registry's uniqueness governs
+    // whether a second *fresh* claim for the same subject+predicate is admissible.
+    let seq = next_seq(&store);
+    let mut event = build_event(
+        &format!("event:{seq}"),
+        &format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}"),
+        subject_kind,
+        subject_key,
+        predicate,
+        ClaimEventKind::Asserted,
+        Some(ClaimValue::Text(value.to_string())),
+        source,
+        authority,
+        now,
+    )
+    .map_err(|error| OpError::Invalid(format!("invalid assertion: {error}")))?;
+    let registry = PredicateRegistry::coding_agent();
+    // Apply the predicate's default TTL up front so the event we *persist* is byte-identical
+    // to the one `admit` arbitrates and hashes (otherwise the durable event would carry
+    // `Ttl::Never` and a hash that disagrees with the receipt on reload).
+    apply_policy_defaults(&registry, &mut event);
+    let receipt = admit(&mut store, &registry, event.clone(), now)
+        .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    append_events(path, &[&event])
+        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    Ok(format!(
+        "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?})\n  \
+         seq={}  hash={}",
+        receipt.global_sequence,
+        short(&receipt.event_hash)
+    ))
+}
+
+fn cmd_assert(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    value: &str,
+    authority: &str,
+    source: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(op_assert(
+        &log_path(),
+        subject_kind,
+        subject_key,
+        predicate,
+        value,
+        authority_level,
+        source,
+    ))
+}
+
+/// Render an operation result for the CLI: success to stdout (exit 0), a malformed request
+/// to stderr (exit 2), a refused one to stderr (exit 1).
+fn present(outcome: Result<String, OpError>) -> i32 {
+    match outcome {
+        Ok(message) => {
+            println!("{message}");
+            0
+        }
+        Err(OpError::Invalid(message)) => {
+            eprintln!("{message}");
+            2
+        }
+        Err(OpError::Rejected(message)) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
+/// Build the events for a revision: one fresh replacement assertion (`event:{seq}`,
+/// appended first so the supersessions can resolve it) followed by **one supersession per
+/// believed incumbent** (`event:{seq+1+i}`), each pointing `by` at the replacement.
+/// Superseding *every* believed incumbent — not just one — is what makes the end state
+/// satisfy uniqueness, since the registry can leave a stale + fresh pair both believed.
+/// Returns `(events, replacement_claim_id)` with `events[0]` the replacement.
+#[allow(clippy::too_many_arguments)]
+fn build_revision(
+    seq: usize,
+    incumbents: &[ClaimId],
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    new_value: &str,
+    source: &str,
+    authority: AuthorityLevel,
+    now: TimestampMillis,
+) -> Result<(Vec<ClaimEvent>, String), String> {
+    let replacement_claim_id = format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}");
+    let replacement = build_event(
+        &format!("event:{seq}"),
+        &replacement_claim_id,
+        subject_kind,
+        subject_key,
+        predicate,
+        ClaimEventKind::Asserted,
+        Some(ClaimValue::Text(new_value.to_string())),
+        source,
+        authority,
+        now,
+    )?;
+    let mut events = vec![replacement];
+    for (index, incumbent) in incumbents.iter().enumerate() {
+        let by = ClaimId::new(&replacement_claim_id).map_err(|e| format!("claim id: {e}"))?;
+        events.push(build_event(
+            &format!("event:{}", seq + 1 + index),
+            incumbent.as_str(),
+            subject_kind,
+            subject_key,
+            predicate,
+            ClaimEventKind::Superseded {
+                by,
+                reason: SupersessionReason::UserCorrection,
+            },
+            None,
+            source,
+            authority,
+            now,
+        )?);
+    }
+    Ok((events, replacement_claim_id))
+}
+
+/// Revise the believed fact for a subject+predicate via the sanctioned supersession path:
+/// assert a *replacement* claim and mark **every** believed incumbent superseded by it,
+/// persisted as one best-effort single write (true transactional atomicity is Postgres,
+/// M2b). The base firewall's anti-laundering enforces that the replacement out-ranks each
+/// incumbent, so a lower-authority revision is rejected. Uniqueness holds in the end state
+/// because *all* believed incumbents become terminal — the replacement assertion goes
+/// through the base firewall directly (not the uniqueness-checking `admit` path) because
+/// the supersessions, not a pre-check, are what restore the invariant.
+fn op_supersede(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    new_value: &str,
+    authority: AuthorityLevel,
+    source: &str,
+) -> Result<String, OpError> {
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let subject = EntityRef::new(subject_kind, subject_key)
+        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+    let now = now_millis();
+
+    // Every believed incumbent must be superseded so the end state is unique.
+    let incumbents = match store
+        .believed_claim_ids(&subject, &predicate_parsed)
+        .map_err(|error| OpError::Invalid(error.to_string()))?
+    {
+        ids if !ids.is_empty() => ids,
+        _ => {
+            return Err(OpError::Rejected(format!(
+                "nothing to supersede: no believed {subject_kind}:{subject_key} {predicate}"
+            )));
+        }
+    };
+    let previous = store
+        .explain_subject(&subject, &predicate_parsed, now)
+        .ok()
+        .flatten()
+        .map_or_else(|| "?".to_string(), |receipt| display_value(&receipt.value));
+
+    // Defensive floor check: the replacement must still clear the predicate's floor even if
+    // the floor was raised after the incumbent was admitted. (Anti-laundering already
+    // requires replacement >= incumbent, but the incumbent could predate a raised floor.)
+    let registry = PredicateRegistry::coding_agent();
+    if let Some(policy) = registry.policy_for(&subject, &predicate_parsed)
+        && authority < policy.authority_floor
+    {
+        return Err(OpError::Rejected(format!(
+            "REJECTED: {subject_kind}.{predicate} requires authority {:?}, got {authority:?}",
+            policy.authority_floor
+        )));
+    }
+
+    let (mut events, replacement_claim_id) = build_revision(
+        next_seq(&store),
+        &incumbents,
+        subject_kind,
+        subject_key,
+        predicate,
+        new_value,
+        source,
+        authority,
+        now,
+    )
+    .map_err(|error| OpError::Invalid(format!("invalid supersession: {error}")))?;
+    // The replacement is a fresh assertion of this predicate, so it inherits the same
+    // default freshness as `assert` (e.g. a revised `branch.status` still goes stale).
+    apply_policy_defaults(&registry, &mut events[0]);
+
+    // Apply all in memory first (replacement, then each supersession); persist only if
+    // every one is admitted, so a rejected revision leaves no orphan in the durable log.
+    for event in &events {
+        store
+            .append(event.clone())
+            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    }
+    let refs: Vec<&ClaimEvent> = events.iter().collect();
+    append_events(path, &refs)
+        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+
+    let count = incumbents.len();
+    let claims = if count == 1 { "claim" } else { "claims" };
+    Ok(format!(
+        "ACCEPTED  superseded {count} believed {claims} of {subject_kind}:{subject_key} \
+         {predicate}: {previous} -> \"{new_value}\"  (authority={authority:?})\n  \
+         new believed claim {replacement_claim_id}"
+    ))
+}
+
+/// Revise the believed fact for a subject+predicate via the sanctioned supersession path:
+/// assert a *replacement* claim and mark **every** believed incumbent superseded by it.
+/// The base firewall's anti-laundering enforces that the replacement out-ranks each
+/// incumbent, so a lower-authority revision is rejected; uniqueness holds in the end state
+/// because all believed incumbents become terminal. Shared by `dent8 supersede` and the
+/// MCP `supersede` tool.
+fn cmd_supersede(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    new_value: &str,
+    authority: &str,
+    source: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(op_supersede(
+        &log_path(),
+        subject_kind,
+        subject_key,
+        predicate,
+        new_value,
+        authority_level,
+        source,
+    ))
+}
+
+/// Build one `Retracted` event per believed incumbent. Each retraction is authority-gated
+/// in the core fold (it may not under-rank its incumbent — [ADR 0008]), so a low-authority
+/// retraction of a high-authority fact is rejected.
+#[allow(clippy::too_many_arguments)]
+fn build_retractions(
+    seq: usize,
+    incumbents: &[ClaimId],
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    source: &str,
+    authority: AuthorityLevel,
+    now: TimestampMillis,
+) -> Result<Vec<ClaimEvent>, String> {
+    incumbents
+        .iter()
+        .enumerate()
+        .map(|(index, incumbent)| {
+            build_event(
+                &format!("event:{}", seq + index),
+                incumbent.as_str(),
+                subject_kind,
+                subject_key,
+                predicate,
+                ClaimEventKind::Retracted {
+                    reason: RetractionReason::UserDeleted,
+                },
+                None,
+                source,
+                authority,
+                now,
+            )
+        })
+        .collect()
+}
+
+fn op_retract(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: AuthorityLevel,
+    source: &str,
+) -> Result<String, OpError> {
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let subject = EntityRef::new(subject_kind, subject_key)
+        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+    let incumbents = match store
+        .believed_claim_ids(&subject, &predicate_parsed)
+        .map_err(|error| OpError::Invalid(error.to_string()))?
+    {
+        ids if !ids.is_empty() => ids,
+        _ => {
+            return Err(OpError::Rejected(format!(
+                "nothing to retract: no believed {subject_kind}:{subject_key} {predicate}"
+            )));
+        }
+    };
+    let events = build_retractions(
+        next_seq(&store),
+        &incumbents,
+        subject_kind,
+        subject_key,
+        predicate,
+        source,
+        authority,
+        now_millis(),
+    )
+    .map_err(|error| OpError::Invalid(format!("invalid retraction: {error}")))?;
+    // Apply all in memory first (each authority-gated); persist only if all are admitted.
+    for event in &events {
+        store
+            .append(event.clone())
+            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    }
+    let refs: Vec<&ClaimEvent> = events.iter().collect();
+    append_events(path, &refs)
+        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    let count = incumbents.len();
+    let claims = if count == 1 { "claim" } else { "claims" };
+    Ok(format!(
+        "ACCEPTED  retracted {count} believed {claims} of {subject_kind}:{subject_key} \
+         {predicate}  (authority={authority:?})"
+    ))
+}
+
+/// Terminally remove the believed fact(s) for a subject+predicate. Unlike `supersede`
+/// there is no replacement; unlike a contradiction (dissent) it is authority-gated — the
+/// core fold rejects a retraction that under-ranks its incumbent, so a low-authority actor
+/// cannot delete a trusted fact. Shared by `dent8 retract` and the MCP `retract` tool.
+fn cmd_retract(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: &str,
+    source: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(op_retract(
+        &log_path(),
+        subject_kind,
+        subject_key,
+        predicate,
+        authority_level,
+        source,
+    ))
+}
+
+/// Build the `(events, opposing_claim_id)` for a `contradict`: a fresh opposing assertion
+/// (`event:{seq}`, appended first) carrying the rival value, plus a `Contradicted` event on
+/// the incumbent pointing `by` at it. Both end up believed — the paraconsistent surfaced
+/// conflict ([ADR 0009](../../docs/decisions/0009-uniqueness-and-contestation.md)).
+#[allow(clippy::too_many_arguments)]
+fn build_contradiction(
+    seq: usize,
+    incumbent_claim_id: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    opposing_value: &str,
+    source: &str,
+    authority: AuthorityLevel,
+    now: TimestampMillis,
+) -> Result<(Vec<ClaimEvent>, String), String> {
+    let opposing_claim_id = format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}");
+    let opposing = build_event(
+        &format!("event:{seq}"),
+        &opposing_claim_id,
+        subject_kind,
+        subject_key,
+        predicate,
+        ClaimEventKind::Asserted,
+        Some(ClaimValue::Text(opposing_value.to_string())),
+        source,
+        authority,
+        now,
+    )?;
+    let by = ClaimId::new(&opposing_claim_id).map_err(|e| format!("claim id: {e}"))?;
+    let contradiction = build_event(
+        &format!("event:{}", seq + 1),
+        incumbent_claim_id,
+        subject_kind,
+        subject_key,
+        predicate,
+        ClaimEventKind::Contradicted {
+            by,
+            basis: ContradictionBasis::SamePredicateDifferentValue,
+        },
+        None,
+        source,
+        authority,
+        now,
+    )?;
+    Ok((vec![opposing, contradiction], opposing_claim_id))
+}
+
+fn op_contradict(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    opposing_value: &str,
+    authority: AuthorityLevel,
+    source: &str,
+) -> Result<String, OpError> {
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let subject = EntityRef::new(subject_kind, subject_key)
+        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+    let now = now_millis();
+    // Contradiction targets the *single* believed incumbent (explain_subject prefers the
+    // contested/fresh one) — unlike supersede/retract, which act on every believed claim.
+    // Flagging one fact as disputed is the intent (ADR 0009); the surfaced conflict can
+    // then be resolved with supersede/retract.
+    let Some(incumbent) = store
+        .explain_subject(&subject, &predicate_parsed, now)
+        .ok()
+        .flatten()
+    else {
+        return Err(OpError::Rejected(format!(
+            "nothing to contradict: no believed {subject_kind}:{subject_key} {predicate}"
+        )));
+    };
+    let (mut events, opposing_claim_id) = build_contradiction(
+        next_seq(&store),
+        incumbent.claim_id.as_str(),
+        subject_kind,
+        subject_key,
+        predicate,
+        opposing_value,
+        source,
+        authority,
+        now,
+    )
+    .map_err(|error| OpError::Invalid(format!("invalid contradiction: {error}")))?;
+    // The opposing claim is a fresh assertion of this predicate (default TTL like `assert`).
+    let registry = PredicateRegistry::coding_agent();
+    apply_policy_defaults(&registry, &mut events[0]);
+
+    // Apply both in memory first; persist only if both admit (a Canonical incumbent makes
+    // the contradiction hard-alarm, rejecting the whole operation with nothing persisted).
+    for event in &events {
+        store
+            .append(event.clone())
+            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    }
+    let refs: Vec<&ClaimEvent> = events.iter().collect();
+    append_events(path, &refs)
+        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    Ok(format!(
+        "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
+         (authority={authority:?})\n  both are now believed; resolve with `supersede` (install a \
+         winner) or `retract`. new claim {opposing_claim_id}",
+        display_value(&incumbent.value)
+    ))
+}
+
+/// Flag a conflict: assert an opposing claim and move the believed incumbent to
+/// `Contested`, keeping **both** (paraconsistency — localize, don't drop). Unlike
+/// `supersede`/`retract` this is **dissent**: it is *not* authority-gated, so a
+/// low-authority source can flag a wrong fact without overriding it — the one exception
+/// being a `Canonical` incumbent, which hard-alarms. Shared by `dent8 contradict` and the
+/// MCP `contradict` tool.
+fn cmd_contradict(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    opposing_value: &str,
+    authority: &str,
+    source: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(op_contradict(
+        &log_path(),
+        subject_kind,
+        subject_key,
+        predicate,
+        opposing_value,
+        authority_level,
+        source,
+    ))
+}
+
+/// One line of a fact's event history for `replay`: what happened, with provenance.
+fn format_history_line(event: &ClaimEvent) -> String {
+    let what = match &event.kind {
+        ClaimEventKind::Asserted => {
+            let value = event
+                .value
+                .as_ref()
+                .map_or_else(|| "-".to_string(), display_value);
+            format!("asserted     = {value}")
+        }
+        ClaimEventKind::Superseded { by, .. } => format!("superseded   by {by}"),
+        ClaimEventKind::Contradicted { by, .. } => format!("contradicted by {by}"),
+        ClaimEventKind::Retracted { reason } => format!("retracted    ({reason:?})"),
+        ClaimEventKind::Expired { .. } => "expired".to_string(),
+        ClaimEventKind::Reinforced { .. } => "reinforced".to_string(),
+        ClaimEventKind::Retrieved { .. } => "retrieved".to_string(),
+        ClaimEventKind::UsedInDecision { .. } => "used-in-decision".to_string(),
+    };
+    format!(
+        "  {:<9} {:<34} {what}  ({:?}, {})",
+        event.event_id.as_str(),
+        event.claim_id.as_str(),
+        event.authority.level,
+        event.provenance.source
+    )
+}
+
+/// Replay the full ordered event history for a subject+predicate — every assertion,
+/// supersession, retraction, and contradiction, with its authority and source — then the
+/// current believed (or terminal) state. dent8's "replay *why* a fact is believed". Shared
+/// by `dent8 replay` and the MCP `replay` tool.
+fn op_replay(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+) -> Result<String, OpError> {
+    use std::fmt::Write;
+    let store = load_store(path).map_err(OpError::Invalid)?;
+    let subject = EntityRef::new(subject_kind, subject_key)
+        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+    let filter = EventFilter {
+        subject: Some(subject.clone()),
+        predicate: Some(predicate_parsed.clone()),
+        ..EventFilter::default()
+    };
+    let events = store
+        .scan_events(&filter)
+        .map_err(|error| OpError::Rejected(format!("replay failed: {error}")))?;
+    if events.is_empty() {
+        return Err(OpError::Rejected(format!(
+            "no events for {subject_kind}:{subject_key} {predicate}"
+        )));
+    }
+    let mut out = format!(
+        "replay {subject_kind}:{subject_key} {predicate}  ({} events)",
+        events.len()
+    );
+    for event in &events {
+        out.push('\n');
+        out.push_str(&format_history_line(event));
+    }
+    if let Ok(Some(receipt)) = store.explain_latest(&subject, &predicate_parsed, now_millis()) {
+        // Freshness is folded into the non-terminal cases so the audit summary never
+        // understates staleness (a contested *and* stale claim says so).
+        let stale = if receipt.fresh { "" } else { " (stale)" };
+        let status = if receipt.lifecycle.is_terminal() {
+            format!("{:?}", receipt.lifecycle)
+        } else if receipt.lifecycle == ClaimLifecycle::Contested {
+            format!("contested by {}{stale}", receipt.contradicted_by.len())
+        } else {
+            format!("believed{stale}")
+        };
+        let _ = write!(
+            out,
+            "\n  => current: {} [{status}]",
+            display_value(&receipt.value)
+        );
+    }
+    Ok(out)
+}
+
+fn cmd_replay(subject_kind: &str, subject_key: &str, predicate: &str) -> i32 {
+    present(op_replay(&log_path(), subject_kind, subject_key, predicate))
+}
+
+/// Explain the believed (or terminal) fact + its integrity receipt. Shared by
+/// `dent8 explain` and the MCP `explain` tool.
+fn op_explain(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+) -> Result<String, OpError> {
+    let store = load_store(path).map_err(OpError::Invalid)?;
+    let subject = EntityRef::new(subject_kind, subject_key)
+        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+    match store.explain_latest(&subject, &predicate_parsed, now_millis()) {
+        Ok(Some(receipt)) => {
+            let annotation = read_annotation(receipt.lifecycle, receipt.fresh);
+            Ok(format!(
+                "explain {subject_kind}:{subject_key} {predicate}{annotation}\n{}",
+                format_receipt(&receipt)
+            ))
+        }
+        Ok(None) => Err(OpError::Rejected(format!(
+            "no claim for {subject_kind}:{subject_key} {predicate}"
+        ))),
+        Err(error) => Err(OpError::Rejected(format!("explain failed: {error}"))),
+    }
+}
+
+fn cmd_explain(subject_kind: &str, subject_key: &str, predicate: &str) -> i32 {
+    present(op_explain(
+        &log_path(),
+        subject_kind,
+        subject_key,
+        predicate,
+    ))
+}
+
+/// The distinct `(kind, key, predicate)` fact streams in the log, in append order — the
+/// enumeration behind the MCP `resources/list` surface.
+fn op_list_subjects(path: &str) -> Result<Vec<(String, String, String)>, OpError> {
+    let store = load_store(path).map_err(OpError::Invalid)?;
+    Ok(store
+        .subjects()
+        .into_iter()
+        .map(|(subject, predicate)| {
+            (
+                subject.kind().to_string(),
+                subject.key().to_string(),
+                predicate.as_str().to_string(),
+            )
+        })
+        .collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn assert_event(
+    event_id: &str,
+    claim_id: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    value: &str,
+    source: &str,
+    authority: AuthorityLevel,
+) -> ClaimEvent {
+    let mut event = base(
+        event_id,
+        claim_id,
+        subject_kind,
+        subject_key,
+        predicate,
+        source,
+        authority,
+    );
+    event.kind = ClaimEventKind::Asserted;
+    event.value = Some(ClaimValue::Text(value.to_string()));
+    event
+}
+
+fn base(
+    event_id: &str,
+    claim_id: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    source: &str,
+    authority: AuthorityLevel,
+) -> ClaimEvent {
+    ClaimEvent {
+        event_id: ClaimEventId::new(event_id).expect("event id"),
+        claim_id: ClaimId::new(claim_id).expect("claim id"),
+        kind: ClaimEventKind::Asserted,
+        subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
+        predicate: Predicate::new(predicate).expect("predicate"),
+        value: None,
+        confidence: Confidence::from_millis(900).expect("confidence"),
+        authority: Authority {
+            level: authority,
+            issuer: None,
+            scope: None,
+        },
+        ttl: Ttl::Never,
+        provenance: Provenance {
+            source: dent8_core::SourceId::new(source).expect("source"),
+            actor: ActorId::new("actor:demo").expect("actor"),
+            tool: Some("dent8-demo".to_string()),
+            run_id: None,
+            input_digest: None,
+            recorded_at: TimestampMillis::from_unix_millis(1),
+        },
+        evidence: vec![Evidence {
+            id: EvidenceId::new("evidence:1").expect("evidence id"),
+            kind: EvidenceKind::UserStatement,
+            locator: source.to_string(),
+            digest: None,
+            summary: None,
+        }],
+        observed_at: None,
+        valid_from: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_read_annotation_flags_stale_and_terminal_facts() {
+        // A fresh, believed fact gets no annotation.
+        assert!(read_annotation(ClaimLifecycle::Active, true).is_empty());
+        // An Active fact past its TTL is flagged stale (the T4 read-surface verdict).
+        assert!(read_annotation(ClaimLifecycle::Active, false).contains("stale"));
+        // A terminal fact is flagged no-longer-believed...
+        assert!(read_annotation(ClaimLifecycle::Superseded, true).contains("no longer believed"));
+        // ...and that verdict wins even if it is also stale.
+        assert!(read_annotation(ClaimLifecycle::Retracted, false).contains("no longer believed"));
+    }
+
+    /// A durable log with a hole at `event:2` — a line lost to a torn write or to manual /
+    /// tool log surgery. The highest id present (`3`) and the line-count (`3`) coincide,
+    /// which is exactly the case the old `seq = store.len()` got wrong.
+    fn gapped_log() -> Vec<ClaimEvent> {
+        vec![
+            assert_event(
+                "event:0",
+                "claim:repo:a:database:0",
+                "repo",
+                "a",
+                "database",
+                "postgres",
+                "source:owner",
+                AuthorityLevel::High,
+            ),
+            assert_event(
+                "event:1",
+                "claim:repo:b:lang:1",
+                "repo",
+                "b",
+                "lang",
+                "rust",
+                "source:owner",
+                AuthorityLevel::High,
+            ),
+            // event:2 is missing — the gap.
+            assert_event(
+                "event:3",
+                "claim:repo:c:ci:3",
+                "repo",
+                "c",
+                "ci",
+                "green",
+                "source:owner",
+                AuthorityLevel::High,
+            ),
+        ]
+    }
+
+    /// Regression: the next sequence is one past the **highest** id actually present, not
+    /// the line-count. After a gap the two diverge, and only the max-derived seq avoids
+    /// minting an id that already exists.
+    #[test]
+    fn next_seq_is_one_past_the_highest_id_not_the_line_count() {
+        let events = gapped_log();
+        let store =
+            InMemoryEventStore::from_trusted_events(events.clone()).expect("reload gap log");
+
+        // The line-count — the pre-fix seq source — is 3, the trailing number of an id that
+        // is already in the log. Deriving from the max id steps past it to 4.
+        assert_eq!(store.len(), 3);
+        assert_eq!(
+            next_seq(&store),
+            4,
+            "next seq must be one past the highest id, not the line count"
+        );
+    }
+
+    /// Regression: the id `assert` mints after a gap is unique, so the append + next reload
+    /// does not wedge on a duplicate `event_id`.
+    #[test]
+    fn assert_after_a_gap_mints_a_non_colliding_event_id() {
+        let mut events = gapped_log();
+        let store =
+            InMemoryEventStore::from_trusted_events(events.clone()).expect("reload gap log");
+
+        let seq = next_seq(&store);
+        events.push(assert_event(
+            &format!("event:{seq}"),
+            &format!("claim:repo:a:database:{seq}"),
+            "repo",
+            "a",
+            "database",
+            "mysql",
+            "source:owner",
+            AuthorityLevel::High,
+        ));
+
+        // The grown log reloads cleanly through the trusted path that would otherwise reject
+        // a reused id with `StoreError::Conflict("duplicate event_id ...")`.
+        assert!(
+            InMemoryEventStore::from_trusted_events(events).is_ok(),
+            "minted id must not collide with an existing event on reload"
+        );
+    }
+
+    /// The bug this guards against: deriving the seq from the line-count reuses `event:3`
+    /// after the gap, and the very next reload wedges the store with a duplicate-id conflict.
+    #[test]
+    fn line_count_seq_would_collide_after_a_gap() {
+        let mut events = gapped_log();
+        let store =
+            InMemoryEventStore::from_trusted_events(events.clone()).expect("reload gap log");
+
+        let buggy_seq = store.len(); // the pre-fix computation: 3
+        events.push(assert_event(
+            &format!("event:{buggy_seq}"),
+            &format!("claim:repo:a:database:{buggy_seq}"),
+            "repo",
+            "a",
+            "database",
+            "mysql",
+            "source:owner",
+            AuthorityLevel::High,
+        ));
+
+        assert!(
+            matches!(
+                InMemoryEventStore::from_trusted_events(events),
+                Err(StoreError::Conflict(_))
+            ),
+            "line-count seq reuses event:3 and must wedge the reload — this is the regression"
+        );
+    }
+
+    /// Regression for the `supersede` write path: `build_revision` seeds its replacement +
+    /// supersession ids from `next_seq`, so after a gap they continue past the highest id
+    /// (`event:4`, `event:5`) instead of colliding, and the revised log reloads cleanly.
+    #[test]
+    fn supersede_after_a_gap_mints_unique_non_colliding_ids() {
+        let mut events = gapped_log();
+        let store =
+            InMemoryEventStore::from_trusted_events(events.clone()).expect("reload gap log");
+
+        let seq = next_seq(&store);
+        let incumbents = vec![ClaimId::new("claim:repo:a:database:0").expect("claim id")];
+        let (revision, _replacement) = build_revision(
+            seq,
+            &incumbents,
+            "repo",
+            "a",
+            "database",
+            "mysql",
+            "source:owner",
+            AuthorityLevel::High,
+            TimestampMillis::from_unix_millis(1),
+        )
+        .expect("build revision");
+
+        let ids: Vec<&str> = revision.iter().map(|e| e.event_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["event:4", "event:5"],
+            "revision ids must continue past the highest existing id"
+        );
+
+        events.extend(revision);
+        assert!(
+            InMemoryEventStore::from_trusted_events(events).is_ok(),
+            "revised log must reload without a duplicate-id conflict"
+        );
+    }
+}

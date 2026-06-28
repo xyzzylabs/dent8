@@ -1,0 +1,204 @@
+# dent8 Implementation Status
+
+**Single source of truth for what is built.** If any other doc's "what works" claim
+contradicts this file, this file wins. Three tiers, because the distinction that
+matters most is *"a tested function exists"* vs *"a user can run it"*:
+
+- **Runnable** — a user can invoke it (a CLI command, a server).
+- **Library** — implemented and tested in a crate, but exposed through *no* runnable
+  surface (no persistence, no CLI, no MCP). It is correct code that nothing calls.
+- **Design-only** — specified in docs, not implemented.
+
+## Runnable today (the entire user-facing surface)
+
+- **`dent8 demo`** — runs the firewall + replay/explain loop end to end against the
+  in-memory backend, **driven by the coding-agent predicate registry**: a high-authority
+  `repo.database` fact is asserted; a low-authority source is **rejected by the
+  predicate's authority floor**; a competing assertion is **rejected by uniqueness**; a
+  `branch.status` fact goes stale on its **registered default TTL**; and `explain` returns
+  an integrity receipt (value, lifecycle, authority, freshness, evidence, supersession,
+  contradiction, replay position, `event_hash`, chain-verified).
+- **`dent8 assert <kind> <key> <predicate> <value> <authority> <source>`** — asserts a
+  fact through the firewall + registry, **persisted to a JSON-lines event log** and
+  composing across separate invocations. A below-floor or non-unique write is rejected and
+  **never reaches the log**.
+- **`dent8 supersede <kind> <key> <predicate> <new-value> <authority> <source>`** — revises
+  the believed fact via the sanctioned supersession path: it asserts a replacement and
+  marks **every** believed incumbent superseded by it, persisted as one write. The base
+  firewall's **anti-laundering rejects a revision that cannot out-rank each incumbent**;
+  the end state is unique because all incumbents become terminal. Reload re-validates
+  integrity: a torn write or external edit that leaves two fresh believed claims **or** a
+  broken supersession lineage (dangling/cyclic) is rejected, not silently masked.
+- **`dent8 retract <kind> <key> <predicate> <authority> <source>`** — terminally removes
+  every believed claim for the subject+predicate. Unlike a contradiction (dissent), it is
+  **authority-gated** ([ADR 0008](decisions/0008-retraction-authority.md)): a retraction
+  that under-ranks its incumbent is rejected, so a low-authority actor cannot delete a
+  trusted fact.
+- **`dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>`** —
+  flags a conflict: asserts an opposing claim and moves the incumbent to `Contested`,
+  keeping **both** (paraconsistency, [ADR 0009](decisions/0009-uniqueness-and-contestation.md)).
+  This is **dissent** — *not* authority-gated, so a low-authority source can flag a wrong
+  fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms.
+- **`dent8 explain <kind> <key> <predicate>`** — replays the persisted log and prints the
+  believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
+  a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
+  receipt carries `fresh` + the `expires_at` instant. Composes with
+  `assert`/`supersede`/`retract` across processes (and the same receipt backs the MCP
+  `explain` tool and `resources/read`).
+- **`dent8 replay <kind> <key> <predicate>`** — prints the full ordered event history
+  (every assertion, supersession, retraction, contradiction, with authority + source) and
+  the current state — *why* the fact is what it is.
+- **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing the **full belief
+  surface** as tools to agent clients — `assert` / `supersede` / `retract` / `contradict` /
+  `explain` / `replay` (`initialize` / `tools/list` / `tools/call`). Every tool dispatches
+  to the *same* `op_*` firewall path as the CLI, so a low-authority, laundered, or
+  non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,
+  not a protocol error, so the agent sees the reason). It also serves **`resources/list` /
+  `resources/read`** — each fact stream is a readable resource at
+  `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt) — and accepts
+  **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
+  omitted; an empty batch is `-32600`).
+- `dent8 schema postgres` — prints the Postgres schema.
+- `dent8 --version`, `dent8 --help`.
+
+`assert`/`explain` persist across invocations via a **local file-backed log**
+(`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload
+path. This is a **dev store, not the operational backend**: it is single-writer (no
+concurrency control — two processes appending at once can interleave), non-transactional,
+and single-user. A long-lived `dent8 mcp serve` sharing one `DENT8_LOG` with ad-hoc CLI
+runs makes that race more reachable; corruption is *detected* on the next load
+(`validate_unique_log` rejects a duplicated belief, a duplicate `event_id` wedges the
+reload), not silently believed — but the operational store with atomic append + isolation
+is **Postgres (M2b)**. The file backend exists so the firewall loop is usable and to prove
+a *second* `EventStore` backend behind the same contract (de-risking M2b).
+
+`explain` exits 0 whenever a claim exists (believed *or* terminal — a retracted/superseded
+fact still has an auditable receipt) and exits 1 only when no claim exists for the
+subject+predicate.
+
+## Library — implemented and tested, not exposed
+
+**`dent8-core`:**
+- `ClaimEvent` model, lifecycle state machine, terminal immutability, replay fold.
+- Authority-weighted supersession **and retraction** arbitration (`InsufficientAuthority`,
+  [ADR 0008](decisions/0008-retraction-authority.md)) + canonical contradiction hard-alarm
+  (`CanonicalContradiction`); exhaustive 5×5-lattice non-resurrection tests (one per
+  supersession/retraction) + `#[cfg(kani)]` harnesses.
+- Read-time freshness evaluator (`ClaimState::is_expired_at`).
+- Earned-entrenchment: authority-weighted `corroboration_at_or_above`.
+- Canonicalization + hash chain (`canonical_bytes`, `event_hash`, `hash_chain`):
+  serde, SHA-256, injective length-framed leaf, `0x00` domain separation. **Not JCS**
+  (sorted-key `serde_json` form — see [storage.md](storage.md)). The "logically-equal →
+  identical bytes" invariant holds for **all** fields including embedded JSON:
+  `ClaimValue::Json` is the `CanonicalJson` newtype, canonical by construction and
+  re-canonicalized on deserialize (ADR 0004 item 6, resolved).
+- **External anchor** (`anchor_head` / `verify_anchor` / `ChainAnchor`): an HMAC-SHA256
+  commitment to `(count, head)` under a witness key (zero new deps), giving
+  tamper-*resistance* on top of the chain's tamper-*evidence* — it catches a
+  re-hashed-forward rewrite that `verify_chain` cannot (threat-model T6).
+- **Asymmetric anchor** (`sign_head` / `verify_signed_head` / `SignedTreeHead`, behind the
+  `signed-anchor` feature): an **Ed25519-signed tree head** over the same domain-separated
+  `(count, head)` message. Unlike the symmetric HMAC, the verifier needs only the **public**
+  key, so a published head is **publicly verifiable** — the witness keeps the private key.
+  Feature-gated so the default build and the CLI keep the HMAC anchor with no signature
+  stack. Tested: public verification, tamper detection, and wrong-key rejection.
+- **Property-based test suites** (`proptest`): universally-quantified complements to the
+  example tests and Kani proofs.
+  [`tests/proptest_invariants.rs`](../crates/dent8-core/tests/proptest_invariants.rs) —
+  canonicalization is **idempotent + reload-stable for arbitrary JSON** (the property the
+  float bug violated; the suite reproduces it when `float_roundtrip` is removed),
+  `canonical_bytes`/`event_hash` round-trip through serde, the hash chain **localizes tamper**
+  (a changed event flips its hash and every later one, never an earlier one), and the anchor
+  accepts its own log while rejecting any change.
+  [`tests/proptest_fold.rs`](../crates/dent8-core/tests/proptest_fold.rs) — the **stateful
+  fold harness**: a random coherent event stream folded through `apply_event` is checked
+  step-by-step against an **independent reference model** (accept/reject, reject *reason*,
+  resulting lifecycle), plus **terminal absorption / non-resurrection**, value immutability,
+  `updated_at` tracking, replay determinism, and claim isolation. The cross-check is verified
+  to catch a deliberately wrong model gate.
+- **Golden replay fixtures** ([`tests/golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs),
+  fixtures in [`tests/golden/replay/`](../crates/dent8-core/tests/golden/replay)): named
+  event streams frozen on disk as canonical `.events.jsonl` (the `DENT8_LOG` format) +
+  `.expected.json` (chain head + replayed-state summary). The test replays the **on-disk**
+  events and asserts the current code reproduces them, locking the event encoding, the hash
+  chain, and the fold against silent drift (regenerate with `UPDATE_GOLDEN=1`).
+
+**`dent8-store`:**
+- `replay_claim` / `replay_claim_with_policy` + `diff_states` (policy-counterfactual replay).
+- `replay_entity` / `EntityProjection` (`lineage_issues`, `unearned_supersessions`).
+- **The firewall** is `EventStore::append` itself (via `arbitrate`): every write is
+  arbitrated and there is **no un-arbitrated write path**. It rejects a low-stated-authority
+  supersession *and* a laundered one (over-stated event authority backed by a low-authority
+  claim). Reachable via `dent8 demo`.
+- `InMemoryEventStore` (test/demo + file-backed CLI backend, not operational) +
+  `IntegrityReceipt` / `explain` / `explain_subject` + global-chain `verify_chain`
+  (internally consistent) + `anchor` / `verify_against_anchor` (external tamper-resistance).
+- `InMemoryEventStore::from_trusted_events` — the trusted-reload path (rehydrate an
+  already-admitted log without re-arbitration), recomputing the global chain. Used by the
+  file-backed CLI; the documented counterpart to the single arbitrated `append` path.
+- **`PredicateRegistry`** (coding-agent fact policies): per-predicate authority floor,
+  default TTL, and uniqueness, enforced via `enforce_policy` / `apply_policy_defaults`.
+  Ships `repo.database`, `repo.test_command`, `dependency.version`, `branch.status`,
+  `user.preference`.
+- `EventStore` trait — implemented in-memory; the Postgres adapter is written but not yet
+  DB-verified (below).
+- `arbitrate_events` — the **pure, I/O-free firewall decision** over loaded event streams,
+  shared by the in-memory backend and the Postgres adapter so they cannot diverge.
+
+**`dent8-store-postgres` (`--features adapter`):**
+- **`PostgresEventStore`** (v0 async sqlx adapter) — `connect`/`migrate`/`append`/
+  `load_claim_events`/`scan_events`/`verify_chain` over the `dent8_event_log` table
+  (migration 002). Transactional append serialized by an advisory lock for the global
+  chain; the firewall reuses `arbitrate_events`; the canonical event is stored as JSONB.
+- **Materialized projection + edge graph** (migration 003): each accepted append also folds
+  the post-append `ClaimState` (via the shared `apply_event`) into `dent8_claim_projection`
+  and records the claim→claim relationship into `dent8_claim_edge`, in the same transaction.
+  `materialized_projection` reads the believed state without re-folding; `edges_from` reads
+  the supersession/contradiction/reinforcement graph; `verify_projection` re-folds and
+  asserts `projection == fold(log)`. Derived caches, not a second source of truth.
+- **Status: verified against a live Postgres (`postgres:16`).** The `DATABASE_URL`-gated
+  integration tests pass — the firewall over Postgres (incl. laundered-supersession
+  rejection) **and** the projection/edge materialization + `projection == fold(log)` + the
+  scalar columns matching the fold — via
+  `DATABASE_URL=… cargo test -p dent8-store-postgres --features adapter` (the tests share one
+  database but self-serialize and retry the initial connection, so no flags are needed).
+  `sqlx` is feature-gated so the default build and the CLI stay free of it. The live run
+  surfaced and fixed real bugs: `migrate()` now serializes concurrent schema creation under
+  an advisory lock (`CREATE TABLE IF NOT EXISTS` is not race-safe on the `pg_class`/`pg_type`
+  catalog), and `connect()` bounds its acquire timeout so an unreachable DB fails fast.
+
+**`dent8-evals`:**
+- Adversarial corpus: MINJA injection, authority laundering, canonical contradiction, and
+  Sybil corroboration run against the **real firewall** vs a **recency-only baseline**.
+  `cargo test -p dent8-evals` asserts the firewall blocks all four while the baseline is
+  compromised by all four (plus a positive control admitting legitimate revision). See
+  [evals.md](evals.md).
+
+## Design-only — not implemented
+
+- **Postgres adapter — verified (M2b done).** The v0 `PostgresEventStore` and its
+  materialization (migration 003) are **DB-verified** (Library, above): the gated integration
+  tests pass against a live `postgres:16`, via [`compose.yml`](../compose.yml) locally or the
+  CI `postgres` job ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)). What remains
+  *design-only* is the richer per-column event table + `uses_as_evidence` edges (migration
+  001), operational tuning, and wiring the CLI/MCP onto Postgres for multi-user operation
+  (the runnable surface still uses the file-backed dev store).
+- **Persistent CLI — built (file-backed).** `assert` / `supersede` / `retract` /
+  `contradict` / `explain` / `replay` across invocations are **Runnable** (above);
+  wiring the CLI onto `PostgresEventStore` for multi-user operation is pending DB
+  verification of the adapter.
+- The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
+  tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
+  stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
+- **A published anchor cadence / witness service.** Both anchor primitives — symmetric
+  (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree head) —
+  are built and tested (Library, above). What is design-only is the *operational* piece: a
+  witness that periodically signs and **publishes** the head on its own infrastructure, and
+  key management/rotation for it.
+
+## How to keep this honest
+
+The README "what works" list must map 1:1 to the **Runnable** section above. Do not
+describe Library-tier mechanisms as things dent8 "does" for a user — they are things
+the code can compute, with no user-facing surface. Update this file in the same change
+that moves an item between tiers.

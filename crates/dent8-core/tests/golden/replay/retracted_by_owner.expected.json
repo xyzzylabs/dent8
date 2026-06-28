@@ -1,0 +1,9 @@
+{
+  "chain_head": "3ac094c2c23c3df7995bf956e2639e323022e8c871fed43956f6f6a9313f2741",
+  "lifecycle": "Retracted",
+  "value": "text:postgres",
+  "authority": "High",
+  "superseded_by": null,
+  "contradicted_by": [],
+  "corroboration": 1
+}

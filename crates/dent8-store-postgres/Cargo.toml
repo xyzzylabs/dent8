@@ -1,0 +1,36 @@
+[package]
+name = "dent8-store-postgres"
+description = "Postgres schema and adapter boundary for dent8."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "dent8_store_postgres"
+path = "src/lib.rs"
+
+[dependencies]
+dent8-core = { path = "../dent8-core" }
+dent8-store = { path = "../dent8-store" }
+serde_json = { version = "1", optional = true }
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "json",
+], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[features]
+# The async sqlx adapter is opt-in so the schema string (and the CLI that prints it) does
+# not pull the sqlx/serde_json dependency tree. Build/test the adapter with
+# `--features adapter`.
+adapter = ["dep:sqlx", "dep:serde_json"]
+
+[lints]
+workspace = true
+

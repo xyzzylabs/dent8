@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 536e180afad5052a6668a71506045fce9ddee5b8417eeeed3e1cb52527aeb9c5 # shrinks to ops = [Assert { value: Text("alpha"), authority: Canonical }, Supersede { authority: Canonical }]
+cc 3f35e05fa94896739f8e41789b9c34c99a05b49627941916b5be205f89e6246b # shrinks to ops = [Assert { value: Text("alpha"), authority: Unknown }, Contradict { authority: Unknown }]
+cc 2e89d378763182e5c8eb40871d01d00125f315d0988c5a2b4d26ae92a83fb0a6 # shrinks to ops = [Assert { value: Text("alpha"), authority: Medium }, Retract { authority: Unknown }]
+cc 5fbd706224ecadfd7389beaf9df72a9a89ad73a202177142de00dfbf28086597 # shrinks to ops = [Assert { value: Redacted, authority: Unknown, source: 0 }, Reinforce { value: None, authority: Unknown, source: 1 }]

@@ -1,0 +1,19 @@
+[package]
+name = "dent8-evals"
+description = "Adversarial evaluation corpus for the dent8 memory firewall: attack scenarios run against the real firewall, contrasted with a recency-only baseline."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "dent8_evals"
+path = "src/lib.rs"
+
+[dependencies]
+dent8-core = { path = "../dent8-core" }
+dent8-store = { path = "../dent8-store" }
+
+[lints]
+workspace = true
