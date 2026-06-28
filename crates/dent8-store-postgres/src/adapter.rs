@@ -87,95 +87,40 @@ impl PostgresEventStore {
         Ok(())
     }
 
-    /// Append a candidate event **through the firewall**, transactionally. Mirrors the
-    /// in-memory backend's contract: arbitrate against current state (rejecting an
-    /// inadmissible or laundered write), chain the `event_hash` to the global head, and
-    /// persist — all under one advisory-lock-serialized transaction so the chain stays
-    /// consistent and the append is atomic.
+    /// Append a candidate event **through the firewall**, transactionally (a one-event
+    /// [`Self::append_many`]). Arbitrates against current state (rejecting an inadmissible or
+    /// laundered write), chains the `event_hash` to the global head, and persists — all under
+    /// one advisory-lock-serialized transaction so the chain stays consistent and the append
+    /// is atomic.
     pub async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
-        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let mut receipts = self.append_many(vec![event]).await?;
+        Ok(receipts.pop().expect("one event -> one receipt"))
+    }
 
-        // Serialize all appends: the global chain head must be read and extended atomically.
+    /// Append several events as **one transaction** — the durable form of a multi-event
+    /// operation (supersede / retract / contradict): the replacement plus its
+    /// supersessions/retractions/contradiction commit together or not at all. Each event is
+    /// firewalled, chained, and materialized in order under a single advisory-lock-serialized
+    /// transaction, and later events see the earlier ones' in-transaction writes (so a
+    /// supersession resolves the replacement claim asserted just before it).
+    pub async fn append_many(
+        &self,
+        events: Vec<ClaimEvent>,
+    ) -> Result<Vec<AppendReceipt>, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        // One advisory lock for the whole batch: the global chain head is read-modify-written
+        // atomically across every event in the operation.
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(APPEND_LOCK_KEY)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
-
-        // The firewall: the SAME pure decision the in-memory backend uses — run FIRST so a
-        // candidate that is *both* inadmissible and a duplicate fails with the firewall's
-        // error, matching the in-memory backend's precedence (which arbitrates before it
-        // dedups), not with Conflict.
-        let existing = load_claim_in_tx(&mut tx, event.claim_id.as_str()).await?;
-        let replacing = match &event.kind {
-            ClaimEventKind::Superseded { by, .. } => {
-                Some(load_claim_in_tx(&mut tx, by.as_str()).await?)
-            }
-            _ => None,
-        };
-        arbitrate_events(&event, &existing, replacing.as_deref())?;
-
-        // Idempotency / tamper signal: a duplicate event_id is a conflict (the UNIQUE
-        // constraint is the backstop if a race ever slipped past the advisory lock).
-        let duplicate = sqlx::query("SELECT 1 FROM dent8_event_log WHERE event_id = $1")
-            .bind(event.event_id.as_str())
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(unavailable)?;
-        if duplicate.is_some() {
-            return Err(StoreError::Conflict(format!(
-                "duplicate event_id {}",
-                event.event_id
-            )));
+        let mut receipts = Vec::with_capacity(events.len());
+        for event in &events {
+            receipts.push(append_event_in_tx(&mut tx, event).await?);
         }
-
-        // Chain to the current global head (NULL for the first event).
-        let previous: Option<String> = sqlx::query_scalar(
-            "SELECT event_hash FROM dent8_event_log ORDER BY global_sequence DESC LIMIT 1",
-        )
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(unavailable)?
-        .flatten();
-        let hash = event_hash(&event, previous.as_deref())
-            .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
-        let event_json = serde_json::to_value(&event)
-            .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
-
-        let global_sequence: i64 = sqlx::query_scalar(
-            "INSERT INTO dent8_event_log \
-             (event_id, claim_id, subject_type, subject_key, predicate, previous_event_hash, event_hash, event_json) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING global_sequence",
-        )
-        .bind(event.event_id.as_str())
-        .bind(event.claim_id.as_str())
-        .bind(event.subject.kind())
-        .bind(event.subject.key())
-        .bind(event.predicate.as_str())
-        .bind(previous.as_deref())
-        .bind(hash.as_str())
-        .bind(&event_json)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(unavailable)?;
-
-        // Materialize derived caches in the same transaction: the folded projection and the
-        // claim->claim edge. `existing` is this claim's pre-append stream, so folding it then
-        // applying the new event yields the post-append `ClaimState` (the same fold the
-        // in-memory backend would compute on read).
-        let current = fold_state(&existing)?;
-        let state = apply_event(current, &event)
-            .map_err(|error| StoreError::CorruptEvent(error.to_string()))?;
-        upsert_projection(&mut tx, &state).await?;
-        insert_edge(&mut tx, &event).await?;
-
         tx.commit().await.map_err(unavailable)?;
-
-        Ok(AppendReceipt {
-            global_sequence: u64::try_from(global_sequence).unwrap_or(0),
-            event_id: event.event_id,
-            event_hash: hash,
-        })
+        Ok(receipts)
     }
 
     /// Ordered events for one claim stream.
@@ -417,6 +362,83 @@ async fn insert_edge(
 }
 
 /// Load one claim stream inside an in-flight transaction (for the firewall's read).
+/// Firewall + chain + persist + materialize **one** event inside an in-flight transaction
+/// (no begin/commit/lock of its own — the caller holds them, so a batch commits atomically).
+async fn append_event_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    event: &ClaimEvent,
+) -> Result<AppendReceipt, StoreError> {
+    // The firewall: the SAME pure decision the in-memory backend uses — run FIRST so a
+    // candidate that is both inadmissible and a duplicate fails with the firewall's error
+    // (matching the in-memory backend's arbitrate-before-dedup precedence), not Conflict.
+    let existing = load_claim_in_tx(&mut *tx, event.claim_id.as_str()).await?;
+    let replacing = match &event.kind {
+        ClaimEventKind::Superseded { by, .. } => {
+            Some(load_claim_in_tx(&mut *tx, by.as_str()).await?)
+        }
+        _ => None,
+    };
+    arbitrate_events(event, &existing, replacing.as_deref())?;
+
+    // Idempotency / tamper signal: a duplicate event_id is a conflict (the UNIQUE constraint
+    // is the backstop if a race ever slipped past the advisory lock).
+    let duplicate = sqlx::query("SELECT 1 FROM dent8_event_log WHERE event_id = $1")
+        .bind(event.event_id.as_str())
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(unavailable)?;
+    if duplicate.is_some() {
+        return Err(StoreError::Conflict(format!(
+            "duplicate event_id {}",
+            event.event_id
+        )));
+    }
+
+    // Chain to the current global head (NULL for the first event — or the previous event of
+    // this same transaction, since its INSERT is visible here).
+    let previous: Option<String> = sqlx::query_scalar(
+        "SELECT event_hash FROM dent8_event_log ORDER BY global_sequence DESC LIMIT 1",
+    )
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(unavailable)?
+    .flatten();
+    let hash = event_hash(event, previous.as_deref())
+        .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
+    let event_json = serde_json::to_value(event)
+        .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
+
+    let global_sequence: i64 = sqlx::query_scalar(
+        "INSERT INTO dent8_event_log \
+         (event_id, claim_id, subject_type, subject_key, predicate, previous_event_hash, event_hash, event_json) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING global_sequence",
+    )
+    .bind(event.event_id.as_str())
+    .bind(event.claim_id.as_str())
+    .bind(event.subject.kind())
+    .bind(event.subject.key())
+    .bind(event.predicate.as_str())
+    .bind(previous.as_deref())
+    .bind(hash.as_str())
+    .bind(&event_json)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(unavailable)?;
+
+    // Materialize the derived caches in the same transaction.
+    let current = fold_state(&existing)?;
+    let state =
+        apply_event(current, event).map_err(|error| StoreError::CorruptEvent(error.to_string()))?;
+    upsert_projection(&mut *tx, &state).await?;
+    insert_edge(&mut *tx, event).await?;
+
+    Ok(AppendReceipt {
+        global_sequence: u64::try_from(global_sequence).unwrap_or(0),
+        event_id: event.event_id.clone(),
+        event_hash: hash,
+    })
+}
+
 async fn load_claim_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     claim_id: &str,
@@ -768,6 +790,101 @@ mod tests {
                 .materialized_projection(&ClaimId::new("claim:none").unwrap())
                 .await
                 .expect("read")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn append_many_commits_a_multi_event_operation_atomically() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: DATABASE_URL unset");
+            return;
+        };
+        let (_guard, store) = fresh_store().await;
+        let a = ClaimId::new("claim:A").unwrap();
+        let r = ClaimId::new("claim:R").unwrap();
+
+        store
+            .append(assert_event(
+                "a1",
+                "claim:A",
+                "postgres",
+                "source:owner",
+                AuthorityLevel::High,
+            ))
+            .await
+            .expect("assert incumbent A");
+
+        // The supersede *operation* as one transaction: assert the replacement R, then mark
+        // A superseded by R. Both commit together; the supersession resolves R from the same
+        // in-flight transaction.
+        let receipts = store
+            .append_many(vec![
+                assert_event(
+                    "r1",
+                    "claim:R",
+                    "mysql",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+                supersede_event(
+                    "s1",
+                    "claim:A",
+                    "claim:R",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+            ])
+            .await
+            .expect("append_many");
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(
+            store
+                .materialized_projection(&a)
+                .await
+                .unwrap()
+                .unwrap()
+                .lifecycle,
+            ClaimLifecycle::Superseded
+        );
+        assert_eq!(
+            store
+                .materialized_projection(&r)
+                .await
+                .unwrap()
+                .unwrap()
+                .value,
+            ClaimValue::Text("mysql".to_string())
+        );
+        assert!(store.verify_projection(&a).await.unwrap());
+        assert!(store.verify_chain().await.unwrap());
+
+        // Atomicity: a batch whose second event is rejected (the supersession targets the
+        // now-terminal A) commits NOTHING — the R2 assert rolls back with it.
+        let bad = store
+            .append_many(vec![
+                assert_event(
+                    "r2",
+                    "claim:R2",
+                    "redis",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+                supersede_event(
+                    "s2",
+                    "claim:A",
+                    "claim:R2",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+            ])
+            .await;
+        assert!(bad.is_err());
+        assert!(
+            store
+                .materialized_projection(&ClaimId::new("claim:R2").unwrap())
+                .await
+                .unwrap()
                 .is_none()
         );
     }

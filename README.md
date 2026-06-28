@@ -49,12 +49,12 @@ source of truth for what is built.** In short:
   does tools, resources, and JSON-RPC batches) and the per-column Postgres event table +
   `uses_as_evidence` edges (the projection + relationship graph are built, above).
 
-The remaining gap is **operational persistence wiring**: the firewall loop runs, the
-predicate registry (M3) governs it, a local file-backed log already persists
-`assert`/`explain` across invocations, and the transactional Postgres backend (M2b) is
-**DB-verified** — but the runnable CLI/MCP surface still uses the file dev store, so making
-it a real multi-user product means wiring those commands onto `PostgresEventStore`. The
-[Roadmap](docs/roadmap.md) front-loads exactly that.
+The runnable surface persists either way: a local file dev log by default, or — with
+`DENT8_DATABASE_URL` set and a `--features postgres` build — the **DB-verified transactional
+Postgres backend** (each multi-event operation committed as one transaction). The remaining
+gap to a hardened multi-user product is an **authn/authz layer** (authority is still
+client-supplied) and an **operational witness service** for published anchoring. The
+[Roadmap](docs/roadmap.md) and [docs/STATUS.md](docs/STATUS.md) track exactly that.
 
 ## Initial Shape
 

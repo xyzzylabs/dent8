@@ -16,6 +16,12 @@ dent8-core = { path = "../dent8-core" }
 dent8-store = { path = "../dent8-store" }
 dent8-store-postgres = { path = "../dent8-store-postgres" }
 serde_json = "1"
+# Opt-in: lets the CLI/MCP run against Postgres (DENT8_DATABASE_URL). Off by default so the
+# stock `dent8` binary stays free of the async sqlx stack and uses the file dev store.
+tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
+
+[features]
+postgres = ["dent8-store-postgres/adapter", "dep:tokio"]
 
 [lints]
 workspace = true

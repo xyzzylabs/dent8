@@ -33,8 +33,9 @@ What remains to make it a *product*, not a demo:
   firewall via the shared `arbitrate_events`, JSONB event log + materialized projection/edge
   graph) — the `DATABASE_URL`-gated tests pass against a live `postgres:16`. Sharing the pure
   `arbitrate_events` means the firewall decision is the same tested code on both backends.
-  What remains for a multi-user product is wiring the runnable CLI/MCP onto it (still the
-  file dev store today).
+  The CLI/MCP **run on it** (`DENT8_DATABASE_URL`, a `--features postgres` build), each
+  multi-event operation committed transactionally (`append_many`). What remains for a
+  multi-user product is an authn/authz layer and an operational witness service.
 - `assert`/`supersede`/`retract`/`contradict`/`explain`/`replay` are built (retract
   authority-gated per [ADR 0008](decisions/0008-retraction-authority.md); contradict +
   uniqueness-vs-contestation per [ADR 0009](decisions/0009-uniqueness-and-contestation.md));

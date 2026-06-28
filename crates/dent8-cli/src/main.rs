@@ -122,9 +122,10 @@ Usage:
   dent8 schema postgres   print the Postgres schema
   dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
 
-`assert`/`explain` persist to a JSON-lines log (DENT8_LOG, default ./dent8-log.jsonl)
-and compose across invocations. authority is one of: low | medium | high | canonical.
-The operational, transactional backend is Postgres (M2b). See docs/STATUS.md."
+Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or the
+operational transactional Postgres backend when DENT8_DATABASE_URL is set (requires a build
+with --features postgres). authority is one of: low | medium | high | canonical.
+See docs/STATUS.md."
     );
 }
 
@@ -370,6 +371,21 @@ fn parse_authority(value: &str) -> Option<AuthorityLevel> {
 /// unique predicate — so a torn write or external edit that orphaned a believed claim is
 /// rejected loudly rather than silently masked by `explain`.
 fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
+    // Backend selection lives here (and in `append_events`) so every `op_*` is backend-aware
+    // with no changes of its own. With `DENT8_DATABASE_URL` set (and the `postgres` feature),
+    // reads/writes go to the operational Postgres store; otherwise to the file dev store.
+    #[cfg(feature = "postgres")]
+    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
+        return pg_load(&url);
+    }
+    #[cfg(not(feature = "postgres"))]
+    if std::env::var_os("DENT8_DATABASE_URL").is_some() {
+        return Err(
+            "DENT8_DATABASE_URL is set but this build lacks Postgres support — \
+                    rebuild with `--features postgres`"
+                .to_string(),
+        );
+    }
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -497,6 +513,13 @@ fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Resu
 /// store; true transactional atomicity is the Postgres backend (M2b).
 fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), String> {
     use std::io::Write;
+    // Postgres commits the whole operation (assert / supersede / retract / contradict) as one
+    // transaction via `append_many`; the file store just appends the lines. (A `not(postgres)`
+    // build that reaches here with the env var set already errored in `load_store`.)
+    #[cfg(feature = "postgres")]
+    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
+        return pg_append(&url, events);
+    }
     let mut buffer = String::new();
     for event in events {
         let line = serde_json::to_string(event).map_err(|error| format!("serialize: {error}"))?;
@@ -510,6 +533,54 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), String> {
         .map_err(|error| format!("cannot open {path}: {error}"))?;
     file.write_all(buffer.as_bytes())
         .map_err(|error| format!("cannot write {path}: {error}"))
+}
+
+/// A throwaway current-thread runtime to bridge the sync CLI to the async adapter. One per
+/// storage call is fine for a single-operation CLI process.
+#[cfg(feature = "postgres")]
+fn pg_runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("tokio runtime: {error}"))
+}
+
+/// Load the whole Postgres log into an in-memory working store (the decide snapshot the
+/// `op_*` functions read), connecting + self-migrating on the way.
+#[cfg(feature = "postgres")]
+fn pg_load(url: &str) -> Result<InMemoryEventStore, String> {
+    use dent8_store_postgres::PostgresEventStore;
+    pg_runtime()?.block_on(async {
+        let store = PostgresEventStore::connect(url)
+            .await
+            .map_err(|error| error.to_string())?;
+        store.migrate().await.map_err(|error| error.to_string())?;
+        let events = store
+            .scan_events(&dent8_store::EventFilter::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        InMemoryEventStore::from_trusted_events(events).map_err(|error| error.to_string())
+    })
+}
+
+/// Persist an accepted operation to Postgres as **one transaction** (`append_many`), so a
+/// multi-event supersede/retract/contradict commits atomically and is re-arbitrated by the
+/// durable firewall.
+#[cfg(feature = "postgres")]
+fn pg_append(url: &str, events: &[&ClaimEvent]) -> Result<(), String> {
+    use dent8_store_postgres::PostgresEventStore;
+    let owned: Vec<ClaimEvent> = events.iter().map(|&event| event.clone()).collect();
+    pg_runtime()?.block_on(async {
+        let store = PostgresEventStore::connect(url)
+            .await
+            .map_err(|error| error.to_string())?;
+        store.migrate().await.map_err(|error| error.to_string())?;
+        store
+            .append_many(owned)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    })
 }
 
 /// Build a validated `ClaimEvent` from CLI strings, returning a friendly error rather than

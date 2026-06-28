@@ -11,12 +11,14 @@ event hashing, the **unbypassable write-path firewall** with anti-laundering, th
 (`assert`/`supersede`/`retract`/`contradict`/`explain`/`replay`), the **`dent8-evals`
 adversarial corpus** (firewall vs recency-only baseline), an **external HMAC anchor** for
 tamper-resistance, and an **asymmetric (publicly-verifiable) signed-tree-head anchor**
-(Ed25519, feature-gated). Still gated on implementation: wiring the runnable CLI/MCP surface
-onto the **operational Postgres adapter** (the adapter — incl. the materialized
-projection/edge graph — is DB-verified against `postgres:16`, but the runnable surface still
-uses the single-writer file dev store), the official **`rmcp` SDK** (the v0 stdio server
-already does tools, resources, and JSON-RPC batches, and reads apply freshness), and a
-**published anchor cadence** (a witness that signs/publishes the head on its own infra).
+(Ed25519, feature-gated). The CLI/MCP run on the **operational Postgres adapter** (the
+adapter — incl. the materialized projection/edge graph — is DB-verified against `postgres:16`,
+and with `DENT8_DATABASE_URL` the runnable surface uses it, each multi-event operation
+committed transactionally; the stock binary keeps the file dev store). Still gated on
+implementation: an **authn/authz layer** (authority is client-supplied), the official **`rmcp`
+SDK** (the v0 stdio server already does tools, resources, and JSON-RPC batches, and reads
+apply freshness), and a **published anchor cadence** (a witness that signs/publishes the head
+on its own infra).
 The plan separates what is *claimable now* from what is *gated on
 implementation*, and is explicit about the weakest novelty claims. Prior art and the
 fact-checked basis are in [related-work.md](../related-work.md) and

@@ -256,9 +256,11 @@ trusted-reload path (`from_trusted_events`) is the only way to rehydrate an
 already-admitted log without re-arbitration. A persistent, file-backed CLI exposes the
 full lifecycle — `assert`, `supersede`, `retract`, `contradict`, `explain`, `replay` —
 composing across process invocations and re-validating log integrity on load. We are
-explicit (§10) that the runnable CLI/MCP use a single-writer **dev** store; the operational,
-transactional Postgres backend (`PostgresEventStore`) is built and **DB-verified**, but
-wiring the runnable surface onto it for multi-user operation is the remaining step.
+explicit (§10) that the stock binary uses a single-writer **dev** store; the operational,
+transactional Postgres backend (`PostgresEventStore`) is built, **DB-verified**, and **driven
+by the CLI/MCP** when `DENT8_DATABASE_URL` is set (a `--features postgres` build), each
+multi-event operation committed transactionally. The remaining productization step is an
+authn/authz layer (authority is client-supplied) and an operational witness service.
 
 ## 9. Evaluation
 
@@ -335,10 +337,10 @@ dent8 reframes agent memory as an integrity problem and shows that an event-sour
 model with authority-weighted belief revision can make poisoning *visible, attributable,
 and — for the headline non-resurrection property — refutable by construction*, with a
 reproducible adversarial evaluation and a tamper-evident log made tamper-resistant under an
-external-witness deployment (§6, §10). The honest frontier is the operational layer: wiring
-the runnable surface onto the transactional Postgres backend (the adapter itself, incl. the
-materialized projection/edge graph, is DB-verified against `postgres:16`; the CLI/MCP still
-use the file dev store), a published anchor cadence (the asymmetric signed-tree-head
+external-witness deployment (§6, §10). The honest frontier is the operational layer: an
+authn/authz layer that maps a verified caller to its allowed authority (the CLI/MCP already
+run on the DB-verified transactional Postgres backend via `DENT8_DATABASE_URL`, but authority
+is client-supplied), a published anchor cadence (the asymmetric signed-tree-head
 primitive is built; the signing/publishing witness is not), a `valid_to` validity interval
 (reads already apply TTL freshness — `explain` flags stale facts), the official `rmcp` SDK
 (the v0 server already does tools, resources, and batches), and a broader

@@ -74,9 +74,11 @@ un-arbitrated write path. The in-memory backend runs steps 1–6 end-to-end (it 
 `dent8 assert`/`supersede`/… and the demo exercise), and the **Postgres adapter runs them
 transactionally** — advisory-lock-serialized, in-transaction projection load + arbitration,
 atomic append, and materialized projection/edges (steps 1, 2, 5, 6) — and is **DB-verified**.
-So end-to-end firewall behavior *is* runnable. The remaining gap is *productization*, not
-enforcement: the runnable CLI/MCP still use the file-backed dev store rather than
-`PostgresEventStore` (see [STATUS.md](STATUS.md)).
+So end-to-end firewall behavior *is* runnable — and the CLI/MCP run on `PostgresEventStore`
+when `DENT8_DATABASE_URL` is set (a `--features postgres` build), with each multi-event
+operation committed in one transaction. The remaining gap is *productization*, not
+enforcement: there is no authn/authz layer (authority is client-supplied — "authority is
+asserted, not proven", below) and no operational witness service. See [STATUS.md](STATUS.md).
 
 ## Residual risks & honest limits
 

@@ -176,17 +176,22 @@ subject+predicate.
 
 ## Design-only — not implemented
 
-- **Postgres adapter — verified (M2b done).** The v0 `PostgresEventStore` and its
-  materialization (migration 003) are **DB-verified** (Library, above): the gated integration
-  tests pass against a live `postgres:16`, via [`compose.yml`](../compose.yml) locally or the
-  CI `postgres` job ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)). What remains
-  *design-only* is the richer per-column event table + `uses_as_evidence` edges (migration
-  001), operational tuning, and wiring the CLI/MCP onto Postgres for multi-user operation
-  (the runnable surface still uses the file-backed dev store).
-- **Persistent CLI — built (file-backed).** `assert` / `supersede` / `retract` /
-  `contradict` / `explain` / `replay` across invocations are **Runnable** (above);
-  wiring the CLI onto `PostgresEventStore` for multi-user operation is pending DB
-  verification of the adapter.
+- **Postgres adapter — verified, and the CLI/MCP run on it (M2b done).** The v0
+  `PostgresEventStore` + its materialization (migration 003) are **DB-verified** (the gated
+  integration tests pass against a live `postgres:16`, via [`compose.yml`](../compose.yml) or
+  the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_DATABASE_URL` set
+  and a `--features postgres` build, `dent8` and `mcp serve` read/write Postgres, with each
+  multi-event operation (supersede/retract/contradict) committed as one transaction
+  (`append_many`). Verified end-to-end against live Postgres. The stock binary keeps the file
+  dev store (sqlx is opt-in). What remains *design-only*: an **authn/authz layer** (authority
+  is still client-supplied), the richer per-column event table + `uses_as_evidence` edges
+  (migration 001), and operational tuning.
+- **Persistent CLI/MCP — built, file *or* Postgres.** `assert` / `supersede` / `retract` /
+  `contradict` / `explain` / `replay` across invocations are **Runnable** (above) over the
+  file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
+  build (selected in `load_store`/`append_events`; multi-event ops use the transactional
+  `append_many`) — verified end-to-end against live Postgres. The remaining product gap is an
+  authn/authz layer, not persistence.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
   tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.

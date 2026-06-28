@@ -195,6 +195,7 @@ dependencies = [
  "dent8-store",
  "dent8-store-postgres",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
