@@ -56,6 +56,26 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
             cmd_explain(kind, key, predicate)
         }
         [command, kind, key, predicate] if command == "replay" => cmd_replay(kind, key, predicate),
+        [command, sub] if command == "authority" && sub == "list" => cmd_authority_list(),
+        [command, sub, source, max] if command == "authority" && sub == "add" => {
+            cmd_authority_add(source, max, None, None)
+        }
+        [command, sub, source, max, issuer] if command == "authority" && sub == "add" => {
+            cmd_authority_add(source, max, Some(issuer), None)
+        }
+        [command, sub, source, max, issuer, scope] if command == "authority" && sub == "add" => {
+            cmd_authority_add(source, max, Some(issuer), Some(scope))
+        }
+        [command, sub, source] if command == "authority" && sub == "remove" => {
+            cmd_authority_remove(source)
+        }
+        [command] if command == "authority" => {
+            eprintln!(
+                "usage: dent8 authority <list | add <source> <max> [issuer] [scope] | \
+                 remove <source>>"
+            );
+            2
+        }
         [command] if command == "assert" => {
             eprintln!(
                 "usage: dent8 assert <subject-kind> <subject-key> <predicate> <value> \
@@ -119,12 +139,16 @@ Usage:
                           explain the believed fact, with an integrity receipt
   dent8 replay <kind> <key> <predicate>
                           replay the full event history (why the fact is what it is)
+  dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
+                          manage the source -> authority ceiling (authz)
   dent8 schema postgres   print the Postgres schema
   dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
 
 Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or the
 operational transactional Postgres backend when DENT8_DATABASE_URL is set (requires a build
 with --features postgres). authority is one of: low | medium | high | canonical.
+Authority ceiling: a source may assert at most its registered max; enforced once a registry
+exists (DENT8_AUTHORITY, default ./dent8-authority.json), else permissive (dev mode).
 See docs/STATUS.md."
     );
 }
@@ -340,9 +364,189 @@ fn short(hash: &str) -> String {
 // the operational, transactional backend is Postgres (M2b).
 
 const DEFAULT_LOG: &str = "dent8-log.jsonl";
+const DEFAULT_AUTHORITY: &str = "dent8-authority.json";
 
 fn log_path() -> String {
     std::env::var("DENT8_LOG").unwrap_or_else(|_| DEFAULT_LOG.to_string())
+}
+
+// ---- Source authority registry (authz: cap what a source may *claim*) ----------------
+//
+// dent8 otherwise trusts the caller-supplied `authority` argument. The registry maps a
+// `source` to the highest authority it may assert; a write above that ceiling is **rejected**
+// (not silently capped, so a laundering attempt stays visible in the error). Enforcement is
+// **opt-in**: it activates once a registry exists (created by `dent8 authority add`); without
+// one the CLI is permissive (dev mode). With one, a source not listed has an `Unknown` ceiling.
+
+/// What a registered source is allowed to assert.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct SourceGrant {
+    max_authority: AuthorityLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issuer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+struct SourceRegistry {
+    sources: std::collections::BTreeMap<String, SourceGrant>,
+}
+
+impl SourceRegistry {
+    /// A registered source's ceiling, or `Unknown` (the floor) for an unregistered one.
+    fn ceiling(&self, source: &str) -> AuthorityLevel {
+        self.sources
+            .get(source)
+            .map_or(AuthorityLevel::Unknown, |grant| grant.max_authority)
+    }
+}
+
+fn authority_registry_path() -> String {
+    std::env::var("DENT8_AUTHORITY").unwrap_or_else(|_| DEFAULT_AUTHORITY.to_string())
+}
+
+/// Load the registry, or `None` when none exists (enforcement disabled).
+fn load_authority_registry() -> Result<Option<SourceRegistry>, String> {
+    let path = authority_registry_path();
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents)
+            .map(Some)
+            .map_err(|error| format!("{path}: corrupt authority registry: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {path}: {error}")),
+    }
+}
+
+fn save_authority_registry(registry: &SourceRegistry) -> Result<(), String> {
+    let path = authority_registry_path();
+    let json =
+        serde_json::to_string_pretty(registry).map_err(|error| format!("serialize: {error}"))?;
+    std::fs::write(&path, format!("{json}\n"))
+        .map_err(|error| format!("cannot write {path}: {error}"))
+}
+
+/// The authz gate, run before the firewall on every write: reject a stated `authority` above
+/// its `source`'s registered ceiling. A no-op when no registry is configured.
+fn enforce_source_ceiling(source: &str, requested: AuthorityLevel) -> Result<(), OpError> {
+    let registry = load_authority_registry().map_err(OpError::Invalid)?;
+    ceiling_check(registry.as_ref(), source, requested)
+}
+
+/// The pure decision: reject `requested` above the source's ceiling. `None` registry (none
+/// configured) is permissive. Rejection — not silent capping — keeps a laundering attempt
+/// visible.
+fn ceiling_check(
+    registry: Option<&SourceRegistry>,
+    source: &str,
+    requested: AuthorityLevel,
+) -> Result<(), OpError> {
+    let Some(registry) = registry else {
+        return Ok(());
+    };
+    let ceiling = registry.ceiling(source);
+    if requested > ceiling {
+        return Err(OpError::Rejected(format!(
+            "authority ceiling: source {source:?} may assert at most {ceiling:?}, but requested \
+             {requested:?} (grant it with `dent8 authority add {source} <max>`)"
+        )));
+    }
+    Ok(())
+}
+
+fn cmd_authority_list() -> i32 {
+    match load_authority_registry() {
+        Ok(None) => {
+            println!(
+                "no authority registry at {} — enforcement is OFF (dev mode). Add a source \
+                 with `dent8 authority add <source> <max>`.",
+                authority_registry_path()
+            );
+            0
+        }
+        Ok(Some(registry)) if registry.sources.is_empty() => {
+            println!("authority registry is empty (every source has an Unknown ceiling)");
+            0
+        }
+        Ok(Some(registry)) => {
+            for (source, grant) in &registry.sources {
+                let issuer = grant
+                    .issuer
+                    .as_deref()
+                    .map_or_else(String::new, |issuer| format!("  issuer={issuer}"));
+                let scope = grant
+                    .scope
+                    .as_deref()
+                    .map_or_else(String::new, |scope| format!("  scope={scope}"));
+                println!("{source}  max={:?}{issuer}{scope}", grant.max_authority);
+            }
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            2
+        }
+    }
+}
+
+fn cmd_authority_add(source: &str, max: &str, issuer: Option<&str>, scope: Option<&str>) -> i32 {
+    let Some(max_authority) = parse_authority(max) else {
+        eprintln!("unknown authority '{max}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    let mut registry = match load_authority_registry() {
+        Ok(registry) => registry.unwrap_or_default(),
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    registry.sources.insert(
+        source.to_string(),
+        SourceGrant {
+            max_authority,
+            issuer: issuer.map(str::to_string),
+            scope: scope.map(str::to_string),
+        },
+    );
+    match save_authority_registry(&registry) {
+        Ok(()) => {
+            println!("granted {source} a max authority of {max_authority:?}");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+fn cmd_authority_remove(source: &str) -> i32 {
+    let mut registry = match load_authority_registry() {
+        Ok(Some(registry)) => registry,
+        Ok(None) => {
+            eprintln!("no authority registry to remove from");
+            return 1;
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    if registry.sources.remove(source).is_none() {
+        eprintln!("{source} is not in the authority registry");
+        return 1;
+    }
+    match save_authority_registry(&registry) {
+        Ok(()) => {
+            println!("revoked {source}");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
 }
 
 fn now_millis() -> TimestampMillis {
@@ -681,6 +885,7 @@ fn op_assert(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
+    enforce_source_ceiling(source, authority)?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let now = now_millis();
     // A fresh claim per assertion (keyed by sequence); the registry's uniqueness governs
@@ -828,6 +1033,7 @@ fn op_supersede(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
+    enforce_source_ceiling(source, authority)?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -975,6 +1181,7 @@ fn op_retract(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
+    enforce_source_ceiling(source, authority)?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -1101,6 +1308,7 @@ fn op_contradict(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
+    enforce_source_ceiling(source, authority)?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -1396,6 +1604,37 @@ fn base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_authority_ceiling_rejects_writes_above_a_source_grant() {
+        let mut registry = SourceRegistry::default();
+        registry.sources.insert(
+            "source:owner".to_string(),
+            SourceGrant {
+                max_authority: AuthorityLevel::High,
+                issuer: None,
+                scope: None,
+            },
+        );
+        let check = |source, level| ceiling_check(Some(&registry), source, level);
+
+        // At or below the grant is admitted.
+        assert!(check("source:owner", AuthorityLevel::High).is_ok());
+        assert!(check("source:owner", AuthorityLevel::Low).is_ok());
+        // Above the grant is rejected (a low/medium source cannot mint canonical).
+        assert!(matches!(
+            check("source:owner", AuthorityLevel::Canonical),
+            Err(OpError::Rejected(_))
+        ));
+        // An unregistered source has an Unknown ceiling: anything above Unknown is rejected.
+        assert!(matches!(
+            check("source:web-scrape", AuthorityLevel::Low),
+            Err(OpError::Rejected(_))
+        ));
+        assert!(check("source:web-scrape", AuthorityLevel::Unknown).is_ok());
+        // No registry configured -> permissive (dev mode).
+        assert!(ceiling_check(None, "source:web-scrape", AuthorityLevel::Canonical).is_ok());
+    }
 
     #[test]
     fn the_read_annotation_flags_stale_and_terminal_facts() {

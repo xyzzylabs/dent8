@@ -5,9 +5,11 @@
 .env.*
 !.env.example
 
-# The CLI's default file-backed event log (DENT8_LOG).
+# The CLI's default file-backed event log (DENT8_LOG) and authority registry (DENT8_AUTHORITY).
 /dent8-log.jsonl
 dent8-log.jsonl
+/dent8-authority.json
+dent8-authority.json
 
 # Editor and OS noise.
 .DS_Store

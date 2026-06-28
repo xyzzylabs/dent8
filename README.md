@@ -51,9 +51,11 @@ source of truth for what is built.** In short:
 
 The runnable surface persists either way: a local file dev log by default, or — with
 `DENT8_DATABASE_URL` set and a `--features postgres` build — the **DB-verified transactional
-Postgres backend** (each multi-event operation committed as one transaction). The remaining
-gap to a hardened multi-user product is an **authn/authz layer** (authority is still
-client-supplied) and an **operational witness service** for published anchoring. The
+Postgres backend** (each multi-event operation committed as one transaction). An opt-in
+**authority ceiling** (`dent8 authority`) caps what each source may assert, rejecting a
+write above its registered ceiling. The remaining gap to a hardened multi-user product is
+**cryptographic caller identity** (signed grants — *which* source is calling is still
+asserted) and an **operational witness service** for published anchoring. The
 [Roadmap](docs/roadmap.md) and [docs/STATUS.md](docs/STATUS.md) track exactly that.
 
 ## Initial Shape

@@ -77,8 +77,10 @@ atomic append, and materialized projection/edges (steps 1, 2, 5, 6) — and is *
 So end-to-end firewall behavior *is* runnable — and the CLI/MCP run on `PostgresEventStore`
 when `DENT8_DATABASE_URL` is set (a `--features postgres` build), with each multi-event
 operation committed in one transaction. The remaining gap is *productization*, not
-enforcement: there is no authn/authz layer (authority is client-supplied — "authority is
-asserted, not proven", below) and no operational witness service. See [STATUS.md](STATUS.md).
+enforcement: an opt-in **authority ceiling** caps what each source may assert (`dent8
+authority`), but *which* source is calling is still asserted, not cryptographically proven
+("authority is asserted, not proven", below), and there is no operational witness service.
+See [STATUS.md](STATUS.md).
 
 ## Residual risks & honest limits
 
@@ -102,9 +104,14 @@ asserted, not proven", below) and no operational witness service. See [STATUS.md
     the same head with Ed25519, so a published head is **publicly verifiable** (RFC 6962-style
     signed tree head). Both are built; the operational cadence/publication above is the
     remaining piece.
-- **Authority is asserted, not proven.** dent8 trusts the appender's stated
-  `Authority`. A compromised high-authority actor is out of scope; authority
-  arbitration only helps against *low*-privilege injection (the MINJA case).
+- **Authority is ceiling-capped, but the source identity is asserted, not proven.** The
+  opt-in **authority registry** (`dent8 authority`) caps a stated `Authority` at the source's
+  registered ceiling and *rejects* an over-ceiling write — so a low-trust source cannot mint
+  `canonical` even by passing it. What is *not yet* proven is the source identity itself: a
+  caller can still claim to *be* a high-ceiling source. A compromised high-authority actor is
+  out of scope; cryptographic caller identity (signed grants) is the deferred next layer.
+  Authority arbitration plus the ceiling chiefly defends against *low*-privilege injection
+  (the MINJA case).
 - **The firewall cannot judge truth.** It governs provenance, freshness, authority,
   and contradiction *visibility* — not whether a well-formed, well-sourced claim is
   factually correct. That is the correct scope for an integrity layer.

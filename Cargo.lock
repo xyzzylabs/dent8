@@ -194,6 +194,7 @@ dependencies = [
  "dent8-core",
  "dent8-store",
  "dent8-store-postgres",
+ "serde",
  "serde_json",
  "tokio",
 ]

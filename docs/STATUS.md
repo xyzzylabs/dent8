@@ -58,6 +58,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt) — and accepts
   **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
   omitted; an empty batch is `-32600`).
+- **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
+  **authority layer (authz)**: a source→authority *ceiling* registry. Every write checks the
+  caller-supplied `authority` against its `source`'s registered ceiling *before* the firewall
+  and **rejects** (does not silently cap) a write above it — so a low-trust source cannot mint
+  `canonical`, and the rejection names the source, ceiling, and request for debuggability.
+  **Opt-in**: enforcement activates once a registry exists (`DENT8_AUTHORITY`, default
+  `./dent8-authority.json`); without one the CLI is permissive (dev mode), and an unlisted
+  source has an `Unknown` ceiling. (Caps *what a source may claim*; cryptographic verification
+  of *which source is calling* — signed tokens — is deferred.)
 - `dent8 schema postgres` — prints the Postgres schema.
 - `dent8 --version`, `dent8 --help`.
 
@@ -183,9 +192,10 @@ subject+predicate.
   and a `--features postgres` build, `dent8` and `mcp serve` read/write Postgres, with each
   multi-event operation (supersede/retract/contradict) committed as one transaction
   (`append_many`). Verified end-to-end against live Postgres. The stock binary keeps the file
-  dev store (sqlx is opt-in). What remains *design-only*: an **authn/authz layer** (authority
-  is still client-supplied), the richer per-column event table + `uses_as_evidence` edges
-  (migration 001), and operational tuning.
+  dev store (sqlx is opt-in). What remains *design-only*: **cryptographic caller identity**
+  (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
+  is calling is still asserted, not proven by a signed token), the richer per-column event
+  table + `uses_as_evidence` edges (migration 001), and operational tuning.
 - **Persistent CLI/MCP — built, file *or* Postgres.** `assert` / `supersede` / `retract` /
   `contradict` / `explain` / `replay` across invocations are **Runnable** (above) over the
   file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
@@ -195,7 +205,8 @@ subject+predicate.
   the Postgres path mints event/claim ids optimistically from a snapshot, so two writers
   racing one DB are safely serialized and conflict-rejected (no corruption) but one may get a
   *retryable* write conflict — treat it as effectively single-writer until DB-assigned ids
-  land (hardening). The remaining product gap is an authn/authz layer, not persistence.
+  land (hardening). Authz (source→authority ceilings) is built (`dent8 authority`, above); the
+  remaining product gap is cryptographic caller identity and the witness service.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
   tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
