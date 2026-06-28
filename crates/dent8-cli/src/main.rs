@@ -147,9 +147,11 @@ Usage:
 Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or the
 operational transactional Postgres backend when DENT8_DATABASE_URL is set (requires a build
 with --features postgres). authority is one of: low | medium | high | canonical.
-Authority ceiling: a source may assert at most its registered max; enforced once a registry
-exists (DENT8_AUTHORITY, default ./dent8-authority.json), else permissive (dev mode).
-See docs/STATUS.md."
+Authority ceiling: a source may assert at most its registered max. Enforced once a registry
+exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
+source is blocked from writing. Without a registry the CLI is permissive (dev mode). The
+registry is host-local config, independent of the event backend. issuer/scope are recorded
+but NOT enforced in v0. See docs/STATUS.md."
     );
 }
 
@@ -422,8 +424,14 @@ fn save_authority_registry(registry: &SourceRegistry) -> Result<(), String> {
     let path = authority_registry_path();
     let json =
         serde_json::to_string_pretty(registry).map_err(|error| format!("serialize: {error}"))?;
-    std::fs::write(&path, format!("{json}\n"))
-        .map_err(|error| format!("cannot write {path}: {error}"))
+    // Atomic write: a torn save would corrupt the registry, and a corrupt registry fails
+    // *closed* (every write is then blocked). Stage a sibling temp file, then rename it over
+    // the target — rename is atomic within a filesystem. Concurrent writers remain
+    // last-write-wins, which is acceptable for a human-managed config file.
+    let tmp = format!("{path}.tmp.{}", std::process::id());
+    std::fs::write(&tmp, format!("{json}\n"))
+        .map_err(|error| format!("cannot write {tmp}: {error}"))?;
+    std::fs::rename(&tmp, &path).map_err(|error| format!("cannot install {path}: {error}"))
 }
 
 /// The authz gate, run before the firewall on every write: reject a stated `authority` above
@@ -435,7 +443,10 @@ fn enforce_source_ceiling(source: &str, requested: AuthorityLevel) -> Result<(),
 
 /// The pure decision: reject `requested` above the source's ceiling. `None` registry (none
 /// configured) is permissive. Rejection — not silent capping — keeps a laundering attempt
-/// visible.
+/// visible. Only `max_authority` is consulted: a grant's `issuer`/`scope` are recorded
+/// metadata, **not** enforced in v0 (scope does not restrict which predicates a source may
+/// write). An active registry is deny-by-default — an unlisted source's ceiling is `Unknown`,
+/// below the lowest requestable level (`Low`), so it is blocked from writing entirely.
 fn ceiling_check(
     registry: Option<&SourceRegistry>,
     source: &str,
@@ -465,7 +476,10 @@ fn cmd_authority_list() -> i32 {
             0
         }
         Ok(Some(registry)) if registry.sources.is_empty() => {
-            println!("authority registry is empty (every source has an Unknown ceiling)");
+            println!(
+                "authority registry is empty — deny-by-default: every source is blocked from \
+                 writing until granted with `dent8 authority add <source> <max>`."
+            );
             0
         }
         Ok(Some(registry)) => {
@@ -478,7 +492,15 @@ fn cmd_authority_list() -> i32 {
                     .scope
                     .as_deref()
                     .map_or_else(String::new, |scope| format!("  scope={scope}"));
-                println!("{source}  max={:?}{issuer}{scope}", grant.max_authority);
+                let note = if grant.issuer.is_some() || grant.scope.is_some() {
+                    "  (issuer/scope recorded, NOT enforced in v0)"
+                } else {
+                    ""
+                };
+                println!(
+                    "{source}  max={:?}{issuer}{scope}{note}",
+                    grant.max_authority
+                );
             }
             0
         }

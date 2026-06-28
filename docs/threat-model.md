@@ -111,7 +111,10 @@ See [STATUS.md](STATUS.md).
   caller can still claim to *be* a high-ceiling source. A compromised high-authority actor is
   out of scope; cryptographic caller identity (signed grants) is the deferred next layer.
   Authority arbitration plus the ceiling chiefly defends against *low*-privilege injection
-  (the MINJA case).
+  (the MINJA case). Two scope notes: the ceiling is enforced at the CLI/MCP `op_*` write
+  layer, so a process driving the Postgres adapter *directly* is outside this boundary; and a
+  grant's `issuer`/`scope` are recorded but **not enforced** in v0 (scope does not yet
+  restrict which predicates a source may write).
 - **The firewall cannot judge truth.** It governs provenance, freshness, authority,
   and contradiction *visibility* — not whether a well-formed, well-sourced claim is
   factually correct. That is the correct scope for an integrity layer.

@@ -59,14 +59,21 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
   omitted; an empty batch is `-32600`).
 - **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
-  **authority layer (authz)**: a source→authority *ceiling* registry. Every write checks the
-  caller-supplied `authority` against its `source`'s registered ceiling *before* the firewall
-  and **rejects** (does not silently cap) a write above it — so a low-trust source cannot mint
-  `canonical`, and the rejection names the source, ceiling, and request for debuggability.
-  **Opt-in**: enforcement activates once a registry exists (`DENT8_AUTHORITY`, default
-  `./dent8-authority.json`); without one the CLI is permissive (dev mode), and an unlisted
-  source has an `Unknown` ceiling. (Caps *what a source may claim*; cryptographic verification
-  of *which source is calling* — signed tokens — is deferred.)
+  **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
+  firewall). A source→authority *ceiling* registry: every write checks the caller-supplied
+  `authority` against its `source`'s registered ceiling and **rejects** (does not silently
+  cap) a write above it — so a low-trust source cannot mint `canonical`, and the rejection
+  names the source, ceiling, and request for debuggability. **Opt-in**: enforcement activates
+  once a registry exists (`DENT8_AUTHORITY`, default `./dent8-authority.json`); without one the
+  CLI is permissive (dev mode). With one it is **deny-by-default** — an unlisted source's
+  ceiling is `Unknown`, below the lowest requestable level (`Low`), so it is blocked from
+  writing until granted. The registry is **host-local config**, independent of the event
+  backend (a Postgres deployment still reads `DENT8_AUTHORITY` from the local filesystem; sync
+  it per instance). Caveats: a grant's `issuer`/`scope` are **recorded but not enforced** in
+  v0 (scope does not restrict predicates); the ceiling is an `op_*`-layer check, so a process
+  calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
+  boundary; and cryptographic verification of *which source is calling* (signed tokens) is
+  deferred — the ceiling caps *what a source may claim*, not *who it is*.
 - `dent8 schema postgres` — prints the Postgres schema.
 - `dent8 --version`, `dent8 --help`.
 
