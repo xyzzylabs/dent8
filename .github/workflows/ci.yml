@@ -13,7 +13,7 @@ jobs:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -50,7 +50,7 @@ jobs:
       # otherwise — see crates/dent8-store-postgres/src/adapter.rs).
       DATABASE_URL: postgres://postgres:dent8@localhost:5432/dent8
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # The integration tests share one database; they self-serialize (a process-static
