@@ -141,6 +141,15 @@ subject+predicate.
   resulting lifecycle), plus **terminal absorption / non-resurrection**, value immutability,
   `updated_at` tracking, replay determinism, and claim isolation. The cross-check is verified
   to catch a deliberately wrong model gate.
+  [`tests/proptest_robustness.rs`](../crates/dent8-core/tests/proptest_robustness.rs) — the
+  **robustness** complement: the untrusted-input pipeline (parse → `event_hash`/`hash_chain` →
+  `canonical_bytes` → `apply_event`) never **panics** on adversarial input, including values
+  that bypass the constructors' validation via derived `Deserialize` (out-of-range
+  `Confidence`, extreme timestamps, `u64::MAX` TTL, empty/oversized ids, deep JSON); a panic
+  on hand-edited-log / MCP / JSONB input would be a DoS, not a wrong answer. The store
+  firewall has the matching guard ([`dent8-store/tests/robustness.rs`](../crates/dent8-store/tests/robustness.rs)):
+  `replay_entity` absorbs self-referential / cyclic / dangling supersessions and extreme
+  freshness/TTL math without crashing.
 - **Golden replay fixtures** ([`tests/golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs),
   fixtures in [`tests/golden/replay/`](../crates/dent8-core/tests/golden/replay)): named
   event streams frozen on disk as canonical `.events.jsonl` (the `DENT8_LOG` format) +
