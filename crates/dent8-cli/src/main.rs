@@ -656,6 +656,61 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
     Ok(store)
 }
 
+/// The event log as a raw, ordered `Vec<ClaimEvent>` — the same global append order
+/// [`load_store`] reads, but **without** the trusted-reload integrity gate
+/// (`validate_unique_log`). The witness must be the *authoritative* tamper oracle: it has to
+/// render its own `TAMPER`/`ROLLBACK` verdict even on a log the integrity gate would reject,
+/// rather than be preempted by that gate's error. A genuinely unparseable line is still a hard
+/// error (nothing to witness).
+#[cfg(feature = "witness")]
+fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
+    #[cfg(feature = "postgres")]
+    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
+        return pg_scan_raw(&url);
+    }
+    #[cfg(not(feature = "postgres"))]
+    if std::env::var_os("DENT8_DATABASE_URL").is_some() {
+        return Err(
+            "DENT8_DATABASE_URL is set but this build lacks Postgres support — \
+                    rebuild with `--features postgres`"
+                .to_string(),
+        );
+    }
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("cannot read {path}: {error}")),
+    };
+    let mut events = Vec::new();
+    for (line_no, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event: ClaimEvent = serde_json::from_str(line)
+            .map_err(|error| format!("{path}:{}: corrupt event: {error}", line_no + 1))?;
+        events.push(event);
+    }
+    Ok(events)
+}
+
+/// Raw ordered Postgres log for the witness: connect + self-migrate + scan, with **no**
+/// integrity gate (see [`load_raw_events`]).
+#[cfg(all(feature = "witness", feature = "postgres"))]
+fn pg_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
+    use dent8_store_postgres::PostgresEventStore;
+    pg_runtime()?.block_on(async {
+        let store = PostgresEventStore::connect(url)
+            .await
+            .map_err(|error| error.to_string())?;
+        store.migrate().await.map_err(|error| error.to_string())?;
+        store
+            .scan_events(&dent8_store::EventFilter::default())
+            .await
+            .map_err(|error| error.to_string())
+    })
+}
+
 /// The next event/claim sequence: one past the **highest** `event:{n}` id actually
 /// present, not the log line-count — so a lost or surgically-removed line cannot make a
 /// later command mint a colliding id (which would wedge the command and the reload).

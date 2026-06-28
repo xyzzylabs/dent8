@@ -17,11 +17,17 @@
 //! the key can re-sign a rewrite. `keygen` prints that warning; the operational witness
 //! service (a separate signer on a cadence, key rotation) is the layer above this. See the
 //! threat model's T6 residuals.
+//!
+//! Residual — the witness log itself is plain appended JSONL. Every head is independently
+//! signature-verified (none can be *forged* without the key), but an attacker with write
+//! access can *drop* the latest head to shrink coverage — undetectable from the log alone.
+//! That is the same "missing/rewound anchor" residual the operated service closes by
+//! **publishing** heads externally; `verify` prints how many heads it checked so an operator
+//! who knows how many were issued can spot a shortfall.
 
 use std::io::Write;
 
 use dent8_core::{ClaimEvent, SignedTreeHead, sign_head, verify_signed_head};
-use dent8_store::{EventFilter, EventStore};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 const DEFAULT_KEY: &str = "dent8-witness.key";
@@ -40,13 +46,11 @@ fn public_key_path(key: &str) -> String {
 }
 
 /// The current event log in global append order — the chain `sign_head`/`verify_signed_head`
-/// commit to. Backend-aware (file dev store or Postgres), reusing the same loader the rest of
-/// the CLI uses.
+/// commit to. Backend-aware (file dev store or Postgres). Loaded **raw**, without the
+/// trusted-reload integrity gate, so the witness renders its own tamper verdict on a log that
+/// gate would reject rather than being preempted by it.
 fn load_events() -> Result<Vec<ClaimEvent>, String> {
-    let store = crate::load_store(&crate::log_path())?;
-    store
-        .scan_events(&EventFilter::default())
-        .map_err(|error| error.to_string())
+    crate::load_raw_events(&crate::log_path())
 }
 
 /// Generate an Ed25519 witness keypair: the private signing key (hex, `0600`) at
@@ -72,12 +76,20 @@ pub fn keygen() -> i32 {
     let public = public_key_path(&key);
     if let Err(error) = std::fs::write(&public, format!("{}\n", hex::encode(verifying.to_bytes())))
     {
-        eprintln!("cannot write {public}: {error}");
+        // Don't strand a private key with no public counterpart — a later `keygen` would refuse
+        // to overwrite it. Best-effort remove the half-written pair.
+        let _ = std::fs::remove_file(&key);
+        eprintln!("cannot write {public}: {error} (removed the partial key {key})");
         return 1;
     }
     println!(
         "wrote witness signing key to {key} (keep it OFF the log-writer's machine — that \
          separation is what gives tamper-resistance)\nwrote public verifying key to {public}"
+    );
+    #[cfg(not(unix))]
+    println!(
+        "note: this is a non-Unix platform — {key} was NOT restricted to owner-only file \
+         permissions; protect it yourself"
     );
     0
 }
