@@ -11,6 +11,8 @@ use dent8_store::{
 use dent8_store_postgres::INITIAL_SCHEMA_SQL;
 
 mod mcp;
+#[cfg(feature = "witness")]
+mod witness;
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -76,45 +78,63 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
             );
             2
         }
-        [command] if command == "assert" => {
-            eprintln!(
-                "usage: dent8 assert <subject-kind> <subject-key> <predicate> <value> \
-                 <authority> <source>\n  e.g.  dent8 assert repo myproj database postgres high owner"
-            );
-            2
-        }
-        [command] if command == "supersede" => {
-            eprintln!(
-                "usage: dent8 supersede <subject-kind> <subject-key> <predicate> <new-value> \
-                 <authority> <source>\n  e.g.  dent8 supersede repo myproj database mysql high owner"
-            );
-            2
-        }
-        [command] if command == "retract" => {
-            eprintln!(
-                "usage: dent8 retract <subject-kind> <subject-key> <predicate> <authority> \
-                 <source>\n  e.g.  dent8 retract repo myproj database high owner"
-            );
-            2
-        }
-        [command] if command == "contradict" => {
-            eprintln!(
-                "usage: dent8 contradict <subject-kind> <subject-key> <predicate> <opposing-value> \
-                 <authority> <source>\n  e.g.  dent8 contradict repo myproj database mysql low scanner"
-            );
-            2
-        }
-        [command] if command == "explain" => {
-            eprintln!("usage: dent8 explain <subject-kind> <subject-key> <predicate>");
-            2
-        }
-        [command] if command == "replay" => {
-            eprintln!("usage: dent8 replay <subject-kind> <subject-key> <predicate>");
-            2
-        }
         [command, subcommand] if command == "mcp" && subcommand == "serve" => mcp::serve(),
+        [command, rest @ ..] if command == "witness" => run_witness(rest),
+        [command] => usage_error(command),
         _ => {
             print_help();
+            2
+        }
+    }
+}
+
+/// A known verb invoked with the wrong arity prints its specific usage (exit 2); anything else
+/// falls back to the general help. Keeps the per-verb usage text out of the dispatch match.
+fn usage_error(command: &str) -> i32 {
+    let usage = match command {
+        "assert" => {
+            "dent8 assert <subject-kind> <subject-key> <predicate> <value> <authority> <source>\
+             \n  e.g.  dent8 assert repo myproj database postgres high owner"
+        }
+        "supersede" => {
+            "dent8 supersede <subject-kind> <subject-key> <predicate> <new-value> <authority> \
+             <source>\n  e.g.  dent8 supersede repo myproj database mysql high owner"
+        }
+        "retract" => {
+            "dent8 retract <subject-kind> <subject-key> <predicate> <authority> <source>\
+             \n  e.g.  dent8 retract repo myproj database high owner"
+        }
+        "contradict" => {
+            "dent8 contradict <subject-kind> <subject-key> <predicate> <opposing-value> \
+             <authority> <source>\n  e.g.  dent8 contradict repo myproj database mysql low scanner"
+        }
+        "explain" => "dent8 explain <subject-kind> <subject-key> <predicate>",
+        "replay" => "dent8 replay <subject-kind> <subject-key> <predicate>",
+        _ => {
+            print_help();
+            return 2;
+        }
+    };
+    eprintln!("usage: {usage}");
+    2
+}
+
+/// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
+/// exists only to explain how to enable it.
+fn run_witness(args: &[String]) -> i32 {
+    #[cfg(not(feature = "witness"))]
+    {
+        let _ = args;
+        eprintln!("`dent8 witness` requires a build with `--features witness`");
+        2
+    }
+    #[cfg(feature = "witness")]
+    match args {
+        [sub] if sub == "keygen" => witness::keygen(),
+        [sub] if sub == "sign" => witness::sign(),
+        [sub] if sub == "verify" => witness::verify(),
+        _ => {
+            eprintln!("usage: dent8 witness <keygen | sign | verify>");
             2
         }
     }
@@ -141,6 +161,9 @@ Usage:
                           replay the full event history (why the fact is what it is)
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
+  dent8 witness keygen | sign | verify
+                          emit/verify Ed25519 signed tree heads to detect a history
+                          rewrite or rollback (needs --features witness)
   dent8 schema postgres   print the Postgres schema
   dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
 

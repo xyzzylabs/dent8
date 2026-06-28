@@ -74,6 +74,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
   boundary; and cryptographic verification of *which source is calling* (signed tokens) is
   deferred — the ceiling caps *what a source may claim*, not *who it is*.
+- **`dent8 witness keygen | sign | verify`** — the **witness primitive** (behind
+  `--features witness`), built on the Ed25519 signed tree head. `keygen` writes a keypair
+  (private key `0600`, with the warning to keep it off the log-writer's machine); `sign` emits
+  a signed tree head over the current log and appends it to a witness log
+  (`DENT8_WITNESS_LOG`); `verify` re-checks every witnessed head against the current log's
+  matching **prefix** and that the counts never decrease — catching a history **rewrite**
+  (a re-hashed-forward edit an internal `verify_chain` cannot, threat-model T6) as `TAMPER`
+  and a truncation/reorder as `ROLLBACK`. This is the runnable *primitive*; the operated
+  service (a separate signer on a cadence, publication, key rotation) is the layer above it.
 - `dent8 schema postgres` — prints the Postgres schema.
 - `dent8 --version`, `dent8 --help`.
 
@@ -215,16 +224,19 @@ subject+predicate.
   remaining **v0 caveat is CLI-level**: the CLI mints `event:{n}` ids from a snapshot count, so
   two CLI *processes* racing one DB can pick the same id — safely caught as a *retryable* write
   conflict (no corruption), but it means the CLI is effectively single-writer until snapshot-
-  independent ids land. Authz (source→authority ceilings) is built (`dent8 authority`, above);
-  the remaining product gap is cryptographic caller identity and the witness service.
+  independent ids land. Authz (source→authority ceilings) is built (`dent8 authority`, above)
+  and the witness *primitive* is runnable (`dent8 witness`, above); the remaining product gap
+  is cryptographic caller identity and the *operated* witness service.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
   tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
-- **A published anchor cadence / witness service.** Both anchor primitives — symmetric
-  (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree head) —
-  are built and tested (Library, above). What is design-only is the *operational* piece: a
-  witness that periodically signs and **publishes** the head on its own infrastructure, and
-  key management/rotation for it.
+- **A published anchor cadence / *operated* witness service.** Both anchor primitives —
+  symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
+  head) — are built and tested (Library, above), and the signed-tree-head primitive is now
+  runnable end-to-end as **`dent8 witness keygen | sign | verify`** (Runnable, above), which
+  emits heads and detects rewrite/rollback. What is still design-only is the *operated* piece:
+  a witness running on **separate infrastructure** that signs on a cadence and **publishes**
+  the head (so the key is provably off the writer), plus key rotation.
 
 ## How to keep this honest
 

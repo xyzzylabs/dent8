@@ -11,6 +11,11 @@ dent8-log.jsonl
 /dent8-authority.json
 dent8-authority.json
 
+# Witness keys + signed-tree-head log (DENT8_WITNESS_KEY / DENT8_WITNESS_LOG).
+dent8-witness.key
+dent8-witness.key.pub
+dent8-witness.jsonl
+
 # Editor and OS noise.
 .DS_Store
 *.swp

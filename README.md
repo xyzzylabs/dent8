@@ -53,10 +53,13 @@ The runnable surface persists either way: a local file dev log by default, or �
 `DENT8_DATABASE_URL` set and a `--features postgres` build — the **DB-verified transactional
 Postgres backend** (each multi-event operation committed as one transaction). An opt-in
 **authority ceiling** (`dent8 authority`) caps what each source may assert, rejecting a
-write above its registered ceiling. The remaining gap to a hardened multi-user product is
-**cryptographic caller identity** (signed grants — *which* source is calling is still
-asserted) and an **operational witness service** for published anchoring. The
-[Roadmap](docs/roadmap.md) and [docs/STATUS.md](docs/STATUS.md) track exactly that.
+write above its registered ceiling. The witness is runnable as a *primitive* — **`dent8
+witness`** (`--features witness`) emits Ed25519 signed tree heads and detects a history
+rewrite or rollback that an internal chain re-verify cannot. The remaining gap to a hardened
+multi-user product is **cryptographic caller identity** (signed grants — *which* source is
+calling is still asserted) and an **operated witness service** that signs on a cadence from
+separate infrastructure. The [Roadmap](docs/roadmap.md) and
+[docs/STATUS.md](docs/STATUS.md) track exactly that.
 
 ## Initial Shape
 
