@@ -559,15 +559,28 @@ fn pg_load(url: &str) -> Result<InMemoryEventStore, String> {
             .scan_events(&dent8_store::EventFilter::default())
             .await
             .map_err(|error| error.to_string())?;
-        InMemoryEventStore::from_trusted_events(events).map_err(|error| error.to_string())
+        let working = InMemoryEventStore::from_trusted_events(events)
+            .map_err(|error| format!("cannot load Postgres log: {error}"))?;
+        // Re-run the same integrity gate the file path enforces, so the operational backend is
+        // at least as defensive: a torn/forged state (e.g. a direct SQL edit) is rejected, not
+        // silently believed.
+        validate_unique_log(&working, now_millis())?;
+        Ok(working)
     })
 }
 
 /// Persist an accepted operation to Postgres as **one transaction** (`append_many`), so a
 /// multi-event supersede/retract/contradict commits atomically and is re-arbitrated by the
 /// durable firewall.
+///
+/// v0 concurrency: commits are serialized by the adapter's advisory lock and any racing write
+/// is safely rejected (the `event_id` UNIQUE constraint + in-transaction re-arbitration), so
+/// there is no corruption — but event/claim ids are minted optimistically from a snapshot, so
+/// two writers racing the same DB can collide and one gets a **retryable** write conflict.
+/// Treat the v0 Postgres path as effectively single-writer until DB-assigned ids land.
 #[cfg(feature = "postgres")]
 fn pg_append(url: &str, events: &[&ClaimEvent]) -> Result<(), String> {
+    use dent8_store::StoreError;
     use dent8_store_postgres::PostgresEventStore;
     let owned: Vec<ClaimEvent> = events.iter().map(|&event| event.clone()).collect();
     pg_runtime()?.block_on(async {
@@ -578,7 +591,13 @@ fn pg_append(url: &str, events: &[&ClaimEvent]) -> Result<(), String> {
         store
             .append_many(owned)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| match error {
+                // A duplicate id under the optimistic scheme is a race, not corruption — say so.
+                StoreError::Conflict(message) => {
+                    format!("write conflict ({message}); a concurrent writer raced — retry")
+                }
+                other => other.to_string(),
+            })?;
         Ok(())
     })
 }

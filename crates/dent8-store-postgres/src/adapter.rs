@@ -432,8 +432,13 @@ async fn append_event_in_tx(
     upsert_projection(&mut *tx, &state).await?;
     insert_edge(&mut *tx, event).await?;
 
+    // `global_sequence` is a positive BIGINT IDENTITY; a non-positive value would be corrupt,
+    // so fail loudly rather than emit a phantom seq 0.
+    let global_sequence = u64::try_from(global_sequence).map_err(|_| {
+        StoreError::CorruptEvent(format!("non-positive global_sequence {global_sequence}"))
+    })?;
     Ok(AppendReceipt {
-        global_sequence: u64::try_from(global_sequence).unwrap_or(0),
+        global_sequence,
         event_id: event.event_id.clone(),
         event_hash: hash,
     })

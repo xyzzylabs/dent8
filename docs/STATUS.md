@@ -190,8 +190,12 @@ subject+predicate.
   `contradict` / `explain` / `replay` across invocations are **Runnable** (above) over the
   file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
   build (selected in `load_store`/`append_events`; multi-event ops use the transactional
-  `append_many`) — verified end-to-end against live Postgres. The remaining product gap is an
-  authn/authz layer, not persistence.
+  `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
+  as the file path) — verified end-to-end against live Postgres. **v0 concurrency caveat:**
+  the Postgres path mints event/claim ids optimistically from a snapshot, so two writers
+  racing one DB are safely serialized and conflict-rejected (no corruption) but one may get a
+  *retryable* write conflict — treat it as effectively single-writer until DB-assigned ids
+  land (hardening). The remaining product gap is an authn/authz layer, not persistence.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
   tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
