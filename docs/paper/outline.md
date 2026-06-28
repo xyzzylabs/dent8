@@ -183,9 +183,9 @@ as "first to unify/transplant," never "first to invent"):
   + tamper-cascade tests), **populated** by the in-memory/file store, and extended with an
   external anchor that catches a re-hashed-forward rewrite (witness-keyed `(count, head)`),
   in both a symmetric (HMAC) and an asymmetric (Ed25519 signed tree head) variant. Caveats:
-  **not** RFC 8785/JCS; the anchor *primitives* are built but the operational witness that
-  signs/publishes the head on a cadence — and the Postgres append path — are unbuilt.
-  *Claim tamper-resistance only with the off-writer witness-key assumption.*
+  **not** RFC 8785/JCS; the anchor *primitives* are built (the Postgres append path is
+  DB-verified) but the operational witness that signs/publishes the head on a cadence is
+  unbuilt. *Claim tamper-resistance only with the off-writer witness-key assumption.*
 - **"Pattern separation" framing.** A loose neuroscience analogy; CA3 pattern
   *completion* does not map at all. *Strengthen* by defining pattern separation as a
   testable invariant (distinct subject+predicate streams never merge; near-duplicate

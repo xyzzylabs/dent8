@@ -256,8 +256,9 @@ trusted-reload path (`from_trusted_events`) is the only way to rehydrate an
 already-admitted log without re-arbitration. A persistent, file-backed CLI exposes the
 full lifecycle — `assert`, `supersede`, `retract`, `contradict`, `explain`, `replay` —
 composing across process invocations and re-validating log integrity on load. We are
-explicit (§10) that the file backend is a single-writer **dev** store; the operational,
-transactional, multi-user backend is Postgres and is not yet built.
+explicit (§10) that the runnable CLI/MCP use a single-writer **dev** store; the operational,
+transactional Postgres backend (`PostgresEventStore`) is built and **DB-verified**, but
+wiring the runnable surface onto it for multi-user operation is the remaining step.
 
 ## 9. Evaluation
 

@@ -96,8 +96,8 @@ Two cells deserve blunt honesty:
   and arbitration is **implemented in the `dent8-core` fold**: `apply_event` rejects a
   strictly-lower-authority supersession and hard-alarms a canonical contradiction —
   the mechanism that distinguishes dent8 from Graphiti's recency-only resolution.
-  Marked ✓ for the core fold; transactional enforcement at the (still-unbuilt) store
-  layer is a separate step.
+  Marked ✓ for the core fold; transactional enforcement at the store layer is **built and
+  DB-verified** (the Postgres adapter — advisory-lock-serialized append + materialization).
 
 Of dent8's differentiating mechanisms, serde serialization, event hashing and the
 hash-chain, the real Postgres adapter, the replay/explain runtime, and authority

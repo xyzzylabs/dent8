@@ -68,12 +68,15 @@ The firewall is the enforcement point for T1, T5, T5b, and T7. Per
 5. append the immutable event and update projections + edges atomically;
 6. emit integrity metadata for the read path and debugger.
 
-Steps 3 and 4 — the security-relevant arbitration — now exist and are tested in the
-`dent8-core` fold. What is still missing is the *transactional firewall around them*:
-steps 1, 2, 5, and 6 (loading projections, locking rows, atomic append, emitting
-integrity metadata) await the Postgres adapter. So the poisoning-resistance *decision*
-is enforced and exhaustively tested at the fold level, but end-to-end firewall
-behavior is not yet runnable — and the [evaluation plan](paper/outline.md) must say so.
+Steps 3 and 4 — the security-relevant arbitration — are **enforced at the write boundary**
+(`EventStore::append` via `arbitrate`), not merely computed in the fold: there is no
+un-arbitrated write path. The in-memory backend runs steps 1–6 end-to-end (it is what
+`dent8 assert`/`supersede`/… and the demo exercise), and the **Postgres adapter runs them
+transactionally** — advisory-lock-serialized, in-transaction projection load + arbitration,
+atomic append, and materialized projection/edges (steps 1, 2, 5, 6) — and is **DB-verified**.
+So end-to-end firewall behavior *is* runnable. The remaining gap is *productization*, not
+enforcement: the runnable CLI/MCP still use the file-backed dev store rather than
+`PostgresEventStore` (see [STATUS.md](STATUS.md)).
 
 ## Residual risks & honest limits
 

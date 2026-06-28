@@ -113,8 +113,9 @@ head is verifiable by **anyone with the public key** while the witness keeps the
 (RFC 6962-style signed tree head). Both are built and tested; what remains is the
 *operational* witness that signs and publishes the head on a cadence.
 
-Remaining: wire `hash_chain` into the (still-unbuilt) Postgres append path to populate
-the `event_hash`/`previous_event_hash` columns and reverify on replay.
+**Done:** the Postgres append path (migration 002) computes the chained `event_hash`, stores
+it alongside `previous_event_hash`, and `verify_chain` recomputes the global chain to
+re-verify on demand — DB-verified against a live `postgres:16`.
 
 ## Postgres adapter (the first realization)
 
