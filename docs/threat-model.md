@@ -121,6 +121,15 @@ See [STATUS.md](STATUS.md).
 - **The firewall cannot judge truth.** It governs provenance, freshness, authority,
   and contradiction *visibility* — not whether a well-formed, well-sourced claim is
   factually correct. That is the correct scope for an integrity layer.
+- **Deserialization trusts field-level validity (but is panic-safe).** `Deserialize` is
+  derived for the scalar newtypes, so loading an event does *not* re-run the constructors'
+  validation — a hand-edited log line, JSONB row, or MCP argument can carry an out-of-range
+  `Confidence`, an empty predicate, or an extreme timestamp/TTL. This is **non-crashing**: the
+  parse → hash → fold → canonicalize pipeline is property-tested to never panic on adversarial
+  input, and numeric edges fail open (`checked_add` TTL, comparison-only confidence), so a
+  corrupt field is a denial-of-*service* non-issue. The most safety-critical value, the JSON
+  claim value, *does* validate on load (`CanonicalJson` re-canonicalizes). Such an edit is a
+  *tamper* of the log, caught by the hash chain / witness, not by field validation.
 
 ## References
 
