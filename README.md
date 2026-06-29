@@ -77,8 +77,11 @@ source of truth for what is built.** In short:
   `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backend is Postgres (M2b). `dent8 mcp serve` exposes
-  the full belief surface to agents over MCP (stdio JSON-RPC), through the same firewall —
-  see [examples/mcp/](examples/mcp/) for wiring it into an agent client + a runnable demo.
+  the full belief surface plus read/audit tools to agents over MCP (stdio JSON-RPC), through
+  the same firewall — see [examples/mcp/](examples/mcp/), [examples/codex/](examples/codex/),
+  [examples/claude-code/](examples/claude-code/), [examples/cursor/](examples/cursor/),
+  [examples/grok-build/](examples/grok-build/), and [examples/hecate/](examples/hecate/) for
+  agent-client wiring.
 - **Implemented as a tested library:** the `ClaimEvent` model and replay fold; the
   unbypassable write-path firewall (`EventStore::append`) with authority-weighted
   arbitration + retraction, an anti-laundering challenger check, and the
@@ -94,7 +97,8 @@ source of truth for what is built.** In short:
   JSONB event log, **plus a materialized projection + edge graph** (migration 003) folded in
   the same transaction with a `projection == fold(log)` check. The `DATABASE_URL`-gated
   integration tests pass against a live `postgres:16`.
-- **Runnable (v0):** an MCP server (`dent8 mcp serve`) exposing the full belief surface
+- **Runnable (v0):** an MCP server (`dent8 mcp serve`) exposing read/audit tools
+  (`list_facts`/`verify`/`conflicts`) and the full belief surface
   (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`)
   as tools, plus `resources/list`/`resources/read` and JSON-RPC batches, over stdio JSON-RPC,
   through the shared firewall path.
@@ -137,14 +141,17 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   also rejected unless it can out-rank the incumbent.
 - `dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>`: flag a
   conflict (dissent) — contest the fact and keep both, even from low authority.
+- `dent8 expire <kind> <key> <predicate> <authority> <source>`: terminally close the
+  believed fact for policy retention — authority-gated like retraction; TTL staleness is
+  read-time and non-mutating.
 - `dent8 explain <kind> <key> <predicate>`: print the believed (or terminal) fact's receipt.
 - `dent8 replay <kind> <key> <predicate>`: replay the full event history — *why* the fact
   is what it is.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
 - `dent8 schema postgres`: print the initial Postgres schema.
-- `dent8 mcp serve`: expose the full belief surface (tools + resources + JSON-RPC batches)
-  to agents over MCP (stdio JSON-RPC).
+- `dent8 mcp serve`: expose read/audit tools, the full belief surface, resources, and
+  JSON-RPC batches to agents over MCP (stdio JSON-RPC).
 
 ## Project Docs
 

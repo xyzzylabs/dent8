@@ -209,6 +209,15 @@ fn apply_next_event(
             state.superseded_by = Some(by.clone());
         }
         ClaimEventKind::Expired { .. } => {
+            // Explicit expiration is a terminal close, so it is authority-gated like
+            // retraction: a low-authority actor cannot make a trusted fact disappear by
+            // calling it "stale." TTL freshness remains a separate read-time predicate.
+            if event.authority.level < state.authority.level {
+                return Err(TransitionError::InsufficientAuthority {
+                    incumbent: state.authority.level,
+                    challenger: event.authority.level,
+                });
+            }
             state.lifecycle = ClaimLifecycle::Expired;
         }
         ClaimEventKind::Retracted { .. } => {
@@ -301,8 +310,8 @@ mod tests {
     use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
     use crate::model::{
         Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, Confidence,
-        ContradictionBasis, EntityRef, Evidence, EvidenceKind, Predicate, Provenance,
-        RetractionReason, SupersessionReason, Ttl,
+        ContradictionBasis, EntityRef, Evidence, EvidenceKind, ExpirationReason, Predicate,
+        Provenance, RetractionReason, SupersessionReason, Ttl,
     };
 
     use super::{ClaimLifecycle, TransitionError, apply_event};
@@ -354,6 +363,19 @@ mod tests {
             base_event(
                 ClaimEventKind::Retracted {
                     reason: RetractionReason::UserDeleted,
+                },
+                event_id,
+                None,
+            ),
+            level,
+        )
+    }
+
+    fn expire(event_id: &str, level: AuthorityLevel) -> ClaimEvent {
+        with_authority(
+            base_event(
+                ClaimEventKind::Expired {
+                    reason: ExpirationReason::PolicyRetention,
                 },
                 event_id,
                 None,
@@ -661,6 +683,43 @@ mod tests {
             }
         }
     }
+
+    /// Explicit expiration is also a terminal close. TTL staleness is read-time and needs no
+    /// actor authority, but a `claim.expired` event changes the durable lifecycle, so it must
+    /// not under-rank the incumbent.
+    #[test]
+    fn authority_monotone_expiration_and_non_resurrection() {
+        for incumbent in ALL_LEVELS {
+            for challenger in ALL_LEVELS {
+                let state = apply_event(None, &asserted(incumbent)).expect("assertion applies");
+                let result = apply_event(Some(state), &expire("event:2", challenger));
+
+                if challenger < incumbent {
+                    assert_eq!(
+                        result,
+                        Err(TransitionError::InsufficientAuthority {
+                            incumbent,
+                            challenger,
+                        }),
+                        "expirer {challenger:?} should not expire incumbent {incumbent:?}",
+                    );
+                    continue;
+                }
+
+                let expired = result.expect("non-under-ranking expiration applies");
+                assert_eq!(expired.lifecycle, ClaimLifecycle::Expired);
+                assert!(expired.lifecycle.is_terminal());
+
+                let resurrect = supersede("event:3", AuthorityLevel::Canonical);
+                let error = apply_event(Some(expired), &resurrect)
+                    .expect_err("terminal claim cannot be resurrected");
+                assert_eq!(
+                    error,
+                    TransitionError::TerminalStateMutation(ClaimLifecycle::Expired)
+                );
+            }
+        }
+    }
 }
 
 /// Rank-1 "verified non-resurrection" harness. Bounded model check of the
@@ -673,7 +732,7 @@ mod proofs {
     use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
     use crate::model::{
         Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, Confidence, EntityRef,
-        Evidence, EvidenceKind, Predicate, Provenance, SupersessionReason, Ttl,
+        Evidence, EvidenceKind, ExpirationReason, Predicate, Provenance, SupersessionReason, Ttl,
     };
 
     use super::apply_event;
@@ -810,6 +869,54 @@ mod proofs {
         );
 
         match apply_event(Some(state), &retracted) {
+            Ok(next) => {
+                assert!(challenger >= incumbent);
+                assert!(next.lifecycle.is_terminal());
+
+                let resurrect = event(
+                    ClaimEventKind::Superseded {
+                        by: ClaimId::new("claim:3").unwrap(),
+                        reason: SupersessionReason::NewerObservation,
+                    },
+                    "event:3",
+                    None,
+                    AuthorityLevel::Canonical,
+                );
+                assert!(apply_event(Some(next), &resurrect).is_err());
+            }
+            Err(_) => {
+                assert!(challenger < incumbent);
+            }
+        }
+    }
+
+    #[kani::proof]
+    fn expiration_is_authority_monotone_and_non_resurrecting() {
+        let a: u8 = kani::any();
+        let b: u8 = kani::any();
+        kani::assume(a < 5);
+        kani::assume(b < 5);
+        let incumbent = level_from(a);
+        let challenger = level_from(b);
+
+        let asserted = event(
+            ClaimEventKind::Asserted,
+            "event:1",
+            Some(ClaimValue::Text("postgres".to_string())),
+            incumbent,
+        );
+        let state = apply_event(None, &asserted).unwrap();
+
+        let expired = event(
+            ClaimEventKind::Expired {
+                reason: ExpirationReason::PolicyRetention,
+            },
+            "event:2",
+            None,
+            challenger,
+        );
+
+        match apply_event(Some(state), &expired) {
             Ok(next) => {
                 assert!(challenger >= incumbent);
                 assert!(next.lifecycle.is_terminal());

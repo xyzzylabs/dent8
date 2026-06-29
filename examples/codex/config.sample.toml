@@ -1,0 +1,10 @@
+[mcp_servers.dent8]
+command = "dent8"
+args = ["mcp", "serve"]
+startup_timeout_sec = 20
+tool_timeout_sec = 60
+
+[mcp_servers.dent8.env]
+DENT8_LOG = "/abs/path/to/project/.dent8/codex-memory.jsonl"
+DENT8_AUTHORITY = "/abs/path/to/project/.dent8/authority.json"
+DENT8_REQUIRE_AUTHORITY = "1"

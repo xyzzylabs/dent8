@@ -4,9 +4,9 @@
 //!
 //! It speaks just enough MCP to be useful:
 //! - `initialize`, `tools/list`, and `tools/call` for the full belief surface — `assert` /
-//!   `supersede` / `retract` / `contradict` / `explain` / `replay` — which dispatch to the
-//!   *same* shared `op_*` functions the CLI uses, so the firewall decision is identical on
-//!   both surfaces;
+//!   `supersede` / `retract` / `contradict` / `explain` / `replay` — plus read/audit tools
+//!   (`list_facts`, `verify`, `conflicts`) which dispatch to the same shared `op_*`
+//!   functions the CLI uses, so the firewall decision is identical on both surfaces;
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
 //!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt);
 //! - **JSON-RPC 2.0 batches** — a top-level array of requests yields an array of responses
@@ -19,13 +19,20 @@ use std::io::{BufRead, Write};
 use serde_json::{Value, json};
 
 use crate::{
-    OpError, log_path, op_assert, op_contradict, op_derive, op_expire, op_explain,
+    OpError, log_path, op_assert, op_conflicts, op_contradict, op_derive, op_expire, op_explain,
     op_list_subjects, op_reinforce, op_replay, op_retract, op_supersede, parse_authority,
-    with_write_retry,
+    verify_log, with_write_retry,
 };
 
 /// The MCP protocol revision we advertise (negotiated in `initialize`).
 const PROTOCOL_VERSION: &str = "2024-11-05";
+
+/// Server-wide guidance consumed by MCP clients that support `instructions` (including Codex).
+const SERVER_INSTRUCTIONS: &str = "\
+dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, \
+call list_facts or explain. Record stable facts with assert using truthful source and authority. \
+Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
+Treat rejected writes as safety signals; do not silently overwrite.";
 
 /// Run the stdio server loop until EOF. Returns a process exit code.
 pub fn serve() -> i32 {
@@ -127,6 +134,7 @@ fn handle(request: &Value, path: &str) -> Option<Value> {
             &json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": {}, "resources": {} },
+                "instructions": SERVER_INSTRUCTIONS,
                 "serverInfo": { "name": "dent8", "version": env!("CARGO_PKG_VERSION") },
             }),
         )),
@@ -283,6 +291,9 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
     let key = || arg(arguments, "subject_key");
     let predicate = || arg(arguments, "predicate");
     match name {
+        "list_facts" => list_facts(path),
+        "verify" => verify_log(path).map_err(ToolError::Failed),
+        "conflicts" => op_conflicts(path).map_err(into_failed),
         "assert" => {
             let (kind, key, predicate, value, authority, source) = (
                 kind()?,
@@ -394,6 +405,30 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
     }
 }
 
+fn list_facts(path: &str) -> Result<String, ToolError> {
+    let subjects = op_list_subjects(path).map_err(into_failed)?;
+    if subjects.is_empty() {
+        return Ok("no dent8 facts recorded yet".to_string());
+    }
+    let lines: Vec<String> = subjects
+        .iter()
+        .map(|(kind, key, predicate)| {
+            format!(
+                "- {}  ({}:{} {})",
+                resource_uri(kind, key, predicate),
+                kind,
+                key,
+                predicate
+            )
+        })
+        .collect();
+    Ok(format!(
+        "{} dent8 fact stream(s):\n{}",
+        subjects.len(),
+        lines.join("\n")
+    ))
+}
+
 /// A required string argument, or a tool error naming the missing field.
 fn arg(arguments: &Value, name: &str) -> Result<String, ToolError> {
     arguments
@@ -423,6 +458,7 @@ fn into_failed(error: OpError) -> ToolError {
 // A flat tool registry; grows with the tool set, not in complexity.
 #[allow(clippy::too_many_lines)]
 fn tool_list() -> Vec<Value> {
+    let empty = json!({});
     let subject = json!({
         "subject_kind": { "type": "string", "description": "entity kind, e.g. repo" },
         "subject_key": { "type": "string", "description": "entity key, e.g. myproj" },
@@ -470,6 +506,24 @@ fn tool_list() -> Vec<Value> {
     ];
     vec![
         tool(
+            "list_facts",
+            "List known dent8 fact streams and their dent8:// resource URIs. Use before relying on project memory.",
+            &empty,
+            &[],
+        ),
+        tool(
+            "verify",
+            "Run dent8 integrity checks: structural/hash-chain verification where available, lineage checks, and taint detection.",
+            &empty,
+            &[],
+        ),
+        tool(
+            "conflicts",
+            "List contested facts that are currently in dispute and need resolution.",
+            &empty,
+            &[],
+        ),
+        tool(
             "assert",
             "Assert a project fact through the dent8 firewall (provenance + authority + freshness). Rejected if it cannot clear the predicate's policy.",
             &valued,
@@ -501,7 +555,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "expire",
-            "Mark the believed fact expired (lifecycle-natural close, e.g. policy retention). Moves it to the terminal Expired state.",
+            "Terminally expire the believed fact (authority-gated policy close). TTL staleness remains read-time and non-mutating.",
             &write_only,
             &write_req,
         ),
@@ -575,6 +629,11 @@ mod tests {
         assert_eq!(response["result"]["serverInfo"]["name"], "dent8");
         assert!(response["result"]["capabilities"]["tools"].is_object());
         assert!(response["result"]["capabilities"]["resources"].is_object());
+        let instructions = response["result"]["instructions"]
+            .as_str()
+            .expect("server instructions");
+        assert!(instructions.contains("memory integrity firewall"));
+        assert!(instructions.contains("list_facts"));
     }
 
     #[test]
@@ -720,6 +779,12 @@ mod tests {
     /// Issue a tools/call and return `(isError, first text line)`.
     #[allow(clippy::needless_pass_by_value)]
     fn call_tool(path: &str, name: &str, arguments: Value) -> (bool, String) {
+        let (is_error, text) = call_tool_text(path, name, arguments);
+        (is_error, text.lines().next().unwrap_or("").to_string())
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn call_tool_text(path: &str, name: &str, arguments: Value) -> (bool, String) {
         let request = json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": name, "arguments": arguments },
@@ -727,9 +792,6 @@ mod tests {
         let result = handle(&request, path).expect("response")["result"].clone();
         let text = result["content"][0]["text"]
             .as_str()
-            .unwrap_or("")
-            .lines()
-            .next()
             .unwrap_or("")
             .to_string();
         (result["isError"].as_bool().unwrap_or(true), text)
@@ -764,6 +826,17 @@ mod tests {
                     "authority": "low", "source": "src" }),
         );
         assert!(err, "low-authority retract must be refused: {text}");
+
+        // A low-authority explicit expiration of a High fact.
+        let (_g, path) = temp_log();
+        assert!(!call_tool(&path, "assert", database("postgres", "high")).0);
+        let (err, text) = call_tool(
+            &path,
+            "expire",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+                    "authority": "low", "source": "src" }),
+        );
+        assert!(err, "low-authority expire must be refused: {text}");
 
         // A contradiction against a Canonical fact hard-alarms (not a soft contest).
         let (_g, path) = temp_log();
@@ -813,6 +886,9 @@ mod tests {
         assert_eq!(
             names,
             [
+                "list_facts",
+                "verify",
+                "conflicts",
                 "assert",
                 "supersede",
                 "retract",
@@ -824,6 +900,29 @@ mod tests {
                 "replay"
             ]
         );
+    }
+
+    #[test]
+    fn read_audit_tools_are_useful_to_agents() {
+        let (_guard, path) = temp_log();
+        let (err, text) = call_tool_text(&path, "list_facts", json!({}));
+        assert!(!err, "{text}");
+        assert!(text.contains("no dent8 facts"), "{text}");
+
+        let (err, text) = call_tool(&path, "assert", database("postgres", "high"));
+        assert!(!err, "{text}");
+
+        let (err, text) = call_tool_text(&path, "list_facts", json!({}));
+        assert!(!err, "{text}");
+        assert!(text.contains("dent8://repo/p/database"), "{text}");
+
+        let (err, text) = call_tool(&path, "verify", json!({}));
+        assert!(!err, "{text}");
+        assert!(text.contains("STRUCTURAL integrity holds"), "{text}");
+
+        let (err, text) = call_tool(&path, "conflicts", json!({}));
+        assert!(!err, "{text}");
+        assert!(text.contains("no contested facts"), "{text}");
     }
 
     #[test]

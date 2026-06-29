@@ -55,7 +55,9 @@ enum Op {
         authority: AuthorityLevel,
         by: u8,
     },
-    Expire,
+    Expire {
+        authority: AuthorityLevel,
+    },
     Retract {
         authority: AuthorityLevel,
     },
@@ -71,8 +73,9 @@ impl Op {
             | Op::Reinforce { authority, .. }
             | Op::Contradict { authority, .. }
             | Op::Supersede { authority, .. }
+            | Op::Expire { authority }
             | Op::Retract { authority } => *authority,
-            Op::Expire | Op::Retrieve | Op::UseInDecision => AuthorityLevel::Medium,
+            Op::Retrieve | Op::UseInDecision => AuthorityLevel::Medium,
         }
     }
 
@@ -203,7 +206,12 @@ fn model_apply(state: Option<&Model>, op: &Op, at: TimestampMillis) -> Result<Mo
             next.lifecycle = ClaimLifecycle::Superseded;
             next.superseded_by = Some(by_claim(*by));
         }
-        Op::Expire => next.lifecycle = ClaimLifecycle::Expired,
+        Op::Expire { authority } => {
+            if *authority < model.authority {
+                return Err(Reject::InsufficientAuthority);
+            }
+            next.lifecycle = ClaimLifecycle::Expired;
+        }
         Op::Retract { authority } => {
             if *authority < model.authority {
                 return Err(Reject::InsufficientAuthority);
@@ -251,7 +259,7 @@ fn build_event(base: &Base, index: usize, op: &Op) -> ClaimEvent {
             },
             None,
         ),
-        Op::Expire => (
+        Op::Expire { .. } => (
             ClaimEventKind::Expired {
                 reason: ExpirationReason::TtlElapsed,
             },
@@ -412,7 +420,7 @@ fn arb_op() -> impl Strategy<Value = Op> {
             .prop_map(|(value, authority, source)| Op::Reinforce { value, authority, source }),
         3 => (arb_level(), 0u8..2).prop_map(|(authority, by)| Op::Contradict { authority, by }),
         2 => (arb_level(), 0u8..2).prop_map(|(authority, by)| Op::Supersede { authority, by }),
-        1 => Just(Op::Expire),
+        1 => arb_level().prop_map(|authority| Op::Expire { authority }),
         2 => arb_level().prop_map(|authority| Op::Retract { authority }),
         1 => Just(Op::Retrieve),
         1 => Just(Op::UseInDecision),
@@ -451,7 +459,8 @@ proptest! {
         check_stream(&ops)?;
     }
 
-    /// Terminal absorption, deterministically: after a forced `Assert` + `Expire`, EVERY
+    /// Terminal absorption, deterministically: after a forced `Assert` + equal-authority
+    /// `Expire`, EVERY
     /// op kind is correctly handled — retrieval/decision no-ops are accepted with the
     /// lifecycle frozen, everything else is rejected with `TerminalStateMutation`.
     #[test]
@@ -461,7 +470,7 @@ proptest! {
             &base, 0,
             &Op::Assert { value: ClaimValue::Text("alpha".to_string()), authority: AuthorityLevel::High, source: 0 },
         );
-        let expired = build_event(&base, 1, &Op::Expire);
+        let expired = build_event(&base, 1, &Op::Expire { authority: AuthorityLevel::High });
         let mut state = apply_event(None, &asserted).expect("assert");
         state = apply_event(Some(state), &expired).expect("expire");
         prop_assert!(state.lifecycle.is_terminal());

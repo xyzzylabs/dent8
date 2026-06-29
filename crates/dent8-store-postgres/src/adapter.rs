@@ -104,10 +104,12 @@ impl PostgresEventStore {
     /// transaction, and later events see the earlier ones' in-transaction writes (so a
     /// supersession resolves the replacement claim asserted just before it).
     ///
-    /// Trust boundary: the firewall (authority arbitration, freshness, uniqueness) runs here,
-    /// but the source→authority *ceiling* (`dent8 authority`) is enforced one layer up, at the
-    /// CLI/MCP `op_*` write path — a process calling this adapter directly is responsible for
-    /// any such authz itself.
+    /// Trust boundary: the base claim-stream firewall (authority arbitration,
+    /// anti-laundering, canonical hard alarms, terminal-state rules) runs here. The
+    /// source→authority *ceiling* (`dent8 authority`) and predicate registry policy
+    /// (authority floors, default TTLs, uniqueness) are enforced one layer up, at the CLI/MCP
+    /// `op_*` write path — a process calling this adapter directly is responsible for those
+    /// product-policy checks itself.
     pub async fn append_many(
         &self,
         events: Vec<ClaimEvent>,

@@ -1,0 +1,21 @@
+{
+  "execution_kind": "agent_loop",
+  "title": "Use dent8-protected project memory",
+  "working_directory": "/abs/path/to/project",
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "prompt": "Inspect dent8 with list_facts before relying on durable project facts. Record stable project facts in dent8 using source:hecate and the lowest adequate authority. Run verify before making broad edits that depend on remembered facts.",
+  "mcp_servers": [
+    {
+      "name": "dent8",
+      "command": "dent8",
+      "args": ["mcp", "serve"],
+      "env": {
+        "DENT8_LOG": "/abs/path/to/project/.dent8/hecate-memory.jsonl",
+        "DENT8_AUTHORITY": "/abs/path/to/project/.dent8/authority.json",
+        "DENT8_REQUIRE_AUTHORITY": "1"
+      },
+      "approval_policy": "require_approval"
+    }
+  ]
+}

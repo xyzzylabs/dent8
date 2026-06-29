@@ -30,7 +30,8 @@ user:project_owner + prefers_eval_style + formal fixtures and invariants
 - `claim.reinforced`: adds compatible evidence without changing value.
 - `claim.contradicted`: records a conflict from another claim.
 - `claim.superseded`: points to a replacing claim.
-- `claim.expired`: marks a claim stale by TTL or policy.
+- `claim.expired`: terminally closes a claim by explicit policy action; TTL staleness is a
+  separate read-time predicate and does not mutate lifecycle.
 - `claim.retracted`: removes trust in a claim because the source, policy, or evidence failed.
 - `claim.retrieved`: audits that a claim was returned as context.
 - `claim.used_in_decision`: audits that a claim influenced an agent decision.
@@ -115,16 +116,18 @@ Initial TTL forms:
 - `expires_at`
 - `duration`
 
-Expired claims remain in the event log. Expiration changes read eligibility and projection state; it does not delete history.
+Expired claims remain in the event log. Explicit expiration changes read eligibility and
+projection state; it does not delete history, and it is authority-gated like retraction.
 
 > Status: the read-time **freshness evaluator is implemented** —
 > `ClaimState::is_expired_at(now)` (`state.rs`) evaluates TTL against the claim's
 > `freshness_anchor` (`valid_from`, else `observed_at`, else `recorded_at`) and is
 > tested. It is deliberately a *read-time predicate*, kept separate from the
 > event-driven lifecycle: a claim is not auto-mutated to `Expired` by TTL; `Expired`
-> as a lifecycle state still comes only from a `claim.expired` event. Not yet built:
-> a read surface (CLI/MCP) that *applies* the predicate to exclude stale claims, and
-> a `valid_to` closed valid-time interval (only an open `valid_from` plus TTL today).
+> as a lifecycle state still comes only from an authority-gated `claim.expired` event
+> (ADR 0011). The CLI/MCP read surface applies freshness by flagging stale receipts.
+> Remaining: a `valid_to` closed valid-time interval (only an open `valid_from` plus
+> TTL today) and freshness on every summary surface.
 
 ## Lifecycle State
 
@@ -198,4 +201,3 @@ See [belief-revision.md](belief-revision.md) and
 - Higher-authority supersession requires an explicit basis: the replacing claim must out-rank or tie the incumbent (enforced in `apply_event`).
 - Cross-stream lineage holds: if a claim is `superseded_by` another, the replacing claim exists and does not orphan the lineage.
 - Re-assertion after retraction does not restore prior dependents (Recovery deliberately not satisfied).
-

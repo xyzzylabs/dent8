@@ -112,19 +112,16 @@ The MCP and CLI surfaces should expose this metadata by default. dent8 should ma
 
 ## Implementation status (honest)
 
-The write/read paths above are the *target*. The core fold implements lifecycle
-transitions, terminal immutability, contradiction-as-`contested`, and — now —
-**authority-weighted arbitration**: a strictly-lower-authority supersession is
-rejected and a canonical contradiction hard-alarms
-([ADR 0007](decisions/0007-authority-as-entrenchment.md)), with an exhaustive
-non-resurrection test. The read-time freshness evaluator (`ClaimState::is_expired_at`),
-policy-counterfactual replay (`EpistemicPolicy` + `replay_claim_with_policy` +
-`diff_states`), and **entity-level replay** (`replay_entity` + `EntityProjection` with
-cross-stream `lineage_issues`) also exist and are tested. Still **not built**: a read
-surface that *applies* freshness and exposes these views (CLI/MCP), and the
-*transactional firewall* that calls the arbitration within a locked append (it lives in
-the not-yet-built store layer). So
-"low-authority writes can't override high-authority facts" is enforced in the fold but
-not yet end-to-end; "fresh reads exclude expired" remains a claim of intent. See
-[roadmap.md](roadmap.md) and [threat-model.md](threat-model.md).
-
+The core fold implements lifecycle transitions, terminal immutability,
+contradiction-as-`contested`, canonical-contradiction hard alarms, and
+authority-weighted terminal mutation: lower-authority supersession, explicit
+expiration, and retraction are rejected
+([ADR 0007](decisions/0007-authority-as-entrenchment.md),
+[ADR 0011](decisions/0011-authority-gated-expiration.md)). The CLI/MCP write
+surface runs through the same firewall path, with an additional source->authority
+ceiling registry at the `op_*` layer. The Postgres adapter commits accepted events
+transactionally under an advisory-lock-serialized append, and the read surface applies
+freshness by flagging stale receipts. Remaining product gaps are operational: signed
+caller identity, an operated witness service, DB-assigned ids, richer transports, and
+more live Postgres smoke coverage. See [STATUS.md](STATUS.md), [roadmap.md](roadmap.md),
+and [threat-model.md](threat-model.md).

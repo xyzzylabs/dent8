@@ -79,9 +79,9 @@ verifiable invariants.
   prefix; `reinforced` never changes value; terminal immutability; fresh reads
   exclude expired; contradiction/supersession leave auditable edges — as property
   tests + bounded model checking, with a layered-portfolio justification [5][8].
-- **A tamper-evidence design** resolving the currently-unresolved hash-chain
-  canonicalization via a frozen, versioned canonical encoding (RFC 8785 / JCS, with
-  `ClaimValue::Json` numerics constrained) and RFC 6962-style domain separation [6][9].
+- **A tamper-evidence design** using a frozen, versioned canonical encoding (dent8's
+  sorted-key compact `serde_json` form, explicitly **not** RFC 8785/JCS) and
+  RFC 6962-style domain separation [6][9].
 - **An integrity/poisoning-robustness evaluation** turning the threat literature into
   a reproducible benchmark: authority-weighted supersession resists query-only
   injection, and every poisoned write remains traceable and replayable [3].

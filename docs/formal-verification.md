@@ -78,7 +78,9 @@ are random `ClaimEvent` streams. After each event assert:
 - **replay determinism** — same events, same order → same `ClaimState`;
 - **`projection == fold(events)`** against the reference model;
 - **reinforced never mutates value** — the `ReinforcementValueMismatch` guard (`state.rs:97`);
-- **terminal immutability** — no lifecycle event accepted in `Superseded`/`Expired`/`Retracted` (`state.rs:86`);
+- **terminal immutability** — no lifecycle event accepted in `Superseded`/`Expired`/`Retracted`
+  (`state.rs`), with authority-monotone terminal transitions for supersession, explicit
+  expiration, and retraction;
 - **single-assertion prefix** — exactly one `claim.asserted` starts a stream;
 - **claim isolation** — events on one `claim_id` never perturb another's projection;
 - **contradiction-edge symmetry** — `contradicted_by` is one-sided in `state.rs`, but [evals.md](evals.md) requires edges be symmetric at query time; test that the reverse edge is materialized or that `explain` queries both directions;
@@ -130,11 +132,12 @@ and validating it against the model's allowed behaviors [2].
    event streams (`.events.jsonl`) and their replayed outcome (`.expected.json`: chain head +
    state summary), locking the on-disk encoding, the hash chain, and the fold against drift.
    Remaining for (a): `proptest-stateful`/`bolero` escalation and `cargo-fuzz`.
-2. **After event serialization + hashing exist:** resolve canonicalization *first*
-   (RFC 8785 / JCS — see [storage.md](storage.md) and
-   [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md)), since
-   tamper-evidence is only as strong as deterministic bytes; then add `bolero`/Kani
-   proofs (b) for panic-freedom and hash-link checks [13].
+2. **After event serialization + hashing exist:** keep the frozen canonical form explicit
+   (dent8 currently uses sorted-key compact `serde_json`, **not** RFC 8785/JCS — see
+   [storage.md](storage.md) and
+   [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md)), since tamper-evidence
+   is only as strong as deterministic bytes; then add `bolero`/Kani proofs (b) for
+   panic-freedom and hash-link checks [13].
 3. **After the sqlx adapter is designed:** introduce the Stateright model (c) for
    append+projection atomicity and contradiction serializability, sharing Rust types
    with the adapter.

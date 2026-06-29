@@ -20,6 +20,7 @@ fn main() {
     std::process::exit(code);
 }
 
+#[allow(clippy::too_many_lines)] // a flat command-dispatch table; splitting it would obscure it
 fn run(args: impl IntoIterator<Item = String>) -> i32 {
     let args = args.into_iter().collect::<Vec<_>>();
     match args.as_slice() {
@@ -53,6 +54,12 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
         [command, out] if command == "export" => cmd_export(out),
         #[cfg(feature = "export")]
         [command] if command == "export" => cmd_export("dent8-events.parquet"),
+        #[cfg(feature = "export")]
+        [command, ..] if command == "export" => {
+            // Wrong arity on an export-enabled build: a targeted usage, not the generic help.
+            eprintln!("usage: dent8 export [out.parquet]");
+            2
+        }
         #[cfg(not(feature = "export"))]
         [command, ..] if command == "export" => {
             eprintln!(
@@ -217,7 +224,7 @@ Usage:
   dent8 reinforce <kind> <key> <predicate> <authority> <source>
                           corroborate the believed fact (raise earned entrenchment)
   dent8 expire <kind> <key> <predicate> <authority> <source>
-                          mark the believed fact expired (lifecycle-natural close)
+                          terminally expire the believed fact (authority-gated)
   dent8 explain <kind> <key> <predicate>
                           explain the believed fact, with an integrity receipt
   dent8 replay <kind> <key> <predicate>
@@ -242,9 +249,9 @@ operational transactional Postgres backend when DENT8_DATABASE_URL is set (requi
 with --features postgres). authority is one of: low | medium | high | canonical.
 Authority ceiling: a source may assert at most its registered max. Enforced once a registry
 exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
-source is blocked from writing. Without a registry the CLI is permissive (dev mode). The
-registry is host-local config, independent of the event backend. issuer/scope are recorded
-but NOT enforced in v0. See docs/STATUS.md."
+source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
+DENT8_REQUIRE_AUTHORITY=1 is set. The registry is host-local config, independent of the event
+backend. issuer/scope are recorded but NOT enforced in v0. See docs/STATUS.md."
     );
 }
 
@@ -501,16 +508,54 @@ fn authority_registry_path() -> String {
     std::env::var("DENT8_AUTHORITY").unwrap_or_else(|_| DEFAULT_AUTHORITY.to_string())
 }
 
-/// Load the registry, or `None` when none exists (enforcement disabled).
-fn load_authority_registry() -> Result<Option<SourceRegistry>, String> {
-    let path = authority_registry_path();
-    match std::fs::read_to_string(&path) {
+fn parse_flag(name: &str, value: &str) -> Result<bool, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "" | "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(format!(
+            "{name} must be a boolean flag: use 1/true/yes/on or 0/false/no/off"
+        )),
+    }
+}
+
+fn env_flag(name: &str) -> Result<bool, String> {
+    match std::env::var(name) {
+        Ok(value) => parse_flag(name, &value),
+        Err(std::env::VarError::NotPresent) => Ok(false),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} must be valid UTF-8")),
+    }
+}
+
+fn authority_required() -> Result<bool, String> {
+    env_flag("DENT8_REQUIRE_AUTHORITY")
+}
+
+fn load_authority_registry_at(
+    path: &str,
+    required: bool,
+) -> Result<Option<SourceRegistry>, String> {
+    match std::fs::read_to_string(path) {
         Ok(contents) => serde_json::from_str(&contents)
             .map(Some)
             .map_err(|error| format!("{path}: corrupt authority registry: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && required => Err(format!(
+            "authority registry required by DENT8_REQUIRE_AUTHORITY, but {path} does not exist; \
+             create it with `dent8 authority add <source> <max>` or unset DENT8_REQUIRE_AUTHORITY"
+        )),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("cannot read {path}: {error}")),
     }
+}
+
+/// Load the registry, or `None` when none exists and fail-closed mode is not enabled.
+fn load_authority_registry() -> Result<Option<SourceRegistry>, String> {
+    load_authority_registry_at(&authority_registry_path(), authority_required()?)
+}
+
+/// Load the registry for operator edits. Missing still means "create a new file" even when
+/// `DENT8_REQUIRE_AUTHORITY` is set; otherwise the flag would prevent bootstrapping itself.
+fn load_authority_registry_for_edit() -> Result<Option<SourceRegistry>, String> {
+    load_authority_registry_at(&authority_registry_path(), false)
 }
 
 fn save_authority_registry(registry: &SourceRegistry) -> Result<(), String> {
@@ -528,18 +573,20 @@ fn save_authority_registry(registry: &SourceRegistry) -> Result<(), String> {
 }
 
 /// The authz gate, run before the firewall on every write: reject a stated `authority` above
-/// its `source`'s registered ceiling. A no-op when no registry is configured.
+/// its `source`'s registered ceiling. A no-op only when no registry is configured and
+/// `DENT8_REQUIRE_AUTHORITY` is not enabled.
 fn enforce_source_ceiling(source: &str, requested: AuthorityLevel) -> Result<(), OpError> {
     let registry = load_authority_registry().map_err(OpError::Invalid)?;
     ceiling_check(registry.as_ref(), source, requested)
 }
 
-/// The pure decision: reject `requested` above the source's ceiling. `None` registry (none
-/// configured) is permissive. Rejection — not silent capping — keeps a laundering attempt
-/// visible. Only `max_authority` is consulted: a grant's `issuer`/`scope` are recorded
-/// metadata, **not** enforced in v0 (scope does not restrict which predicates a source may
-/// write). An active registry is deny-by-default — an unlisted source's ceiling is `Unknown`,
-/// below the lowest requestable level (`Low`), so it is blocked from writing entirely.
+/// The pure decision: reject `requested` above the source's ceiling. `None` registry is
+/// permissive (dev mode); production can disable that path with `DENT8_REQUIRE_AUTHORITY`.
+/// Rejection — not silent capping — keeps a laundering attempt visible. Only `max_authority`
+/// is consulted: a grant's `issuer`/`scope` are recorded metadata, **not** enforced in v0
+/// (scope does not restrict which predicates a source may write). An active registry is
+/// deny-by-default — an unlisted source's ceiling is `Unknown`, below the lowest requestable
+/// level (`Low`), so it is blocked from writing entirely.
 fn ceiling_check(
     registry: Option<&SourceRegistry>,
     source: &str,
@@ -609,7 +656,7 @@ fn cmd_authority_add(source: &str, max: &str, issuer: Option<&str>, scope: Optio
         eprintln!("unknown authority '{max}' (expected: low | medium | high | canonical)");
         return 2;
     };
-    let mut registry = match load_authority_registry() {
+    let mut registry = match load_authority_registry_for_edit() {
         Ok(registry) => registry.unwrap_or_default(),
         Err(error) => {
             eprintln!("{error}");
@@ -637,7 +684,7 @@ fn cmd_authority_add(source: &str, max: &str, issuer: Option<&str>, scope: Optio
 }
 
 fn cmd_authority_remove(source: &str) -> i32 {
-    let mut registry = match load_authority_registry() {
+    let mut registry = match load_authority_registry_for_edit() {
         Ok(Some(registry)) => registry,
         Ok(None) => {
             eprintln!("no authority registry to remove from");
@@ -980,7 +1027,7 @@ fn cmd_export(out: &str) -> i32 {
             println!(
                 "exported {} event(s) to {out}\n  query it with DuckDB, e.g.:\n    \
                  duckdb -c \"SELECT source, count(*) AS writes FROM '{out}' GROUP BY 1 ORDER BY 2 DESC\"\n    \
-                 duckdb -c \"SELECT claim_id, derived_from FROM '{out}' WHERE derived_from IS NOT NULL\"",
+                 duckdb -c \"SELECT claim_id, UNNEST(derived_from) AS source_claim FROM '{out}' WHERE derived_from IS NOT NULL\"",
                 events.len()
             );
             0
@@ -1842,9 +1889,9 @@ fn op_reinforce(
 }
 
 /// Mark the believed fact(s) expired: append an `Expired` event per believed claim, moving it
-/// to the terminal `Expired` lifecycle. Unlike `retract` this is a lifecycle-natural close
-/// (policy retention), not an authority-gated removal. Shared by `dent8 expire` and the MCP
-/// `expire` tool.
+/// to the terminal `Expired` lifecycle. This is an explicit lifecycle close and is
+/// authority-gated by the core fold; TTL staleness remains read-time and non-mutating.
+/// Shared by `dent8 expire` and the MCP `expire` tool.
 fn op_expire(
     path: &str,
     subject_kind: &str,
@@ -2416,6 +2463,34 @@ mod tests {
         assert!(check("source:web-scrape", AuthorityLevel::Unknown).is_ok());
         // No registry configured -> permissive (dev mode).
         assert!(ceiling_check(None, "source:web-scrape", AuthorityLevel::Canonical).is_ok());
+    }
+
+    #[test]
+    fn authority_required_fails_closed_when_the_registry_is_missing() {
+        let path = std::env::temp_dir().join(format!(
+            "dent8-authority-missing-{}-{}.json",
+            std::process::id(),
+            line!()
+        ));
+        let path = path.to_string_lossy().into_owned();
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            load_authority_registry_at(&path, false)
+                .expect("optional registry may be absent")
+                .is_none()
+        );
+        let error = load_authority_registry_at(&path, true)
+            .expect_err("required missing registry fails closed");
+        assert!(error.contains("DENT8_REQUIRE_AUTHORITY"), "{error}");
+    }
+
+    #[test]
+    fn authority_required_flag_is_parsed_strictly() {
+        assert!(parse_flag("DENT8_REQUIRE_AUTHORITY", "true").expect("true"));
+        assert!(parse_flag("DENT8_REQUIRE_AUTHORITY", "1").expect("1"));
+        assert!(!parse_flag("DENT8_REQUIRE_AUTHORITY", "off").expect("off"));
+        assert!(parse_flag("DENT8_REQUIRE_AUTHORITY", "maybe").is_err());
     }
 
     #[test]

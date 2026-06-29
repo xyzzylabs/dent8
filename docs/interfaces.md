@@ -39,15 +39,20 @@ The Model Context Protocol lets servers expose tools that language models can ca
 
 Source: [MCP tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
 
-Initial MCP tools:
+Current v0 MCP tools:
 
-- `memory.write_claim`
-- `memory.get_context`
-- `memory.search_claims`
-- `memory.explain_claim`
-- `memory.list_conflicts`
-- `memory.replay_entity_state`
-- `memory.invalidate_claim`
+- `list_facts`
+- `verify`
+- `conflicts`
+- `assert`
+- `supersede`
+- `retract`
+- `contradict`
+- `reinforce`
+- `expire`
+- `derive`
+- `explain`
+- `replay`
 
 Recommended behavior:
 
@@ -55,7 +60,16 @@ Recommended behavior:
 - Treat writes as candidate events through the firewall.
 - Require evidence/provenance fields for assertions.
 - Make stale, contested, expired, or superseded claims visible to clients.
+- Put the core usage workflow in MCP server instructions so Codex, Claude Code, Cursor, Grok
+  Build, Hecate, and other MCP-aware agent hosts know to inspect dent8 before relying on
+  durable project facts.
 - Use tool output schemas once the Rust types settle.
+
+Client setup examples live under [`examples/mcp/`](../examples/mcp/):
+[`Codex`](../examples/codex/), [`Claude Code`](../examples/claude-code/),
+[`Cursor`](../examples/cursor/), [`Grok Build`](../examples/grok-build/), and
+[`Hecate`](../examples/hecate/). These are integration profiles, not separate memory
+semantics; every write still enters through the shared firewall path.
 
 ## MCP Resources
 
@@ -92,4 +106,3 @@ Likely routes:
 SDKs should be thin wrappers over the HTTP API and shared JSON schemas.
 
 Do not let SDK convenience helpers hide freshness, conflict, or authority metadata.
-

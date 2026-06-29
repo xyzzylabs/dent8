@@ -14,7 +14,9 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
 ### Added
 
 - **Firewall + lifecycle**, enforced at the write boundary (`EventStore::append`):
-  authority-weighted supersession/retraction arbitration, an anti-laundering challenger
+  authority-weighted supersession/retraction **and explicit-expiration** arbitration
+  (expiration is authority-gated like retraction — [ADR 0011](docs/decisions/0011-authority-gated-expiration.md);
+  TTL staleness stays a separate read-time predicate), an anti-laundering challenger
   check, the canonical-contradiction hard-alarm, and per-predicate policy (the coding-agent
   registry). Runnable as `assert` / `supersede` / `retract` / `contradict` / `reinforce` /
   `expire` / `explain` / `replay`.
@@ -22,7 +24,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   transactional Postgres backend** (`--features postgres`, `DENT8_DATABASE_URL`), with each
   multi-event operation committed atomically and concurrent CLI writers auto-retried.
 - **Authority layer** (`dent8 authority`): an opt-in source→authority *ceiling* that rejects
-  an over-ceiling write before the firewall (deny-by-default once a registry exists).
+  an over-ceiling write before the firewall (deny-by-default once a registry exists). Set
+  `DENT8_REQUIRE_AUTHORITY=1` to **fail closed** — a missing registry is an error, not
+  permissive dev mode (the `authority` edit commands stay exempt so the registry can be
+  bootstrapped).
 - **Witness** (`dent8 witness`, `--features witness`): Ed25519 signed tree heads with
   `keygen` / `sign` / `verify` / `head` / `serve` (cadence signer) to detect a history
   rewrite or rollback.
@@ -33,7 +38,13 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   on Postgres), `dent8 conflicts` (contested facts), and `dent8 eval` (the self-demonstrating
   adversarial benchmark: firewall vs a recency-only baseline).
 - **MCP server** (`dent8 mcp serve`): the full belief surface as stdio JSON-RPC tools +
-  readable resources, through the same firewall ([examples/mcp/](examples/mcp/)).
+  readable resources, through the same firewall ([examples/mcp/](examples/mcp/)). Adds
+  **read/audit tools** (`list_facts`, `verify`, `conflicts`) and **server `instructions`** in
+  the `initialize` response that tell MCP-aware agents to inspect dent8 before relying on
+  durable facts and to treat rejected writes as safety signals.
+- **Client integration examples**: ready-to-adapt MCP setup for Claude Code, Codex, Cursor,
+  Grok Build, and Hecate ([examples/](examples/)) — each with a distinct source id and
+  `DENT8_REQUIRE_AUTHORITY`, validated by an integration test (`agent_integrations.rs`).
 - **Analytical/export lane** (`dent8 export`, `--features export`): writes the whole log —
   file *or* Postgres — to flattened columnar Parquet (one row per event, with the `DerivedFrom`
   dependency edges materialized), queried directly by DuckDB for forensics/audit/replay

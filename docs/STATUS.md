@@ -43,8 +43,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   believed fact: records an additional source/authority backing the same value, raising
   **earned entrenchment** without restating the value (no value-mismatch).
 - **`dent8 expire <kind> <key> <predicate> <authority> <source>`** — moves the believed
-  fact(s) to the terminal `Expired` lifecycle (a lifecycle-natural close, e.g. policy
-  retention — *not* an authority-gated removal like `retract`).
+  fact(s) to the terminal `Expired` lifecycle. This is an explicit policy close, not TTL
+  staleness, and is **authority-gated** like retraction ([ADR 0011](decisions/0011-authority-gated-expiration.md)):
+  a lower-authority source cannot expire a higher-authority incumbent.
 - **`dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> <from-key>
   <from-predicate>`** — asserts a fact **derived from** another (named by subject, resolved to
   its believed claim id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
@@ -74,14 +75,19 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 export [out.parquet]`** — the **analytical/export lane** (behind `--features
   export`). Writes the whole log — backend-aware, so the file *or* the Postgres log — to a
   flattened, columnar **Parquet** table (one row per event; the queryable scalars promoted to
-  columns, the `DerivedFrom` dependency edges materialized as `derived_from`, the full event
-  retained in `event_json`). **DuckDB reads the Parquet directly** — no embedded engine in the
+  columns — including a `value_kind` discriminator so redacted ≠ absent, and a stable
+  `authority` name — the `DerivedFrom` dependency edges as a `derived_from` **list** column, and
+  the full event retained in `event_json`). **DuckDB reads the Parquet directly** — no embedded engine in the
   binary — for offline forensics/audit/replay. Read-only export; the log stays the source of
   truth. ([examples/duckdb/](../examples/duckdb/), [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
-- **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing the **full belief
-  surface** as tools to agent clients — `assert` / `supersede` / `retract` / `contradict` /
-  `reinforce` / `expire` / `derive` / `explain` / `replay` (`initialize` / `tools/list` /
-  `tools/call`).
+- **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing read/audit tools
+  (`list_facts` / `verify` / `conflicts`) and the **full belief surface** as tools to agent
+  clients — `assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
+  `derive` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
+  The initialize response includes server instructions that tell MCP-aware agents to inspect
+  dent8 before relying on durable project facts and to treat rejected writes as safety signals.
+  Setup examples are checked in for Codex, Claude Code, Cursor, Grok Build, and Hecate under
+  `examples/`; they are client wiring only, not alternate semantics.
   Every tool dispatches
   to the *same* `op_*` firewall path as the CLI, so a low-authority, laundered, or
   non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,
@@ -95,11 +101,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   firewall). A source→authority *ceiling* registry: every write checks the caller-supplied
   `authority` against its `source`'s registered ceiling and **rejects** (does not silently
   cap) a write above it — so a low-trust source cannot mint `canonical`, and the rejection
-  names the source, ceiling, and request for debuggability. **Opt-in**: enforcement activates
-  once a registry exists (`DENT8_AUTHORITY`, default `./dent8-authority.json`); without one the
-  CLI is permissive (dev mode). With one it is **deny-by-default** — an unlisted source's
-  ceiling is `Unknown`, below the lowest requestable level (`Low`), so it is blocked from
-  writing until granted. The registry is **host-local config**, independent of the event
+  names the source, ceiling, and request for debuggability. **Opt-in by default**: enforcement
+  activates once a registry exists (`DENT8_AUTHORITY`, default `./dent8-authority.json`);
+  without one the CLI is permissive (dev mode). Set `DENT8_REQUIRE_AUTHORITY=1` to make a
+  missing registry fail closed. With a registry it is **deny-by-default** — an unlisted
+  source's ceiling is `Unknown`, below the lowest requestable level (`Low`), so it is blocked
+  from writing until granted. The registry is **host-local config**, independent of the event
   backend (a Postgres deployment still reads `DENT8_AUTHORITY` from the local filesystem; sync
   it per instance). Caveats: a grant's `issuer`/`scope` are **recorded but not enforced** in
   v0 (scope does not restrict predicates); the ceiling is an `op_*`-layer check, so a process
@@ -140,12 +147,13 @@ subject+predicate.
 
 **`dent8-core`:**
 - `ClaimEvent` model, lifecycle state machine, terminal immutability, replay fold.
-- Authority-weighted supersession **and retraction** arbitration (`InsufficientAuthority`,
-  [ADR 0008](decisions/0008-retraction-authority.md)) + canonical contradiction hard-alarm
+- Authority-weighted supersession, expiration, **and retraction** arbitration
+  (`InsufficientAuthority`, [ADR 0008](decisions/0008-retraction-authority.md),
+  [ADR 0011](decisions/0011-authority-gated-expiration.md)) + canonical contradiction hard-alarm
   (`CanonicalContradiction`); exhaustive 5×5-lattice non-resurrection tests (one per
-  supersession/retraction) + `#[cfg(kani)]` harnesses (run manually via `cargo kani`; a green
-  CI job is a tracked follow-up — Kani's pinned nightly does not yet build this edition-2024
-  workspace).
+  supersession/expiration/retraction) + `#[cfg(kani)]` harnesses (run manually via
+  `cargo kani`; a green CI job is a tracked follow-up — Kani's pinned nightly does not yet
+  build this edition-2024 workspace).
 - Read-time freshness evaluator (`ClaimState::is_expired_at`).
 - Earned-entrenchment: authority-weighted `corroboration_at_or_above`.
 - Canonicalization + hash chain (`canonical_bytes`, `event_hash`, `hash_chain`):
@@ -253,9 +261,9 @@ subject+predicate.
   blocks all five while the baseline is compromised by all five (plus a positive control
   admitting legitimate revision). See [evals.md](evals.md).
 
-## Design-only — not implemented
+## Remaining Gaps
 
-- **Postgres adapter — verified, and the CLI/MCP run on it (M2b done).** The v0
+- **Postgres remaining gaps — not the adapter itself.** The v0
   `PostgresEventStore` + its materialization (migration 003) are **DB-verified** (the gated
   integration tests pass against a live `postgres:16`, via [`compose.yml`](../compose.yml) or
   the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_DATABASE_URL` set
@@ -269,7 +277,7 @@ subject+predicate.
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
   is calling is still asserted, not proven by a signed token), the richer per-column event
   table + `uses_as_evidence` edges (migration 001), and operational tuning.
-- **Persistent CLI/MCP — built, file *or* Postgres.** The full surface — `assert` /
+- **Persistent CLI/MCP remaining gaps — productization, not persistence.** The full surface — `assert` /
   `supersede` / `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` /
   `replay` / `verify` / `conflicts` / `eval` — across invocations is **Runnable** (above) over
   the file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
@@ -293,8 +301,8 @@ subject+predicate.
   is built (`dent8 authority`, above)
   and the witness *primitive* is runnable (`dent8 witness`, above); the remaining product gap
   is cryptographic caller identity and the *operated* witness service.
-- The official `rmcp` SDK / richer transports — the v0 server (full belief surface as
-  tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
+- The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
+  surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
 - **A published anchor cadence / *operated* witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree

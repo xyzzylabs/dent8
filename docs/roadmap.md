@@ -196,17 +196,18 @@ shipped after replay/explain proved the loop. A **v0 is built**: `dent8 mcp serv
 synchronous, newline-delimited JSON-RPC 2.0 server over stdio (no async runtime, no new
 heavy deps), handling `initialize` / `tools/list` / `tools/call` for the full belief
 surface (`assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
-`derive` / `explain` / `replay`), plus
-`resources/list` / `resources/read` (each fact stream as a `dent8://` resource) and
-JSON-RPC batch requests. The tools dispatch to the shared `op_*` firewall path, so the same
+`derive` / `explain` / `replay`), read/audit tools (`list_facts` / `verify` / `conflicts`),
+plus `resources/list` / `resources/read` (each fact stream as a `dent8://` resource),
+server instructions for MCP-aware agents, and JSON-RPC batch requests. The tools dispatch to
+the shared `op_*` firewall path, so the same
 arbitration applies over MCP as on the CLI (a low-authority write is refused, surfaced as a
 tool error).
 
 **Role.** *Enforce* the firewall at write time: it already rejects missing-provenance /
 sub-floor / non-unique writes (T1) via `op_*`, across the full belief surface
 (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`),
-plus `resources/list` /
-`resources/read` and JSON-RPC batch requests. The freshness filter on reads (T4) is applied
+read/audit tools (`list_facts`/`verify`/`conflicts`), plus `resources/list` /
+`resources/read`, server instructions, and JSON-RPC batch requests. The freshness filter on reads (T4) is applied
 — `explain` headline-flags a stale fact and the receipt carries `fresh` + `expires_at`.
 Still to add: the official `rmcp` SDK / richer transports.
 See [interfaces.md](interfaces.md).
@@ -219,7 +220,7 @@ needed.
 
 ```
 §0 core arbitration (cheap, parallel)
-§1 serde + JCS + hash  ->  §2 sqlx adapter  ->  §3 replay/explain CLI  ->  §5 MCP
+§1 serde canonical form + hash  ->  §2 sqlx adapter  ->  §3 replay/explain CLI  ->  §5 MCP
 §4 evals: start now against the pure core, grow with §1-3
 ```
 

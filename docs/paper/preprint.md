@@ -301,8 +301,9 @@ while `verify_against_anchor` returns false. Planned additions: golden replay fi
   over the finite authority lattice; it is not a whole-system proof, and Kani results are
   bounded [5].
 - **Canonicalization is not frozen to JCS.** The canonical form is a sorted-key
-  `serde_json` encoding that coincides with RFC 8785 only because all keys are ASCII and
-  all numbers are integers. Embedded `ClaimValue::Json` is itself canonicalized (a
+  `serde_json` encoding, not RFC 8785/JCS; it may coincide only for narrow inputs
+  without UTF-16 key-order or number-format differences. Embedded `ClaimValue::Json`
+  is itself canonicalized (a
   `CanonicalJson` newtype, sorted-key + compact, re-applied on deserialize), so the bytes
   invariant holds for it too; freezing the *outer* encoding to JCS for cross-implementation
   interop is the remaining canonicalization item [6].

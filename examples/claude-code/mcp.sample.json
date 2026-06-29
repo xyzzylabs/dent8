@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "dent8": {
+      "command": "${DENT8_BIN:-dent8}",
+      "args": ["mcp", "serve"],
+      "env": {
+        "DENT8_LOG": "${CLAUDE_PROJECT_DIR:-.}/.dent8/claude-memory.jsonl",
+        "DENT8_AUTHORITY": "${CLAUDE_PROJECT_DIR:-.}/.dent8/authority.json",
+        "DENT8_REQUIRE_AUTHORITY": "1"
+      },
+      "timeout": 60000
+    }
+  }
+}

@@ -64,7 +64,7 @@ the data model in [`crates/dent8-core/src/model.rs`](../crates/dent8-core/src/mo
 | `claim.retracted` (`Retracted { reason }`) | **Contraction** / kernel contraction | Inspirational |
 | `contested` on `claim.contradicted` | **Paraconsistent toleration** of inconsistency | Rigorous (architectural) |
 | `Authority` vs `Confidence` | **Entrenchment** vs probability/evidential strength | Rigorous (architectural) |
-| `claim.expired` / TTL | **Defeasible/temporal defeat** | Inspirational — **unimplemented** (see below) |
+| `claim.expired` / TTL | **Defeasible/temporal defeat** | Inspirational — TTL read surface built; explicit expiration authority-gated |
 | `dent8_claim_edges` | **TMS justifications** | Rigorous (data-structure level) |
 | `replay_claim` fold → projection | TMS **labelling pass** / non-monotonic consequence | Rigorous as motivation |
 
@@ -139,10 +139,10 @@ formally separate from evidential strength [1].
    *environment* ("trust only `High`+ authority sources") to answer "what does
    memory look like if I distrust source Z." This shapes the replay API and
    deserves its own decision record [3].
-5. **Frame TTL/expiry as principled non-monotonic defeat** — once it exists. A
-   read-time/projection-time freshness evaluator wrapping the already-present
-   `Ttl::is_expired_at` (`model.rs:127`, currently called by nothing) is a required,
-   missing component; without it "fresh reads exclude expired" is vacuous [5].
+5. **Frame TTL/expiry as principled non-monotonic defeat.** The read-time freshness
+   evaluator and CLI/MCP receipt surface are built; explicit `claim.expired` is a
+   separate authority-gated terminal close (ADR 0011). Remaining work is a richer
+   `valid_to` interval and freshness on every summary surface [5].
 
 **Deliberately do NOT:**
 
