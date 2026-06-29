@@ -48,6 +48,7 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
         }
         [command] if command == "verify" => cmd_verify(),
         [command] if command == "conflicts" => cmd_conflicts(),
+        [command] if command == "eval" => cmd_eval(),
         [command, kind, key, predicate, value, authority, source] if command == "assert" => {
             cmd_assert(kind, key, predicate, value, authority, source)
         }
@@ -213,6 +214,7 @@ Usage:
   dent8 verify            check log integrity (structural on the file store; a real
                           stored-hash-chain re-verification on Postgres)
   dent8 conflicts         list contested facts (in dispute), across all entities
+  dent8 eval              run the adversarial corpus (firewall vs recency-only baseline)
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
   dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
@@ -913,6 +915,24 @@ fn cmd_verify() -> i32 {
             1
         }
     }
+}
+
+/// Run the adversarial corpus and print the firewall-vs-recency-baseline contrast — the
+/// self-demonstrating "why dent8" benchmark. Exits non-zero only if a scenario regresses.
+fn cmd_eval() -> i32 {
+    let results = dent8_evals::run_corpus();
+    let demonstrated = results
+        .iter()
+        .filter(|result| result.demonstrates_defense())
+        .count();
+    println!(
+        "dent8 adversarial corpus — {demonstrated}/{} scenarios demonstrate the firewall's \
+         defense:\nthe firewall blocks every attack a recency-only baseline (newest-write-wins, \
+         no authority/dependency) falls to.\n",
+        results.len()
+    );
+    print!("{}", dent8_evals::summary_table());
+    i32::from(demonstrated != results.len())
 }
 
 /// The next event/claim sequence: one past the **highest** `event:{n}` id actually

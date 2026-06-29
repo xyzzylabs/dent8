@@ -192,6 +192,7 @@ name = "dent8-cli"
 version = "0.1.0"
 dependencies = [
  "dent8-core",
+ "dent8-evals",
  "dent8-store",
  "dent8-store-postgres",
  "ed25519-dalek",

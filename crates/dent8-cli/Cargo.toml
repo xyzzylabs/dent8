@@ -15,6 +15,9 @@ path = "src/main.rs"
 dent8-core = { path = "../dent8-core" }
 dent8-store = { path = "../dent8-store" }
 dent8-store-postgres = { path = "../dent8-store-postgres" }
+# Pure logic over core/store (no extra heavy deps) — powers the self-demonstrating
+# `dent8 eval` benchmark.
+dent8-evals = { path = "../dent8-evals" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Opt-in: lets the CLI/MCP run against Postgres (DENT8_DATABASE_URL). Off by default so the

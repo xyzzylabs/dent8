@@ -10,6 +10,24 @@ See it run: **`cargo run -p dent8-cli -- demo`** — a high-authority fact is as
 low-authority source is rejected when it tries to override it, and an integrity receipt
 explains the result with a verified hash chain.
 
+## Why a firewall? (the one-command proof)
+
+Run **`dent8 eval`** — dent8's adversarial corpus pits each attack against the real firewall
+*and* a recency-only baseline (newest-write-wins, the resolution Zep/Graphiti use):
+
+| attack | family | firewall | recency-only baseline |
+|---|---|---|---|
+| `minja_low_authority_injection` | T1 memory injection | blocked ✓ | **compromised** |
+| `authority_laundering` | T1 memory injection | blocked ✓ | **compromised** |
+| `canonical_contradiction` | T5 canonical contradiction | blocked ✓ | **compromised** |
+| `sybil_corroboration` | earned entrenchment | blocked ✓ | **compromised** |
+| `poisoned_source_retraction` | T2 retraction cascade | blocked ✓ | **compromised** |
+
+The firewall blocks **5/5** attacks a recency-only memory falls to — including
+`poisoned_source_retraction`: retract a poisoned source and dent8 flags every fact *derived*
+from it (`dent8 derive` records the edge, `dent8 verify` surfaces the taint), the
+dependency-cascade integrity recency-only memory structurally cannot express.
+
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
 lineage, and replayability. (Origin: *dentate gyrus*, the hippocampal structure
@@ -32,10 +50,10 @@ source of truth for what is built.** In short:
   canonical-contradiction hard-alarm; the coding-agent predicate registry; the integrity
   receipt; a freshness evaluator; policy-counterfactual and entity-level replay with
   lineage and earned-entrenchment audits; and serde canonicalization + a SHA-256 hash chain.
-- **Validated by an adversarial corpus** (`cargo test -p dent8-evals`): MINJA injection,
-  authority laundering, canonical contradiction, and Sybil corroboration all **fail against
-  the firewall (0/4)** while **compromising a recency-only baseline (4/4)** — see
-  [docs/evals.md](docs/evals.md).
+- **Validated by an adversarial corpus** (`dent8 eval`, or `cargo test -p dent8-evals`): MINJA
+  injection, authority laundering, canonical contradiction, Sybil corroboration, and
+  **poisoned-source retraction** all **fail against the firewall (0/5)** while **compromising a
+  recency-only baseline (5/5)** — see [docs/evals.md](docs/evals.md).
 - **DB-verified (M2b):** the v0 Postgres adapter (`PostgresEventStore`, behind
   `--features adapter`) — transactional append, firewall via the shared `arbitrate_events`,
   JSONB event log, **plus a materialized projection + edge graph** (migration 003) folded in

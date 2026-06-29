@@ -66,6 +66,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   that content-edit tamper-detection there is `dent8 witness verify`'s job. On **both** it also
   reports **retraction taint** — a still-believed claim deriving from a retracted/expired source
   (`TAINTED: X derives from Y`).
+- **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
+  contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
+  the self-demonstrating "why dent8" benchmark.
 - **`dent8 conflicts`** — lists every contested fact (in dispute) across all entities, showing
   **both** rival claims (value + authority + lifecycle).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing the **full belief
