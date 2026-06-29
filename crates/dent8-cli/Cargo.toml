@@ -28,10 +28,14 @@ tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
 ed25519-dalek = { version = "2", optional = true }
 getrandom = { version = "0.2", optional = true }
 hex = { version = "0.4", optional = true }
+# Opt-in: the `dent8 export` analytical lane (Parquet for DuckDB). Off by default so the stock
+# binary stays free of the arrow/parquet columnar stack.
+dent8-export = { path = "../dent8-export", optional = true }
 
 [features]
 postgres = ["dent8-store-postgres/adapter", "dep:tokio"]
 witness = ["dent8-core/signed-anchor", "dep:ed25519-dalek", "dep:getrandom", "dep:hex"]
+export = ["dep:dent8-export"]
 
 [lints]
 workspace = true

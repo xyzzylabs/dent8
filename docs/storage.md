@@ -217,12 +217,36 @@ CI runs the same test against a Postgres service container
 feature-gated adapter). The application never assumes a database exists — it is env-gated
 and self-migrating; Docker/CI merely *provide* one identically for dev and CI.
 
-## Analytical lane (later, not a runtime store)
+## Analytical lane (export-only, not a runtime store)
 
-DuckDB and Parquet are **not** runtime write stores. Later flow: export event-log
-slices and projections to Parquet; query with DuckDB for replay analysis, forensics,
-benchmark aggregation, and debugger views; keep Postgres as the write path and
-operational projection store.
+DuckDB and Parquet are **not** runtime write stores. The write path stays the event log
+(file or Postgres); the analytical lane is a **read-only export** of it.
 
+**Built (`dent8-export` + `dent8 export`).** `dent8 export [out.parquet]` writes the whole
+log — backend-aware, so it snapshots the file *or* the Postgres log — to a flattened,
+columnar Parquet table, **one row per event**. The queryable scalars are promoted to columns
+(`sequence`, `event_id`, `claim_id`, `kind`, `subject_kind`, `subject_key`, `predicate`,
+`value`, `authority`, `source`, `actor`, `recorded_at_ms`), the `DerivedFrom` dependency
+edges ([ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)) are materialized as
+a `derived_from` column, and the full canonical event is retained in `event_json`. DuckDB
+reads the Parquet **directly** — there is no embedded engine in the binary. Gated behind
+`--features export` so the stock `dent8` carries no arrow/parquet stack.
+
+```sh
+dent8 export audit.parquet
+# writes by source
+duckdb -c "SELECT source, count(*) AS writes FROM 'audit.parquet' GROUP BY 1 ORDER BY 2 DESC"
+# the dependency graph (what was derived from what)
+duckdb -c "SELECT claim_id, derived_from FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
+# current believed value per claim id (latest event wins)
+duckdb -c "SELECT claim_id, last(value ORDER BY sequence) FROM 'audit.parquet' GROUP BY 1"
+```
+
+Use it for replay analysis, forensics, benchmark aggregation, and debugger views; keep
+Postgres as the write path and operational projection store. DuckDB can re-emit the export in
+any format it supports (`COPY … TO … (FORMAT parquet)`), so this is also the bridge to other
+analytical tools.
+
+- [Worked example: `examples/duckdb/`](../examples/duckdb/README.md)
 - [DuckDB Parquet support](https://duckdb.org/docs/stable/data/parquet/overview)
 - [Apache Parquet documentation](https://parquet.apache.org/docs/)

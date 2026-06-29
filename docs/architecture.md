@@ -16,7 +16,7 @@ The integrity semantics behind these surfaces have a formal identity — dent8 i
 
 ## Storage
 
-The durable storage design is the append-only event log, its projection, the edge graph, and a tamper-evident hash chain — expressed against the `EventStore` trait. **Postgres is the first adapter that realizes it, not the architecture.** The full design (backend-agnostic event log + Postgres adapter + canonicalization) lives in [storage.md](storage.md); the decision to start Postgres-first (and not SQLite) is [ADR 0001](decisions/0001-postgres-first.md). DuckDB and Parquet are a later analytical lane that consumes *exported* event streams, never runtime writes.
+The durable storage design is the append-only event log, its projection, the edge graph, and a tamper-evident hash chain — expressed against the `EventStore` trait. **Postgres is the first adapter that realizes it, not the architecture.** The full design (backend-agnostic event log + Postgres adapter + canonicalization) lives in [storage.md](storage.md); the decision to start Postgres-first (and not SQLite) is [ADR 0001](decisions/0001-postgres-first.md). DuckDB and Parquet are an **export-only** analytical lane that consumes *exported* event streams, never runtime writes — built as `dent8-export` / `dent8 export` (see [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 
 ## Rust Workspace
 
@@ -27,6 +27,8 @@ dent8/
     dent8-store/           # store traits, replay boundary, invariant result types
     dent8-store-postgres/  # Postgres migrations and adapter implementation
     dent8-cli/             # CLI commands for schema, replay, explain, MCP
+    dent8-evals/           # adversarial corpus behind the self-demonstrating `dent8 eval`
+    dent8-export/          # Parquet export for DuckDB analysis (opt-in, `--features export`)
   migrations/postgres/     # SQL migrations
   docs/                    # architecture, eval strategy, naming, MVP notes
   evals/
@@ -40,7 +42,6 @@ Later crates should be added only when they own a real boundary:
 - `dent8-mcp`: MCP transport adapter.
 - `dent8-http`: HTTP API.
 - `dent8-debugger`: debugger query model before the TypeScript UI exists.
-- `dent8-export`: Parquet export and DuckDB analysis helpers.
 
 ## Core Model
 

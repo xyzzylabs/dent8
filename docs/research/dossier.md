@@ -39,8 +39,9 @@ pass are folded into the topical docs and noted below.
    write-path firewall (enforced at `EventStore::append`), the **DB-verified** Postgres
    adapter, the CLI/MCP runtime, and the **evidence-edge retraction taint** (ADR 0010,
    `dent8 derive`/`verify` + the `poisoned_source_retraction` eval) are **built** — the
-   differentiator is now a running, demonstrated system (see [STATUS.md](../STATUS.md)). What
-   remains is seeded golden/replay fixtures and the analytical/export lane.
+   differentiator is now a running, demonstrated system (see [STATUS.md](../STATUS.md)). The
+   analytical/export lane is also built (`dent8 export` → Parquet for DuckDB); what
+   remains is seeded golden/replay fixtures.
    → [roadmap.md](../roadmap.md), [threat-model.md](../threat-model.md)
 
 5. **Publish in two stages.** A model + belief-revision-semantics workshop paper is

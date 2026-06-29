@@ -29,9 +29,12 @@ jobs:
       - run: cargo clippy -p dent8-cli --features witness --all-targets -- -D warnings
       # The asymmetric (signed) anchor is feature-gated; lint + test it too.
       - run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
+      # The CLI's Parquet export lane (arrow/parquet) is feature-gated; lint + test.
+      - run: cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo test -p dent8-core --features signed-anchor
       - run: cargo test -p dent8-cli --features witness
+      - run: cargo test -p dent8-export
 
   postgres:
     name: M2b adapter (live Postgres)

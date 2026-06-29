@@ -71,6 +71,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   the self-demonstrating "why dent8" benchmark.
 - **`dent8 conflicts`** — lists every contested fact (in dispute) across all entities, showing
   **both** rival claims (value + authority + lifecycle).
+- **`dent8 export [out.parquet]`** — the **analytical/export lane** (behind `--features
+  export`). Writes the whole log — backend-aware, so the file *or* the Postgres log — to a
+  flattened, columnar **Parquet** table (one row per event; the queryable scalars promoted to
+  columns, the `DerivedFrom` dependency edges materialized as `derived_from`, the full event
+  retained in `event_json`). **DuckDB reads the Parquet directly** — no embedded engine in the
+  binary — for offline forensics/audit/replay. Read-only export; the log stays the source of
+  truth. ([examples/duckdb/](../examples/duckdb/), [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing the **full belief
   surface** as tools to agent clients — `assert` / `supersede` / `retract` / `contradict` /
   `reinforce` / `expire` / `derive` / `explain` / `replay` (`initialize` / `tools/list` /

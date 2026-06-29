@@ -55,7 +55,7 @@ dent8 verify                                               # …and verify flags
 
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
-`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`authority`/`witness`/`mcp serve`).
+`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`witness`/`mcp serve`).
 
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
@@ -70,8 +70,10 @@ source of truth for what is built.** In short:
 - **Runnable today:** `dent8 demo` (the firewall + replay/explain loop, registry-driven); the
   full lifecycle through the firewall — **`assert` / `supersede` / `retract` / `contradict` /
   `reinforce` / `expire` / `derive` / `explain` / `replay`** — plus the operator surfaces
-  **`verify`** (integrity + retraction-taint check), **`conflicts`**, and **`eval`** (the
-  self-demonstrating benchmark), `dent8 authority` / `dent8 witness` (the latter behind
+  **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
+  self-demonstrating benchmark), and **`export`** (the whole log to Parquet for offline DuckDB
+  forensics/audit, behind `--features export` — see [examples/duckdb/](examples/duckdb/)),
+  `dent8 authority` / `dent8 witness` (the latter behind
   `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backend is Postgres (M2b). `dent8 mcp serve` exposes
@@ -115,7 +117,7 @@ separate infrastructure. The [Roadmap](docs/roadmap.md) and
 
 ## Initial Shape
 
-This repository starts Postgres-first. Postgres is the operational source of truth for append-only claim events, projections, audit queries, and future multi-user use. DuckDB and Parquet remain a later analytical lane for replay, forensic inspection, benchmark analysis, and debugger workflows.
+This repository starts Postgres-first. Postgres is the operational source of truth for append-only claim events, projections, audit queries, and future multi-user use. DuckDB and Parquet are an **export-only** analytical lane — built as `dent8 export` (Parquet, queried directly by DuckDB) for replay, forensic inspection, and benchmark analysis, never a runtime write store.
 
 Workspace crates:
 
@@ -138,6 +140,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 explain <kind> <key> <predicate>`: print the believed (or terminal) fact's receipt.
 - `dent8 replay <kind> <key> <predicate>`: replay the full event history — *why* the fact
   is what it is.
+- `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
+  forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
 - `dent8 schema postgres`: print the initial Postgres schema.
 - `dent8 mcp serve`: expose the full belief surface (tools + resources + JSON-RPC batches)
   to agents over MCP (stdio JSON-RPC).

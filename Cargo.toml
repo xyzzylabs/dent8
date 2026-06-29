@@ -3,6 +3,7 @@ members = [
     "crates/dent8-cli",
     "crates/dent8-core",
     "crates/dent8-evals",
+    "crates/dent8-export",
     "crates/dent8-store",
     "crates/dent8-store-postgres",
 ]

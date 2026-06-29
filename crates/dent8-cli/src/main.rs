@@ -49,6 +49,17 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
         [command] if command == "verify" => cmd_verify(),
         [command] if command == "conflicts" => cmd_conflicts(),
         [command] if command == "eval" => cmd_eval(),
+        #[cfg(feature = "export")]
+        [command, out] if command == "export" => cmd_export(out),
+        #[cfg(feature = "export")]
+        [command] if command == "export" => cmd_export("dent8-events.parquet"),
+        #[cfg(not(feature = "export"))]
+        [command, ..] if command == "export" => {
+            eprintln!(
+                "`dent8 export` (Parquet for DuckDB) requires a build with `--features export`"
+            );
+            2
+        }
         [command, kind, key, predicate, value, authority, source] if command == "assert" => {
             cmd_assert(kind, key, predicate, value, authority, source)
         }
@@ -215,6 +226,8 @@ Usage:
                           stored-hash-chain re-verification on Postgres)
   dent8 conflicts         list contested facts (in dispute), across all entities
   dent8 eval              run the adversarial corpus (firewall vs recency-only baseline)
+  dent8 export [out]      export the log to Parquet for DuckDB analysis (out defaults to
+                          ./dent8-events.parquet; needs --features export)
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
   dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
@@ -933,6 +946,50 @@ fn cmd_eval() -> i32 {
     );
     print!("{}", dent8_evals::summary_table());
     i32::from(demonstrated != results.len())
+}
+
+/// Export the whole event log to a flattened Parquet file for offline `DuckDB` analysis
+/// (forensics, audit, replay-at-scale). Read-only and backend-aware via `load_store`, so it
+/// snapshots the file *or* the Postgres log. Gated behind `--features export` so the stock
+/// binary carries no arrow/parquet stack.
+#[cfg(feature = "export")]
+fn cmd_export(out: &str) -> i32 {
+    let store = match load_store(&log_path()) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    let events = match store.scan_events(&EventFilter::default()) {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("cannot read the log: {error}");
+            return 1;
+        }
+    };
+    let file = match std::fs::File::create(out) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("cannot create {out}: {error}");
+            return 1;
+        }
+    };
+    match dent8_export::export_events(&events, file) {
+        Ok(()) => {
+            println!(
+                "exported {} event(s) to {out}\n  query it with DuckDB, e.g.:\n    \
+                 duckdb -c \"SELECT source, count(*) AS writes FROM '{out}' GROUP BY 1 ORDER BY 2 DESC\"\n    \
+                 duckdb -c \"SELECT claim_id, derived_from FROM '{out}' WHERE derived_from IS NOT NULL\"",
+                events.len()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("export failed: {error}");
+            1
+        }
+    }
 }
 
 /// The next event/claim sequence: one past the **highest** `event:{n}` id actually

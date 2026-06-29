@@ -34,6 +34,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   adversarial benchmark: firewall vs a recency-only baseline).
 - **MCP server** (`dent8 mcp serve`): the full belief surface as stdio JSON-RPC tools +
   readable resources, through the same firewall ([examples/mcp/](examples/mcp/)).
+- **Analytical/export lane** (`dent8 export`, `--features export`): writes the whole log —
+  file *or* Postgres — to flattened columnar Parquet (one row per event, with the `DerivedFrom`
+  dependency edges materialized), queried directly by DuckDB for forensics/audit/replay
+  ([examples/duckdb/](examples/duckdb/)). Read-only export; the log stays the source of truth.
 - **Verification**: hash chain + symmetric/asymmetric anchors, exhaustive authority-lattice
   tests, property-based + robustness proptests, golden replay fixtures, `#[cfg(kani)]` proof
   harnesses (run manually), and the adversarial corpus.

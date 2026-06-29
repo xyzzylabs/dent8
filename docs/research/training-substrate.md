@@ -115,10 +115,12 @@ aspirational of the set.
 ## The missing plumbing (what to build to make this real)
 
 None of the above is usable until dent8 can *export* its log and audits as datasets.
-This aligns with the roadmap's "later" analytical lane ([storage.md](../storage.md)).
-Concretely, a `dent8 export` surface would emit:
+The first plank is **built**: `dent8 export` ([storage.md](../storage.md#analytical-lane-export-only-not-a-runtime-store))
+emits the event log as flattened Parquet, with the `DerivedFrom` dependency edges
+materialized. The remaining planks below build on that substrate:
 
-1. **The event log + projections** (JSONL/Parquet) — the raw substrate.
+1. **The event log + projections** (JSONL/Parquet) — the raw substrate. *(Built for the event
+   log via `dent8 export`; projection export is still to come.)*
 2. **Preference pairs** — derived from supersession/contradiction edges, *pre-filtered*
    by `unearned_supersessions`, with `SupersessionReason` and corroboration as metadata.
 3. **Reward traces** — per memory action, the invariant verdicts (replay-survived,

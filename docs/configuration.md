@@ -26,12 +26,14 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 | *(none)* | the full firewall + lifecycle over the **file dev store**, plus `eval`, `verify`, `conflicts`, `authority`, MCP | yes |
 | `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by `DENT8_DATABASE_URL` | no |
 | `witness` | the `dent8 witness` Ed25519 signed-tree-head commands | no |
+| `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
 ```sh
 cargo build -p dent8-cli                                    # stock: file store only
 cargo build -p dent8-cli --features postgres                # + Postgres backend
 cargo build -p dent8-cli --features witness                 # + witness
-cargo build -p dent8-cli --features postgres,witness        # both
+cargo build -p dent8-cli --features export                  # + Parquet export for DuckDB
+cargo build -p dent8-cli --features postgres,witness,export # all
 ```
 
 Off by default so the stock binary stays free of the async sqlx and signature stacks. The

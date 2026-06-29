@@ -1,0 +1,27 @@
+[package]
+name = "dent8-export"
+description = "Parquet export of the dent8 event log for DuckDB-based replay analysis, forensics, and audit queries."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "dent8_export"
+path = "src/lib.rs"
+
+[dependencies]
+dent8-core = { path = "../dent8-core" }
+serde_json = "1"
+# Pure-Rust columnar/Parquet stack. Heavy, so this crate is opt-in (the CLI gates it behind
+# `--features export`); DuckDB reads the resulting Parquet directly, no embedded engine.
+arrow = "59"
+parquet = { version = "59", features = ["arrow"] }
+
+[dev-dependencies]
+# For the round-trip test: read the written Parquet back from an in-memory buffer.
+bytes = "1"
+
+[lints]
+workspace = true

@@ -42,9 +42,12 @@ What remains to make it a *product*, not a demo:
   are built (retract authority-gated per [ADR 0008](decisions/0008-retraction-authority.md);
   contradict + uniqueness-vs-contestation per [ADR 0009](decisions/0009-uniqueness-and-contestation.md);
   `derive` + retraction taint per [ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)),
-  plus the operator surfaces `verify` / `conflicts` / `eval`; the **MCP server**
+  plus the operator surfaces `verify` / `conflicts` / `eval` / `export`; the **MCP server**
   (`dent8 mcp serve`) exposes that full belief surface over stdio JSON-RPC. The full lifecycle
   is runnable.
+- The **analytical/export lane** is built: `dent8 export` (`--features export`) writes the
+  whole log — file *or* Postgres — to flattened Parquet for offline DuckDB forensics/audit,
+  with the dependency edges materialized ([storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 - The **`dent8-evals` adversarial corpus** is built (firewall vs recency-only baseline:
   0/5 attacks succeed against the firewall, 5/5 against the baseline; runnable as `dent8 eval`).
   Remaining eval work:
@@ -222,7 +225,7 @@ last. Two decisions to resolve before coding the adapter:
 
 ## Later
 
-Postgres multi-tenant partitioning · DuckDB replay/forensics over exported Parquet ·
+Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger ·
 [valid-time intervals (`valid_to`)](decisions/0005-belief-base-revision-semantics.md) ·
 predicate-level volatility policy · HTTP API and SDKs · adapters for existing memory
