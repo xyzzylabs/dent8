@@ -606,7 +606,26 @@ fn ceiling_check(
 }
 
 fn cmd_authority_list() -> i32 {
-    match load_authority_registry() {
+    // A diagnostic/read command: load WITHOUT the fail-closed gate (like the edit commands),
+    // so `authority list` can always report state — including "no registry yet" under
+    // DENT8_REQUIRE_AUTHORITY, which is exactly when an operator needs to inspect it. (Only the
+    // write gate `enforce_source_ceiling` consults the flag.)
+    let required = match authority_required() {
+        Ok(required) => required,
+        Err(error) => {
+            eprintln!("{error}");
+            return 2;
+        }
+    };
+    match load_authority_registry_for_edit() {
+        Ok(None) if required => {
+            println!(
+                "no authority registry at {} — but DENT8_REQUIRE_AUTHORITY is set, so every \
+                 write is BLOCKED until you create one with `dent8 authority add <source> <max>`.",
+                authority_registry_path()
+            );
+            0
+        }
         Ok(None) => {
             println!(
                 "no authority registry at {} — enforcement is OFF (dev mode). Add a source \

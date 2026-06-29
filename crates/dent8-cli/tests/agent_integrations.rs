@@ -217,6 +217,113 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
     assert!(tool_text(verify).contains("STRUCTURAL integrity holds"));
 }
 
+/// Run a `dent8` subcommand with a controlled environment (per-process, so no env races).
+fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
+    let mut command = Command::new(dent8_bin());
+    command.args(args).env_remove("DENT8_DATABASE_URL");
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    command.output().expect("run dent8")
+}
+
+/// ADR 0011, through the CLI surface: an explicit `expire` that under-ranks the incumbent is
+/// rejected (a low-trust source cannot terminally close a high-authority fact by calling it
+/// stale); an equal-authority expire is accepted.
+#[test]
+fn cli_expire_is_authority_gated() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    // absent -> permissive dev mode
+    let missing_registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs: &[(&str, &str)] = &[("DENT8_LOG", &log), ("DENT8_AUTHORITY", &missing_registry)];
+
+    assert!(
+        run_dent8(
+            &[
+                "assert",
+                "repo",
+                "p",
+                "database",
+                "postgres",
+                "high",
+                "source:owner"
+            ],
+            envs,
+        )
+        .status
+        .success(),
+        "high-authority assert should be accepted"
+    );
+
+    let low = run_dent8(
+        &["expire", "repo", "p", "database", "low", "source:owner"],
+        envs,
+    );
+    assert!(
+        !low.status.success(),
+        "a low-authority expire of a High fact must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&low.stderr);
+    assert!(
+        stderr.contains("insufficient authority"),
+        "rejection should name the authority gate: {stderr}"
+    );
+
+    assert!(
+        run_dent8(
+            &["expire", "repo", "p", "database", "high", "source:owner"],
+            envs,
+        )
+        .status
+        .success(),
+        "an equal-authority expire must be accepted"
+    );
+}
+
+/// The bootstrap exemption: `dent8 authority add` and the diagnostic `authority list` must
+/// keep working under `DENT8_REQUIRE_AUTHORITY=1` even with no registry yet — otherwise the
+/// fail-closed flag would lock the operator out of creating or inspecting the registry.
+#[test]
+fn authority_add_and_list_work_under_require_authority() {
+    let temp = TempDir::new();
+    let authority = temp.file("authority.json");
+    let authority_env = authority.to_string_lossy().into_owned();
+    let required: &[(&str, &str)] = &[
+        ("DENT8_AUTHORITY", &authority_env),
+        ("DENT8_REQUIRE_AUTHORITY", "1"),
+    ];
+
+    // List before the registry exists must NOT error — it reports the fail-closed state.
+    let list_before = run_dent8(&["authority", "list"], required);
+    assert!(
+        list_before.status.success(),
+        "authority list must not be blocked by the fail-closed flag\nstderr:\n{}",
+        String::from_utf8_lossy(&list_before.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&list_before.stdout).contains("BLOCKED"),
+        "list should explain that writes are blocked until a registry exists: {}",
+        String::from_utf8_lossy(&list_before.stdout)
+    );
+
+    // Add must bootstrap the registry despite the flag.
+    assert!(
+        run_dent8(&["authority", "add", "source:codex", "high"], required)
+            .status
+            .success(),
+        "authority add must bootstrap the registry under the fail-closed flag"
+    );
+    assert!(authority.exists(), "the registry file should now exist");
+
+    let list_after = run_dent8(&["authority", "list"], required);
+    assert!(list_after.status.success());
+    assert!(
+        String::from_utf8_lossy(&list_after.stdout).contains("source:codex"),
+        "list should show the granted source"
+    );
+}
+
 fn assert_dent8_stdio_server(agent: &str, server: &Value) {
     assert!(
         server.is_object(),

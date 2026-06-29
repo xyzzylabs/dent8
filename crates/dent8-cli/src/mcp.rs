@@ -292,7 +292,14 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
     let predicate = || arg(arguments, "predicate");
     match name {
         "list_facts" => list_facts(path),
-        "verify" => verify_log(path).map_err(ToolError::Failed),
+        // `verify_log` returns Err for integrity *findings* (taint, lineage, a corrupt log) as
+        // well as for a genuine couldn't-run — but for an MCP agent those findings are the
+        // audit's whole point, not a failed tool call. Surface the verdict text as a normal
+        // result (the agent reads "INTEGRITY ISSUES" / "TAINTED" / "OK" from the content);
+        // mapping it to isError would read as "verify itself broke," masking the alarm.
+        "verify" => Ok(match verify_log(path) {
+            Ok(report) | Err(report) => report,
+        }),
         "conflicts" => op_conflicts(path).map_err(into_failed),
         "assert" => {
             let (kind, key, predicate, value, authority, source) = (
@@ -561,7 +568,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "derive",
-            "Assert a fact derived from another fact (named by its subject), recording a dependency edge. If that source is later retracted, this derivative is flagged as tainted.",
+            "Assert a fact derived from another fact (named by its subject), recording a dependency edge. If that source is later retracted or expired, this derivative is flagged as tainted.",
             &derive_props,
             &derive_req,
         ),
@@ -923,6 +930,41 @@ mod tests {
         let (err, text) = call_tool(&path, "conflicts", json!({}));
         assert!(!err, "{text}");
         assert!(text.contains("no contested facts"), "{text}");
+    }
+
+    #[test]
+    fn verify_surfaces_a_finding_as_content_not_a_tool_error() {
+        let (_guard, path) = temp_log();
+        // A fact, a derivative of it, then retract the source → the derivative is tainted.
+        assert!(!call_tool(&path, "assert", database("postgres", "high")).0);
+        let (err, text) = call_tool(
+            &path,
+            "derive",
+            json!({
+                "subject_kind": "service", "subject_key": "api", "predicate": "datastore",
+                "value": "pg", "authority": "high", "source": "src",
+                "from_kind": "repo", "from_key": "p", "from_predicate": "database",
+            }),
+        );
+        assert!(!err, "derive should be admitted: {text}");
+        let (err, text) = call_tool(
+            &path,
+            "retract",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+                    "authority": "high", "source": "src" }),
+        );
+        assert!(!err, "retract should be admitted: {text}");
+        // `verify` found a taint, but the TOOL did not fail: isError must be false (the agent
+        // reads the finding from the content), not true (which would read as "verify broke").
+        let (err, text) = call_tool_text(&path, "verify", json!({}));
+        assert!(
+            !err,
+            "verify must surface an integrity finding as content, not a tool error: {text}"
+        );
+        assert!(
+            text.contains("TAINTED"),
+            "verify should report the taint: {text}"
+        );
     }
 
     #[test]

@@ -28,7 +28,7 @@ Use this while developing dent8 itself:
 [mcp_servers.dent8]
 command = "cargo"
 args = ["run", "-q", "-p", "dent8-cli", "--", "mcp", "serve"]
-cwd = "/Users/chicoxyzzy/dev/opensource/dent8"
+cwd = "/abs/path/to/dent8"
 startup_timeout_sec = 30
 tool_timeout_sec = 60
 

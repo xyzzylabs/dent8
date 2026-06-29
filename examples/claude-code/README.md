@@ -28,8 +28,10 @@ Check it inside Claude Code with:
 ## Project scope
 
 For a team-shared setup, copy [`mcp.sample.json`](mcp.sample.json) to `.mcp.json` in the
-target project. Claude Code supports `${CLAUDE_PROJECT_DIR:-.}` expansion in `.mcp.json`, so
-the sample keeps the log and authority file under the project root.
+target project. Claude Code supports `${VAR:-default}` expansion in `.mcp.json`, so the sample
+keeps the log and authority file under `${CLAUDE_PROJECT_DIR:-.}` (the project root) and
+launches `${DENT8_BIN:-dent8}` — set `DENT8_BIN` to point at a specific build (e.g. a local
+checkout's `target/debug/dent8`), or leave it unset to use `dent8` from `PATH`.
 
 ```sh
 cp /path/to/dent8/examples/claude-code/mcp.sample.json .mcp.json
