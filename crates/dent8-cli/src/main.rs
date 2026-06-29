@@ -45,6 +45,7 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
             demo();
             0
         }
+        [command] if command == "verify" => cmd_verify(),
         [command, kind, key, predicate, value, authority, source] if command == "assert" => {
             cmd_assert(kind, key, predicate, value, authority, source)
         }
@@ -167,6 +168,8 @@ Usage:
                           explain the believed fact, with an integrity receipt
   dent8 replay <kind> <key> <predicate>
                           replay the full event history (why the fact is what it is)
+  dent8 verify            check log integrity (structural on the file store; a real
+                          stored-hash-chain re-verification on Postgres)
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
   dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
@@ -718,6 +721,121 @@ fn pg_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
             .await
             .map_err(|error| error.to_string())
     })
+}
+
+/// On-demand integrity check: re-verify the hash chain and the per-entity lineage.
+/// Backend-aware. For **Postgres** it re-verifies the *stored* global chain (real
+/// tamper-evidence — a mutated stored event is caught); for the **file dev store** it
+/// re-folds and checks structural integrity (tamper-*resistance* over the file log is the
+/// witness's job, not this).
+fn verify_log(path: &str) -> Result<String, String> {
+    #[cfg(feature = "postgres")]
+    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
+        return pg_verify(&url);
+    }
+    #[cfg(not(feature = "postgres"))]
+    if std::env::var_os("DENT8_DATABASE_URL").is_some() {
+        return Err(
+            "DENT8_DATABASE_URL is set but this build lacks Postgres support — \
+                    rebuild with `--features postgres`"
+                .to_string(),
+        );
+    }
+    // `load_store` already runs `validate_unique_log`, so a load error *is* an integrity
+    // failure — surface it as one.
+    let store = load_store(path).map_err(|error| format!("INTEGRITY FAILURE: {error}"))?;
+    // The file store keeps no stored per-event hash, so re-folding only confirms the events
+    // canonicalize cleanly — it is NOT a reference to detect a content edit against (a tampered
+    // log just re-hashes to a different but self-consistent chain). Real tamper-detection over
+    // the file log is `dent8 witness verify`; this command checks *structural* integrity.
+    if !store.verify_chain() {
+        return Err(format!(
+            "INTEGRITY FAILURE: an event does not canonicalize ({} events)",
+            store.len()
+        ));
+    }
+    let subjects = store.subjects();
+    let mut issues = Vec::new();
+    for (subject, predicate) in &subjects {
+        let filter = EventFilter {
+            subject: Some(subject.clone()),
+            predicate: Some(predicate.clone()),
+            ..EventFilter::default()
+        };
+        let events = store
+            .scan_events(&filter)
+            .map_err(|error| error.to_string())?;
+        if let Ok(projection) = replay_entity(&events) {
+            for issue in projection.lineage_issues() {
+                issues.push(format!(
+                    "{}:{} {} — {issue:?}",
+                    subject.kind(),
+                    subject.key(),
+                    predicate.as_str()
+                ));
+            }
+        }
+    }
+    if !issues.is_empty() {
+        return Err(format!(
+            "INTEGRITY ISSUES ({} found):\n  {}",
+            issues.len(),
+            issues.join("\n  ")
+        ));
+    }
+    Ok(format!(
+        "OK: {} event(s) across {} entit(ies) — STRUCTURAL integrity holds (uniqueness + \
+         lineage intact, all events canonicalize). This does NOT detect a content edit: the \
+         file dev store keeps no stored hash to compare against — use `dent8 witness verify` \
+         (or the Postgres backend) for tamper-detection.",
+        store.len(),
+        subjects.len()
+    ))
+}
+
+/// Postgres integrity check: re-verify the stored global hash chain (real tamper-evidence).
+#[cfg(feature = "postgres")]
+fn pg_verify(url: &str) -> Result<String, String> {
+    use dent8_store_postgres::PostgresEventStore;
+    pg_runtime()?.block_on(async {
+        let store = PostgresEventStore::connect(url)
+            .await
+            .map_err(|error| error.to_string())?;
+        store.migrate().await.map_err(|error| error.to_string())?;
+        if !store
+            .verify_chain()
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            return Err(
+                "INTEGRITY FAILURE: the Postgres global hash chain does not re-verify \
+                        (a stored event was altered)"
+                    .to_string(),
+            );
+        }
+        let count = store
+            .scan_events(&dent8_store::EventFilter::default())
+            .await
+            .map_err(|error| error.to_string())?
+            .len();
+        Ok(format!(
+            "OK: {count} event(s) — the Postgres global hash chain re-verifies. \
+             (Tamper-resistance needs an external operated witness.)"
+        ))
+    })
+}
+
+fn cmd_verify() -> i32 {
+    match verify_log(&log_path()) {
+        Ok(report) => {
+            println!("{report}");
+            0
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
 }
 
 /// The next event/claim sequence: one past the **highest** `event:{n}` id actually
