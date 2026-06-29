@@ -28,6 +28,35 @@ The firewall blocks **5/5** attacks a recency-only memory falls to — including
 from it (`dent8 derive` records the edge, `dent8 verify` surfaces the taint), the
 dependency-cascade integrity recency-only memory structurally cannot express.
 
+## Install
+
+```sh
+# From source (Rust 1.95+):
+cargo install --git https://github.com/xyzzylabs/dent8 dent8-cli   # installs the `dent8` binary
+# …or run from a clone without installing:
+cargo run -p dent8-cli -- demo
+```
+
+The stock `dent8` binary uses a local file log and needs no services. Opt-in builds add the
+operational **Postgres** backend (`--features postgres`, with `DENT8_DATABASE_URL`) and the
+Ed25519 **witness** (`--features witness`).
+
+## Quickstart
+
+```sh
+dent8 eval                                                 # why: 5/5 attacks blocked vs a recency baseline
+dent8 assert repo myproj database postgres high owner      # assert a trusted fact
+dent8 supersede repo myproj database mysql low web-scrape  # a low-authority override → REJECTED by the firewall
+dent8 explain repo myproj database                         # still "postgres", with an integrity receipt
+dent8 derive repo myproj deploy_target pg high agent repo myproj database  # derive a fact from it
+dent8 retract repo myproj database high owner              # retract the source…
+dent8 verify                                               # …and verify flags the now-tainted derivative
+```
+
+Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
+lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
+`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`authority`/`witness`/`mcp serve`).
+
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
 lineage, and replayability. (Origin: *dentate gyrus*, the hippocampal structure
