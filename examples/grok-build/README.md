@@ -1,18 +1,22 @@
 # dent8 with Grok Build
 
-dent8 exposes a plain stdio MCP server (`dent8 mcp serve`). Use the sample `mcpServers`
-block anywhere Grok Build asks for local MCP server configuration.
+dent8 exposes a plain stdio MCP server (`dent8 mcp serve`). Grok Build is **Claude Code
+compatible**: it reads a project-root `.mcp.json`, so the sample `mcpServers` block works
+as-is via that path.
 
-Public MCP setup details for Grok Build are less stable/visible than Codex, Claude Code, or
-Cursor at the time of writing, so this example intentionally stays client-neutral: it is the
-server profile dent8 expects the host to launch. If a Grok Build environment only accepts
-remote MCP servers, dent8 needs an MCP HTTP bridge or a future HTTP transport; v0 is stdio.
+If a Grok Build environment only accepts remote MCP servers, dent8 needs an MCP HTTP bridge
+or a future HTTP transport; v0 is stdio.
 
 ## Local MCP profile
 
-Copy [`mcp.sample.json`](mcp.sample.json) into the Grok Build MCP configuration location, or
-paste the `dent8` entry into an existing `mcpServers` block. Replace `/abs/path/to/project`
-with the target repository root.
+Easiest: drop [`mcp.sample.json`](mcp.sample.json) at the project root as `.mcp.json` (Grok
+Build reads Claude Code's `.mcp.json`), or paste the `dent8` entry into an existing
+`mcpServers` block. Replace `/abs/path/to/project` with the target repository root.
+
+Grok Build also has a **native** config — `[mcp_servers.dent8]` in `~/.grok/config.toml`
+(global) or `.grok/config.toml` (project), the same TOML shape as the
+[Codex example](../codex/config.sample.toml) — or add it via
+`grok mcp add dent8 --command dent8 --args "mcp serve"`.
 
 ```sh
 mkdir -p /abs/path/to/project/.dent8

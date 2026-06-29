@@ -26,9 +26,11 @@ curl -sS \
   -d @examples/hecate/task-with-dent8.sample.json
 ```
 
-Edit the sample first: replace `/abs/path/to/project` with the workspace root and choose the
-provider/model Hecate should use. If your Hecate runtime requires `HECATE_RUNTIME_TOKEN`, add
-the matching `X-Hecate-Runtime-Token` header to the `curl` call.
+Edit the sample first: replace `/abs/path/to/project` with the workspace root and set
+`requested_provider` / `requested_model` to the LLM Hecate should drive (leave them empty to
+use the gateway default). The sample sets `workspace_mode: "in_place"` so Hecate operates on
+that directory rather than a fresh clone. If your Hecate runtime requires
+`HECATE_RUNTIME_TOKEN`, add the matching `X-Hecate-Runtime-Token` header to the `curl` call.
 
 ## Hecate UI
 
