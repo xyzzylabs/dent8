@@ -111,7 +111,9 @@ subject+predicate.
 - Authority-weighted supersession **and retraction** arbitration (`InsufficientAuthority`,
   [ADR 0008](decisions/0008-retraction-authority.md)) + canonical contradiction hard-alarm
   (`CanonicalContradiction`); exhaustive 5×5-lattice non-resurrection tests (one per
-  supersession/retraction) + `#[cfg(kani)]` harnesses.
+  supersession/retraction) + `#[cfg(kani)]` harnesses (run manually via `cargo kani`; a green
+  CI job is a tracked follow-up — Kani's pinned nightly does not yet build this edition-2024
+  workspace).
 - Read-time freshness evaluator (`ClaimState::is_expired_at`).
 - Earned-entrenchment: authority-weighted `corroboration_at_or_above`.
 - Canonicalization + hash chain (`canonical_bytes`, `event_hash`, `hash_chain`):
@@ -219,9 +221,10 @@ subject+predicate.
   the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_DATABASE_URL` set
   and a `--features postgres` build, `dent8` and `mcp serve` read/write Postgres, with each
   multi-event operation (supersede/retract/contradict) committed as one transaction
-  (`append_many`). The *adapter* is **CI-verified** against live Postgres (the gated `postgres`
-  job); the **CLI/MCP-over-Postgres path is verified by local end-to-end runs**, not yet by a CI
-  job (a coverage gap to close). The stock binary keeps the file dev store (sqlx is opt-in).
+  (`append_many`). Both the *adapter* **and the CLI-over-Postgres path** are **CI-verified**
+  against live Postgres (the gated `postgres` job runs the adapter tests *and* a live
+  `assert → supersede → explain → verify` end-to-end). The stock binary keeps the file dev
+  store (sqlx is opt-in).
   What remains *design-only*: **cryptographic caller identity**
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
   is calling is still asserted, not proven by a signed token), the richer per-column event
@@ -231,8 +234,8 @@ subject+predicate.
   file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
   build (selected in `load_store`/`append_events`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
-  as the file path) — exercised by local end-to-end runs against live Postgres (the *adapter*
-  is CI-verified; a CI job for the CLI/MCP-over-Postgres path is still owed). **Concurrency:**
+  as the file path) — **CI-verified** end-to-end against live Postgres (the `postgres` job runs
+  a live `assert → supersede → explain → verify`). **Concurrency:**
   the *adapter*
   is **tested** multi-writer-safe — a DB-gated test fires 12 genuinely concurrent appends and
   asserts they serialize (via a transaction-scoped advisory lock) into one gap-free,
