@@ -56,6 +56,12 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
         [command, kind, key, predicate, authority, source] if command == "retract" => {
             cmd_retract(kind, key, predicate, authority, source)
         }
+        [command, kind, key, predicate, authority, source] if command == "reinforce" => {
+            cmd_reinforce(kind, key, predicate, authority, source)
+        }
+        [command, kind, key, predicate, authority, source] if command == "expire" => {
+            cmd_expire(kind, key, predicate, authority, source)
+        }
         [command, kind, key, predicate, value, authority, source] if command == "contradict" => {
             cmd_contradict(kind, key, predicate, value, authority, source)
         }
@@ -108,6 +114,14 @@ fn usage_error(command: &str) -> i32 {
         "retract" => {
             "dent8 retract <subject-kind> <subject-key> <predicate> <authority> <source>\
              \n  e.g.  dent8 retract repo myproj database high owner"
+        }
+        "reinforce" => {
+            "dent8 reinforce <subject-kind> <subject-key> <predicate> <authority> <source>\
+             \n  e.g.  dent8 reinforce repo myproj database high ci-system"
+        }
+        "expire" => {
+            "dent8 expire <subject-kind> <subject-key> <predicate> <authority> <source>\
+             \n  e.g.  dent8 expire repo myproj branch.status high owner"
         }
         "contradict" => {
             "dent8 contradict <subject-kind> <subject-key> <predicate> <opposing-value> \
@@ -165,6 +179,10 @@ Usage:
                           remove the believed fact (rejected if it can't out-rank it)
   dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>
                           flag a conflict (dissent): contest the fact, keep both
+  dent8 reinforce <kind> <key> <predicate> <authority> <source>
+                          corroborate the believed fact (raise earned entrenchment)
+  dent8 expire <kind> <key> <predicate> <authority> <source>
+                          mark the believed fact expired (lifecycle-natural close)
   dent8 explain <kind> <key> <predicate>
                           explain the believed fact, with an integrity receipt
   dent8 replay <kind> <key> <predicate>
@@ -1545,6 +1563,170 @@ fn cmd_retract(
     };
     present(with_write_retry(|| {
         op_retract(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            authority_level,
+            source,
+        )
+    }))
+}
+
+/// Corroborate the believed fact(s): append a `Reinforced` event per believed claim. The
+/// fold raises earned entrenchment (a distinct source/authority backing the same value) and
+/// counts the evidence; the value is left unset so it is pure corroboration (no restatement,
+/// no value-mismatch). Shared by `dent8 reinforce` and the MCP `reinforce` tool.
+fn op_reinforce(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: AuthorityLevel,
+    source: &str,
+) -> Result<String, OpError> {
+    let events = build_per_incumbent(
+        path,
+        subject_kind,
+        subject_key,
+        predicate,
+        authority,
+        source,
+        "reinforce",
+        |incumbent| ClaimEventKind::Reinforced {
+            by: incumbent.clone(),
+        },
+    )?;
+    let count = events.len();
+    Ok(format!(
+        "ACCEPTED  reinforced {count} believed claim(s) of {subject_kind}:{subject_key} \
+         {predicate}  (authority={authority:?})"
+    ))
+}
+
+/// Mark the believed fact(s) expired: append an `Expired` event per believed claim, moving it
+/// to the terminal `Expired` lifecycle. Unlike `retract` this is a lifecycle-natural close
+/// (policy retention), not an authority-gated removal. Shared by `dent8 expire` and the MCP
+/// `expire` tool.
+fn op_expire(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: AuthorityLevel,
+    source: &str,
+) -> Result<String, OpError> {
+    let events = build_per_incumbent(
+        path,
+        subject_kind,
+        subject_key,
+        predicate,
+        authority,
+        source,
+        "expire",
+        |_incumbent| ClaimEventKind::Expired {
+            reason: dent8_core::ExpirationReason::PolicyRetention,
+        },
+    )?;
+    let count = events.len();
+    Ok(format!(
+        "ACCEPTED  expired {count} believed claim(s) of {subject_kind}:{subject_key} {predicate}"
+    ))
+}
+
+/// Shared body for the single-event-per-believed-claim writes (`reinforce`, `expire`): find
+/// the believed incumbents, build one event per incumbent (its kind chosen by `kind_for`),
+/// admit each through the firewall, then persist all-or-nothing.
+#[allow(clippy::too_many_arguments)]
+fn build_per_incumbent(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: AuthorityLevel,
+    source: &str,
+    verb: &str,
+    kind_for: impl Fn(&ClaimId) -> ClaimEventKind,
+) -> Result<Vec<ClaimEvent>, OpError> {
+    enforce_source_ceiling(source, authority)?;
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let subject = EntityRef::new(subject_kind, subject_key)
+        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+    let incumbents = store
+        .believed_claim_ids(&subject, &predicate_parsed)
+        .map_err(|error| OpError::Invalid(error.to_string()))?;
+    if incumbents.is_empty() {
+        return Err(OpError::Rejected(format!(
+            "nothing to {verb}: no believed {subject_kind}:{subject_key} {predicate}"
+        )));
+    }
+    let now = now_millis();
+    let seq = next_seq(&store);
+    let mut events = Vec::with_capacity(incumbents.len());
+    for (index, incumbent) in incumbents.iter().enumerate() {
+        let event = build_event(
+            &format!("event:{}", seq + index),
+            incumbent.as_str(),
+            subject_kind,
+            subject_key,
+            predicate,
+            kind_for(incumbent),
+            None,
+            source,
+            authority,
+            now,
+        )
+        .map_err(|error| OpError::Invalid(format!("invalid {verb}: {error}")))?;
+        events.push(event);
+    }
+    for event in &events {
+        store
+            .append(event.clone())
+            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    }
+    let refs: Vec<&ClaimEvent> = events.iter().collect();
+    append_events(path, &refs).map_err(write_error_to_op)?;
+    Ok(events)
+}
+
+fn cmd_reinforce(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: &str,
+    source: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(with_write_retry(|| {
+        op_reinforce(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            authority_level,
+            source,
+        )
+    }))
+}
+
+fn cmd_expire(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    authority: &str,
+    source: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(with_write_retry(|| {
+        op_expire(
             &log_path(),
             subject_kind,
             subject_key,

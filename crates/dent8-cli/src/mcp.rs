@@ -19,8 +19,8 @@ use std::io::{BufRead, Write};
 use serde_json::{Value, json};
 
 use crate::{
-    OpError, log_path, op_assert, op_contradict, op_explain, op_list_subjects, op_replay,
-    op_retract, op_supersede, parse_authority, with_write_retry,
+    OpError, log_path, op_assert, op_contradict, op_expire, op_explain, op_list_subjects,
+    op_reinforce, op_replay, op_retract, op_supersede, parse_authority, with_write_retry,
 };
 
 /// The MCP protocol revision we advertise (negotiated in `initialize`).
@@ -319,6 +319,28 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
             with_write_retry(|| op_retract(path, &kind, &key, &predicate, authority, &source))
                 .map_err(into_failed)
         }
+        "reinforce" => {
+            let (kind, key, predicate, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            with_write_retry(|| op_reinforce(path, &kind, &key, &predicate, authority, &source))
+                .map_err(into_failed)
+        }
+        "expire" => {
+            let (kind, key, predicate, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            with_write_retry(|| op_expire(path, &kind, &key, &predicate, authority, &source))
+                .map_err(into_failed)
+        }
         "contradict" => {
             let (kind, key, predicate, value, authority, source) = (
                 kind()?,
@@ -418,6 +440,18 @@ fn tool_list() -> Vec<Value> {
             "Flag a conflict (dissent): contest the believed fact, keeping both. Not authority-gated, except a canonical fact hard-alarms.",
             &valued,
             &valued_req,
+        ),
+        tool(
+            "reinforce",
+            "Corroborate the believed fact (raise earned entrenchment): record an additional source/authority backing the same value.",
+            &write_only,
+            &write_req,
+        ),
+        tool(
+            "expire",
+            "Mark the believed fact expired (lifecycle-natural close, e.g. policy retention). Moves it to the terminal Expired state.",
+            &write_only,
+            &write_req,
         ),
         tool(
             "explain",
@@ -725,6 +759,8 @@ mod tests {
                 "supersede",
                 "retract",
                 "contradict",
+                "reinforce",
+                "expire",
                 "explain",
                 "replay"
             ]
