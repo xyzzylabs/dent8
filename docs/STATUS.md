@@ -39,6 +39,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   keeping **both** (paraconsistency, [ADR 0009](decisions/0009-uniqueness-and-contestation.md)).
   This is **dissent** — *not* authority-gated, so a low-authority source can flag a wrong
   fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms.
+- **`dent8 reinforce <kind> <key> <predicate> <authority> <source>`** — corroborates the
+  believed fact: records an additional source/authority backing the same value, raising
+  **earned entrenchment** without restating the value (no value-mismatch).
+- **`dent8 expire <kind> <key> <predicate> <authority> <source>`** — moves the believed
+  fact(s) to the terminal `Expired` lifecycle (a lifecycle-natural close, e.g. policy
+  retention — *not* an authority-gated removal like `retract`).
 - **`dent8 explain <kind> <key> <predicate>`** — replays the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
   a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
@@ -48,9 +54,16 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 replay <kind> <key> <predicate>`** — prints the full ordered event history
   (every assertion, supersession, retraction, contradiction, with authority + source) and
   the current state — *why* the fact is what it is.
+- **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
+  global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
+  it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
+  that content-edit tamper-detection there is `dent8 witness verify`'s job.
+- **`dent8 conflicts`** — lists every contested fact (in dispute) across all entities, showing
+  **both** rival claims (value + authority + lifecycle).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing the **full belief
   surface** as tools to agent clients — `assert` / `supersede` / `retract` / `contradict` /
-  `explain` / `replay` (`initialize` / `tools/list` / `tools/call`). Every tool dispatches
+  `reinforce` / `expire` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
+  Every tool dispatches
   to the *same* `op_*` firewall path as the CLI, so a low-authority, laundered, or
   non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,
   not a protocol error, so the agent sees the reason). It also serves **`resources/list` /
