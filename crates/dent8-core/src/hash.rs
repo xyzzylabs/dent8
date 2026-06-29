@@ -31,10 +31,15 @@ use sha2::{Digest, Sha256};
 
 use crate::model::ClaimEvent;
 
-/// Version of the canonical encoding. Bump on any change to the serialized shape so
-/// hashes from different schema versions never collide. Mixed into every leaf hash.
-/// (This is dent8's `schema_version`, realized as an out-of-band constant rather than
-/// a per-event field — see ADR 0004 item 7.)
+/// Version of the canonical encoding. Mixed into every leaf hash so events under
+/// different encodings never collide. (This is dent8's `schema_version`, realized as an
+/// out-of-band constant rather than a per-event field — see ADR 0004 item 7.)
+///
+/// DO NOT bump this constant on its own to introduce a second encoding: it would re-hash
+/// every existing event and raise a false tamper alarm on the whole log. To add a v2,
+/// first introduce a per-event `schema_version` field (serde-default 1, excluded from
+/// `canonical_bytes`) and mix *that* into the leaf — existing events then backfill to 1
+/// for free and keep verifying. See ADR 0004 item 7 for the full procedure.
 pub const CANON_VERSION: u8 = 1;
 
 /// Domain-separation prefix for a leaf (event) hash, RFC 6962 style. Interior/Merkle

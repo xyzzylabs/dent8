@@ -62,6 +62,25 @@ number formatting.
    while a single encoding version is in force; revisit if multiple encodings must
    coexist in one log.
 
+   **How to introduce a second encoding safely (the deferral is NOT a one-way door).**
+   When v2 is needed, do *not* bump the `CANON_VERSION` constant in `hash_leaf` on its
+   own — that would re-hash every existing event under `2` and raise a false tamper alarm
+   on the whole log. Instead, in the same change:
+   1. add a per-event `schema_version: u8` field to `ClaimEvent` with
+      `#[serde(default = "…v1")]` and **exclude it from `canonical_bytes`** (mix it into
+      the leaf where the constant is today);
+   2. mix `event.schema_version` into the leaf instead of the constant.
+
+   Every event already in the log was written under the only encoding that ever existed
+   (v1), so it deserializes to `schema_version = 1` and mixes `1` into its leaf — **byte-
+   identical to today's `CANON_VERSION = 1`** — so its stored hash, the chain, and any
+   witness/anchor signature over it all still verify, with **no data migration**. New
+   events carry `2` and the v2 rules; verification dispatches per event. Because the
+   backfill-to-v1 is free at that point, adding the field now would be premature churn (it
+   touches every `ClaimEvent` construction site) for no integrity gain. The single rule to
+   preserve the property: **never change the leaf-mixed version without a per-event field
+   to record it.**
+
 ## Consequences
 
 Positive:
