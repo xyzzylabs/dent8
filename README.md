@@ -72,7 +72,8 @@ source of truth for what is built.** In short:
   the firewall, persisted to a local file-backed log and **composing across separate
   invocations**; and `dent8 schema postgres`. The file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backend is Postgres (M2b). `dent8 mcp serve` exposes
-  the full belief surface to agents over MCP (stdio JSON-RPC), through the same firewall.
+  the full belief surface to agents over MCP (stdio JSON-RPC), through the same firewall —
+  see [examples/mcp/](examples/mcp/) for wiring it into an agent client + a runnable demo.
 - **Implemented as a tested library:** the `ClaimEvent` model and replay fold; the
   unbypassable write-path firewall (`EventStore::append`) with authority-weighted
   arbitration + retraction, an anti-laundering challenger check, and the
