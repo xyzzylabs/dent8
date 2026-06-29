@@ -19,8 +19,9 @@ use std::io::{BufRead, Write};
 use serde_json::{Value, json};
 
 use crate::{
-    OpError, log_path, op_assert, op_contradict, op_expire, op_explain, op_list_subjects,
-    op_reinforce, op_replay, op_retract, op_supersede, parse_authority, with_write_retry,
+    OpError, log_path, op_assert, op_contradict, op_derive, op_expire, op_explain,
+    op_list_subjects, op_reinforce, op_replay, op_retract, op_supersede, parse_authority,
+    with_write_retry,
 };
 
 /// The MCP protocol revision we advertise (negotiated in `initialize`).
@@ -275,6 +276,8 @@ fn decode_segment(segment: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
+// A flat one-arm-per-tool dispatch; grows with the tool set, not in complexity.
+#[allow(clippy::too_many_lines)]
 fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, ToolError> {
     let kind = || arg(arguments, "subject_kind");
     let key = || arg(arguments, "subject_key");
@@ -341,6 +344,36 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
             with_write_retry(|| op_expire(path, &kind, &key, &predicate, authority, &source))
                 .map_err(into_failed)
         }
+        "derive" => {
+            let (kind, key, predicate, value, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg(arguments, "value")?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            let (from_kind, from_key, from_predicate) = (
+                arg(arguments, "from_kind")?,
+                arg(arguments, "from_key")?,
+                arg(arguments, "from_predicate")?,
+            );
+            with_write_retry(|| {
+                op_derive(
+                    path,
+                    &kind,
+                    &key,
+                    &predicate,
+                    &value,
+                    authority,
+                    &source,
+                    &from_kind,
+                    &from_key,
+                    &from_predicate,
+                )
+            })
+            .map_err(into_failed)
+        }
         "contradict" => {
             let (kind, key, predicate, value, authority, source) = (
                 kind()?,
@@ -387,6 +420,8 @@ fn into_failed(error: OpError) -> ToolError {
 }
 
 /// The advertised tools and their JSON-Schema inputs.
+// A flat tool registry; grows with the tool set, not in complexity.
+#[allow(clippy::too_many_lines)]
 fn tool_list() -> Vec<Value> {
     let subject = json!({
         "subject_kind": { "type": "string", "description": "entity kind, e.g. repo" },
@@ -400,6 +435,12 @@ fn tool_list() -> Vec<Value> {
     let value = json!({ "value": { "type": "string", "description": "the fact's value" } });
     let valued = merge(&subject, &merge(&value, &write));
     let write_only = merge(&subject, &write);
+    let from = json!({
+        "from_kind": { "type": "string", "description": "source fact's entity kind" },
+        "from_key": { "type": "string", "description": "source fact's entity key" },
+        "from_predicate": { "type": "string", "description": "source fact's predicate" },
+    });
+    let derive_props = merge(&valued, &from);
     let read = ["subject_kind", "subject_key", "predicate"];
     let valued_req = [
         "subject_kind",
@@ -408,6 +449,17 @@ fn tool_list() -> Vec<Value> {
         "value",
         "authority",
         "source",
+    ];
+    let derive_req = [
+        "subject_kind",
+        "subject_key",
+        "predicate",
+        "value",
+        "authority",
+        "source",
+        "from_kind",
+        "from_key",
+        "from_predicate",
     ];
     let write_req = [
         "subject_kind",
@@ -452,6 +504,12 @@ fn tool_list() -> Vec<Value> {
             "Mark the believed fact expired (lifecycle-natural close, e.g. policy retention). Moves it to the terminal Expired state.",
             &write_only,
             &write_req,
+        ),
+        tool(
+            "derive",
+            "Assert a fact derived from another fact (named by its subject), recording a dependency edge. If that source is later retracted, this derivative is flagged as tainted.",
+            &derive_props,
+            &derive_req,
         ),
         tool(
             "explain",
@@ -761,6 +819,7 @@ mod tests {
                 "contradict",
                 "reinforce",
                 "expire",
+                "derive",
                 "explain",
                 "replay"
             ]
