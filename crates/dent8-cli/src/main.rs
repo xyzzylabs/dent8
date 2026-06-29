@@ -7,6 +7,7 @@ use dent8_core::{
 use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt, LineageIssue,
     PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_entity,
+    tainted_claims,
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
@@ -50,6 +51,20 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
         [command, kind, key, predicate, value, authority, source] if command == "assert" => {
             cmd_assert(kind, key, predicate, value, authority, source)
         }
+        [
+            command,
+            kind,
+            key,
+            predicate,
+            value,
+            authority,
+            source,
+            fk,
+            fkey,
+            fpred,
+        ] if command == "derive" => cmd_derive(
+            kind, key, predicate, value, authority, source, fk, fkey, fpred,
+        ),
         [command, kind, key, predicate, value, authority, source] if command == "supersede" => {
             cmd_supersede(kind, key, predicate, value, authority, source)
         }
@@ -115,6 +130,11 @@ fn usage_error(command: &str) -> i32 {
             "dent8 retract <subject-kind> <subject-key> <predicate> <authority> <source>\
              \n  e.g.  dent8 retract repo myproj database high owner"
         }
+        "derive" => {
+            "dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> \
+             <from-key> <from-predicate>\n  e.g.  dent8 derive repo myproj deploy_target pg high \
+             agent repo myproj database"
+        }
         "reinforce" => {
             "dent8 reinforce <subject-kind> <subject-key> <predicate> <authority> <source>\
              \n  e.g.  dent8 reinforce repo myproj database high ci-system"
@@ -179,6 +199,9 @@ Usage:
                           remove the believed fact (rejected if it can't out-rank it)
   dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>
                           flag a conflict (dissent): contest the fact, keep both
+  dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> <from-key> <from-predicate>
+                          assert a fact derived from another fact (records a dependency
+                          edge; retract the source → `verify` flags this as tainted)
   dent8 reinforce <kind> <key> <predicate> <authority> <source>
                           corroborate the believed fact (raise earned entrenchment)
   dent8 expire <kind> <key> <predicate> <authority> <source>
@@ -796,6 +819,19 @@ fn verify_log(path: &str) -> Result<String, String> {
             }
         }
     }
+    // Retraction taint (ADR 0010): a still-believed claim deriving from a retracted/expired
+    // source is surviving poison — flag it across all entities.
+    let all_events = store
+        .scan_events(&EventFilter::default())
+        .map_err(|error| error.to_string())?;
+    for taint in tainted_claims(&all_events).map_err(|error| error.to_string())? {
+        issues.push(format!(
+            "TAINTED: {} derives from {} (now {:?})",
+            taint.claim.as_str(),
+            taint.root.as_str(),
+            taint.root_lifecycle
+        ));
+    }
     if !issues.is_empty() {
         return Err(format!(
             "INTEGRITY ISSUES ({} found):\n  {}",
@@ -805,9 +841,9 @@ fn verify_log(path: &str) -> Result<String, String> {
     }
     Ok(format!(
         "OK: {} event(s) across {} entit(ies) — STRUCTURAL integrity holds (uniqueness + \
-         lineage intact, all events canonicalize). This does NOT detect a content edit: the \
-         file dev store keeps no stored hash to compare against — use `dent8 witness verify` \
-         (or the Postgres backend) for tamper-detection.",
+         lineage intact, no retraction taint, all events canonicalize). This does NOT detect a \
+         content edit: the file dev store keeps no stored hash to compare against — use \
+         `dent8 witness verify` (or the Postgres backend) for tamper-detection.",
         store.len(),
         subjects.len()
     ))
@@ -833,14 +869,35 @@ fn pg_verify(url: &str) -> Result<String, String> {
                     .to_string(),
             );
         }
-        let count = store
+        let events = store
             .scan_events(&dent8_store::EventFilter::default())
             .await
-            .map_err(|error| error.to_string())?
-            .len();
+            .map_err(|error| error.to_string())?;
+        // Retraction taint (ADR 0010): surviving poison — a believed claim deriving from a
+        // retracted/expired source.
+        let tainted = tainted_claims(&events).map_err(|error| error.to_string())?;
+        if !tainted.is_empty() {
+            let lines: Vec<String> = tainted
+                .iter()
+                .map(|taint| {
+                    format!(
+                        "TAINTED: {} derives from {} (now {:?})",
+                        taint.claim.as_str(),
+                        taint.root.as_str(),
+                        taint.root_lifecycle
+                    )
+                })
+                .collect();
+            return Err(format!(
+                "INTEGRITY ISSUES ({} found):\n  {}",
+                lines.len(),
+                lines.join("\n  ")
+            ));
+        }
         Ok(format!(
-            "OK: {count} event(s) — the Postgres global hash chain re-verifies. \
-             (Tamper-resistance needs an external operated witness.)"
+            "OK: {} event(s) — the Postgres global hash chain re-verifies, no retraction taint. \
+             (Tamper-resistance needs an external operated witness.)",
+            events.len()
         ))
     })
 }
@@ -1260,6 +1317,109 @@ fn cmd_assert(
             value,
             authority_level,
             source,
+        )
+    }))
+}
+
+/// Assert a fact **derived from** another fact, recording the claim->claim dependency edge
+/// (`EvidenceKind::DerivedFrom`, ADR 0010). The source is named by *subject* (kind/key/
+/// predicate) and resolved to its currently-believed claim id(s), so no internal claim id need
+/// be typed. If that source is later retracted/expired, `verify` flags this derivative as
+/// tainted. Shared by `dent8 derive` and the MCP `derive` tool.
+#[allow(clippy::too_many_arguments)]
+fn op_derive(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    value: &str,
+    authority: AuthorityLevel,
+    source: &str,
+    from_kind: &str,
+    from_key: &str,
+    from_predicate: &str,
+) -> Result<String, OpError> {
+    enforce_source_ceiling(source, authority)?;
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let from_subject = EntityRef::new(from_kind, from_key)
+        .map_err(|error| OpError::Invalid(format!("invalid source subject: {error}")))?;
+    let from_predicate_parsed = Predicate::new(from_predicate)
+        .map_err(|error| OpError::Invalid(format!("invalid source predicate: {error}")))?;
+    let sources = store
+        .believed_claim_ids(&from_subject, &from_predicate_parsed)
+        .map_err(|error| OpError::Invalid(error.to_string()))?;
+    if sources.is_empty() {
+        return Err(OpError::Rejected(format!(
+            "nothing to derive from: no believed {from_kind}:{from_key} {from_predicate}"
+        )));
+    }
+    let now = now_millis();
+    let seq = next_seq(&store);
+    let mut event = build_event(
+        &format!("event:{seq}"),
+        &format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}"),
+        subject_kind,
+        subject_key,
+        predicate,
+        ClaimEventKind::Asserted,
+        Some(ClaimValue::Text(value.to_string())),
+        source,
+        authority,
+        now,
+    )
+    .map_err(|error| OpError::Invalid(format!("invalid derivation: {error}")))?;
+    // Record a DerivedFrom evidence edge to each believed source claim.
+    for (index, src) in sources.iter().enumerate() {
+        event.evidence.push(Evidence {
+            id: EvidenceId::new(format!("evidence:derived:{index}"))
+                .map_err(|error| OpError::Invalid(format!("evidence id: {error}")))?,
+            kind: EvidenceKind::DerivedFrom,
+            locator: src.as_str().to_string(),
+            digest: None,
+            summary: None,
+        });
+    }
+    let registry = PredicateRegistry::coding_agent();
+    apply_policy_defaults(&registry, &mut event);
+    let receipt = admit(&mut store, &registry, event.clone(), now)
+        .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    append_events(path, &[&event]).map_err(write_error_to_op)?;
+    Ok(format!(
+        "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?}, \
+         derived from {from_kind}:{from_key} {from_predicate})\n  seq={}  hash={}",
+        receipt.global_sequence,
+        short(&receipt.event_hash)
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_derive(
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    value: &str,
+    authority: &str,
+    source: &str,
+    from_kind: &str,
+    from_key: &str,
+    from_predicate: &str,
+) -> i32 {
+    let Some(authority_level) = parse_authority(authority) else {
+        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
+        return 2;
+    };
+    present(with_write_retry(|| {
+        op_derive(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            value,
+            authority_level,
+            source,
+            from_kind,
+            from_key,
+            from_predicate,
         )
     }))
 }
