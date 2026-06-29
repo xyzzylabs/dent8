@@ -232,11 +232,11 @@ subject+predicate.
   catalog), and `connect()` bounds its acquire timeout so an unreachable DB fails fast.
 
 **`dent8-evals`:**
-- Adversarial corpus: MINJA injection, authority laundering, canonical contradiction, and
-  Sybil corroboration run against the **real firewall** vs a **recency-only baseline**.
-  `cargo test -p dent8-evals` asserts the firewall blocks all four while the baseline is
-  compromised by all four (plus a positive control admitting legitimate revision). See
-  [evals.md](evals.md).
+- Adversarial corpus: MINJA injection, authority laundering, canonical contradiction, Sybil
+  corroboration, and **poisoned-source retraction** run against the **real firewall** vs a
+  **recency-only baseline**. `dent8 eval` (or `cargo test -p dent8-evals`) asserts the firewall
+  blocks all five while the baseline is compromised by all five (plus a positive control
+  admitting legitimate revision). See [evals.md](evals.md).
 
 ## Design-only — not implemented
 
@@ -254,9 +254,10 @@ subject+predicate.
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
   is calling is still asserted, not proven by a signed token), the richer per-column event
   table + `uses_as_evidence` edges (migration 001), and operational tuning.
-- **Persistent CLI/MCP — built, file *or* Postgres.** `assert` / `supersede` / `retract` /
-  `contradict` / `explain` / `replay` across invocations are **Runnable** (above) over the
-  file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
+- **Persistent CLI/MCP — built, file *or* Postgres.** The full surface — `assert` /
+  `supersede` / `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` /
+  `replay` / `verify` / `conflicts` / `eval` — across invocations is **Runnable** (above) over
+  the file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
   build (selected in `load_store`/`append_events`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
   as the file path) — **CI-verified** end-to-end against live Postgres (the `postgres` job runs

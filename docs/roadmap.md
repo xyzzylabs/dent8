@@ -38,13 +38,16 @@ What remains to make it a *product*, not a demo:
   multi-user product is cryptographic caller identity (an authority *ceiling* per source is
   built — `dent8 authority`) and an *operated* witness service (the signed-tree-head witness
   *primitive* is built and runnable — `dent8 witness`).
-- `assert`/`supersede`/`retract`/`contradict`/`explain`/`replay` are built (retract
-  authority-gated per [ADR 0008](decisions/0008-retraction-authority.md); contradict +
-  uniqueness-vs-contestation per [ADR 0009](decisions/0009-uniqueness-and-contestation.md));
-  a v0 **MCP server** (`dent8 mcp serve`) exposes `assert`/`explain`/`replay` over stdio
-  JSON-RPC. The full belief lifecycle is runnable.
+- `assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`
+  are built (retract authority-gated per [ADR 0008](decisions/0008-retraction-authority.md);
+  contradict + uniqueness-vs-contestation per [ADR 0009](decisions/0009-uniqueness-and-contestation.md);
+  `derive` + retraction taint per [ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)),
+  plus the operator surfaces `verify` / `conflicts` / `eval`; the **MCP server**
+  (`dent8 mcp serve`) exposes that full belief surface over stdio JSON-RPC. The full lifecycle
+  is runnable.
 - The **`dent8-evals` adversarial corpus** is built (firewall vs recency-only baseline:
-  0/4 attacks succeed against the firewall, 4/4 against the baseline). Remaining eval work:
+  0/5 attacks succeed against the firewall, 5/5 against the baseline; runnable as `dent8 eval`).
+  Remaining eval work:
   property tests (`proptest`), fuzzing (`cargo-fuzz`), and golden replay fixtures.
 
 Closing the remaining gap — *operational* persistence (Postgres) — turns the tool into a
@@ -129,10 +132,11 @@ timestamp is authoritative (the Rust core already reads it as such).
 
 **Crates.** `sqlx`, `tokio`, reuse `sha2`.
 
-## 3. Replay / explain CLI
+## 3. Replay / explain CLI — [DONE]
 
-**Why.** `dent8 replay`/`dent8 explain` are stubs returning exit code 2; only
-`schema postgres` works. These are the demoable surface of the integrity thesis.
+**Why.** `dent8 replay`/`dent8 explain` are the demoable surface of the integrity thesis.
+**Both are built** (real commands, not stubs), alongside `verify` / `conflicts` / `derive` /
+`eval` and the full write lifecycle.
 
 **Invariant.** Deterministic replay and auditability.
 
@@ -182,7 +186,8 @@ optionally `bolero`.
 shipped after replay/explain proved the loop. A **v0 is built**: `dent8 mcp serve` runs a
 synchronous, newline-delimited JSON-RPC 2.0 server over stdio (no async runtime, no new
 heavy deps), handling `initialize` / `tools/list` / `tools/call` for the full belief
-surface (`assert` / `supersede` / `retract` / `contradict` / `explain` / `replay`), plus
+surface (`assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
+`derive` / `explain` / `replay`), plus
 `resources/list` / `resources/read` (each fact stream as a `dent8://` resource) and
 JSON-RPC batch requests. The tools dispatch to the shared `op_*` firewall path, so the same
 arbitration applies over MCP as on the CLI (a low-authority write is refused, surfaced as a
@@ -190,7 +195,8 @@ tool error).
 
 **Role.** *Enforce* the firewall at write time: it already rejects missing-provenance /
 sub-floor / non-unique writes (T1) via `op_*`, across the full belief surface
-(`assert`/`supersede`/`retract`/`contradict`/`explain`/`replay`), plus `resources/list` /
+(`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`),
+plus `resources/list` /
 `resources/read` and JSON-RPC batch requests. The freshness filter on reads (T4) is applied
 — `explain` headline-flags a stale fact and the receipt carries `fresh` + `expires_at`.
 Still to add: the official `rmcp` SDK / richer transports.

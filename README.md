@@ -67,10 +67,13 @@ associated with pattern separation.)
 This is an early open-source project. **[docs/STATUS.md](docs/STATUS.md) is the single
 source of truth for what is built.** In short:
 
-- **Runnable today:** `dent8 demo` (the firewall + replay/explain loop, registry-driven);
-  the full **`assert` / `supersede` / `retract` / `contradict` / `explain` / `replay`** lifecycle through
-  the firewall, persisted to a local file-backed log and **composing across separate
-  invocations**; and `dent8 schema postgres`. The file log is a **dev store** (single-writer,
+- **Runnable today:** `dent8 demo` (the firewall + replay/explain loop, registry-driven); the
+  full lifecycle through the firewall — **`assert` / `supersede` / `retract` / `contradict` /
+  `reinforce` / `expire` / `derive` / `explain` / `replay`** — plus the operator surfaces
+  **`verify`** (integrity + retraction-taint check), **`conflicts`**, and **`eval`** (the
+  self-demonstrating benchmark), `dent8 authority` / `dent8 witness` (the latter behind
+  `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
+  **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backend is Postgres (M2b). `dent8 mcp serve` exposes
   the full belief surface to agents over MCP (stdio JSON-RPC), through the same firewall —
   see [examples/mcp/](examples/mcp/) for wiring it into an agent client + a runnable demo.
@@ -90,12 +93,13 @@ source of truth for what is built.** In short:
   the same transaction with a `projection == fold(log)` check. The `DATABASE_URL`-gated
   integration tests pass against a live `postgres:16`.
 - **Runnable (v0):** an MCP server (`dent8 mcp serve`) exposing the full belief surface
-  (`assert`/`supersede`/`retract`/`contradict`/`explain`/`replay`) as tools, plus
-  `resources/list`/`resources/read` and JSON-RPC batches, over stdio JSON-RPC, through the
-  shared firewall path.
-- **Design-only:** the official MCP `rmcp` SDK / richer transports (the v0 server already
-  does tools, resources, and JSON-RPC batches) and the per-column Postgres event table +
-  `uses_as_evidence` edges (the projection + relationship graph are built, above).
+  (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`)
+  as tools, plus `resources/list`/`resources/read` and JSON-RPC batches, over stdio JSON-RPC,
+  through the shared firewall path.
+- **Design-only:** the official MCP `rmcp` SDK / richer transports (the v0 server already does
+  the nine tools above, resources, and JSON-RPC batches) and the richer per-column Postgres
+  event table of migration 001 (the JSONB log, projection, and edge graph are built, above;
+  evidence-dependency edges ship as `EvidenceKind::DerivedFrom` + retraction taint, ADR 0010).
 
 The runnable surface persists either way: a local file dev log by default, or — with
 `DENT8_DATABASE_URL` set and a `--features postgres` build — the **DB-verified transactional

@@ -32,8 +32,9 @@ exhaustive bounded (lattice-enumerated) tests plus Kani model checking for the c
 arbitration invariants — and a tamper-evident hash chain extended with an external HMAC anchor that
 detects a history rewrite an internal re-verification cannot. We evaluate with a
 reproducible adversarial corpus: across MINJA-style injection, authority laundering,
-canonical contradiction, and Sybil corroboration, **0/4 attacks succeed against the
-firewall while 4/4 compromise a recency-only baseline**. We are explicit that several
+canonical contradiction, Sybil corroboration, and poisoned-source retraction (evidence
+taint), **0/5 attacks succeed against the firewall while 5/5 compromise a recency-only
+baseline**. We are explicit that several
 integrity primitives are not individually novel — Zep/Graphiti already ships bitemporal
 validity, contradiction-driven edge invalidation, and provenance [7] — and locate dent8's
 contribution in the *combination*: an event-sourced source of truth with deterministic
@@ -280,8 +281,9 @@ compromised.
 | Authority laundering | blocked | **compromised** |
 | Canonical contradiction | blocked | **compromised** |
 | Sybil corroboration | blocked | **compromised** |
+| Poisoned-source retraction (evidence taint) | blocked | **compromised** |
 
-**Attack-success rate: 0/4 against the firewall, 4/4 against the baseline.** Two
+**Attack-success rate: 0/5 against the firewall, 5/5 against the baseline.** Two
 safeguards keep this honest. A *positive control* asserts that a legitimate
 equal-or-higher-authority supersession **is** admitted — the firewall is not a blanket
 "reject all change" gate. A *mechanism* test asserts the first three families are rejected by their *intended*

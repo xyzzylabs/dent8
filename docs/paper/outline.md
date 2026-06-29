@@ -8,7 +8,8 @@ tested: `dent8-core` (model, lifecycle state machine, typed IDs, **authority arb
 + retraction**, the **freshness evaluator**, **policy-counterfactual replay**), serde +
 event hashing, the **unbypassable write-path firewall** with anti-laundering, the
 **coding-agent predicate registry**, a **persistent file-backed CLI**
-(`assert`/`supersede`/`retract`/`contradict`/`explain`/`replay`), the **`dent8-evals`
+(`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`,
+plus `verify`/`conflicts`/`eval`), the **`dent8-evals`
 adversarial corpus** (firewall vs recency-only baseline), an **external HMAC anchor** for
 tamper-resistance, and an **asymmetric (publicly-verifiable) signed-tree-head anchor**
 (Ed25519, feature-gated). The CLI/MCP run on the **operational Postgres adapter** (the
@@ -133,8 +134,9 @@ as "first to unify/transplant," never "first to invent"):
    forbidden, clippy pedantic); `dent8-core`; Postgres schema 001; honest status of
    unbuilt components.
 6. **Evaluation** — the built `dent8-evals` adversarial corpus (MINJA, laundering,
-   canonical contradiction, Sybil) showing **0/4 attack success against the firewall vs
-   4/4 against a recency-only baseline** [3], plus the exhaustive authority-lattice test
+   canonical contradiction, Sybil, poisoned-source retraction) showing **0/5 attack success
+   against the firewall vs 5/5 against a recency-only baseline** [3], plus the exhaustive
+   authority-lattice test
    and Kani proofs; comparison axes. Still to add: golden replay fixtures, `proptest`
    property results, TTL-expiry evaluation.
 7. **Threats to validity** — model-vs-implementation gap; bounded proofs;
