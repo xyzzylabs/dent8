@@ -27,7 +27,24 @@ result (`dent8_evals::summary_table()`):
 Attack-success-rate: **0/5 against the firewall, 5/5 against the baseline.** A positive
 control (`legitimate_supersession_is_accepted`) confirms the firewall is not a blanket
 "reject all change" gate — an equal-authority supersession is admitted. Run it as
-`dent8 eval`. Next families to add: `ttl_expiry` and `summary_drift`.
+`dent8 eval`.
+
+## Scenario-family golden corpus (built)
+
+The file-based fixture corpus this strategy calls for lives under
+[`evals/`](../evals/README.md), generated and verified by
+[`crates/dent8-store/tests/evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs). Each
+scenario freezes a whole stream's **firewall outcome** — admitted vs rejected writes, the
+per-claim end-state, read-time freshness, and retraction taint — to
+`evals/fixtures/<name>.events.jsonl` + `evals/replay/<name>.expected.json`, so a regression in
+arbitration, the canonical hard-alarm, freshness, or the evidence-edge taint is caught as a
+snapshot mismatch (regenerate with `UPDATE_GOLDEN=1`). It covers `beginner_to_senior`
+(`project_fact_correction`), **`ttl_expiry`** (read-time staleness), **`summary_drift`**
+(retraction taint, [ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)),
+`consistency_required` (the canonical hard-alarm), and `low_authority_injection` (MINJA).
+Unlike the single-claim encoding goldens in
+[`golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs), these are multi-claim and
+include writes the firewall is **expected to reject**.
 
 ## Layers
 
@@ -61,21 +78,25 @@ Initial invariants:
 
 ## Fixture Families
 
-Fixtures should live under `evals/fixtures` and `evals/replay`.
+Fixtures live under `evals/fixtures` (authored streams) and `evals/replay` (frozen outcomes),
+generated and verified by the corpus harness above. Families marked *(frozen)* are pinned as
+golden fixtures there; the rest are designed and exercised by the adversarial corpus
+and/or the unit/property tests but not yet frozen as file fixtures.
 
 - `basic_assertion`: one claim becomes active.
 - `reinforcement_same_value`: evidence increases without changing value.
 - `reinforcement_value_mismatch`: replay rejects mutation disguised as reinforcement.
 - `same_predicate_conflict`: two claims conflict on the same subject/predicate.
 - `authority_supersession`: higher-authority claim replaces weaker claim.
-- `ttl_expiry`: fresh claim becomes expired at replay time.
+- `ttl_expiry`: fresh claim becomes read-time stale at a later clock. *(frozen.)*
 - `poisoned_source_retraction`: source invalidation **flags** (taints) the claims derived from
-  it via `DerivedFrom` evidence edges — surfaced, not auto-retracted (ADR 0010). *(Built.)*
+  it via `DerivedFrom` evidence edges — surfaced, not auto-retracted (ADR 0010). *(Built — the
+  adversarial corpus; the frozen file form is `summary_drift`.)*
 - `stale_context_use`: retrieved event records use of stale memory.
-- `summary_drift`: derived summary contradicts original evidence.
-- `project_fact_correction`: coding-agent project fact is corrected and replayed.
-- `consistency_required`: a contradiction against a `canonical`/uniqueness-constrained claim hard-alarms instead of softly contesting (the LFI tier; see [belief-revision.md](belief-revision.md)).
-- `low_authority_injection`: a low-authority write must not auto-supersede a high-authority active claim (MINJA-style poisoning; see [threat-model.md](threat-model.md)).
+- `summary_drift`: a derived summary outlives the retraction of its source and is flagged tainted. *(frozen.)*
+- `project_fact_correction`: a project fact is corrected via supersession and replayed (`beginner_to_senior`). *(frozen.)*
+- `consistency_required`: a contradiction against a `canonical`/uniqueness-constrained claim hard-alarms instead of softly contesting (the LFI tier; see [belief-revision.md](belief-revision.md)). *(frozen.)*
+- `low_authority_injection`: a low-authority write must not auto-supersede a high-authority active claim (MINJA-style poisoning; see [threat-model.md](threat-model.md)). *(frozen.)*
 
 ## Property Tests
 

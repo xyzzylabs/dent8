@@ -1,0 +1,15 @@
+{
+  "chain_head": "89e28b32cc65ad84ea9995a33875836e2f463a49f2bcf97b0fdacdcc3354ad11",
+  "claims": [
+    {
+      "claim_id": "claim:flag",
+      "lifecycle": "Active",
+      "value": "text:beta-x",
+      "authority": "Medium",
+      "believed": true,
+      "fresh": false
+    }
+  ],
+  "rejected": [],
+  "tainted": []
+}

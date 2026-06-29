@@ -40,8 +40,9 @@ pass are folded into the topical docs and noted below.
    adapter, the CLI/MCP runtime, and the **evidence-edge retraction taint** (ADR 0010,
    `dent8 derive`/`verify` + the `poisoned_source_retraction` eval) are **built** — the
    differentiator is now a running, demonstrated system (see [STATUS.md](../STATUS.md)). The
-   analytical/export lane is also built (`dent8 export` → Parquet for DuckDB); what
-   remains is seeded golden/replay fixtures.
+   analytical/export lane is also built (`dent8 export` → Parquet for DuckDB), and the
+   file-based scenario-family golden corpus is seeded ([`evals/`](../../evals/README.md)); what
+   remains on the eval side is `cargo-fuzz`.
    → [roadmap.md](../roadmap.md), [threat-model.md](../threat-model.md)
 
 5. **Publish in two stages.** A model + belief-revision-semantics workshop paper is

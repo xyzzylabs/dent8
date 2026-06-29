@@ -167,16 +167,22 @@ fixtures** are built too: [`golden_replay.rs`](../crates/dent8-core/tests/golden
 freezes named event streams ([`tests/golden/replay/`](../crates/dent8-core/tests/golden/replay))
 as canonical `.events.jsonl` + an `.expected.json` (chain head + replayed-state summary), so
 an encoding/hash/fold change is caught as a snapshot mismatch (regenerate with
-`UPDATE_GOLDEN=1`). Remaining: `cargo-fuzz` over the deserialize→apply→canonicalize path.
+`UPDATE_GOLDEN=1`). The **file-based scenario-family corpus** under
+[`evals/`](../evals/README.md) is seeded too:
+[`evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs) freezes whole-stream firewall
+outcomes (admitted vs rejected writes, per-claim end-state, read-time freshness, retraction
+taint) for `beginner_to_senior`, `ttl_expiry`, `summary_drift`, `consistency_required`, and
+`low_authority_injection`. Remaining: `cargo-fuzz` over the deserialize→apply→canonicalize path.
 
 **Invariant.** All stated invariants, mechanized — see the property list in
 [formal-verification.md](formal-verification.md) §(a).
 
-**Concretely.** A stateful/model-based harness with an independent reference model
-generating random `ClaimEvent` streams. Seed `evals/fixtures` and `evals/replay`
-with the families in [evals.md](evals.md), including the supersession scenario
-("beginner-in-January → senior-in-November") and a `consistency_required` family for
-the LFI tier. Add `cargo-fuzz` targets over the deserialize→apply→canonicalize path.
+**Concretely.** `evals/fixtures` and `evals/replay` are seeded with the families from
+[evals.md](evals.md) — the supersession scenario ("beginner-in-January → senior-in-November"),
+the `consistency_required` LFI family, the `summary_drift` retraction taint, `ttl_expiry`, and
+`low_authority_injection` — each a frozen firewall outcome. Still open: a stateful/model-based
+harness with an independent reference model generating random `ClaimEvent` streams, and
+`cargo-fuzz` targets over the deserialize→apply→canonicalize path.
 Optionally escalate terminal-immutability and fold-determinism to Kani via `bolero`
 (documented as **bounded**, not universal).
 

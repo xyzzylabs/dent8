@@ -1,0 +1,20 @@
+{
+  "chain_head": "fe2d8c7439490eb63e9dcf88b9b8d6e1433ddee7926f89ae5d8ea237f0b40561",
+  "claims": [
+    {
+      "claim_id": "claim:canon",
+      "lifecycle": "Active",
+      "value": "text:MIT",
+      "authority": "Canonical",
+      "believed": true,
+      "fresh": true
+    }
+  ],
+  "rejected": [
+    {
+      "event_id": "event:1",
+      "reason": "Rejected::CanonicalContradiction"
+    }
+  ],
+  "tainted": []
+}

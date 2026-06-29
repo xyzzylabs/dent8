@@ -193,6 +193,14 @@ subject+predicate.
   `.expected.json` (chain head + replayed-state summary). The test replays the **on-disk**
   events and asserts the current code reproduces them, locking the event encoding, the hash
   chain, and the fold against silent drift (regenerate with `UPDATE_GOLDEN=1`).
+- **Scenario-family golden corpus** ([`evals/`](../evals/README.md), harness
+  [`dent8-store/tests/evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs)): the
+  file-based fixture corpus from [evals.md](evals.md). Unlike the single-claim goldens above,
+  these are often **multi-claim** streams that include writes the firewall is **expected to
+  reject**; each `evals/replay/<name>.expected.json` freezes the whole-stream firewall outcome —
+  admitted vs rejected writes (with a stable category), per-claim end-state, read-time
+  freshness, and retraction taint — for `beginner_to_senior`, `ttl_expiry`, `summary_drift`,
+  `consistency_required`, and `low_authority_injection`.
 
 **`dent8-store`:**
 - `replay_claim` / `replay_claim_with_policy` + `diff_states` (policy-counterfactual replay).

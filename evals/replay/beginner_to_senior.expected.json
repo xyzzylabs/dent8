@@ -1,0 +1,23 @@
+{
+  "chain_head": "9a70cbbae1e2c0f909899344e873aba0b1a9a0d0390cc79ef38eb44f812e9b7b",
+  "claims": [
+    {
+      "claim_id": "claim:jan",
+      "lifecycle": "Superseded",
+      "value": "text:beginner",
+      "authority": "High",
+      "believed": false,
+      "fresh": true
+    },
+    {
+      "claim_id": "claim:nov",
+      "lifecycle": "Active",
+      "value": "text:senior",
+      "authority": "High",
+      "believed": true,
+      "fresh": true
+    }
+  ],
+  "rejected": [],
+  "tainted": []
+}
