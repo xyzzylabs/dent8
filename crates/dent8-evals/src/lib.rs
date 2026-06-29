@@ -18,10 +18,10 @@
 use dent8_core::{
     ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
     ClaimLifecycle, ClaimState, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis,
-    Ttl,
+    EvidenceId, EvidenceKind, Predicate, Provenance, RetractionReason, SourceId,
+    SupersessionReason, TimestampMillis, Ttl,
 };
-use dent8_store::{EventStore, InMemoryEventStore, replay_claim};
+use dent8_store::{EventFilter, EventStore, InMemoryEventStore, replay_claim, tainted_claims};
 
 /// The outcome of running one attack scenario through both resolution strategies.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +51,7 @@ pub fn run_corpus() -> Vec<AttackResult> {
         authority_laundering(),
         canonical_contradiction(),
         sybil_corroboration(),
+        poisoned_source_retraction(),
     ]
 }
 
@@ -122,6 +123,52 @@ fn minja_low_authority_injection() -> AttackResult {
             .is_some_and(|state| state.lifecycle == ClaimLifecycle::Active),
         // Baseline: newest write wins, so the trusted fact is overridden by "mysql".
         baseline_compromised: recency_head(&events) == Some("mysql".to_string()),
+    }
+}
+
+/// Retraction taint (T2/T8 — poison does not survive in derivatives, ADR 0010): a claim is
+/// **derived** (`EvidenceKind::DerivedFrom`) from a source, then the source is retracted as
+/// poisoned. The firewall flags the still-believed derivative as **tainted** (it traces to a
+/// retracted source); a recency-only store has no dependency graph at all, so the derivative
+/// silently survives with no flag. This is the structural capability recency-only memory
+/// cannot represent.
+fn poisoned_source_retraction() -> AttackResult {
+    let source = asserted(
+        "event:0",
+        "claim:source",
+        "postgres",
+        "source:owner",
+        AuthorityLevel::High,
+        1,
+    );
+    let derived = derived_from(
+        "event:1",
+        "claim:derived",
+        "deploy-to-pg",
+        "source:agent",
+        AuthorityLevel::High,
+        2,
+        "claim:source",
+    );
+    let retract = retracted(
+        "event:2",
+        "claim:source",
+        "source:owner",
+        AuthorityLevel::High,
+        3,
+    );
+    let admitted = firewall_admitted(&[source, derived.clone(), retract]);
+    AttackResult {
+        name: "poisoned_source_retraction",
+        family: "T2_retraction_cascade",
+        // Firewall: the still-believed derivative is flagged as tainted (its source retracted).
+        firewall_blocked: tainted_claims(&admitted)
+            .expect("taint")
+            .iter()
+            .any(|taint| taint.claim.as_str() == "claim:derived"),
+        // Baseline: recency-only has no dependency graph, so the derivative's own stream is
+        // never touched by the source's retraction — it silently survives, unflagged.
+        baseline_compromised: recency_head(&[derived]).is_some(),
     }
 }
 
@@ -409,6 +456,68 @@ fn contradicted(
         authority,
         at,
     )
+}
+
+fn retracted(
+    event_id: &str,
+    claim_id: &str,
+    source: &str,
+    authority: AuthorityLevel,
+    at: i64,
+) -> ClaimEvent {
+    event(
+        event_id,
+        claim_id,
+        ClaimEventKind::Retracted {
+            reason: RetractionReason::PoisoningDetected,
+        },
+        None,
+        source,
+        authority,
+        at,
+    )
+}
+
+/// An `Asserted` claim on a *distinct* predicate (`deploy_target`, so it does not collide with
+/// the source's `database` fact) carrying a `DerivedFrom` evidence edge to `from_claim` — the
+/// claim->claim dependency the taint analysis walks (ADR 0010).
+fn derived_from(
+    event_id: &str,
+    claim_id: &str,
+    value: &str,
+    source: &str,
+    authority: AuthorityLevel,
+    at: i64,
+    from_claim: &str,
+) -> ClaimEvent {
+    let mut e = event(
+        event_id,
+        claim_id,
+        ClaimEventKind::Asserted,
+        Some(value),
+        source,
+        authority,
+        at,
+    );
+    e.predicate = Predicate::new("deploy_target").expect("predicate");
+    e.evidence.push(Evidence {
+        id: EvidenceId::new(format!("evidence:dep:{event_id}")).expect("evidence id"),
+        kind: EvidenceKind::DerivedFrom,
+        locator: from_claim.to_string(),
+        digest: None,
+        summary: None,
+    });
+    e
+}
+
+/// The events the firewall actually admitted (rejected writes dropped), for an analysis that
+/// should reflect the stored log rather than the raw candidate sequence.
+fn firewall_admitted(events: &[ClaimEvent]) -> Vec<ClaimEvent> {
+    let mut store = InMemoryEventStore::new();
+    for event in events {
+        let _ = store.append(event.clone());
+    }
+    store.scan_events(&EventFilter::default()).expect("scan")
 }
 
 fn event(
