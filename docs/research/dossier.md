@@ -37,10 +37,11 @@ pass are folded into the topical docs and noted below.
    with an exhaustive non-resurrection proof. The freshness evaluator and serde +
    canonicalization + hash chain are also built and tested in the library. The
    write-path firewall (enforced at `EventStore::append`), the **DB-verified** Postgres
-   adapter, and the CLI/MCP runtime are **built** — the differentiator is now a running
-   system (see [STATUS.md](../STATUS.md)). What remains is the evidence-edge retraction
-   cascade, seeded eval fixtures, and the analytical/export lane. → [roadmap.md](../roadmap.md),
-   [threat-model.md](../threat-model.md)
+   adapter, the CLI/MCP runtime, and the **evidence-edge retraction taint** (ADR 0010,
+   `dent8 derive`/`verify` + the `poisoned_source_retraction` eval) are **built** — the
+   differentiator is now a running, demonstrated system (see [STATUS.md](../STATUS.md)). What
+   remains is seeded golden/replay fixtures and the analytical/export lane.
+   → [roadmap.md](../roadmap.md), [threat-model.md](../threat-model.md)
 
 5. **Publish in two stages.** A model + belief-revision-semantics workshop paper is
    claimable now from `dent8-core`; the systems/security paper must wait for the

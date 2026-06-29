@@ -103,8 +103,10 @@ dent8's differentiating mechanisms — serde serialization, event hashing and th
 hash-chain, the Postgres adapter, the replay/explain runtime, and authority
 arbitration — are **built, and the adapter is DB-verified** (see [STATUS.md](STATUS.md)).
 The adversarial `dent8-evals` corpus exists (the firewall blocks attacks a recency-only
-baseline accepts); what remains is **seeding the golden/replay fixture families** and the
-evidence-edge retraction cascade — see [roadmap.md](roadmap.md).
+baseline accepts), now including the **evidence-edge retraction taint** scenario
+(`poisoned_source_retraction`, ADR 0010) — the dependency-cascade differentiator recency-only
+memory cannot represent. What remains is **seeding the golden/replay fixture families** — see
+[roadmap.md](roadmap.md).
 
 ## Academic and infrastructure prior art
 

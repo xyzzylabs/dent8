@@ -45,6 +45,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 expire <kind> <key> <predicate> <authority> <source>`** — moves the believed
   fact(s) to the terminal `Expired` lifecycle (a lifecycle-natural close, e.g. policy
   retention — *not* an authority-gated removal like `retract`).
+- **`dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> <from-key>
+  <from-predicate>`** — asserts a fact **derived from** another (named by subject, resolved to
+  its believed claim id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
+  is later retracted/expired, `verify` flags this derivative as **tainted** — the
+  "poison does not survive in derivatives" differentiator, demonstrated by the
+  `poisoned_source_retraction` eval.
 - **`dent8 explain <kind> <key> <predicate>`** — replays the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
   a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
@@ -57,12 +63,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
   global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
-  that content-edit tamper-detection there is `dent8 witness verify`'s job.
+  that content-edit tamper-detection there is `dent8 witness verify`'s job. On **both** it also
+  reports **retraction taint** — a still-believed claim deriving from a retracted/expired source
+  (`TAINTED: X derives from Y`).
 - **`dent8 conflicts`** — lists every contested fact (in dispute) across all entities, showing
   **both** rival claims (value + authority + lifecycle).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing the **full belief
   surface** as tools to agent clients — `assert` / `supersede` / `retract` / `contradict` /
-  `reinforce` / `expire` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
+  `reinforce` / `expire` / `derive` / `explain` / `replay` (`initialize` / `tools/list` /
+  `tools/call`).
   Every tool dispatches
   to the *same* `op_*` firewall path as the CLI, so a low-authority, laundered, or
   non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,
