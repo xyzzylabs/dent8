@@ -74,15 +74,18 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
   boundary; and cryptographic verification of *which source is calling* (signed tokens) is
   deferred — the ceiling caps *what a source may claim*, not *who it is*.
-- **`dent8 witness keygen | sign | verify`** — the **witness primitive** (behind
+- **`dent8 witness keygen | sign | verify | head | serve`** — the **witness** (behind
   `--features witness`), built on the Ed25519 signed tree head. `keygen` writes a keypair
   (private key `0600`, with the warning to keep it off the log-writer's machine); `sign` emits
   a signed tree head over the current log and appends it to a witness log
   (`DENT8_WITNESS_LOG`); `verify` re-checks every witnessed head against the current log's
   matching **prefix** and that the counts never decrease — catching a history **rewrite**
   (a re-hashed-forward edit an internal `verify_chain` cannot, threat-model T6) as `TAMPER`
-  and a truncation/reorder as `ROLLBACK`. This is the runnable *primitive*; the operated
-  service (a separate signer on a cadence, publication, key rotation) is the layer above it.
+  and a truncation/reorder as `ROLLBACK`. **`serve [interval] [max-heads]`** is the **cadence
+  signer** — it signs the head whenever the log grows, the loop a separate operator runs; and
+  **`head`** prints the latest signed head as JSON to **publish**. What is *built* is the
+  mechanism (cadence signing + publishable heads); what remains *operational* is running it on
+  a host separate from the writer, with key rotation and external head publication/monitoring.
 - `dent8 schema postgres` — prints the Postgres schema.
 - `dent8 --version`, `dent8 --help`.
 

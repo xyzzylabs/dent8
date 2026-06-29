@@ -133,8 +133,13 @@ fn run_witness(args: &[String]) -> i32 {
         [sub] if sub == "keygen" => witness::keygen(),
         [sub] if sub == "sign" => witness::sign(),
         [sub] if sub == "verify" => witness::verify(),
+        [sub] if sub == "head" => witness::head(),
+        [sub, rest @ ..] if sub == "serve" => witness::serve(rest),
         _ => {
-            eprintln!("usage: dent8 witness <keygen | sign | verify>");
+            eprintln!(
+                "usage: dent8 witness <keygen | sign | verify | head | \
+                 serve [interval-seconds] [max-heads]>"
+            );
             2
         }
     }
@@ -161,9 +166,10 @@ Usage:
                           replay the full event history (why the fact is what it is)
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
-  dent8 witness keygen | sign | verify
+  dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
                           emit/verify Ed25519 signed tree heads to detect a history
-                          rewrite or rollback (needs --features witness)
+                          rewrite or rollback; `serve` is the cadence signer, `head`
+                          prints the latest head to publish (needs --features witness)
   dent8 schema postgres   print the Postgres schema
   dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
 

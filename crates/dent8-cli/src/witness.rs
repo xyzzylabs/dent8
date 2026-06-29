@@ -12,11 +12,12 @@
 //! prefix fails its signature (TAMPER); a log shorter than a witnessed count, or a witness log
 //! whose counts go backwards, is a ROLLBACK.
 //!
-//! **This is the primitive, not a deployment.** Tamper-*resistance* (not just evidence) holds
+//! **This is the mechanism, not a deployment.** Tamper-*resistance* (not just evidence) holds
 //! only if the signing key lives **off** the log-writer's machine — a writer who also holds
-//! the key can re-sign a rewrite. `keygen` prints that warning; the operational witness
-//! service (a separate signer on a cadence, key rotation) is the layer above this. See the
-//! threat model's T6 residuals.
+//! the key can re-sign a rewrite. `keygen` prints that warning. `serve` is the **cadence
+//! signer** (sign on growth) and `head` publishes the latest head; what remains *operational*
+//! is running `serve` on a host separate from the writer, rotating its key, and publishing the
+//! heads to an external monitor. See the threat model's T6 residuals.
 //!
 //! Residual — the witness log itself is plain appended JSONL. Every head is independently
 //! signature-verified (none can be *forged* without the key), but an attacker with write
@@ -117,15 +118,8 @@ pub fn sign() -> i32 {
             return 1;
         }
     };
-    let line = match serde_json::to_string(&sth) {
-        Ok(line) => line,
-        Err(error) => {
-            eprintln!("could not serialize the tree head: {error}");
-            return 1;
-        }
-    };
     let path = witness_log_path();
-    if let Err(error) = append_line(&path, &line) {
+    if let Err(error) = append_head(&path, &sth) {
         eprintln!("{error}");
         return 1;
     }
@@ -135,6 +129,94 @@ pub fn sign() -> i32 {
         sth.head.as_deref().unwrap_or("(empty log)"),
     );
     0
+}
+
+/// Run as a **cadence signer** — the *operated* witness loop. Every `interval` seconds, sign
+/// the head **if the log has grown** (an append-only log's head changes only when its count
+/// does) and append it to the witness log. Run this on a host **separate** from the writer,
+/// holding the key, so the accumulated signatures are evidence the writer cannot forge. The
+/// optional second argument bounds the number of heads signed (for a finite run); without it,
+/// it runs until interrupted. A later in-place rewrite is still caught by an *earlier* signed
+/// head failing `verify`, so signing only on growth loses no resistance.
+pub fn serve(args: &[String]) -> i32 {
+    let interval = args
+        .first()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5);
+    let max_heads = args.get(1).and_then(|value| value.parse::<u64>().ok());
+    let signing = match load_signing_key() {
+        Ok(key) => key,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let path = witness_log_path();
+    eprintln!(
+        "witness: signing the head on growth every {interval}s -> {path}{} (interrupt to stop)",
+        max_heads.map_or_else(String::new, |max| format!(", up to {max} head(s)"))
+    );
+    let mut last_count: Option<u64> = None;
+    let mut signed: u64 = 0;
+    loop {
+        match load_events() {
+            Ok(events) => {
+                let count = events.len() as u64;
+                if last_count != Some(count) {
+                    match sign_head(&events, &signing)
+                        .map_err(|error| error.to_string())
+                        .and_then(|sth| append_head(&path, &sth).map(|()| sth))
+                    {
+                        Ok(sth) => {
+                            last_count = Some(count);
+                            signed += 1;
+                            println!(
+                                "signed head: count={} head={}",
+                                sth.event_count,
+                                sth.head.as_deref().unwrap_or("(empty log)")
+                            );
+                        }
+                        Err(error) => eprintln!("witness: {error}"),
+                    }
+                }
+            }
+            Err(error) => eprintln!("witness: could not load the log: {error}"),
+        }
+        if max_heads.is_some_and(|max| signed >= max) {
+            return 0;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(interval));
+    }
+}
+
+/// Print the latest signed tree head (as one JSON line) for an operator to **publish** —
+/// recording it externally is what lets a third party detect a later rollback.
+pub fn head() -> i32 {
+    match load_witness_log() {
+        Ok(heads) => match heads.last() {
+            None => {
+                println!(
+                    "no signed tree heads in {} yet (run `dent8 witness sign` or `serve`)",
+                    witness_log_path()
+                );
+                0
+            }
+            Some(sth) => match serde_json::to_string(sth) {
+                Ok(json) => {
+                    println!("{json}");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("could not serialize the head: {error}");
+                    1
+                }
+            },
+        },
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
 }
 
 /// Verify the witness log against the current event log and public key.
@@ -302,6 +384,13 @@ fn append_line(path: &str, line: &str) -> Result<(), String> {
         .open(path)
         .map_err(|error| format!("cannot open {path}: {error}"))?;
     writeln!(file, "{line}").map_err(|error| format!("cannot append to {path}: {error}"))
+}
+
+/// Serialize a signed tree head to one JSON line and append it to the witness log.
+fn append_head(path: &str, sth: &SignedTreeHead) -> Result<(), String> {
+    let line = serde_json::to_string(sth)
+        .map_err(|error| format!("could not serialize the tree head: {error}"))?;
+    append_line(path, &line)
 }
 
 /// Write a secret to `path`, owner-read/write only where the platform supports it.
