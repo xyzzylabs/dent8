@@ -11,10 +11,13 @@
 set -euo pipefail
 
 DENT8="${DENT8:-dent8}"
-DENT8_LOG="$(mktemp -t dent8-duckdb-demo.XXXXXX)"
-OUT="$(mktemp -t dent8-events.XXXXXX).parquet"
+# A run-scoped temp dir holds both the log and the Parquet, so cleanup is exact (appending
+# .parquet to a `mktemp` path would name a file mktemp never created and leak the one it did).
+WORK="$(mktemp -d -t dent8-duckdb-demo.XXXXXX)"
+DENT8_LOG="$WORK/log.jsonl"
+OUT="$WORK/events.parquet"
 export DENT8_LOG
-trap 'rm -f "$DENT8_LOG" "$OUT"' EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 echo "# 1. Build a belief history (asserts, a derivation, a retraction of the source)"
 $DENT8 assert repo myproj database postgres high source:owner
@@ -43,8 +46,10 @@ duckdb -c "SELECT source, count(*) AS writes FROM '$OUT' GROUP BY 1 ORDER BY 2 D
 echo "## event timeline (kind per claim, in order)"
 duckdb -c "SELECT sequence, kind, claim_id FROM '$OUT' ORDER BY sequence"
 
-echo "## the dependency graph — what was derived from what"
-duckdb -c "SELECT claim_id, derived_from FROM '$OUT' WHERE derived_from IS NOT NULL"
+echo "## the dependency graph — what was derived from what (derived_from is a LIST; UNNEST it)"
+duckdb -c "SELECT claim_id, UNNEST(derived_from) AS source_claim FROM '$OUT' WHERE derived_from IS NOT NULL"
 
-echo "## re-emit as a second Parquet (DuckDB is the bridge to other tools)"
-duckdb -c "COPY (SELECT * FROM '$OUT') TO '/dev/stdout' (FORMAT json)" | head -1
+echo "## re-emit as JSON (DuckDB is the bridge to other tools)"
+# LIMIT 1 in SQL rather than \`| head -1\`: piping to head would close the pipe early and, under
+# \`set -o pipefail\`, surface DuckDB's SIGPIPE as a non-zero exit for the whole demo.
+duckdb -c "COPY (SELECT * FROM '$OUT' LIMIT 1) TO '/dev/stdout' (FORMAT json)"

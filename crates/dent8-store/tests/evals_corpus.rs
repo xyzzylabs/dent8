@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 use dent8_core::{
     ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
     ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind,
-    Predicate, Provenance, RetractionReason, SourceId, SupersessionReason, TimestampMillis, Ttl,
-    hash_chain,
+    Predicate, Provenance, RetractionReason, SourceId, SupersessionReason, TimestampMillis,
+    TransitionError, Ttl, hash_chain,
 };
 use dent8_store::{
     EventFilter, EventStore, InMemoryEventStore, StoreError, replay_entity, tainted_claims,
@@ -76,9 +76,26 @@ struct Scenario {
     /// Read-time clock for freshness (`unix_millis`).
     now_ms: i64,
     events: Vec<ClaimEvent>,
-    /// Independent, code-free headline assertion, so a wrong regeneration cannot silently
-    /// bless a wrong outcome.
-    expect: &'static str,
+    /// The **independent, hand-declared** headline of the outcome, asserted against the freshly
+    /// computed result (not just frozen to disk). This is the guard against a bad regeneration:
+    /// if a code regression changes an outcome and someone runs `UPDATE_GOLDEN=1`, the frozen
+    /// file matches the (wrong) computed result, but the wrong result no longer matches this
+    /// hand-written expectation — so the test still fails.
+    expect: Headline,
+}
+
+/// The load-bearing facts of a scenario's outcome, declared by the author. Each list is the
+/// **sorted** set of claim/event ids; the harness derives the same four sets from the computed
+/// [`Expected`] and asserts equality.
+struct Headline {
+    /// Claim ids expected to be believed (non-terminal lifecycle), sorted.
+    believed: &'static [&'static str],
+    /// Event ids the firewall is expected to reject, sorted.
+    rejected: &'static [&'static str],
+    /// Claim ids expected to be flagged as retraction-tainted, sorted.
+    tainted: &'static [&'static str],
+    /// Believed claim ids expected to be read-time stale (`fresh == false`), sorted.
+    stale: &'static [&'static str],
 }
 
 /// Compact event builder: one event on `claim`/`subject`/`predicate`, stamped at `seq`
@@ -217,7 +234,12 @@ fn scenarios() -> Vec<Scenario> {
                     "source:owner",
                 ),
             ],
-            expect: "claim:nov believed 'senior'; claim:jan superseded",
+            expect: Headline {
+                believed: &["claim:nov"],
+                rejected: &[],
+                tainted: &[],
+                stale: &[],
+            },
         },
         // Read-time freshness: a finite-TTL fact with NO `Expired` event is still lifecycle
         // Active, but reads at a later clock see it as not fresh (the T4 stale-read axis).
@@ -240,7 +262,12 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 Ttl::DurationMillis(1000),
             )],
-            expect: "claim:flag Active but fresh=false at now=10s",
+            expect: Headline {
+                believed: &["claim:flag"],
+                rejected: &[],
+                tainted: &[],
+                stale: &["claim:flag"],
+            },
         },
         // The differentiator (ADR 0010): a summary derived from a source fact is poisoned when
         // the source is retracted. The summary stays believed but is flagged TAINTED — poison
@@ -288,7 +315,12 @@ fn scenarios() -> Vec<Scenario> {
                     "source:owner",
                 ),
             ],
-            expect: "claim:summary believed but tainted by retracted claim:source",
+            expect: Headline {
+                believed: &["claim:summary"],
+                rejected: &[],
+                tainted: &["claim:summary"],
+                stale: &[],
+            },
         },
         // The LFI hard-alarm: a contradiction against a Canonical fact is REJECTED outright
         // (not softened to Contested), so the canonical fact stays Active and untouched.
@@ -321,7 +353,12 @@ fn scenarios() -> Vec<Scenario> {
                     "source:user",
                 ),
             ],
-            expect: "contradiction rejected (CanonicalContradiction); claim:canon still Active",
+            expect: Headline {
+                believed: &["claim:canon"],
+                rejected: &["event:1"],
+                tainted: &[],
+                stale: &[],
+            },
         },
         // MINJA: a low-authority source tries to supersede a high-authority fact. The firewall
         // rejects the supersession (the challenger cannot out-rank the incumbent), so the
@@ -366,7 +403,12 @@ fn scenarios() -> Vec<Scenario> {
                     "source:web-scrape",
                 ),
             ],
-            expect: "supersession rejected; claim:trusted still believed 'postgres'",
+            expect: Headline {
+                believed: &["claim:attacker", "claim:trusted"],
+                rejected: &["event:2"],
+                tainted: &[],
+                stale: &[],
+            },
         },
     ]
 }
@@ -379,21 +421,38 @@ fn render_value(value: &ClaimValue) -> String {
     }
 }
 
-/// Stable category for a firewall rejection: the `StoreError`/`TransitionError` variant name,
-/// never the `Display` message (which embeds volatile authority levels / claim ids).
+/// Stable category for a firewall rejection: the `StoreError`/`TransitionError` variant name.
+/// A **typed, exhaustive** match (not parsing `Debug` output, whose format Rust does not
+/// guarantee) — so adding a variant is a compile error here, forcing a conscious category
+/// choice rather than a silently-changed snapshot key.
 fn rejection_category(error: &StoreError) -> String {
-    let variant = |debug: String| {
-        debug
-            .split([' ', '(', '{'])
-            .next()
-            .unwrap_or("Unknown")
-            .to_string()
-    };
     match error {
+        StoreError::Conflict(_) => "Conflict".to_string(),
+        StoreError::Unavailable(_) => "Unavailable".to_string(),
+        StoreError::CorruptEvent(_) => "CorruptEvent".to_string(),
+        StoreError::Canonicalization(_) => "Canonicalization".to_string(),
         StoreError::Rejected(transition) => {
-            format!("Rejected::{}", variant(format!("{transition:?}")))
+            format!("Rejected::{}", transition_category(transition))
         }
-        other => variant(format!("{other:?}")),
+        StoreError::LaunderedAuthority { .. } => "LaunderedAuthority".to_string(),
+        StoreError::UnbackedSupersession(_) => "UnbackedSupersession".to_string(),
+        StoreError::BelowAuthorityFloor { .. } => "BelowAuthorityFloor".to_string(),
+        StoreError::UniquenessViolation { .. } => "UniquenessViolation".to_string(),
+        StoreError::Replay(_) => "Replay".to_string(),
+    }
+}
+
+fn transition_category(error: &TransitionError) -> &'static str {
+    match error {
+        TransitionError::InvalidEvent(_) => "InvalidEvent",
+        TransitionError::MissingInitialAssertion => "MissingInitialAssertion",
+        TransitionError::DuplicateAssertion => "DuplicateAssertion",
+        TransitionError::ClaimIdMismatch => "ClaimIdMismatch",
+        TransitionError::ClaimShapeMismatch => "ClaimShapeMismatch",
+        TransitionError::ReinforcementValueMismatch => "ReinforcementValueMismatch",
+        TransitionError::TerminalStateMutation(_) => "TerminalStateMutation",
+        TransitionError::InsufficientAuthority { .. } => "InsufficientAuthority",
+        TransitionError::CanonicalContradiction => "CanonicalContradiction",
     }
 }
 
@@ -529,8 +588,59 @@ fn evals_corpus_outcomes_are_stable() {
                 .expect("parse expected");
         assert_eq!(
             computed, frozen,
-            "firewall outcome drifted for `{}` ({}) — expected: {}",
-            scenario.name, scenario.description, scenario.expect
+            "firewall outcome drifted for `{}` ({})",
+            scenario.name, scenario.description
+        );
+
+        // Independent guard against a bad regeneration: the freshly-computed outcome must
+        // match the hand-declared headline, regardless of what is frozen on disk. (The
+        // `computed == frozen` check above compares two code-derived values; this one
+        // compares against author intent.) Each list is sorted, matching `Headline`'s order.
+        let believed: Vec<&str> = computed
+            .claims
+            .iter()
+            .filter(|claim| claim.believed)
+            .map(|claim| claim.claim_id.as_str())
+            .collect();
+        assert_eq!(
+            believed.as_slice(),
+            scenario.expect.believed,
+            "believed claims for `{}`",
+            scenario.name
+        );
+        let rejected: Vec<&str> = computed
+            .rejected
+            .iter()
+            .map(|rejection| rejection.event_id.as_str())
+            .collect();
+        assert_eq!(
+            rejected.as_slice(),
+            scenario.expect.rejected,
+            "rejected events for `{}`",
+            scenario.name
+        );
+        let tainted: Vec<&str> = computed
+            .tainted
+            .iter()
+            .map(|taint| taint.claim.as_str())
+            .collect();
+        assert_eq!(
+            tainted.as_slice(),
+            scenario.expect.tainted,
+            "tainted claims for `{}`",
+            scenario.name
+        );
+        let stale: Vec<&str> = computed
+            .claims
+            .iter()
+            .filter(|claim| claim.believed && !claim.fresh)
+            .map(|claim| claim.claim_id.as_str())
+            .collect();
+        assert_eq!(
+            stale.as_slice(),
+            scenario.expect.stale,
+            "stale believed claims for `{}`",
+            scenario.name
         );
     }
 }

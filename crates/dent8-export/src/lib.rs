@@ -2,19 +2,21 @@
 //!
 //! dent8's operational store is the append-only event log (file or Postgres); this crate
 //! writes a **flattened, columnar Parquet** view of that log so it can be queried offline with
-//! **`DuckDB`** (which reads Parquet directly — no embedded engine here). One row per event, with
-//! the queryable scalars promoted to columns *and* the `DerivedFrom` dependency edges
-//! materialized as a `derived_from` column, so forensic/audit/replay questions ("every write by
-//! `source:web-scrape`", "what was derived from `claim:X`", "events per predicate over time")
-//! are plain SQL. The full canonical event is retained in `event_json` for anything the columns
-//! omit.
+//! **`DuckDB`** (which reads Parquet directly — no embedded engine here). One row per event,
+//! with the queryable scalars promoted to columns (the value carries an explicit `value_kind`
+//! discriminator so redacted is never confused with absent; `authority` is a stable name, not a
+//! debug string) *and* the `DerivedFrom` dependency edges as a `derived_from` **list** column
+//! (`UNNEST` it — a claim id may contain any character, so it is not delimiter-packed). So
+//! forensic/audit/replay questions ("every write by `source:web-scrape`", "what was derived from
+//! `claim:X`", "events per predicate over time") are plain SQL. The full canonical event is
+//! retained in `event_json` for anything the columns omit.
 //!
 //! This is **read-only export**, not a runtime store (see `docs/storage.md`). The log remains
 //! the source of truth; a Parquet file is a derived snapshot.
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::array::{ArrayRef, Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use dent8_core::{ClaimEvent, ClaimValue};
@@ -43,9 +45,11 @@ impl std::fmt::Display for ExportError {
 
 impl std::error::Error for ExportError {}
 
-/// The columnar schema of an exported event row.
+/// The columnar schema of an exported event row. `derived_from` is a `List<Utf8>` so its
+/// element type must match what the [`ListBuilder`] produces — the caller passes the built
+/// column's data type in rather than hard-coding it.
 #[must_use]
-fn event_schema() -> Arc<Schema> {
+fn event_schema(derived_from_type: DataType) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("sequence", DataType::Int64, false),
         Field::new("event_id", DataType::Utf8, false),
@@ -54,21 +58,31 @@ fn event_schema() -> Arc<Schema> {
         Field::new("subject_kind", DataType::Utf8, false),
         Field::new("subject_key", DataType::Utf8, false),
         Field::new("predicate", DataType::Utf8, false),
+        // `value` carries the raw text/JSON; `value_kind` is the discriminator so a redacted
+        // value (kind="redacted", value=NULL) is never confused with a genuinely absent value
+        // (kind=NULL, value=NULL), and Text vs Json need not be inferred from string shape.
         Field::new("value", DataType::Utf8, true),
+        Field::new("value_kind", DataType::Utf8, true),
         Field::new("authority", DataType::Utf8, false),
         Field::new("source", DataType::Utf8, false),
         Field::new("actor", DataType::Utf8, false),
         Field::new("recorded_at_ms", DataType::Int64, false),
-        Field::new("derived_from", DataType::Utf8, true),
+        Field::new("derived_from", derived_from_type, true),
         Field::new("event_json", DataType::Utf8, false),
     ]))
 }
 
-fn value_to_string(value: Option<&ClaimValue>) -> Option<String> {
+/// Split a claim value into `(value, value_kind)`: the raw string plus a discriminator
+/// (`"text"` / `"json"` / `"redacted"`), or `(None, None)` for a genuinely absent value (the
+/// lifecycle events — retract/supersede/expire — carry no value). Keeping the kind explicit
+/// avoids the two lossy collapses a bare `value` column would have: redacted-vs-absent, and
+/// inferring Text-vs-Json from the string's shape.
+fn value_parts(value: Option<&ClaimValue>) -> (Option<String>, Option<&'static str>) {
     match value {
-        Some(ClaimValue::Text(text)) => Some(text.clone()),
-        Some(ClaimValue::Json(json)) => Some(json.as_str().to_string()),
-        Some(ClaimValue::Redacted) | None => None,
+        Some(ClaimValue::Text(text)) => (Some(text.clone()), Some("text")),
+        Some(ClaimValue::Json(json)) => (Some(json.as_str().to_string()), Some("json")),
+        Some(ClaimValue::Redacted) => (None, Some("redacted")),
+        None => (None, None),
     }
 }
 
@@ -80,7 +94,6 @@ pub fn export_events<W: std::io::Write + Send>(
     events: &[ClaimEvent],
     writer: W,
 ) -> Result<(), ExportError> {
-    let schema = event_schema();
     let len = events.len();
     let mut sequence = Vec::with_capacity(len);
     let mut event_id = Vec::with_capacity(len);
@@ -90,11 +103,15 @@ pub fn export_events<W: std::io::Write + Send>(
     let mut subject_key = Vec::with_capacity(len);
     let mut predicate = Vec::with_capacity(len);
     let mut value = Vec::with_capacity(len);
+    let mut value_kind = Vec::with_capacity(len);
     let mut authority = Vec::with_capacity(len);
     let mut source = Vec::with_capacity(len);
     let mut actor = Vec::with_capacity(len);
     let mut recorded_at = Vec::with_capacity(len);
-    let mut derived_from = Vec::with_capacity(len);
+    // `derived_from` is a genuine list column (one row → zero-or-more source claim ids), not a
+    // delimiter-packed string: a claim id may legally contain a comma, so a join would be
+    // ambiguous. A null list means "no DerivedFrom edges".
+    let mut derived_from = ListBuilder::new(StringBuilder::new());
     let mut event_json = Vec::with_capacity(len);
 
     for (index, event) in events.iter().enumerate() {
@@ -105,22 +122,27 @@ pub fn export_events<W: std::io::Write + Send>(
         subject_kind.push(event.subject.kind().to_string());
         subject_key.push(event.subject.key().to_string());
         predicate.push(event.predicate.as_str().to_string());
-        value.push(value_to_string(event.value.as_ref()));
-        authority.push(format!("{:?}", event.authority.level));
+        let (raw_value, kind_tag) = value_parts(event.value.as_ref());
+        value.push(raw_value);
+        value_kind.push(kind_tag);
+        authority.push(event.authority.level.name().to_string());
         source.push(event.provenance.source.as_str().to_string());
         actor.push(event.provenance.actor.as_str().to_string());
         recorded_at.push(event.provenance.recorded_at.as_unix_millis());
         let edges = event.dependency_edges();
-        derived_from.push((!edges.is_empty()).then(|| {
-            edges
-                .iter()
-                .map(dent8_core::ClaimId::as_str)
-                .collect::<Vec<_>>()
-                .join(",")
-        }));
+        if edges.is_empty() {
+            derived_from.append_null();
+        } else {
+            for edge in &edges {
+                derived_from.values().append_value(edge.as_str());
+            }
+            derived_from.append(true);
+        }
         event_json.push(serde_json::to_string(event).map_err(ExportError::Serialize)?);
     }
 
+    let derived_from: ArrayRef = Arc::new(derived_from.finish());
+    let schema = event_schema(derived_from.data_type().clone());
     let columns: Vec<ArrayRef> = vec![
         Arc::new(Int64Array::from(sequence)),
         Arc::new(StringArray::from(event_id)),
@@ -130,11 +152,12 @@ pub fn export_events<W: std::io::Write + Send>(
         Arc::new(StringArray::from(subject_key)),
         Arc::new(StringArray::from(predicate)),
         Arc::new(StringArray::from(value)),
+        Arc::new(StringArray::from(value_kind)),
         Arc::new(StringArray::from(authority)),
         Arc::new(StringArray::from(source)),
         Arc::new(StringArray::from(actor)),
         Arc::new(Int64Array::from(recorded_at)),
-        Arc::new(StringArray::from(derived_from)),
+        derived_from,
         Arc::new(StringArray::from(event_json)),
     ];
     let batch = RecordBatch::try_new(schema.clone(), columns).map_err(ExportError::Arrow)?;
@@ -148,7 +171,7 @@ pub fn export_events<W: std::io::Write + Send>(
 #[cfg(test)]
 mod tests {
     use super::export_events;
-    use arrow::array::Array;
+    use arrow::array::{Array, StringArray};
     use dent8_core::{
         ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
         ClaimValue, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind, Predicate,
@@ -216,7 +239,7 @@ mod tests {
             .expect("build");
         let batch = reader.into_iter().next().expect("a batch").expect("batch");
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 14);
+        assert_eq!(batch.num_columns(), 15);
 
         let col = |name: &str| {
             let idx = batch.schema().index_of(name).unwrap();
@@ -233,9 +256,24 @@ mod tests {
         assert_eq!(kind.value(0), "claim.asserted");
         let source = col("source");
         assert_eq!(source.value(1), "source:owner");
-        // The dependency edge is materialized for the derived row, null for the source.
-        let derived = col("derived_from");
+        // The value carries its kind discriminator (text/json/redacted), not an inferred shape.
+        let value_kind = col("value_kind");
+        assert_eq!(value_kind.value(0), "text");
+        // The authority column uses the stable name(), not Debug.
+        let authority = col("authority");
+        assert_eq!(authority.value(0), "High");
+        // The dependency edges are a real list: a null list for the source row, a one-element
+        // list for the derived row (no delimiter ambiguity even if an id contained a comma).
+        let derived_idx = batch.schema().index_of("derived_from").unwrap();
+        let derived = batch
+            .column(derived_idx)
+            .as_any()
+            .downcast_ref::<arrow::array::ListArray>()
+            .unwrap();
         assert!(derived.is_null(0));
-        assert_eq!(derived.value(1), "claim:source");
+        let row1 = derived.value(1);
+        let row1 = row1.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(row1.len(), 1);
+        assert_eq!(row1.value(0), "claim:source");
     }
 }

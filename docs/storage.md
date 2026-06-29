@@ -226,18 +226,20 @@ DuckDB and Parquet are **not** runtime write stores. The write path stays the ev
 log — backend-aware, so it snapshots the file *or* the Postgres log — to a flattened,
 columnar Parquet table, **one row per event**. The queryable scalars are promoted to columns
 (`sequence`, `event_id`, `claim_id`, `kind`, `subject_kind`, `subject_key`, `predicate`,
-`value`, `authority`, `source`, `actor`, `recorded_at_ms`), the `DerivedFrom` dependency
-edges ([ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)) are materialized as
-a `derived_from` column, and the full canonical event is retained in `event_json`. DuckDB
-reads the Parquet **directly** — there is no embedded engine in the binary. Gated behind
-`--features export` so the stock `dent8` carries no arrow/parquet stack.
+`value` + a `value_kind` discriminator (`text`/`json`/`redacted`, or null when absent — so
+redacted is never confused with absent), `authority` (a stable name, not a debug string),
+`source`, `actor`, `recorded_at_ms`); the `DerivedFrom` dependency edges
+([ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)) are a `derived_from`
+**list** column (`UNNEST` it, don't string-split); and the full canonical event is retained in
+`event_json`. DuckDB reads the Parquet **directly** — there is no embedded engine in the
+binary. Gated behind `--features export` so the stock `dent8` carries no arrow/parquet stack.
 
 ```sh
 dent8 export audit.parquet
 # writes by source
 duckdb -c "SELECT source, count(*) AS writes FROM 'audit.parquet' GROUP BY 1 ORDER BY 2 DESC"
 # the dependency graph (what was derived from what)
-duckdb -c "SELECT claim_id, derived_from FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
+duckdb -c "SELECT claim_id, UNNEST(derived_from) AS source_claim FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
 # current believed value per claim id (latest event wins)
 duckdb -c "SELECT claim_id, last(value ORDER BY sequence) FROM 'audit.parquet' GROUP BY 1"
 ```

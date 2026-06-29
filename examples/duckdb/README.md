@@ -16,10 +16,11 @@ It is gated behind `--features export` so the stock `dent8` carries no arrow/par
 | `event_id`, `claim_id` | the event and the claim it acts on |
 | `kind` | `claim.asserted`, `claim.superseded`, `claim.retracted`, … |
 | `subject_kind`, `subject_key`, `predicate` | the fact's subject + predicate |
-| `value` | the asserted value (null for lifecycle events) |
-| `authority`, `source`, `actor` | who wrote it, at what authority |
+| `value` | the raw value (null for lifecycle events and for redacted values) |
+| `value_kind` | `text` / `json` / `redacted`, or null when the event carries no value — so redacted is never confused with absent, and Text vs JSON need not be guessed from the string |
+| `authority`, `source`, `actor` | who wrote it, at what authority (`authority` is a stable name, not a debug string) |
 | `recorded_at_ms` | write time (unix millis) |
-| `derived_from` | comma-joined source claim ids — the `DerivedFrom` dependency edges ([ADR 0010](../../docs/decisions/0010-evidence-edges-and-retraction-taint.md)) |
+| `derived_from` | a **list** of source claim ids — the `DerivedFrom` dependency edges ([ADR 0010](../../docs/decisions/0010-evidence-edges-and-retraction-taint.md)); `UNNEST` it, don't string-split (a claim id may contain any character) |
 | `event_json` | the full canonical event, for anything the columns omit |
 
 ## Queries
@@ -30,8 +31,8 @@ dent8 export audit.parquet
 # writes by source
 duckdb -c "SELECT source, count(*) AS writes FROM 'audit.parquet' GROUP BY 1 ORDER BY 2 DESC"
 
-# the dependency graph — what was derived from what
-duckdb -c "SELECT claim_id, derived_from FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
+# the dependency graph — what was derived from what (derived_from is a list; UNNEST it)
+duckdb -c "SELECT claim_id, UNNEST(derived_from) AS source_claim FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
 
 # event timeline for one entity
 duckdb -c "SELECT sequence, kind, value, authority, source FROM 'audit.parquet'

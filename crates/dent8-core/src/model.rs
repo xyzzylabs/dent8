@@ -150,6 +150,23 @@ pub enum AuthorityLevel {
     Canonical,
 }
 
+impl AuthorityLevel {
+    /// A stable string name for the level, matching its serde representation. Use this — not
+    /// `format!("{self:?}")` — anywhere the name is persisted or becomes a query key (e.g. the
+    /// Parquet export's `authority` column), so a future `Debug` change cannot silently break
+    /// downstream consumers.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Unknown => "Unknown",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::Canonical => "Canonical",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Authority {
     pub level: AuthorityLevel,
