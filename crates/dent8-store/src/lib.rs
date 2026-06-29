@@ -324,6 +324,93 @@ pub fn replay_entity(events: &[ClaimEvent]) -> Result<EntityProjection, ReplayEr
     replay_entity_with_policy(events, &EpistemicPolicy::identity())
 }
 
+/// A still-believed claim that transitively derives (`EvidenceKind::DerivedFrom`, ADR 0010)
+/// from a claim now in a terminal *invalidated* lifecycle (`Retracted`/`Expired`) — i.e. poison
+/// (or a removed source) that survived in a derivative. `root` is an invalidated source the
+/// taint traces to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaintedClaim {
+    pub claim: ClaimId,
+    pub root: ClaimId,
+    pub root_lifecycle: ClaimLifecycle,
+}
+
+/// Cross-entity retraction-taint analysis over the **whole** log: fold every claim stream to
+/// its lifecycle and collect its `DerivedFrom` dependency edges, then report each
+/// *still-believed* claim that transitively depends on an invalidated (`Retracted`/`Expired`)
+/// source. This is the read-side "poison does not survive in derivatives" check (ADR 0010) —
+/// computed on replay, never written, and cross-entity (a dependency may live in another
+/// subject's stream).
+pub fn tainted_claims(events: &[ClaimEvent]) -> Result<Vec<TaintedClaim>, ReplayError> {
+    // Group by claim id — independent of entity, since a dependency edge may cross entities.
+    let mut streams: BTreeMap<ClaimId, Vec<&ClaimEvent>> = BTreeMap::new();
+    for event in events {
+        streams
+            .entry(event.claim_id.clone())
+            .or_default()
+            .push(event);
+    }
+    let mut lifecycle: BTreeMap<ClaimId, ClaimLifecycle> = BTreeMap::new();
+    let mut deps: BTreeMap<ClaimId, Vec<ClaimId>> = BTreeMap::new();
+    for (claim, stream) in &streams {
+        let mut state: Option<ClaimState> = None;
+        let mut edges = Vec::new();
+        for &event in stream {
+            edges.extend(event.dependency_edges());
+            state = Some(apply_event(state.take(), event).map_err(ReplayError::Transition)?);
+        }
+        if let Some(state) = state {
+            lifecycle.insert(claim.clone(), state.lifecycle);
+        }
+        deps.insert(claim.clone(), edges);
+    }
+    let invalidated = |claim: &ClaimId| {
+        matches!(
+            lifecycle.get(claim),
+            Some(ClaimLifecycle::Retracted | ClaimLifecycle::Expired)
+        )
+    };
+    let mut tainted = Vec::new();
+    for (claim, life) in &lifecycle {
+        // Only a *still-believed* derivative is surviving poison; a terminal one is fine.
+        if life.is_terminal() {
+            continue;
+        }
+        if let Some(root) = an_invalidated_root(claim, &deps, &invalidated) {
+            let root_lifecycle = lifecycle[&root];
+            tainted.push(TaintedClaim {
+                claim: claim.clone(),
+                root,
+                root_lifecycle,
+            });
+        }
+    }
+    Ok(tainted)
+}
+
+/// Depth-first search from `claim` over `DerivedFrom` edges for an invalidated source.
+/// Cycle-safe (a `seen` set), so a dependency cycle terminates.
+fn an_invalidated_root(
+    claim: &ClaimId,
+    deps: &BTreeMap<ClaimId, Vec<ClaimId>>,
+    invalidated: &impl Fn(&ClaimId) -> bool,
+) -> Option<ClaimId> {
+    let mut seen = BTreeSet::new();
+    let mut stack: Vec<ClaimId> = deps.get(claim).cloned().unwrap_or_default();
+    while let Some(next) = stack.pop() {
+        if !seen.insert(next.clone()) {
+            continue;
+        }
+        if invalidated(&next) {
+            return Some(next);
+        }
+        if let Some(further) = deps.get(&next) {
+            stack.extend(further.iter().cloned());
+        }
+    }
+    None
+}
+
 /// Entity-level [`replay_entity`] under an [`EpistemicPolicy`]: each stream is folded
 /// under the policy, so a distrusted source can make whole claims absent from the
 /// entity view — the multi-claim counterfactual surface.
@@ -510,7 +597,7 @@ impl std::error::Error for ReplayError {}
 mod tests {
     use super::{
         LineageIssue, StateDiff, UnearnedSupersession, diff_states, replay_claim,
-        replay_claim_with_policy, replay_entity, replay_entity_with_policy,
+        replay_claim_with_policy, replay_entity, replay_entity_with_policy, tainted_claims,
     };
     use dent8_core::{
         ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
@@ -575,6 +662,117 @@ mod tests {
             Ttl::Never,
             None,
         )
+    }
+
+    /// An event on `claim_id` (its own subject `repo:{claim_id}`), carrying a `DerivedFrom`
+    /// evidence item per id in `derived_from` (the dependency edges, ADR 0010).
+    fn taint_ev(
+        event_id: &str,
+        claim_id: &str,
+        kind: ClaimEventKind,
+        derived_from: &[&str],
+    ) -> ClaimEvent {
+        let mut evidence = vec![Evidence {
+            id: EvidenceId::new("evidence:base").expect("evidence id"),
+            kind: EvidenceKind::UserStatement,
+            locator: "x".to_string(),
+            digest: None,
+            summary: None,
+        }];
+        for (index, source) in derived_from.iter().enumerate() {
+            evidence.push(Evidence {
+                id: EvidenceId::new(format!("evidence:dep:{index}")).expect("evidence id"),
+                kind: EvidenceKind::DerivedFrom,
+                locator: (*source).to_string(),
+                digest: None,
+                summary: None,
+            });
+        }
+        ClaimEvent {
+            event_id: ClaimEventId::new(event_id).expect("event id"),
+            claim_id: ClaimId::new(claim_id).expect("claim id"),
+            kind,
+            subject: EntityRef::new("repo", claim_id).expect("entity"),
+            predicate: Predicate::new("fact").expect("predicate"),
+            value: Some(ClaimValue::Text("v".to_string())),
+            confidence: Confidence::from_millis(900).expect("confidence"),
+            authority: Authority {
+                level: AuthorityLevel::High,
+                issuer: None,
+                scope: None,
+            },
+            ttl: Ttl::Never,
+            provenance: Provenance {
+                source: SourceId::new("source:test").expect("source"),
+                actor: ActorId::new("actor:test").expect("actor"),
+                tool: None,
+                run_id: None,
+                input_digest: None,
+                recorded_at: TimestampMillis::from_unix_millis(1),
+            },
+            evidence,
+            observed_at: None,
+            valid_from: None,
+        }
+    }
+
+    #[test]
+    fn retracting_a_poisoned_source_taints_its_derivative() {
+        // claim:derived was derived from claim:source; retract the (poisoned) source.
+        let source = taint_ev("event:1", "claim:source", ClaimEventKind::Asserted, &[]);
+        let derived = taint_ev(
+            "event:2",
+            "claim:derived",
+            ClaimEventKind::Asserted,
+            &["claim:source"],
+        );
+        let retract = taint_ev(
+            "event:3",
+            "claim:source",
+            ClaimEventKind::Retracted {
+                reason: RetractionReason::PoisoningDetected,
+            },
+            &[],
+        );
+
+        // Before retraction: nothing tainted (the source is still believed).
+        let clean = tainted_claims(&[source.clone(), derived.clone()]).expect("taint");
+        assert!(clean.is_empty(), "no taint while the source stands");
+
+        // After retraction: the still-believed derivative is flagged, tracing to the source.
+        let log = [source, derived, retract];
+        let tainted = tainted_claims(&log).expect("taint");
+        assert_eq!(tainted.len(), 1, "the derivative is tainted");
+        assert_eq!(tainted[0].claim.as_str(), "claim:derived");
+        assert_eq!(tainted[0].root.as_str(), "claim:source");
+        assert_eq!(tainted[0].root_lifecycle, ClaimLifecycle::Retracted);
+    }
+
+    #[test]
+    fn taint_is_transitive_and_cycle_safe() {
+        // c <- b <- a (a poisoned); c must be tainted transitively. Plus a self-edge to prove
+        // the DFS terminates on a cycle.
+        let a = taint_ev("event:1", "claim:a", ClaimEventKind::Asserted, &[]);
+        let b = taint_ev("event:2", "claim:b", ClaimEventKind::Asserted, &["claim:a"]);
+        let c = taint_ev(
+            "event:3",
+            "claim:c",
+            ClaimEventKind::Asserted,
+            &["claim:b", "claim:c"], // self-edge -> cycle guard
+        );
+        let retract_a = taint_ev(
+            "event:4",
+            "claim:a",
+            ClaimEventKind::Retracted {
+                reason: RetractionReason::SourceInvalidated,
+            },
+            &[],
+        );
+        let tainted = tainted_claims(&[a, b, c, retract_a]).expect("taint");
+        let names: std::collections::BTreeSet<&str> =
+            tainted.iter().map(|t| t.claim.as_str()).collect();
+        assert!(names.contains("claim:b"), "direct derivative tainted");
+        assert!(names.contains("claim:c"), "transitive derivative tainted");
     }
 
     fn supersede_from(event_id: &str, source: &str, authority: AuthorityLevel) -> ClaimEvent {

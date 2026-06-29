@@ -219,6 +219,10 @@ pub enum EvidenceKind {
     UserStatement,
     DerivedSummary,
     ExternalDocument,
+    /// The claim was **derived from another claim**: the [`Evidence::locator`] holds the
+    /// source `claim:` id (ADR 0010). These items form the claim->claim dependency graph that
+    /// retraction-taint analysis walks (poison must not survive in its derivatives).
+    DerivedFrom,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -228,6 +232,20 @@ pub struct Evidence {
     pub locator: String,
     pub digest: Option<String>,
     pub summary: Option<String>,
+}
+
+impl ClaimEvent {
+    /// The claim ids this event was **derived from** — its [`EvidenceKind::DerivedFrom`]
+    /// evidence items, whose `locator` is the source `claim:` id (ADR 0010). A malformed
+    /// locator is skipped (it simply contributes no edge), so this never fails.
+    #[must_use]
+    pub fn dependency_edges(&self) -> Vec<ClaimId> {
+        self.evidence
+            .iter()
+            .filter(|item| item.kind == EvidenceKind::DerivedFrom)
+            .filter_map(|item| ClaimId::new(item.locator.clone()).ok())
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
