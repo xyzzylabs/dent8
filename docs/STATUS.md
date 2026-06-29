@@ -235,11 +235,14 @@ subject+predicate.
   duplicate-free global chain that verifies, with every projection still `== fold(log)`. The
   CLI mints `event:{n}` ids from a snapshot count, so two CLI *processes* racing one DB can pick
   the same id — caught as a duplicate-id conflict and **auto-retried with exponential backoff +
-  per-process jitter** (`with_write_retry`), which re-snapshots and re-mints a non-colliding id.
-  Verified: 16 genuinely concurrent CLI writers all commit into a contiguous chain with no
-  corruption. The residual is bounded — under contention beyond the retry budget a writer gets a
-  clean, retryable conflict (never corruption), and DB-assigned ids remain the end-state for
-  heavy write fan-out. Authz (source→authority ceilings) is built (`dent8 authority`, above)
+  per-process jitter** (`with_write_retry`, decorrelated so the herd does not phase-lock),
+  which re-snapshots and re-mints a non-colliding id. **Integrity is unconditional** — every
+  committed log is a contiguous, corruption-free chain, and a writer that exhausts the retry
+  budget gets a clean rejection, never a partial or corrupt write. **Convergence is
+  best-effort**: the retry lets ordinary concurrent writers through, but under heavy write
+  fan-out a writer can still be cleanly rejected (retry the command), and **DB-assigned ids
+  remain the end-state** that removes the contention entirely. Authz (source→authority ceilings)
+  is built (`dent8 authority`, above)
   and the witness *primitive* is runnable (`dent8 witness`, above); the remaining product gap
   is cryptographic caller identity and the *operated* witness service.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as

@@ -34,6 +34,9 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 const DEFAULT_KEY: &str = "dent8-witness.key";
 const DEFAULT_LOG: &str = "dent8-witness.jsonl";
 
+/// `serve` bails after this many consecutive failed ticks (a deleted key, a full disk).
+const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+
 fn key_path() -> String {
     std::env::var("DENT8_WITNESS_KEY").unwrap_or_else(|_| DEFAULT_KEY.to_string())
 }
@@ -139,10 +142,13 @@ pub fn sign() -> i32 {
 /// it runs until interrupted. A later in-place rewrite is still caught by an *earlier* signed
 /// head failing `verify`, so signing only on growth loses no resistance.
 pub fn serve(args: &[String]) -> i32 {
+    // Floor the interval at 1s: a 0s interval whose head target is never reached on a static log
+    // would busy-spin the CPU (and hammer the DB on the Postgres backend).
     let interval = args
         .first()
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5);
+        .unwrap_or(5)
+        .max(1);
     let max_heads = args.get(1).and_then(|value| value.parse::<u64>().ok());
     let signing = match load_signing_key() {
         Ok(key) => key,
@@ -151,41 +157,92 @@ pub fn serve(args: &[String]) -> i32 {
             return 1;
         }
     };
+    let verifying = signing.verifying_key();
     let path = witness_log_path();
     eprintln!(
         "witness: signing the head on growth every {interval}s -> {path}{} (interrupt to stop)",
         max_heads.map_or_else(String::new, |max| format!(", up to {max} head(s)"))
     );
-    let mut last_count: Option<u64> = None;
+    // Seed from any heads already on disk so growth is measured from the last witnessed point,
+    // and a pre-existing head can flag a rewrite on the first growth tick.
+    let mut last_signed: Option<SignedTreeHead> =
+        load_witness_log().ok().and_then(|mut heads| heads.pop());
     let mut signed: u64 = 0;
+    // Bail out after a run of consecutive failures (a deleted key, a full disk) rather than
+    // logging forever in a tight loop.
+    let mut errors = 0u32;
     loop {
+        let mut had_error = false;
         match load_events() {
             Ok(events) => {
                 let count = events.len() as u64;
-                if last_count != Some(count) {
+                if last_signed.as_ref().map(|sth| sth.event_count) != Some(count) {
+                    warn_if_prior_head_broken(last_signed.as_ref(), &events, &verifying);
                     match sign_head(&events, &signing)
                         .map_err(|error| error.to_string())
                         .and_then(|sth| append_head(&path, &sth).map(|()| sth))
                     {
                         Ok(sth) => {
-                            last_count = Some(count);
                             signed += 1;
                             println!(
                                 "signed head: count={} head={}",
                                 sth.event_count,
                                 sth.head.as_deref().unwrap_or("(empty log)")
                             );
+                            last_signed = Some(sth);
                         }
-                        Err(error) => eprintln!("witness: {error}"),
+                        Err(error) => {
+                            eprintln!("witness: {error}");
+                            had_error = true;
+                        }
                     }
                 }
             }
-            Err(error) => eprintln!("witness: could not load the log: {error}"),
+            Err(error) => {
+                eprintln!("witness: could not load the log: {error}");
+                had_error = true;
+            }
+        }
+        errors = if had_error { errors + 1 } else { 0 };
+        if errors >= MAX_CONSECUTIVE_ERRORS {
+            eprintln!("witness: giving up after {errors} consecutive errors");
+            return 1;
         }
         if max_heads.is_some_and(|max| signed >= max) {
             return 0;
         }
         std::thread::sleep(std::time::Duration::from_secs(interval));
+    }
+}
+
+/// Warn (loudly, non-fatally) if the most recent witnessed head no longer matches the current
+/// log's prefix — history was rewritten or rolled back under the witness. The witness still
+/// signs the new growth; the stale head remains the evidence at `verify` time.
+fn warn_if_prior_head_broken(
+    previous: Option<&SignedTreeHead>,
+    events: &[ClaimEvent],
+    verifying: &VerifyingKey,
+) {
+    let Some(previous) = previous else { return };
+    let Ok(count) = usize::try_from(previous.event_count) else {
+        return;
+    };
+    if count > events.len() {
+        eprintln!(
+            "witness: WARNING — the log shrank below a previously witnessed count {} (ROLLBACK); \
+             signing the new head anyway, the earlier head is the evidence",
+            previous.event_count
+        );
+        return;
+    }
+    match verify_signed_head(&events[..count], previous, verifying) {
+        Ok(true) => {}
+        Ok(false) => eprintln!(
+            "witness: WARNING — the log no longer matches the head witnessed at count {} (history \
+             was REWRITTEN); signing the new head anyway, the earlier head is the evidence",
+            previous.event_count
+        ),
+        Err(error) => eprintln!("witness: could not check the prior head: {error}"),
     }
 }
 

@@ -998,11 +998,14 @@ impl OpError {
 }
 
 /// Map a durable-append failure to an `OpError`, preserving the retryable conflict signal.
+/// `Other` covers both an I/O failure and a durable firewall rejection (e.g. a same-subject
+/// race the in-memory snapshot admitted but the transaction rejected), so the message says
+/// "could not commit" rather than implying the write was admitted-then-lost.
 fn write_error_to_op(error: WriteError) -> OpError {
     match error {
         WriteError::Conflict(message) => OpError::Conflict(message),
         WriteError::Other(message) => {
-            OpError::Rejected(format!("admitted but could not persist: {message}"))
+            OpError::Rejected(format!("could not commit the write: {message}"))
         }
     }
 }
@@ -1015,7 +1018,7 @@ fn write_error_to_op(error: WriteError) -> OpError {
 /// non-conflict failure returns immediately. Without the `postgres` feature no conflict is ever
 /// produced, so this runs `op` exactly once.
 fn with_write_retry(mut op: impl FnMut() -> Result<String, OpError>) -> Result<String, OpError> {
-    const MAX_ATTEMPTS: u32 = 12;
+    const MAX_ATTEMPTS: u32 = 16;
     let mut last = String::new();
     for attempt in 0..MAX_ATTEMPTS {
         match op() {
@@ -1032,15 +1035,20 @@ fn with_write_retry(mut op: impl FnMut() -> Result<String, OpError>) -> Result<S
     )))
 }
 
-/// Exponential backoff (capped) with per-process jitter for the write-conflict retry. The
-/// jitter is derived from the process id — distinct across the racing CLI processes — so the
-/// herd spreads out without needing an RNG dependency.
+/// Capped exponential backoff with **decorrelated** per-process jitter for the write-conflict
+/// retry. The jitter mixes the process id *and the attempt* through `SplitMix64` and takes an
+/// **odd** modulus (`2·exp+1`) — not a power of two — so two processes whose ids happen to be
+/// congruent mod a power of two are not phase-locked into the same delay every attempt (the bug
+/// a plain `pid % (1<<n)` would have). No RNG dependency: the process id is the per-process
+/// entropy, re-mixed each attempt.
 fn back_off(attempt: u32) {
-    let exp_ms = 1u64 << attempt.min(6); // 1, 2, 4, … capped at 64 ms
-    let jitter_ms = u64::from(std::process::id())
-        .wrapping_mul(2_654_435_761)
-        .wrapping_add(u64::from(attempt))
-        % exp_ms;
+    let exp_ms = 1u64 << attempt.min(7); // 1, 2, 4, … capped at 128 ms
+    let mut z = u64::from(std::process::id())
+        .wrapping_add(u64::from(attempt).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    let jitter_ms = z % (2 * exp_ms + 1); // [0, 2·exp]; odd modulus → no power-of-two phase-lock
     std::thread::sleep(std::time::Duration::from_millis(exp_ms + jitter_ms));
 }
 
