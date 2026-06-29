@@ -46,6 +46,7 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
             0
         }
         [command] if command == "verify" => cmd_verify(),
+        [command] if command == "conflicts" => cmd_conflicts(),
         [command, kind, key, predicate, value, authority, source] if command == "assert" => {
             cmd_assert(kind, key, predicate, value, authority, source)
         }
@@ -170,6 +171,7 @@ Usage:
                           replay the full event history (why the fact is what it is)
   dent8 verify            check log integrity (structural on the file store; a real
                           stored-hash-chain re-verification on Postgres)
+  dent8 conflicts         list contested facts (in dispute), across all entities
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
   dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
@@ -1834,6 +1836,64 @@ fn op_list_subjects(path: &str) -> Result<Vec<(String, String, String)>, OpError
             )
         })
         .collect())
+}
+
+/// List every contested fact (a fact in dispute — `Contested` lifecycle) across all
+/// entities. Read-only; backend-aware via `load_store`. Wires `EntityProjection::contested`
+/// to a runnable surface (gap-register #8).
+fn op_conflicts(path: &str) -> Result<String, OpError> {
+    let store = load_store(path).map_err(OpError::Invalid)?;
+    let mut lines = Vec::new();
+    for (subject, predicate) in store.subjects() {
+        let filter = EventFilter {
+            subject: Some(subject.clone()),
+            predicate: Some(predicate.clone()),
+            ..EventFilter::default()
+        };
+        let events = store
+            .scan_events(&filter)
+            .map_err(|error| OpError::Invalid(error.to_string()))?;
+        let Ok(projection) = replay_entity(&events) else {
+            continue;
+        };
+        // An entity is in dispute when one of its believed claims is `Contested`. Show *all*
+        // its believed claims so both sides of the dispute are visible, not just one.
+        let believed: Vec<&dent8_core::ClaimState> = projection.believed().collect();
+        if believed
+            .iter()
+            .any(|state| state.lifecycle == ClaimLifecycle::Contested)
+        {
+            let rivals: Vec<String> = believed
+                .iter()
+                .map(|state| {
+                    format!(
+                        "{:?} (authority={:?}, {:?})",
+                        state.value, state.authority.level, state.lifecycle
+                    )
+                })
+                .collect();
+            lines.push(format!(
+                "{}:{} {}: {}",
+                subject.kind(),
+                subject.key(),
+                predicate.as_str(),
+                rivals.join("  vs  ")
+            ));
+        }
+    }
+    if lines.is_empty() {
+        Ok("no contested facts — nothing in dispute".to_string())
+    } else {
+        Ok(format!(
+            "{} contested fact(s) (resolve with `supersede`):\n  {}",
+            lines.len(),
+            lines.join("\n  ")
+        ))
+    }
+}
+
+fn cmd_conflicts() -> i32 {
+    present(op_conflicts(&log_path()))
 }
 
 #[allow(clippy::too_many_arguments)]
