@@ -219,8 +219,10 @@ subject+predicate.
   the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_DATABASE_URL` set
   and a `--features postgres` build, `dent8` and `mcp serve` read/write Postgres, with each
   multi-event operation (supersede/retract/contradict) committed as one transaction
-  (`append_many`). Verified end-to-end against live Postgres. The stock binary keeps the file
-  dev store (sqlx is opt-in). What remains *design-only*: **cryptographic caller identity**
+  (`append_many`). The *adapter* is **CI-verified** against live Postgres (the gated `postgres`
+  job); the **CLI/MCP-over-Postgres path is verified by local end-to-end runs**, not yet by a CI
+  job (a coverage gap to close). The stock binary keeps the file dev store (sqlx is opt-in).
+  What remains *design-only*: **cryptographic caller identity**
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
   is calling is still asserted, not proven by a signed token), the richer per-column event
   table + `uses_as_evidence` edges (migration 001), and operational tuning.
@@ -229,7 +231,9 @@ subject+predicate.
   file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
   build (selected in `load_store`/`append_events`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
-  as the file path) — verified end-to-end against live Postgres. **Concurrency:** the *adapter*
+  as the file path) — exercised by local end-to-end runs against live Postgres (the *adapter*
+  is CI-verified; a CI job for the CLI/MCP-over-Postgres path is still owed). **Concurrency:**
+  the *adapter*
   is **tested** multi-writer-safe — a DB-gated test fires 12 genuinely concurrent appends and
   asserts they serialize (via a transaction-scoped advisory lock) into one gap-free,
   duplicate-free global chain that verifies, with every projection still `== fold(log)`. The

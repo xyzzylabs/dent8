@@ -8,7 +8,7 @@ use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt, LineageIssue,
     PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_entity,
 };
-use dent8_store_postgres::INITIAL_SCHEMA_SQL;
+use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
 mod mcp;
 #[cfg(feature = "witness")]
@@ -35,7 +35,10 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
             0
         }
         [command, backend] if command == "schema" && backend == "postgres" => {
-            print!("{INITIAL_SCHEMA_SQL}");
+            // Print exactly the schema `migrate()` deploys (the event-log table + the
+            // materialized projection/edges), so an operator who pre-creates it gets the tables
+            // the runtime actually uses — not migration 001's per-column design sketch.
+            print!("{EVENT_LOG_SCHEMA_SQL}{MATERIALIZATION_SCHEMA_SQL}");
             0
         }
         [command] if command == "demo" => {

@@ -87,11 +87,11 @@ not prior art that implements integrity [7].
 
 Two cells deserve blunt honesty:
 
-- **Temporal validity.** dent8 has `observed_at` + `valid_from` but **no `valid_to`
-  interval**, and `apply_event` never evaluates `Ttl` — `Ttl::is_expired_at` is dead
-  code. On the temporal axis dent8 is currently *behind* Zep (which has both
-  `t_valid` and `t_invalid` plus an edge-invalidation mechanism that actually runs),
-  not at parity. Marked ◐, not ✓.
+- **Temporal validity.** dent8 has `observed_at` + `valid_from` and **applies TTL
+  freshness on reads** — `ClaimState::is_expired_at` drives the `fresh` flag and
+  `explain`'s stale annotation — but has **no `valid_to` interval**. On the full
+  bitemporal axis dent8 is still *behind* Zep (which has both `t_valid` and `t_invalid`
+  plus an edge-invalidation mechanism that actually runs), not at parity. Marked ◐, not ✓.
 - **Authority/confidence.** The typed fields exist (`AuthorityLevel`, `Confidence`),
   and arbitration is **implemented in the `dent8-core` fold**: `apply_event` rejects a
   strictly-lower-authority supersession and hard-alarms a canonical contradiction —
@@ -99,10 +99,12 @@ Two cells deserve blunt honesty:
   Marked ✓ for the core fold; transactional enforcement at the store layer is **built and
   DB-verified** (the Postgres adapter — advisory-lock-serialized append + materialization).
 
-Of dent8's differentiating mechanisms, serde serialization, event hashing and the
-hash-chain, the real Postgres adapter, the replay/explain runtime, and authority
-arbitration are **not yet implemented**, and `evals/` is empty. The guarantees are
-credible only once those land — see [roadmap.md](roadmap.md).
+dent8's differentiating mechanisms — serde serialization, event hashing and the
+hash-chain, the Postgres adapter, the replay/explain runtime, and authority
+arbitration — are **built, and the adapter is DB-verified** (see [STATUS.md](STATUS.md)).
+The adversarial `dent8-evals` corpus exists (the firewall blocks attacks a recency-only
+baseline accepts); what remains is **seeding the golden/replay fixture families** and the
+evidence-edge retraction cascade — see [roadmap.md](roadmap.md).
 
 ## Academic and infrastructure prior art
 

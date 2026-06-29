@@ -35,11 +35,12 @@ pass are folded into the topical docs and noted below.
 4. **The honest gap is narrowing.** **Authority arbitration is now implemented** in
    the core fold (the headline differentiator vs Graphiti's recency-only resolution),
    with an exhaustive non-resurrection proof. The freshness evaluator and serde +
-   canonicalization + hash chain are also built and tested in the library. Still
-   design-only: the Postgres adapter, the write-path firewall (no enforcement at
-   append), and the CLI/MCP runtime — so the differentiator is real in the fold but
-   not yet a running system (see [STATUS.md](../STATUS.md)). The roadmap
-   front-loads the rest. → [roadmap.md](../roadmap.md), [threat-model.md](../threat-model.md)
+   canonicalization + hash chain are also built and tested in the library. The
+   write-path firewall (enforced at `EventStore::append`), the **DB-verified** Postgres
+   adapter, and the CLI/MCP runtime are **built** — the differentiator is now a running
+   system (see [STATUS.md](../STATUS.md)). What remains is the evidence-edge retraction
+   cascade, seeded eval fixtures, and the analytical/export lane. → [roadmap.md](../roadmap.md),
+   [threat-model.md](../threat-model.md)
 
 5. **Publish in two stages.** A model + belief-revision-semantics workshop paper is
    claimable now from `dent8-core`; the systems/security paper must wait for the
@@ -100,13 +101,15 @@ These are the reviewer objections the project must pre-empt, not hide:
 3. **Belief-base framing is vocabulary, not a novel mechanism** — bitemporal DBs
    already give "history matters, retract doesn't resurrect." Claim it as principled
    grounding, not as a contribution.
-4. **On the temporal axis dent8 is currently *behind* Zep** (no `valid_to`, no
-   running expiry). The matrix must not overclaim parity.
+4. **On the temporal axis dent8 is currently *behind* Zep** (no `valid_to` interval;
+   TTL freshness runs on reads but full bitemporal validity does not). The matrix must
+   not overclaim parity.
 5. **Deterministic replay alone is not unique** — Zep/Graphiti reconstruct from
    episodes too. The precise differentiator is the *typed, hash-verified,
    single-source-of-truth* log.
 6. **Hash-chain tamper-evidence is table-stakes**, not a contribution (RFC 6962,
-   blockchains). And it is unimplemented.
+   blockchains). It is built (canonicalization + SHA-256 chain, DB-verified); the
+   *resistance* upgrade (an operated external witness) is the part still maturing.
 
 ## Method note
 
