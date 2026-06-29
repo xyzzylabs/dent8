@@ -143,6 +143,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 **Status**
 
 - [Implementation Status](docs/STATUS.md) — single source of truth for what is built
+- [Configuration](docs/configuration.md) — env vars + Cargo features in one place
+- [Changelog](CHANGELOG.md)
 
 **Design**
 
