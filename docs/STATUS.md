@@ -230,10 +230,13 @@ subject+predicate.
   is **tested** multi-writer-safe — a DB-gated test fires 12 genuinely concurrent appends and
   asserts they serialize (via a transaction-scoped advisory lock) into one gap-free,
   duplicate-free global chain that verifies, with every projection still `== fold(log)`. The
-  remaining **v0 caveat is CLI-level**: the CLI mints `event:{n}` ids from a snapshot count, so
-  two CLI *processes* racing one DB can pick the same id — safely caught as a *retryable* write
-  conflict (no corruption), but it means the CLI is effectively single-writer until snapshot-
-  independent ids land. Authz (source→authority ceilings) is built (`dent8 authority`, above)
+  CLI mints `event:{n}` ids from a snapshot count, so two CLI *processes* racing one DB can pick
+  the same id — caught as a duplicate-id conflict and **auto-retried with exponential backoff +
+  per-process jitter** (`with_write_retry`), which re-snapshots and re-mints a non-colliding id.
+  Verified: 16 genuinely concurrent CLI writers all commit into a contiguous chain with no
+  corruption. The residual is bounded — under contention beyond the retry budget a writer gets a
+  clean, retryable conflict (never corruption), and DB-assigned ids remain the end-state for
+  heavy write fan-out. Authz (source→authority ceilings) is built (`dent8 authority`, above)
   and the witness *primitive* is runnable (`dent8 witness`, above); the remaining product gap
   is cryptographic caller identity and the *operated* witness service.
 - The official `rmcp` SDK / richer transports — the v0 server (full belief surface as

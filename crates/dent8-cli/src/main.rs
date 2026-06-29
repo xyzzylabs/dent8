@@ -811,11 +811,21 @@ fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Resu
     Ok(())
 }
 
+/// The outcome of a durable append. `Conflict` is the **retryable** Postgres optimistic-id
+/// race — a concurrent writer committed our snapshot-derived `event:{n}` id first — which a
+/// fresh-snapshot retry resolves; every other failure is terminal. The file dev store is
+/// single-writer and never conflicts (so the variant is unused without the `postgres` feature).
+enum WriteError {
+    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    Conflict(String),
+    Other(String),
+}
+
 /// Append admitted events to the durable log as JSON lines in a **single write** so a
 /// multi-event operation (e.g. a supersession's replacement + supersession events) lands
 /// all-or-nothing at the file boundary. This is best-effort file atomicity for the dev
 /// store; true transactional atomicity is the Postgres backend (M2b).
-fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), String> {
+fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
     use std::io::Write;
     // Postgres commits the whole operation (assert / supersede / retract / contradict) as one
     // transaction via `append_many`; the file store just appends the lines. (A `not(postgres)`
@@ -826,7 +836,8 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), String> {
     }
     let mut buffer = String::new();
     for event in events {
-        let line = serde_json::to_string(event).map_err(|error| format!("serialize: {error}"))?;
+        let line = serde_json::to_string(event)
+            .map_err(|error| WriteError::Other(format!("serialize: {error}")))?;
         buffer.push_str(&line);
         buffer.push('\n');
     }
@@ -834,9 +845,9 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), String> {
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|error| format!("cannot open {path}: {error}"))?;
+        .map_err(|error| WriteError::Other(format!("cannot open {path}: {error}")))?;
     file.write_all(buffer.as_bytes())
-        .map_err(|error| format!("cannot write {path}: {error}"))
+        .map_err(|error| WriteError::Other(format!("cannot write {path}: {error}")))
 }
 
 /// A throwaway current-thread runtime to bridge the sync CLI to the async adapter. One per
@@ -883,24 +894,26 @@ fn pg_load(url: &str) -> Result<InMemoryEventStore, String> {
 /// two writers racing the same DB can collide and one gets a **retryable** write conflict.
 /// Treat the v0 Postgres path as effectively single-writer until DB-assigned ids land.
 #[cfg(feature = "postgres")]
-fn pg_append(url: &str, events: &[&ClaimEvent]) -> Result<(), String> {
+fn pg_append(url: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
     use dent8_store::StoreError;
     use dent8_store_postgres::PostgresEventStore;
     let owned: Vec<ClaimEvent> = events.iter().map(|&event| event.clone()).collect();
-    pg_runtime()?.block_on(async {
+    pg_runtime().map_err(WriteError::Other)?.block_on(async {
         let store = PostgresEventStore::connect(url)
             .await
-            .map_err(|error| error.to_string())?;
-        store.migrate().await.map_err(|error| error.to_string())?;
+            .map_err(|error| WriteError::Other(error.to_string()))?;
+        store
+            .migrate()
+            .await
+            .map_err(|error| WriteError::Other(error.to_string()))?;
         store
             .append_many(owned)
             .await
             .map_err(|error| match error {
-                // A duplicate id under the optimistic scheme is a race, not corruption — say so.
-                StoreError::Conflict(message) => {
-                    format!("write conflict ({message}); a concurrent writer raced — retry")
-                }
-                other => other.to_string(),
+                // A duplicate id under the optimistic scheme is a race, not corruption: signal it as
+                // retryable so the caller re-snapshots and re-mints a non-colliding id.
+                StoreError::Conflict(message) => WriteError::Conflict(message),
+                other => WriteError::Other(other.to_string()),
             })?;
         Ok(())
     })
@@ -964,14 +977,65 @@ fn build_event(
 enum OpError {
     Invalid(String),
     Rejected(String),
+    /// A retryable concurrent-writer conflict (Postgres optimistic-id race). Surfaced so
+    /// [`with_write_retry`] can re-run the operation against a fresh snapshot; it never reaches
+    /// the user unless retries are exhausted (then it is downgraded to `Rejected`).
+    Conflict(String),
 }
 
 impl OpError {
     fn message(&self) -> &str {
         match self {
-            Self::Invalid(message) | Self::Rejected(message) => message,
+            Self::Invalid(message) | Self::Rejected(message) | Self::Conflict(message) => message,
         }
     }
+}
+
+/// Map a durable-append failure to an `OpError`, preserving the retryable conflict signal.
+fn write_error_to_op(error: WriteError) -> OpError {
+    match error {
+        WriteError::Conflict(message) => OpError::Conflict(message),
+        WriteError::Other(message) => {
+            OpError::Rejected(format!("admitted but could not persist: {message}"))
+        }
+    }
+}
+
+/// Run a write operation, retrying on a concurrent-writer conflict. Each attempt re-runs the
+/// whole `op_*` (fresh snapshot → fresh `event:{n}` id → re-arbitrate → append), so a retry
+/// mints a non-colliding id and commits. Between attempts it backs off with per-process jitter
+/// to **de-synchronize a thundering herd** — immediate retries would re-collide on the same
+/// next id, so the spread is what lets many concurrent writers converge. A success or any
+/// non-conflict failure returns immediately. Without the `postgres` feature no conflict is ever
+/// produced, so this runs `op` exactly once.
+fn with_write_retry(mut op: impl FnMut() -> Result<String, OpError>) -> Result<String, OpError> {
+    const MAX_ATTEMPTS: u32 = 12;
+    let mut last = String::new();
+    for attempt in 0..MAX_ATTEMPTS {
+        match op() {
+            Err(OpError::Conflict(message)) => {
+                last = message;
+                back_off(attempt);
+            }
+            settled => return settled,
+        }
+    }
+    Err(OpError::Rejected(format!(
+        "write conflict persisted after {MAX_ATTEMPTS} attempts (last: {last}); a concurrent \
+         writer kept racing — try again, or move to DB-assigned ids for heavy write contention"
+    )))
+}
+
+/// Exponential backoff (capped) with per-process jitter for the write-conflict retry. The
+/// jitter is derived from the process id — distinct across the racing CLI processes — so the
+/// herd spreads out without needing an RNG dependency.
+fn back_off(attempt: u32) {
+    let exp_ms = 1u64 << attempt.min(6); // 1, 2, 4, … capped at 64 ms
+    let jitter_ms = u64::from(std::process::id())
+        .wrapping_mul(2_654_435_761)
+        .wrapping_add(u64::from(attempt))
+        % exp_ms;
+    std::thread::sleep(std::time::Duration::from_millis(exp_ms + jitter_ms));
 }
 
 /// Assert a fact through the firewall + registry and persist it. The shared core behind
@@ -1011,8 +1075,7 @@ fn op_assert(
     apply_policy_defaults(&registry, &mut event);
     let receipt = admit(&mut store, &registry, event.clone(), now)
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
-    append_events(path, &[&event])
-        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    append_events(path, &[&event]).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?})\n  \
          seq={}  hash={}",
@@ -1033,15 +1096,17 @@ fn cmd_assert(
         eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
         return 2;
     };
-    present(op_assert(
-        &log_path(),
-        subject_kind,
-        subject_key,
-        predicate,
-        value,
-        authority_level,
-        source,
-    ))
+    present(with_write_retry(|| {
+        op_assert(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            value,
+            authority_level,
+            source,
+        )
+    }))
 }
 
 /// Render an operation result for the CLI: success to stdout (exit 0), a malformed request
@@ -1056,7 +1121,7 @@ fn present(outcome: Result<String, OpError>) -> i32 {
             eprintln!("{message}");
             2
         }
-        Err(OpError::Rejected(message)) => {
+        Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
             eprintln!("{message}");
             1
         }
@@ -1196,8 +1261,7 @@ fn op_supersede(
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
     let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs)
-        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    append_events(path, &refs).map_err(write_error_to_op)?;
 
     let count = incumbents.len();
     let claims = if count == 1 { "claim" } else { "claims" };
@@ -1226,15 +1290,17 @@ fn cmd_supersede(
         eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
         return 2;
     };
-    present(op_supersede(
-        &log_path(),
-        subject_kind,
-        subject_key,
-        predicate,
-        new_value,
-        authority_level,
-        source,
-    ))
+    present(with_write_retry(|| {
+        op_supersede(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            new_value,
+            authority_level,
+            source,
+        )
+    }))
 }
 
 /// Build one `Retracted` event per believed incumbent. Each retraction is authority-gated
@@ -1316,8 +1382,7 @@ fn op_retract(
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
     let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs)
-        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    append_events(path, &refs).map_err(write_error_to_op)?;
     let count = incumbents.len();
     let claims = if count == 1 { "claim" } else { "claims" };
     Ok(format!(
@@ -1341,14 +1406,16 @@ fn cmd_retract(
         eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
         return 2;
     };
-    present(op_retract(
-        &log_path(),
-        subject_kind,
-        subject_key,
-        predicate,
-        authority_level,
-        source,
-    ))
+    present(with_write_retry(|| {
+        op_retract(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            authority_level,
+            source,
+        )
+    }))
 }
 
 /// Build the `(events, opposing_claim_id)` for a `contradict`: a fresh opposing assertion
@@ -1452,8 +1519,7 @@ fn op_contradict(
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
     let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs)
-        .map_err(|error| OpError::Rejected(format!("admitted but could not persist: {error}")))?;
+    append_events(path, &refs).map_err(write_error_to_op)?;
     Ok(format!(
         "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
          (authority={authority:?})\n  both are now believed; resolve with `supersede` (install a \
@@ -1480,15 +1546,17 @@ fn cmd_contradict(
         eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
         return 2;
     };
-    present(op_contradict(
-        &log_path(),
-        subject_kind,
-        subject_key,
-        predicate,
-        opposing_value,
-        authority_level,
-        source,
-    ))
+    present(with_write_retry(|| {
+        op_contradict(
+            &log_path(),
+            subject_kind,
+            subject_key,
+            predicate,
+            opposing_value,
+            authority_level,
+            source,
+        )
+    }))
 }
 
 /// One line of a fact's event history for `replay`: what happened, with provenance.

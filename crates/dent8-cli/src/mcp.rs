@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::{
     OpError, log_path, op_assert, op_contradict, op_explain, op_list_subjects, op_replay,
-    op_retract, op_supersede, parse_authority,
+    op_retract, op_supersede, parse_authority, with_write_retry,
 };
 
 /// The MCP protocol revision we advertise (negotiated in `initialize`).
@@ -205,7 +205,9 @@ fn handle_resources_read(id: &Value, params: Option<&Value>, path: &str) -> Valu
         ),
         // A well-formed uri naming a fact that does not exist is "resource not found"
         // (-32002); an invalid subject/predicate is a bad request (-32602).
-        Err(OpError::Rejected(message)) => error_response(id, -32002, &message),
+        Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
+            error_response(id, -32002, &message)
+        }
         Err(OpError::Invalid(message)) => error_response(id, -32602, &message),
     }
 }
@@ -278,45 +280,59 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
     let key = || arg(arguments, "subject_key");
     let predicate = || arg(arguments, "predicate");
     match name {
-        "assert" => op_assert(
-            path,
-            &kind()?,
-            &key()?,
-            &predicate()?,
-            &arg(arguments, "value")?,
-            arg_authority(arguments)?,
-            &arg(arguments, "source")?,
-        )
-        .map_err(into_failed),
-        "supersede" => op_supersede(
-            path,
-            &kind()?,
-            &key()?,
-            &predicate()?,
-            &arg(arguments, "value")?,
-            arg_authority(arguments)?,
-            &arg(arguments, "source")?,
-        )
-        .map_err(into_failed),
-        "retract" => op_retract(
-            path,
-            &kind()?,
-            &key()?,
-            &predicate()?,
-            arg_authority(arguments)?,
-            &arg(arguments, "source")?,
-        )
-        .map_err(into_failed),
-        "contradict" => op_contradict(
-            path,
-            &kind()?,
-            &key()?,
-            &predicate()?,
-            &arg(arguments, "value")?,
-            arg_authority(arguments)?,
-            &arg(arguments, "source")?,
-        )
-        .map_err(into_failed),
+        "assert" => {
+            let (kind, key, predicate, value, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg(arguments, "value")?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            with_write_retry(|| {
+                op_assert(path, &kind, &key, &predicate, &value, authority, &source)
+            })
+            .map_err(into_failed)
+        }
+        "supersede" => {
+            let (kind, key, predicate, value, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg(arguments, "value")?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            with_write_retry(|| {
+                op_supersede(path, &kind, &key, &predicate, &value, authority, &source)
+            })
+            .map_err(into_failed)
+        }
+        "retract" => {
+            let (kind, key, predicate, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            with_write_retry(|| op_retract(path, &kind, &key, &predicate, authority, &source))
+                .map_err(into_failed)
+        }
+        "contradict" => {
+            let (kind, key, predicate, value, authority, source) = (
+                kind()?,
+                key()?,
+                predicate()?,
+                arg(arguments, "value")?,
+                arg_authority(arguments)?,
+                arg(arguments, "source")?,
+            );
+            with_write_retry(|| {
+                op_contradict(path, &kind, &key, &predicate, &value, authority, &source)
+            })
+            .map_err(into_failed)
+        }
         "explain" => op_explain(path, &kind()?, &key()?, &predicate()?).map_err(into_failed),
         "replay" => op_replay(path, &kind()?, &key()?, &predicate()?).map_err(into_failed),
         other => Err(ToolError::Unknown(format!("unknown tool: {other}"))),
