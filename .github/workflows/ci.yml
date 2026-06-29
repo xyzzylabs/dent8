@@ -61,3 +61,29 @@ jobs:
       # The integration tests share one database; they self-serialize (a process-static
       # mutex) and retry the initial connection, so no special flags are needed.
       - run: cargo test -p dent8-store-postgres --features adapter
+      # The CLI/MCP-over-Postgres path itself (not just the adapter crate): build it and run a
+      # live end-to-end assert -> supersede -> explain -> verify, so the runnable Postgres
+      # surface is regression-covered.
+      - run: cargo build -p dent8-cli --features postgres
+      - name: CLI end-to-end over live Postgres
+        env:
+          DENT8_DATABASE_URL: postgres://postgres:dent8@localhost:5432/dent8
+        run: |
+          set -euo pipefail
+          BIN=target/debug/dent8
+          "$BIN" assert repo ci-e2e database postgres high owner
+          "$BIN" supersede repo ci-e2e database mysql high owner
+          "$BIN" explain repo ci-e2e database | grep -q mysql
+          "$BIN" verify
+
+  kani:
+    name: Kani proofs (dent8-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Runs `cargo kani` over the `#[cfg(kani)] #[kani::proof]` harnesses in dent8-core, so the
+      # "machine-checked invariants" claim is enforced, not aspirational. The action installs
+      # Kani + its CBMC backend.
+      - uses: model-checking/kani-github-action@v1
+        with:
+          working-directory: crates/dent8-core
