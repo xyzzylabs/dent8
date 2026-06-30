@@ -29,6 +29,13 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   `DENT8_REQUIRE_AUTHORITY=1` to **fail closed** — a missing registry is an error, not
   permissive dev mode (the `authority` edit commands stay exempt so the registry can be
   bootstrapped).
+- **Signed source identity** (`dent8 identity`, `--features identity`): Ed25519 issuer and
+  source key generation, trusted-issuer registry management, signed source grants, grant
+  verification, and write-boundary source-key possession checks for CLI/MCP writes. Identity
+  fails closed when configured without a matching feature build, when identity material points
+  at a missing trust registry, when the grant source/key/scope does not match the write, or
+  when the write exceeds the grant's authority ceiling
+  ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).
 - **Witness** (`dent8 witness`, `--features witness`): Ed25519 signed tree heads with
   `keygen` / `sign` / `verify` / `head` / `serve` (cadence signer) to detect a history
   rewrite or rollback.
@@ -38,18 +45,31 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
 - **Operator surfaces**: `dent8 verify` (integrity check — real stored-chain re-verification
   on Postgres), `dent8 conflicts` (contested facts), and `dent8 eval` (the self-demonstrating
   adversarial benchmark: firewall vs a recency-only baseline).
+- **Adoption and CLI ergonomics**: `dent8 init` creates a project-local env file, authority
+  registry, and selected store profile; `dent8 doctor [--write-check]` diagnoses the binary,
+  store, authority, MCP availability, verification, and an optional trusted write path. The
+  CLI now uses `clap` with named write arguments, targeted usage errors, global
+  `--color auto|always|never`, `--version`, and
+  `dent8 completions <bash|elvish|fish|powershell|zsh>`.
 - **MCP server** (`dent8 mcp serve`): the full belief surface as stdio JSON-RPC tools +
   readable resources, through the same firewall ([examples/mcp/](examples/mcp/)). Adds
   **read/audit tools** (`list_facts`, `verify`, `conflicts`) and **server `instructions`** in
   the `initialize` response that tell MCP-aware agents to inspect dent8 before relying on
-  durable facts and to treat rejected writes as safety signals.
+  durable facts and to treat rejected writes as safety signals. Tool definitions advertise
+  `outputSchema`, and tool calls return both human-readable `content` and stable
+  `structuredContent` receipts/rejection fields so agents do not have to parse prose.
 - **Client integration examples**: ready-to-adapt MCP setup for Claude Code, Codex, Cursor,
-  Grok Build, and Hecate ([examples/](examples/)) — each with a distinct source id and
-  `DENT8_REQUIRE_AUTHORITY`, validated by an integration test (`agent_integrations.rs`).
+  Gemini CLI, Devin/Cascade, Grok Build, Hecate, LangChain, and the Vercel AI SDK
+  ([examples/](examples/)) — each with a distinct source id where applicable and
+  `DENT8_REQUIRE_AUTHORITY`, validated by integration/example tests. Optional hook guard
+  examples and the built-in `dent8 hook native-memory-guard` help prevent provider-native
+  memory/rules files from bypassing dent8.
 - **Analytical/export lane** (`dent8 export`, `--features export`): writes the whole log —
-  file *or* Postgres — to flattened columnar Parquet (one row per event, with the `DerivedFrom`
-  dependency edges materialized), queried directly by DuckDB for forensics/audit/replay
+  file *or* Postgres — to flattened columnar Parquet (one row per event, with stable scalar
+  columns, a `value_kind` discriminator, `DerivedFrom` dependency edges as a list column, and
+  the full event retained as JSON), queried directly by DuckDB for forensics/audit/replay
   ([examples/duckdb/](examples/duckdb/)). Read-only export; the log stays the source of truth.
 - **Verification**: hash chain + symmetric/asymmetric anchors, exhaustive authority-lattice
   tests, property-based + robustness proptests, golden replay fixtures, `#[cfg(kani)]` proof
-  harnesses (run manually), and the adversarial corpus.
+  harnesses (run manually), structured MCP schema tests, CI coverage for Postgres/SQLite and
+  feature combinations, and the adversarial corpus.
