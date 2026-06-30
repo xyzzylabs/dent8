@@ -13,6 +13,13 @@ path = "src/lib.rs"
 
 [dependencies]
 dent8-core = { path = "../dent8-core" }
+# Opt-in: the `AsyncEventStore` trait for async (network/embedded-sqlx) backends. Boxed via
+# `async-trait` so the CLI can hold a `Box<dyn AsyncEventStore>` selected at runtime. Off by
+# default so the sync file/in-memory store pulls no async machinery.
+async-trait = { version = "0.1", optional = true }
+
+[features]
+async-store = ["dep:async-trait"]
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }

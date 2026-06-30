@@ -43,6 +43,43 @@ pub trait EventStore {
     fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError>;
 }
 
+/// The **async** counterpart to [`EventStore`], for backends that do network or embedded-DB
+/// I/O (Postgres, `SQLite` via `sqlx`, …). It carries the same firewall contract: every
+/// implementation MUST arbitrate each candidate ([`arbitrate_events`]) **inside its
+/// transaction** before persisting — there is no un-arbitrated write path.
+///
+/// [`append_many`](AsyncEventStore::append_many) is the integrity-critical primitive: a
+/// multi-event operation (a supersession's replacement + its supersessions, a contradiction's
+/// opposing claim + edge) must commit **atomically** — all events arbitrate and land, or none
+/// do. The trait therefore *requires* it rather than deriving it from single `append`, so a
+/// backend cannot accidentally offer a non-atomic batch path.
+///
+/// Construction is backend-specific (each parses its own URL and deploys its own schema), so
+/// it is deliberately **not** on the trait — see the CLI's `connect_backend`. Sync backends
+/// (the file/in-memory dev store) stay on [`EventStore`]; the two are bridged at the call edge
+/// (`block_on`), not unified, because the file store is genuinely synchronous I/O.
+///
+/// The trait is `?Send` (`async_trait(?Send)`): the CLI/MCP drive it on a **current-thread**
+/// `block_on`, which never moves the futures across threads, and dropping the `Send` bound
+/// sidesteps `sqlx`'s "Executor is not general enough" higher-ranked-lifetime wall. A future
+/// multi-threaded server would need a `Send` variant (or native `async fn` in traits).
+#[cfg(feature = "async-store")]
+#[async_trait::async_trait(?Send)]
+pub trait AsyncEventStore {
+    /// Deploy the schema this backend needs (idempotent).
+    async fn migrate(&self) -> Result<(), StoreError>;
+    /// Append one candidate through the firewall (a one-element [`append_many`](Self::append_many)).
+    async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError>;
+    /// Append a whole operation **atomically**: every event arbitrates and commits, or none do.
+    async fn append_many(&self, events: Vec<ClaimEvent>) -> Result<Vec<AppendReceipt>, StoreError>;
+    /// Ordered events for one claim stream.
+    async fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError>;
+    /// Events matching a filter, in global order.
+    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError>;
+    /// Re-verify the stored global hash chain — `false` if a stored event was altered.
+    async fn verify_chain(&self) -> Result<bool, StoreError>;
+}
+
 /// Fold an ordered claim-event stream into its current projected state. Strict: a
 /// stream that does not start with `claim.asserted` surfaces the transition error.
 pub fn replay_claim(events: &[ClaimEvent]) -> Result<Option<ClaimState>, ReplayError> {

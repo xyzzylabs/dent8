@@ -11,9 +11,10 @@
 //! per-column materialization of migration 001.
 //!
 //! Design choices (see [`storage.md`](../../../docs/storage.md)):
-//! - **Async boundary:** the adapter exposes inherent `async fn`s rather than implementing
-//!   the synchronous `EventStore` trait; a shared `AsyncEventStore` trait is deferred until
-//!   a second async backend needs it (YAGNI).
+//! - **Async boundary:** the adapter exposes inherent `async fn`s (it cannot implement the
+//!   *synchronous* `EventStore` trait) and also implements the shared
+//!   [`dent8_store::AsyncEventStore`] trait, so the CLI can hold it as a
+//!   `Box<dyn AsyncEventStore>` alongside other async backends.
 //! - **Global hash chain:** each `event_hash` links to the previous event across the whole
 //!   log; appends are serialized by a transaction-scoped advisory lock so the chain has one
 //!   consistent head with no per-claim race.
@@ -28,7 +29,7 @@ use dent8_core::{
     ClaimEvent, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimState, apply_event, event_hash,
     hash_chain,
 };
-use dent8_store::{AppendReceipt, EventFilter, StoreError, arbitrate_events};
+use dent8_store::{AppendReceipt, AsyncEventStore, EventFilter, StoreError, arbitrate_events};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 /// Transaction-scoped advisory-lock key that serializes appends (so the global chain head
@@ -255,6 +256,39 @@ impl PostgresEventStore {
         let folded = fold_state(&self.load_claim_events(claim_id).await?)?;
         let materialized = self.materialized_projection(claim_id).await?;
         Ok(folded == materialized)
+    }
+}
+
+/// The backend-agnostic [`AsyncEventStore`] view: each method delegates to the inherent one
+/// of the same name (inherent methods win method resolution, so this is delegation, not
+/// recursion). This is what lets the CLI hold a `Box<dyn AsyncEventStore>` and treat Postgres
+/// like any other async backend. `connect`/`from_pool` and the materialization helpers stay
+/// inherent — construction and the Postgres-specific projection cache are not part of the
+/// portable contract.
+#[async_trait::async_trait(?Send)]
+impl AsyncEventStore for PostgresEventStore {
+    async fn migrate(&self) -> Result<(), StoreError> {
+        self.migrate().await
+    }
+
+    async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+        self.append(event).await
+    }
+
+    async fn append_many(&self, events: Vec<ClaimEvent>) -> Result<Vec<AppendReceipt>, StoreError> {
+        self.append_many(events).await
+    }
+
+    async fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError> {
+        self.load_claim_events(claim_id).await
+    }
+
+    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError> {
+        self.scan_events(filter).await
+    }
+
+    async fn verify_chain(&self) -> Result<bool, StoreError> {
+        self.verify_chain().await
     }
 }
 

@@ -33,7 +33,11 @@ hex = { version = "0.4", optional = true }
 dent8-export = { path = "../dent8-export", optional = true }
 
 [features]
-postgres = ["dent8-store-postgres/adapter", "dep:tokio"]
+# Umbrella enabled by every async backend: it brings in the `AsyncEventStore` trait + the
+# tokio bridge, so the generic `connect_backend`/`backend_*` facade compiles. A backend
+# feature (e.g. `postgres`) turns it on; selection is by URL scheme at runtime.
+async-store = ["dent8-store/async-store", "dep:tokio"]
+postgres = ["dent8-store-postgres/adapter", "async-store"]
 witness = ["dent8-core/signed-anchor", "dep:ed25519-dalek", "dep:getrandom", "dep:hex"]
 export = ["dep:dent8-export"]
 

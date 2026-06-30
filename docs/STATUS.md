@@ -266,13 +266,17 @@ subject+predicate.
 - **Postgres remaining gaps — not the adapter itself.** The v0
   `PostgresEventStore` + its materialization (migration 003) are **DB-verified** (the gated
   integration tests pass against a live `postgres:16`, via [`compose.yml`](../compose.yml) or
-  the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_DATABASE_URL` set
+  the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_STORE_URL` (or the
+  legacy `DENT8_DATABASE_URL` alias) set
   and a `--features postgres` build, `dent8` and `mcp serve` read/write Postgres, with each
   multi-event operation (supersede/retract/contradict) committed as one transaction
   (`append_many`). Both the *adapter* **and the CLI-over-Postgres path** are **CI-verified**
   against live Postgres (the gated `postgres` job runs the adapter tests *and* a live
   `assert → supersede → explain → verify` end-to-end). The stock binary keeps the file dev
-  store (sqlx is opt-in).
+  store (sqlx is opt-in). The async side is now a backend-agnostic **`AsyncEventStore`** trait
+  (`?Send`, with atomic `append_many`) that `PostgresEventStore` implements; the CLI's
+  `connect_backend` dispatches by URL scheme into a `Box<dyn AsyncEventStore>`, so a second
+  async backend is a localized addition, not a CLI rewrite.
   What remains *design-only*: **cryptographic caller identity**
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
   is calling is still asserted, not proven by a signed token), the richer per-column event
@@ -280,8 +284,8 @@ subject+predicate.
 - **Persistent CLI/MCP remaining gaps — productization, not persistence.** The full surface — `assert` /
   `supersede` / `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` /
   `replay` / `verify` / `conflicts` / `eval` — across invocations is **Runnable** (above) over
-  the file dev store, and over **Postgres** with `DENT8_DATABASE_URL` + a `--features postgres`
-  build (selected in `load_store`/`append_events`; multi-event ops use the transactional
+  the file dev store, and over **Postgres** with `DENT8_STORE_URL` + a `--features postgres`
+  build (selected in `load_store`/`append_events` via `connect_backend`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
   as the file path) — **CI-verified** end-to-end against live Postgres (the `postgres` job runs
   a live `assert → supersede → explain → verify`). **Concurrency:**

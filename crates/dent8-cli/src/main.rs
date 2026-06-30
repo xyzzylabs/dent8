@@ -244,9 +244,10 @@ Usage:
   dent8 schema postgres   print the Postgres schema
   dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
 
-Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or the
-operational transactional Postgres backend when DENT8_DATABASE_URL is set (requires a build
-with --features postgres). authority is one of: low | medium | high | canonical.
+Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or an
+async backend selected by a store URL — DENT8_STORE_URL (or the legacy DENT8_DATABASE_URL
+alias), dispatched by scheme (postgres:// needs --features postgres). authority is one of:
+low | medium | high | canonical.
 Authority ceiling: a source may assert at most its registered max. Enforced once a registry
 exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
 source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
@@ -757,17 +758,18 @@ fn parse_authority(value: &str) -> Option<AuthorityLevel> {
 /// rejected loudly rather than silently masked by `explain`.
 fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
     // Backend selection lives here (and in `append_events`) so every `op_*` is backend-aware
-    // with no changes of its own. With `DENT8_DATABASE_URL` set (and the `postgres` feature),
-    // reads/writes go to the operational Postgres store; otherwise to the file dev store.
-    #[cfg(feature = "postgres")]
-    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
-        return pg_load(&url);
+    // with no changes of its own. With a store URL set (`DENT8_STORE_URL`, or the legacy
+    // `DENT8_DATABASE_URL`) and a matching backend feature, reads/writes go to that operational
+    // store; otherwise to the file dev store.
+    #[cfg(feature = "async-store")]
+    if let Some(url) = store_url() {
+        return backend_load(&url);
     }
-    #[cfg(not(feature = "postgres"))]
-    if std::env::var_os("DENT8_DATABASE_URL").is_some() {
+    #[cfg(not(feature = "async-store"))]
+    if store_url().is_some() {
         return Err(
-            "DENT8_DATABASE_URL is set but this build lacks Postgres support — \
-                    rebuild with `--features postgres`"
+            "a store URL is set (DENT8_STORE_URL / DENT8_DATABASE_URL) but this build has no \
+             async backend — rebuild with `--features postgres` (or another backend)"
                 .to_string(),
         );
     }
@@ -800,15 +802,15 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
 /// error (nothing to witness).
 #[cfg(feature = "witness")]
 fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
-    #[cfg(feature = "postgres")]
-    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
-        return pg_scan_raw(&url);
+    #[cfg(feature = "async-store")]
+    if let Some(url) = store_url() {
+        return backend_scan_raw(&url);
     }
-    #[cfg(not(feature = "postgres"))]
-    if std::env::var_os("DENT8_DATABASE_URL").is_some() {
+    #[cfg(not(feature = "async-store"))]
+    if store_url().is_some() {
         return Err(
-            "DENT8_DATABASE_URL is set but this build lacks Postgres support — \
-                    rebuild with `--features postgres`"
+            "a store URL is set (DENT8_STORE_URL / DENT8_DATABASE_URL) but this build has no \
+             async backend — rebuild with `--features postgres` (or another backend)"
                 .to_string(),
         );
     }
@@ -830,18 +832,15 @@ fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
     Ok(events)
 }
 
-/// Raw ordered Postgres log for the witness: connect + self-migrate + scan, with **no**
-/// integrity gate (see [`load_raw_events`]).
-#[cfg(all(feature = "witness", feature = "postgres"))]
-fn pg_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
-    use dent8_store_postgres::PostgresEventStore;
-    pg_runtime()?.block_on(async {
-        let store = PostgresEventStore::connect(url)
-            .await
-            .map_err(|error| error.to_string())?;
-        store.migrate().await.map_err(|error| error.to_string())?;
+/// Raw ordered backend log for the witness: connect + self-migrate + scan, with **no**
+/// integrity gate (see [`load_raw_events`]). Backend-agnostic via [`connect_backend`].
+#[cfg(all(feature = "witness", feature = "async-store"))]
+fn backend_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
+    use dent8_store::EventFilter;
+    store_runtime()?.block_on(async {
+        let store = connect_backend(url).await?;
         store
-            .scan_events(&dent8_store::EventFilter::default())
+            .scan_events(&EventFilter::default())
             .await
             .map_err(|error| error.to_string())
     })
@@ -853,15 +852,15 @@ fn pg_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
 /// re-folds and checks structural integrity (tamper-*resistance* over the file log is the
 /// witness's job, not this).
 fn verify_log(path: &str) -> Result<String, String> {
-    #[cfg(feature = "postgres")]
-    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
-        return pg_verify(&url);
+    #[cfg(feature = "async-store")]
+    if let Some(url) = store_url() {
+        return backend_verify(&url);
     }
-    #[cfg(not(feature = "postgres"))]
-    if std::env::var_os("DENT8_DATABASE_URL").is_some() {
+    #[cfg(not(feature = "async-store"))]
+    if store_url().is_some() {
         return Err(
-            "DENT8_DATABASE_URL is set but this build lacks Postgres support — \
-                    rebuild with `--features postgres`"
+            "a store URL is set (DENT8_STORE_URL / DENT8_DATABASE_URL) but this build has no \
+             async backend — rebuild with `--features postgres` (or another backend)"
                 .to_string(),
         );
     }
@@ -930,28 +929,27 @@ fn verify_log(path: &str) -> Result<String, String> {
     ))
 }
 
-/// Postgres integrity check: re-verify the stored global hash chain (real tamper-evidence).
-#[cfg(feature = "postgres")]
-fn pg_verify(url: &str) -> Result<String, String> {
-    use dent8_store_postgres::PostgresEventStore;
-    pg_runtime()?.block_on(async {
-        let store = PostgresEventStore::connect(url)
-            .await
-            .map_err(|error| error.to_string())?;
-        store.migrate().await.map_err(|error| error.to_string())?;
+/// Async-backend integrity check: re-verify the *stored* global hash chain (real
+/// tamper-evidence — a mutated stored event is caught) and surface retraction taint.
+/// Backend-agnostic via [`connect_backend`].
+#[cfg(feature = "async-store")]
+fn backend_verify(url: &str) -> Result<String, String> {
+    use dent8_store::EventFilter;
+    store_runtime()?.block_on(async {
+        let store = connect_backend(url).await?;
         if !store
             .verify_chain()
             .await
             .map_err(|error| error.to_string())?
         {
             return Err(
-                "INTEGRITY FAILURE: the Postgres global hash chain does not re-verify \
+                "INTEGRITY FAILURE: the stored global hash chain does not re-verify \
                         (a stored event was altered)"
                     .to_string(),
             );
         }
         let events = store
-            .scan_events(&dent8_store::EventFilter::default())
+            .scan_events(&EventFilter::default())
             .await
             .map_err(|error| error.to_string())?;
         // Retraction taint (ADR 0010): surviving poison — a believed claim deriving from a
@@ -976,7 +974,7 @@ fn pg_verify(url: &str) -> Result<String, String> {
             ));
         }
         Ok(format!(
-            "OK: {} event(s) — the Postgres global hash chain re-verifies, no retraction taint. \
+            "OK: {} event(s) — the stored global hash chain re-verifies, no retraction taint. \
              (Tamper-resistance needs an external operated witness.)",
             events.len()
         ))
@@ -1174,12 +1172,13 @@ enum WriteError {
 /// store; true transactional atomicity is the Postgres backend (M2b).
 fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
     use std::io::Write;
-    // Postgres commits the whole operation (assert / supersede / retract / contradict) as one
-    // transaction via `append_many`; the file store just appends the lines. (A `not(postgres)`
-    // build that reaches here with the env var set already errored in `load_store`.)
-    #[cfg(feature = "postgres")]
-    if let Ok(url) = std::env::var("DENT8_DATABASE_URL") {
-        return pg_append(&url, events);
+    // An async backend commits the whole operation (assert / supersede / retract / contradict)
+    // as one transaction via `append_many`; the file store just appends the lines. (A build
+    // with no async backend that reaches here with a store URL set already errored in
+    // `load_store`.)
+    #[cfg(feature = "async-store")]
+    if let Some(url) = store_url() {
+        return backend_append(&url, events);
     }
     let mut buffer = String::new();
     for event in events {
@@ -1197,33 +1196,63 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
         .map_err(|error| WriteError::Other(format!("cannot write {path}: {error}")))
 }
 
-/// A throwaway current-thread runtime to bridge the sync CLI to the async adapter. One per
-/// storage call is fine for a single-operation CLI process.
-#[cfg(feature = "postgres")]
-fn pg_runtime() -> Result<tokio::runtime::Runtime, String> {
+/// The async-backend URL: `DENT8_STORE_URL`, or the legacy `DENT8_DATABASE_URL` alias (kept
+/// for back-compat). `None` selects the file dev store. Always available (just env reads), so
+/// the file-only build can still detect "a store URL is set but no backend is compiled in."
+fn store_url() -> Option<String> {
+    std::env::var("DENT8_STORE_URL")
+        .or_else(|_| std::env::var("DENT8_DATABASE_URL"))
+        .ok()
+}
+
+/// A throwaway current-thread runtime to bridge the sync CLI to an async backend. One per
+/// storage call is fine for a single-operation CLI process, and the single thread is why
+/// [`dent8_store::AsyncEventStore`] can be `?Send`.
+#[cfg(feature = "async-store")]
+fn store_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("tokio runtime: {error}"))
 }
 
-/// Load the whole Postgres log into an in-memory working store (the decide snapshot the
-/// `op_*` functions read), connecting + self-migrating on the way.
-#[cfg(feature = "postgres")]
-fn pg_load(url: &str) -> Result<InMemoryEventStore, String> {
-    use dent8_store_postgres::PostgresEventStore;
-    pg_runtime()?.block_on(async {
+/// Connect to the async backend selected by the URL **scheme** and self-migrate. The single
+/// place that maps a scheme to a concrete backend — adding a backend is one arm here, not a
+/// change at every call site.
+#[cfg(feature = "async-store")]
+async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventStore>, String> {
+    #[cfg(feature = "postgres")]
+    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
+        use dent8_store_postgres::PostgresEventStore;
         let store = PostgresEventStore::connect(url)
             .await
             .map_err(|error| error.to_string())?;
-        store.migrate().await.map_err(|error| error.to_string())?;
+        dent8_store::AsyncEventStore::migrate(&store)
+            .await
+            .map_err(|error| error.to_string())?;
+        return Ok(Box::new(store));
+    }
+    Err(format!(
+        "unsupported store URL `{url}`: no matching backend in this build \
+         (a postgres:// URL needs a `--features postgres` build)"
+    ))
+}
+
+/// Load the whole backend log into an in-memory working store (the decide snapshot the `op_*`
+/// functions read), connecting + self-migrating on the way. Backend-agnostic via
+/// [`connect_backend`].
+#[cfg(feature = "async-store")]
+fn backend_load(url: &str) -> Result<InMemoryEventStore, String> {
+    use dent8_store::EventFilter;
+    store_runtime()?.block_on(async {
+        let store = connect_backend(url).await?;
         let events = store
-            .scan_events(&dent8_store::EventFilter::default())
+            .scan_events(&EventFilter::default())
             .await
             .map_err(|error| error.to_string())?;
         let working = InMemoryEventStore::from_trusted_events(events)
-            .map_err(|error| format!("cannot load Postgres log: {error}"))?;
-        // Re-run the same integrity gate the file path enforces, so the operational backend is
+            .map_err(|error| format!("cannot load store log: {error}"))?;
+        // Re-run the same integrity gate the file path enforces, so an operational backend is
         // at least as defensive: a torn/forged state (e.g. a direct SQL edit) is rejected, not
         // silently believed.
         validate_unique_log(&working, now_millis())?;
@@ -1231,34 +1260,26 @@ fn pg_load(url: &str) -> Result<InMemoryEventStore, String> {
     })
 }
 
-/// Persist an accepted operation to Postgres as **one transaction** (`append_many`), so a
-/// multi-event supersede/retract/contradict commits atomically and is re-arbitrated by the
-/// durable firewall.
+/// Persist an accepted operation as **one transaction** (`append_many`), so a multi-event
+/// supersede/retract/contradict commits atomically and is re-arbitrated by the durable
+/// firewall. Backend-agnostic.
 ///
-/// v0 concurrency: commits are serialized by the adapter's advisory lock and any racing write
-/// is safely rejected (the `event_id` UNIQUE constraint + in-transaction re-arbitration), so
+/// v0 concurrency: commits are serialized by the backend (e.g. Postgres' advisory lock) and a
+/// racing write is safely rejected (the in-transaction re-arbitration + id-uniqueness), so
 /// there is no corruption — but event/claim ids are minted optimistically from a snapshot, so
-/// two writers racing the same DB can collide and one gets a **retryable** write conflict.
-/// Treat the v0 Postgres path as effectively single-writer until DB-assigned ids land.
-#[cfg(feature = "postgres")]
-fn pg_append(url: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
+/// two writers racing the same backend can collide and one gets a **retryable** write conflict.
+#[cfg(feature = "async-store")]
+fn backend_append(url: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
     use dent8_store::StoreError;
-    use dent8_store_postgres::PostgresEventStore;
     let owned: Vec<ClaimEvent> = events.iter().map(|&event| event.clone()).collect();
-    pg_runtime().map_err(WriteError::Other)?.block_on(async {
-        let store = PostgresEventStore::connect(url)
-            .await
-            .map_err(|error| WriteError::Other(error.to_string()))?;
-        store
-            .migrate()
-            .await
-            .map_err(|error| WriteError::Other(error.to_string()))?;
+    store_runtime().map_err(WriteError::Other)?.block_on(async {
+        let store = connect_backend(url).await.map_err(WriteError::Other)?;
         store
             .append_many(owned)
             .await
             .map_err(|error| match error {
-                // A duplicate id under the optimistic scheme is a race, not corruption: signal it as
-                // retryable so the caller re-snapshots and re-mints a non-colliding id.
+                // A duplicate id under the optimistic scheme is a race, not corruption: signal it
+                // as retryable so the caller re-snapshots and re-mints a non-colliding id.
                 StoreError::Conflict(message) => WriteError::Conflict(message),
                 other => WriteError::Other(other.to_string()),
             })?;

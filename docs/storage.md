@@ -25,12 +25,14 @@ slice into `Option<ClaimState>` via `apply_event`. Any backend that returns even
 in `global_sequence` order gets identical replay — which is the whole point: the
 backend stores bytes; the *meaning* lives in `dent8-core`.
 
-> Design obligation (now resolved): the `EventStore` trait is synchronous (`&mut self`),
-> but a Postgres/sqlx adapter is async. The v0 adapter exposes **concrete inherent
-> `async fn`s** rather than implementing a trait, and shares the firewall via the pure
-> `arbitrate_events` (so sync and async backends cannot diverge); a unifying
-> `AsyncEventStore` trait is deferred until a second async backend needs it. See the
-> Postgres-adapter section below.
+> Design obligation (resolved): the `EventStore` trait is synchronous (`&mut self`), but a
+> Postgres/sqlx adapter is async. The two stay **separate traits** — sync `EventStore` for the
+> file/in-memory store, and a feature-gated **`AsyncEventStore`** (`async_trait(?Send)`,
+> carrying `append_many` as the atomic primitive) for async backends — bridged at the call edge
+> with `block_on`, not unified (the file store is genuinely sync I/O). Both share the firewall
+> via the pure `arbitrate_events`, so they cannot diverge. `PostgresEventStore` implements
+> `AsyncEventStore`, and the CLI holds a `Box<dyn AsyncEventStore>` chosen by URL scheme, so a
+> second backend is one `connect_backend` arm. See the Postgres-adapter section below.
 
 ## What the log must guarantee
 
@@ -186,8 +188,10 @@ process-static async mutex, so no `--test-threads=1`) and **retry the initial co
 run surfaced two real bugs now fixed: `migrate()` serializes concurrent schema creation under
 an advisory lock (`CREATE TABLE IF NOT EXISTS` is not race-safe on the `pg_class`/`pg_type`
 catalog), and `connect()` bounds its acquire timeout so an unreachable DB fails in seconds.
-The async boundary is concrete inherent `async fn`s; a shared `AsyncEventStore` trait is
-deferred (YAGNI) — this resolves the "async trait vs separate trait" obligation flagged above.
+The async boundary is the feature-gated **`AsyncEventStore`** trait (`async_trait(?Send)`,
+with `append_many` as the atomic primitive) that `PostgresEventStore` implements; the CLI
+selects a backend by URL scheme into a `Box<dyn AsyncEventStore>`, so adding a backend is one
+`connect_backend` arm — this resolves the "async trait vs separate trait" obligation above.
 
 **Schema reference.** The authoritative table/column listing is the migration SQL
 itself; an operator-facing schema reference should be *generated from* the migration,

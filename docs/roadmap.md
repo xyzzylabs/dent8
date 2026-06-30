@@ -228,7 +228,9 @@ needed.
 cheap and parallel. §4 can begin immediately against the pure core. §5 is strictly
 last. Two decisions to resolve before coding the adapter:
 (a) `recorded_at` appender-supplied vs `DEFAULT now()` (resolved: drop the default);
-(b) sync-vs-async `EventStore` trait (open).
+(b) sync-vs-async `EventStore` trait (resolved: **two** traits — sync `EventStore` for the
+file store, feature-gated `AsyncEventStore` (`?Send`, with atomic `append_many`) for async
+backends; the CLI selects a `Box<dyn AsyncEventStore>` by URL scheme).
 
 ## Later
 

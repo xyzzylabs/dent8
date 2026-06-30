@@ -21,6 +21,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "postgres",
     "json",
 ], optional = true }
+async-trait = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
@@ -28,8 +29,13 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 [features]
 # The async sqlx adapter is opt-in so the schema string (and the CLI that prints it) does
 # not pull the sqlx/serde_json dependency tree. Build/test the adapter with
-# `--features adapter`.
-adapter = ["dep:sqlx", "dep:serde_json"]
+# `--features adapter`. It also implements the backend-agnostic `AsyncEventStore` trait.
+adapter = [
+    "dep:sqlx",
+    "dep:serde_json",
+    "dep:async-trait",
+    "dent8-store/async-store",
+]
 
 [lints]
 workspace = true
