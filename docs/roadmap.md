@@ -237,5 +237,8 @@ backends; the CLI selects a `Box<dyn AsyncEventStore>` by URL scheme).
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger ·
 [valid-time intervals (`valid_to`)](decisions/0005-belief-base-revision-semantics.md) ·
-predicate-level volatility policy · HTTP API and SDKs · adapters for existing memory
-providers · an external witness (published signed tree head) for non-repudiation.
+predicate-level volatility policy · HTTP API · **client SDKs** (`pip install dent8` /
+`npm i dent8` with first-class in-process framework adapters — LangChain, LlamaIndex, Vercel AI
+SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/)) ·
+adapters for existing memory providers · an external witness (published signed tree head) for
+non-repudiation.

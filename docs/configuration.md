@@ -17,6 +17,9 @@ binary needs none of them (it uses a local file log).
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
 | `DATABASE_URL` | the adapter's integration tests only | *(unset → tests skip)* | A throwaway `postgres://…` for `cargo test -p dent8-store-postgres --features adapter`. **Not** read by the CLI/MCP — that is `DENT8_STORE_URL`. |
 
+The optional hook helper `dent8 hook native-memory-guard` has its own variables:
+`DENT8_HOOK_MODE`, `DENT8_HOOK_ENFORCE`, and `DENT8_ALLOW_NATIVE_MEMORY_WRITE`.
+
 The bundled [`compose.yml`](../compose.yml) brings up a throwaway `postgres:16`; the matching
 URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhost:5432/dent8`).
 

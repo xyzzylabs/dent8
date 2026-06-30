@@ -39,3 +39,9 @@ dependency:<package> version
 branch:<branch> status
 user:<name> preference
 ```
+
+## Optional hook/rules guard
+
+Cursor should use dent8 through MCP first. See [`../agent-hooks/cursor/`](../agent-hooks/cursor/)
+for the current hook stance: guard `.cursor/rules/` and `AGENTS.md` only after confirming the
+hook schema for the Cursor version your team runs.

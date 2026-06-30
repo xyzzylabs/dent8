@@ -20,6 +20,10 @@ dent8-witness.jsonl
 /dent8-events.parquet
 dent8-events.parquet
 
+# Python bytecode (from running the example scripts / tooling).
+__pycache__/
+*.pyc
+
 # Editor and OS noise.
 .DS_Store
 *.swp

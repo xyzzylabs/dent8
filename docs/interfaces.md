@@ -60,16 +60,24 @@ Recommended behavior:
 - Treat writes as candidate events through the firewall.
 - Require evidence/provenance fields for assertions.
 - Make stale, contested, expired, or superseded claims visible to clients.
-- Put the core usage workflow in MCP server instructions so Codex, Claude Code, Cursor, Grok
-  Build, Hecate, and other MCP-aware agent hosts know to inspect dent8 before relying on
-  durable project facts.
+- Put the core usage workflow in MCP server instructions so Codex, Claude Code, Gemini CLI,
+  Devin/Cascade, Cursor, Grok Build, Hecate, and other MCP-aware agent hosts know to inspect
+  dent8 before relying on durable project facts.
 - Use tool output schemas once the Rust types settle.
 
 Client setup examples live under [`examples/mcp/`](../examples/mcp/):
 [`Codex`](../examples/codex/), [`Claude Code`](../examples/claude-code/),
+[`Gemini CLI`](../examples/gemini/), [`Devin/Cascade`](../examples/cascade/),
 [`Cursor`](../examples/cursor/), [`Grok Build`](../examples/grok-build/), and
 [`Hecate`](../examples/hecate/). These are integration profiles, not separate memory
 semantics; every write still enters through the shared firewall path.
+
+Optional native-memory guard profiles live under
+[`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.
+These hooks are not an alternate write path; they run `dent8 verify` and block direct edits
+to provider-native memory/rules files that would bypass the claim-event firewall. The
+adapter design is tracked in
+[`agent-adapters.md`](agent-adapters.md).
 
 ## MCP Resources
 

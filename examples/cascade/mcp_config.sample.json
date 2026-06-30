@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "dent8": {
+      "command": "dent8",
+      "args": ["mcp", "serve"],
+      "env": {
+        "DENT8_LOG": "/abs/path/to/project/.dent8/cascade-memory.jsonl",
+        "DENT8_AUTHORITY": "/abs/path/to/project/.dent8/authority.json",
+        "DENT8_REQUIRE_AUTHORITY": "1"
+      }
+    }
+  }
+}

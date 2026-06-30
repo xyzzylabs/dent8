@@ -86,8 +86,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `derive` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
   The initialize response includes server instructions that tell MCP-aware agents to inspect
   dent8 before relying on durable project facts and to treat rejected writes as safety signals.
-  Setup examples are checked in for Codex, Claude Code, Cursor, Grok Build, and Hecate under
-  `examples/`; they are client wiring only, not alternate semantics.
+  Setup examples are checked in for Codex, Claude Code, Gemini CLI, Devin/Cascade, Cursor,
+  Grok Build, and Hecate under `examples/`; they are client wiring only, not alternate
+  semantics. Optional hook guard profiles under `examples/agent-hooks/` call the built-in
+  `dent8 hook native-memory-guard` to protect provider-native memory/rules files from
+  bypassing dent8, but they are examples around the MCP/CLI surfaces, not a separate dent8
+  runtime.
   Every tool dispatches
   to the *same* `op_*` firewall path as the CLI, so a low-authority, laundered, or
   non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,
@@ -96,6 +100,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt) — and accepts
   **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
   omitted; an empty batch is `-32600`).
+- **`dent8 hook native-memory-guard`** — a built-in provider hook helper. It reads hook JSON
+  from stdin, recognizes common native memory/rules paths (`AGENTS.md`, `CLAUDE.md`,
+  `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`, `.windsurf/rules`,
+  `.windsurfrules`), runs `dent8 verify` on session/post-write audit modes, and exits `2`
+  when `DENT8_HOOK_ENFORCE=1` blocks a direct native-memory write that would bypass the
+  claim-event firewall. It is a bypass guard around provider files, not an alternate dent8
+  store.
 - **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
   firewall). A source→authority *ceiling* registry: every write checks the caller-supplied

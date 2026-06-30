@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "name": "dent8-verify-on-start",
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "BeforeTool": [
+      {
+        "matcher": "write_file|replace",
+        "hooks": [
+          {
+            "name": "dent8-native-memory-guard",
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "matcher": "write_file|replace",
+        "hooks": [
+          {
+            "name": "dent8-post-write-audit",
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=post-write-audit dent8 hook native-memory-guard",
+            "timeout": 30000
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "name": "dent8-verify-on-end",
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "pre_write_code": [
+      {
+        "command": "DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
+        "show_output": true
+      }
+    ],
+    "post_write_code": [
+      {
+        "command": "DENT8_HOOK_MODE=post-write-audit dent8 hook native-memory-guard",
+        "show_output": true
+      }
+    ]
+  }
+}

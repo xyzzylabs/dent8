@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "dent8": {
+      "command": "dent8",
+      "args": ["mcp", "serve"],
+      "env": {
+        "DENT8_LOG": "/abs/path/to/project/.dent8/gemini-memory.jsonl",
+        "DENT8_AUTHORITY": "/abs/path/to/project/.dent8/authority.json",
+        "DENT8_REQUIRE_AUTHORITY": "1"
+      },
+      "timeout": 30000,
+      "trust": false
+    }
+  }
+}

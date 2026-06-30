@@ -64,3 +64,10 @@ dependency:<crate-or-package> version
 branch:<branch> status
 user:<name> preference
 ```
+
+## Optional hook guard
+
+After MCP works, you can add [`../agent-hooks/codex/hooks.sample.json`](../agent-hooks/codex/hooks.sample.json)
+to a trusted `.codex/hooks.json` or merge it into your Codex hook config. It runs `dent8
+verify` on session boundaries and blocks direct edits to native memory/rules files such as
+`AGENTS.md`, forcing durable facts through dent8 instead.

@@ -1,0 +1,55 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
+            "timeout": 30,
+            "statusMessage": "Checking dent8 integrity"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
+            "timeout": 30,
+            "statusMessage": "Checking native memory writes"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=post-write-audit dent8 hook native-memory-guard",
+            "timeout": 30,
+            "statusMessage": "Auditing dent8 integrity"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
+            "timeout": 30,
+            "statusMessage": "Final dent8 integrity check"
+          }
+        ]
+      }
+    ]
+  }
+}
