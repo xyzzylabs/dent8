@@ -58,6 +58,24 @@ dent8 verify                                               # flags the now-taint
 dent8 completions zsh                                      # generate shell completions
 ```
 
+Signed source identity is opt-in. With an identity-enabled build, bootstrap a local grant
+bundle and load it alongside the normal env:
+
+```sh
+cargo build -p dent8-cli --features identity
+dent8 init --source source:codex
+dent8 identity bootstrap --source source:codex
+set -a; . .dent8/env; . .dent8/identity.env; set +a
+dent8 doctor --source source:codex --write-check
+```
+
+`identity bootstrap` keeps the issuer key outside `.dent8` by default
+(`$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key`; override with
+`--issuer-key`). The project bundle contains only the trust registry, per-source key, grant,
+and env snippet an agent needs. The default issuer key is shared across projects for the same
+OS user; use a project-specific `--issuer-key` when you want grant-signing isolation between
+projects.
+
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
 `derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
@@ -155,6 +173,9 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   file/SQLite/Postgres store profile.
 - `dent8 doctor [--write-check]`: inspect binary, store, authority, verify, MCP availability;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow.
+- `dent8 identity bootstrap`: create a local signed source identity bundle (operator issuer
+  key outside the bundle, source key, trust registry, grant, and `.dent8/identity.env`; needs
+  `--features identity`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the

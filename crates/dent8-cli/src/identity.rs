@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use dent8_core::{AuthorityLevel, TimestampMillis};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -68,6 +69,39 @@ struct WriteSignatureSource<'a> {
     subject_kind: &'a str,
     subject_key: &'a str,
     predicate: &'a str,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DoctorLine {
+    pub(crate) level: &'static str,
+    pub(crate) message: String,
+    pub(crate) ok: bool,
+}
+
+impl DoctorLine {
+    fn ok(message: impl Into<String>) -> Self {
+        Self {
+            level: "OK",
+            message: message.into(),
+            ok: true,
+        }
+    }
+
+    fn warn(message: impl Into<String>) -> Self {
+        Self {
+            level: "WARN",
+            message: message.into(),
+            ok: true,
+        }
+    }
+
+    fn fail(message: impl Into<String>) -> Self {
+        Self {
+            level: "FAIL",
+            message: message.into(),
+            ok: false,
+        }
+    }
 }
 
 pub(crate) fn trust_path() -> String {
@@ -133,6 +167,36 @@ pub(crate) fn enforce_write(auth: &WriteAuth<'_>, now: TimestampMillis) -> Resul
 
 fn nonempty_env_is_set(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bootstrap(
+    dir: &str,
+    source: &str,
+    issuer: &str,
+    issuer_key: Option<&str>,
+    max_authority: CliAuthority,
+    scope: &str,
+    expires_at_ms: Option<i64>,
+) -> i32 {
+    match bootstrap_inner(
+        dir,
+        source,
+        issuer,
+        issuer_key,
+        max_authority,
+        scope,
+        expires_at_ms,
+    ) {
+        Ok(message) => {
+            println!("{message}");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
 }
 
 pub(crate) fn issuer_keygen(out: &str) -> i32 {
@@ -202,6 +266,144 @@ pub(crate) fn trust_list() -> i32 {
             eprintln!("{error}");
             2
         }
+    }
+}
+
+pub(crate) fn doctor_status(source: &str, now: TimestampMillis) -> Vec<DoctorLine> {
+    let required = match identity_required() {
+        Ok(required) => required,
+        Err(error) => return vec![DoctorLine::fail(format!("identity: {error}"))],
+    };
+    let path = trust_path();
+    if !identity_is_configured(required, &path) {
+        return vec![DoctorLine::warn(
+            "identity: not configured (optional; run `dent8 identity bootstrap` to create a signed source grant)",
+        )];
+    }
+
+    let trust = match doctor_trust(&path) {
+        Ok(trust) => trust,
+        Err(line) => return vec![line],
+    };
+
+    let mut lines = vec![DoctorLine::ok(format!(
+        "identity trust: {path} ({} issuer(s))",
+        trust.issuers.len()
+    ))];
+
+    let Some(grant) = doctor_grant(&mut lines, &trust, now) else {
+        return lines;
+    };
+    doctor_source(&mut lines, source, &grant);
+    doctor_key(&mut lines, &grant);
+    lines
+}
+
+fn identity_is_configured(required: bool, path: &str) -> bool {
+    required
+        || nonempty_env_is_set("DENT8_TRUST")
+        || nonempty_env_is_set("DENT8_GRANT")
+        || nonempty_env_is_set("DENT8_IDENTITY_KEY")
+        || Path::new(path).exists()
+}
+
+fn doctor_trust(path: &str) -> Result<TrustedIssuers, DoctorLine> {
+    let trust = match load_trust_at(path, true) {
+        Ok(Some(trust)) => trust,
+        Ok(None) => {
+            return Err(DoctorLine::fail(format!(
+                "identity: no trust registry at {path}"
+            )));
+        }
+        Err(error) => return Err(DoctorLine::fail(format!("identity: {error}"))),
+    };
+    if trust.issuers.is_empty() {
+        Err(DoctorLine::fail(
+            "identity: trust registry is empty; no issuer can verify grants",
+        ))
+    } else {
+        Ok(trust)
+    }
+}
+
+fn doctor_grant(
+    lines: &mut Vec<DoctorLine>,
+    trust: &TrustedIssuers,
+    now: TimestampMillis,
+) -> Option<SignedSourceGrant> {
+    let grant_file = match grant_path() {
+        Ok(path) => path,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity grant: {error}")));
+            return None;
+        }
+    };
+    let grant = match load_grant(&grant_file) {
+        Ok(grant) => grant,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity grant: {error}")));
+            return None;
+        }
+    };
+    match verify_grant(&grant, trust, now) {
+        Ok(()) => lines.push(DoctorLine::ok(format!(
+            "identity grant: {grant_file} (source={} max={:?} issuer={} scope={})",
+            grant.grant.source,
+            grant.grant.max_authority,
+            grant.grant.issuer,
+            grant.grant.scope.as_deref().unwrap_or("*"),
+        ))),
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity grant: {error}")));
+            return None;
+        }
+    }
+    Some(grant)
+}
+
+fn doctor_source(lines: &mut Vec<DoctorLine>, source: &str, grant: &SignedSourceGrant) {
+    if grant.grant.source == source {
+        lines.push(DoctorLine::ok(format!(
+            "identity source: grant source matches doctor source {source}"
+        )));
+    } else {
+        lines.push(DoctorLine::fail(format!(
+            "identity source: grant source {} does not match doctor source {}; pass `--source {}` or use the matching grant",
+            grant.grant.source, source, grant.grant.source
+        )));
+    }
+}
+
+fn doctor_key(lines: &mut Vec<DoctorLine>, grant: &SignedSourceGrant) {
+    let key_file = match identity_key_path() {
+        Ok(path) => path,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity key: {error}")));
+            return;
+        }
+    };
+    let signing = match load_signing_key(&key_file) {
+        Ok(signing) => signing,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity key: {error}")));
+            return;
+        }
+    };
+    let grant_key = match verifying_key_from_hex(&grant.grant.public_key) {
+        Ok(key) => key,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity grant: {error}")));
+            return;
+        }
+    };
+    if signing.verifying_key().to_bytes() == grant_key.to_bytes() {
+        lines.push(DoctorLine::ok(format!(
+            "identity key: {key_file} (matches grant public key)"
+        )));
+    } else {
+        lines.push(DoctorLine::fail(format!(
+            "identity key: {key_file} does not match grant public key"
+        )));
     }
 }
 
@@ -300,36 +502,391 @@ pub(crate) fn grant_verify(path: &str) -> i32 {
     }
 }
 
+fn bootstrap_inner(
+    dir: &str,
+    source: &str,
+    issuer: &str,
+    issuer_key: Option<&str>,
+    max_authority: CliAuthority,
+    scope: &str,
+    expires_at_ms: Option<i64>,
+) -> Result<String, String> {
+    parse_source(source)?;
+    if issuer.trim().is_empty() {
+        return Err("identity issuer must not be empty".to_string());
+    }
+    if scope.trim().is_empty() {
+        return Err("identity grant scope must not be empty; use `*` for all subjects".to_string());
+    }
+
+    let mut rollback = BootstrapRollback::default();
+    let dir = PathBuf::from(dir);
+    ensure_dir(&dir, &mut rollback)?;
+    let dir = dir
+        .canonicalize()
+        .map_err(|error| format!("cannot canonicalize {}: {error}", dir.display()))?;
+    let identities_dir = dir.join("identities");
+    let grants_dir = dir.join("grants");
+    ensure_dir(&identities_dir, &mut rollback)?;
+    ensure_dir(&grants_dir, &mut rollback)?;
+
+    let slug = source_slug(source);
+    let issuer_key_path = bootstrap_issuer_key_path(issuer_key, &dir)?;
+    let source_key_path = identities_dir.join(format!("{slug}.key"));
+    let source_public_path = public_key_path(&source_key_path);
+    let trust_file = dir.join("trust.json");
+    let grant_file = grants_dir.join(format!("{slug}.grant.json"));
+    let env_file = dir.join("identity.env");
+
+    for path in [
+        source_key_path.as_path(),
+        source_public_path.as_path(),
+        trust_file.as_path(),
+        grant_file.as_path(),
+        env_file.as_path(),
+    ] {
+        ensure_absent(path)?;
+    }
+
+    let issuer_key = load_or_create_issuer_key(&issuer_key_path, &mut rollback)?;
+    let source_key = generate_signing_key()?;
+    write_key_pair(&source_key_path, &source_key)?;
+    rollback.record_key_pair(&source_key_path);
+
+    let mut trust = TrustedIssuers::default();
+    trust.issuers.insert(
+        issuer.to_string(),
+        TrustedIssuer {
+            public_key: hex::encode(issuer_key.verifying_key().to_bytes()),
+        },
+    );
+    write_json_path(&trust_file, &trust)?;
+    rollback.record_file(&trust_file);
+
+    let grant = SourceGrantPayload {
+        version: 1,
+        source: source.to_string(),
+        public_key: hex::encode(source_key.verifying_key().to_bytes()),
+        max_authority: max_authority.level(),
+        issuer: issuer.to_string(),
+        scope: Some(scope.to_string()),
+        expires_at_ms,
+    };
+    let signature = hex::encode(issuer_key.sign(&framed(GRANT_DOMAIN, &grant)?).to_bytes());
+    write_json_path(&grant_file, &SignedSourceGrant { grant, signature })?;
+    rollback.record_file(&grant_file);
+
+    let env_contents = format!(
+        "# dent8 signed source identity environment\n\
+         # Load with: set -a; . {}; set +a\n\
+         DENT8_TRUST={}\n\
+         DENT8_REQUIRE_IDENTITY=1\n\
+         DENT8_GRANT={}\n\
+         DENT8_IDENTITY_KEY={}\n",
+        shell_quote(&path_string(&env_file)),
+        shell_quote(&path_string(&trust_file)),
+        shell_quote(&path_string(&grant_file)),
+        shell_quote(&path_string(&source_key_path)),
+    );
+    write_text_path(&env_file, &env_contents)?;
+    rollback.record_file(&env_file);
+    rollback.commit();
+
+    Ok(format!(
+        "bootstrapped signed identity in {}\n  issuer: {issuer} ({})\n  source: {source} max={:?} scope={scope}\n  trust: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
+        dir.display(),
+        issuer_key_path.display(),
+        max_authority.level(),
+        trust_file.display(),
+        grant_file.display(),
+        source_key_path.display(),
+        env_file.display(),
+        shell_quote(&path_string(&env_file)),
+        source,
+    ))
+}
+
 fn keygen(out: &str, label: &str) -> i32 {
-    if std::path::Path::new(out).exists() {
-        eprintln!("{out} already exists; refusing to overwrite a signing key");
+    let out = Path::new(out);
+    if out.exists() {
+        eprintln!(
+            "{} already exists; refusing to overwrite a signing key",
+            out.display()
+        );
         return 1;
     }
-    let mut seed = [0u8; 32];
-    if let Err(error) = getrandom::getrandom(&mut seed) {
-        eprintln!("could not gather randomness for the key: {error}");
+    let public = public_key_path(out);
+    if public.exists() {
+        eprintln!(
+            "{} already exists; refusing to overwrite a public key",
+            public.display()
+        );
         return 1;
     }
-    let signing = SigningKey::from_bytes(&seed);
-    let public = format!("{out}.pub");
-    if std::path::Path::new(&public).exists() {
-        eprintln!("{public} already exists; refusing to overwrite a public key");
-        return 1;
-    }
-    if let Err(error) = write_secret(out, &hex::encode(signing.to_bytes())) {
+    let signing = match generate_signing_key() {
+        Ok(signing) => signing,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    if let Err(error) = write_key_pair(out, &signing) {
         eprintln!("{error}");
         return 1;
     }
-    if let Err(error) = std::fs::write(
-        &public,
-        format!("{}\n", hex::encode(signing.verifying_key().to_bytes())),
-    ) {
-        let _ = std::fs::remove_file(out);
-        eprintln!("cannot write {public}: {error} (removed partial key {out})");
-        return 1;
-    }
-    println!("wrote {label} signing key to {out}\nwrote public key to {public}");
+    println!(
+        "wrote {label} signing key to {}\nwrote public key to {}",
+        out.display(),
+        public.display()
+    );
     0
+}
+
+fn generate_signing_key() -> Result<SigningKey, String> {
+    let mut seed = [0u8; 32];
+    getrandom::getrandom(&mut seed)
+        .map_err(|error| format!("could not gather randomness for the key: {error}"))?;
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+#[derive(Default)]
+struct BootstrapRollback {
+    files: Vec<PathBuf>,
+    dirs: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl BootstrapRollback {
+    fn record_file(&mut self, path: &Path) {
+        self.files.push(path.to_path_buf());
+    }
+
+    fn record_key_pair(&mut self, private_path: &Path) {
+        self.record_file(private_path);
+        self.record_file(&public_key_path(private_path));
+    }
+
+    fn record_dir(&mut self, path: &Path) {
+        self.dirs.push(path.to_path_buf());
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for BootstrapRollback {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for path in self.files.iter().rev() {
+            let _ = std::fs::remove_file(path);
+        }
+        for path in self.dirs.iter().rev() {
+            let _ = std::fs::remove_dir(path);
+        }
+    }
+}
+
+fn bootstrap_issuer_key_path(raw: Option<&str>, bundle_dir: &Path) -> Result<PathBuf, String> {
+    let key = match raw {
+        Some(path) if !path.trim().is_empty() => PathBuf::from(path),
+        Some(_) => return Err("identity issuer key path must not be empty".to_string()),
+        None => default_issuer_key_path()?,
+    };
+    let key = absolute_path_for_new(&key)?;
+    if key.starts_with(bundle_dir) {
+        return Err(format!(
+            "identity issuer key {} is inside {}; keep issuer keys outside the agent/project bundle",
+            key.display(),
+            bundle_dir.display()
+        ));
+    }
+    Ok(key)
+}
+
+fn default_issuer_key_path() -> Result<PathBuf, String> {
+    if let Some(path) = nonempty_env("DENT8_ISSUER_KEY") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(path) = nonempty_env("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(path).join("dent8/issuer.key"));
+    }
+    if let Some(home) = nonempty_env("HOME") {
+        return Ok(PathBuf::from(home).join(".config/dent8/issuer.key"));
+    }
+    Err(
+        "identity bootstrap needs --issuer-key because neither XDG_CONFIG_HOME nor HOME is set"
+            .to_string(),
+    )
+}
+
+fn absolute_path_for_new(path: &Path) -> Result<PathBuf, String> {
+    let candidate = if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .map_err(|error| format!("cannot resolve {}: {error}", path.display()))
+    }?;
+    if let (Some(parent), Some(file_name)) = (candidate.parent(), candidate.file_name())
+        && parent.exists()
+    {
+        return parent
+            .canonicalize()
+            .map(|parent| parent.join(file_name))
+            .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()));
+    }
+    Ok(candidate)
+}
+
+fn load_or_create_issuer_key(
+    path: &Path,
+    rollback: &mut BootstrapRollback,
+) -> Result<SigningKey, String> {
+    if path.exists() {
+        let signing = load_signing_key(&path_string(path))?;
+        ensure_public_key_for_key(path, &signing, rollback)?;
+        return Ok(signing);
+    }
+
+    let public = public_key_path(path);
+    if public.exists() {
+        return Err(format!(
+            "{} exists but {} does not; refusing to pair a public key with a newly generated issuer key",
+            public.display(),
+            path.display()
+        ));
+    }
+    if let Some(parent) = parent_dir(path) {
+        ensure_dir(parent, rollback)?;
+    }
+    let signing = generate_signing_key()?;
+    write_key_pair(path, &signing)?;
+    rollback.record_key_pair(path);
+    Ok(signing)
+}
+
+fn ensure_public_key_for_key(
+    private_path: &Path,
+    signing: &SigningKey,
+    rollback: &mut BootstrapRollback,
+) -> Result<(), String> {
+    let public_path = public_key_path(private_path);
+    let expected = hex::encode(signing.verifying_key().to_bytes());
+    if public_path.exists() {
+        let actual = read_hex_file(&path_string(&public_path))?;
+        if actual == expected {
+            return Ok(());
+        }
+        return Err(format!(
+            "{} does not match issuer key {}",
+            public_path.display(),
+            private_path.display()
+        ));
+    }
+    write_public_key_file(&public_path, &expected)?;
+    rollback.record_file(&public_path);
+    Ok(())
+}
+
+fn write_key_pair(private_path: &Path, signing: &SigningKey) -> Result<(), String> {
+    let private = path_string(private_path);
+    write_secret(&private, &hex::encode(signing.to_bytes()))?;
+    let public_path = public_key_path(private_path);
+    let public_key = hex::encode(signing.verifying_key().to_bytes());
+    if let Err(error) = write_public_key_file(&public_path, &public_key) {
+        let _ = std::fs::remove_file(private_path);
+        return Err(format!(
+            "cannot write {}: {error} (removed partial key {})",
+            public_path.display(),
+            private_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn write_public_key_file(path: &Path, public_key: &str) -> Result<(), String> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| writeln!(file, "{public_key}"))
+        .map_err(|error| error.to_string())
+}
+
+fn public_key_path(private_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.pub", private_path.to_string_lossy()))
+}
+
+fn ensure_dir(path: &Path, rollback: &mut BootstrapRollback) -> Result<(), String> {
+    if path.exists() {
+        if path.is_dir() {
+            return Ok(());
+        }
+        return Err(format!("{} exists but is not a directory", path.display()));
+    }
+    std::fs::create_dir_all(path)
+        .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
+    rollback.record_dir(path);
+    Ok(())
+}
+
+fn parent_dir(path: &Path) -> Option<&Path> {
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() {
+        None
+    } else {
+        Some(parent)
+    }
+}
+
+fn ensure_absent(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        Err(format!(
+            "{} already exists; refusing to overwrite identity bootstrap output",
+            path.display()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn write_json_path<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    write_json(&path_string(path), value)
+}
+
+fn write_text_path(path: &Path, contents: &str) -> Result<(), String> {
+    write_atomic(&path_string(path), contents)
+}
+
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn source_slug(source: &str) -> String {
+    source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn load_trust_at(path: &str, required: bool) -> Result<Option<TrustedIssuers>, String> {

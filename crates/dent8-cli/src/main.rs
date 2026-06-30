@@ -393,6 +393,8 @@ struct IdentityArgs {
 
 #[derive(Subcommand, Debug)]
 enum IdentityCommand {
+    /// Bootstrap a local signed-identity bundle.
+    Bootstrap(IdentityBootstrapArgs),
     /// Generate an issuer/admin signing key.
     IssuerKeygen(IdentityKeygenArgs),
     /// Generate a source/agent signing key.
@@ -405,6 +407,31 @@ enum IdentityCommand {
     GrantIssue(IdentityGrantIssueArgs),
     /// Verify a signed source grant against the local trust registry.
     GrantVerify(IdentityGrantVerifyArgs),
+}
+
+#[derive(Args, Debug)]
+struct IdentityBootstrapArgs {
+    /// Directory for the identity bundle.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Source id this grant will authorize.
+    #[arg(long, default_value = "source:local", value_parser = parse_source)]
+    source: String,
+    /// Stable issuer name used inside the grant.
+    #[arg(long, default_value = "owner")]
+    issuer: String,
+    /// Operator issuer signing-key path. Defaults outside the project bundle.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
+    /// Maximum authority this source key may claim.
+    #[arg(long, value_enum, default_value = "high")]
+    max: CliAuthority,
+    /// Subject scope: "*" or exact <kind>:<key>.
+    #[arg(long, default_value = "*", value_name = "SCOPE")]
+    scope: String,
+    /// Optional expiration as Unix milliseconds.
+    #[arg(long, value_name = "MILLIS")]
+    expires_at_ms: Option<i64>,
 }
 
 #[derive(Args, Debug)]
@@ -672,6 +699,15 @@ fn run_identity(command: &IdentityCommand) -> i32 {
     }
     #[cfg(feature = "identity")]
     match command {
+        IdentityCommand::Bootstrap(args) => identity::bootstrap(
+            &args.dir,
+            &args.source,
+            &args.issuer,
+            args.issuer_key.as_deref(),
+            args.max,
+            &args.scope,
+            args.expires_at_ms,
+        ),
         IdentityCommand::IssuerKeygen(args) => identity::issuer_keygen(&args.out),
         IdentityCommand::AgentKeygen(args) => identity::agent_keygen(&args.source, &args.out),
         IdentityCommand::TrustAdd(args) => identity::trust_add(&args.issuer, &args.public_key),
@@ -1459,6 +1495,9 @@ fn doctor_report(args: &DoctorArgs) -> DoctorReport {
         ok = false;
         doctor_line(&mut output, "FAIL", &error);
     }
+    if !doctor_identity(&mut output, &args.source) {
+        ok = false;
+    }
     match verify_log(&log_path()) {
         Ok(message) => doctor_line(
             &mut output,
@@ -1566,6 +1605,54 @@ fn doctor_authority(output: &mut String, source: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "identity")]
+fn doctor_identity(output: &mut String, source: &str) -> bool {
+    let mut ok = true;
+    for line in identity::doctor_status(source, now_millis()) {
+        if !line.ok {
+            ok = false;
+        }
+        doctor_line(output, line.level, &line.message);
+    }
+    ok
+}
+
+#[cfg(not(feature = "identity"))]
+fn doctor_identity(output: &mut String, _source: &str) -> bool {
+    let required = match env_flag("DENT8_REQUIRE_IDENTITY") {
+        Ok(required) => required,
+        Err(error) => {
+            doctor_line(output, "FAIL", &format!("identity: {error}"));
+            return false;
+        }
+    };
+    let configured = required
+        || env_present("DENT8_TRUST")
+        || env_present("DENT8_GRANT")
+        || env_present("DENT8_IDENTITY_KEY")
+        || std::path::Path::new("dent8-trust.json").exists();
+    if configured {
+        doctor_line(
+            output,
+            "FAIL",
+            "identity: configured, but this binary was built without `--features identity`",
+        );
+        false
+    } else {
+        doctor_line(
+            output,
+            "WARN",
+            "identity: not configured (optional; build with `--features identity` to enable signed source identity)",
+        );
+        true
+    }
+}
+
+#[cfg(not(feature = "identity"))]
+fn env_present(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+}
+
 fn doctor_write_check(source: &str) -> Result<String, String> {
     let subject_key = format!(
         "alice-doctor-{}-{}",
@@ -1590,7 +1677,7 @@ fn doctor_write_check(source: &str) -> Result<String, String> {
         "favorite_drink",
         "coffee",
         AuthorityLevel::Low,
-        "source:doctor-low",
+        source,
     ) {
         Ok(message) => {
             return Err(format!(

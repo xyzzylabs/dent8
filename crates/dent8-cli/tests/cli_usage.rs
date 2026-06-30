@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Output},
     sync::atomic::{AtomicU32, Ordering},
 };
@@ -238,6 +238,354 @@ fn identity_command_explains_feature_gate_without_identity_build() {
     assert!(stderr(&output).contains("--features identity"));
 }
 
+#[cfg(not(feature = "identity"))]
+#[test]
+fn doctor_fails_when_identity_is_configured_without_identity_build() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let trust = temp.file("trust.json").to_string_lossy().into_owned();
+    let output = run_dent8(&["doctor"], &[("DENT8_LOG", &log), ("DENT8_TRUST", &trust)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stdout(&output).contains("without `--features identity`"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn identity_bootstrap_rejects_project_local_issuer_key() {
+    let temp = TempDir::new();
+    let rejected_dir = temp.file("rejected-dent8");
+    let rejected_dir_str = rejected_dir.to_string_lossy().into_owned();
+    let rejected_issuer = rejected_dir
+        .join("issuer.key")
+        .to_string_lossy()
+        .into_owned();
+    let rejected = run_dent8(
+        &[
+            "identity",
+            "bootstrap",
+            "--dir",
+            &rejected_dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &rejected_issuer,
+        ],
+        &[],
+    );
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(stderr(&rejected).contains("inside"));
+    assert!(
+        !rejected_dir.exists(),
+        "failed bootstrap should clean directories it created"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key");
+    let issuer_key_str = issuer_key.to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+
+    let bootstrapped = run_dent8(
+        &[
+            "identity",
+            "bootstrap",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key_str,
+        ],
+        &[],
+    );
+    assert_success(&bootstrapped, "identity bootstrap");
+    assert!(stdout(&bootstrapped).contains("bootstrapped signed identity"));
+
+    let trust = dir.join("trust.json").to_string_lossy().into_owned();
+    let grant = dir
+        .join("grants/source_codex.grant.json")
+        .to_string_lossy()
+        .into_owned();
+    let key = dir
+        .join("identities/source_codex.key")
+        .to_string_lossy()
+        .into_owned();
+    let env = dir.join("identity.env");
+    assert!(env.exists(), "bootstrap should write identity.env");
+    assert!(
+        issuer_key.exists(),
+        "bootstrap should write the issuer key outside the bundle"
+    );
+    assert!(
+        !dir.join("issuer.key").exists(),
+        "bootstrap must not write issuer private keys into the agent bundle"
+    );
+    assert!(
+        std::path::Path::new(&grant).exists(),
+        "bootstrap should write grant"
+    );
+    assert!(
+        std::path::Path::new(&key).exists(),
+        "bootstrap should write source key"
+    );
+
+    assert_success(
+        &run_dent8(
+            &["identity", "grant-verify", &grant],
+            &[("DENT8_TRUST", &trust)],
+        ),
+        "bootstrap grant verify",
+    );
+
+    let identity_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    let doctor = run_dent8(
+        &["doctor", "--source", "source:codex", "--write-check"],
+        &identity_env,
+    );
+    assert_success(&doctor, "doctor with bootstrapped identity");
+    assert!(stdout(&doctor).contains("identity key:"));
+    assert!(stdout(&doctor).contains("write-check: accepted trusted"));
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &identity_env,
+        ),
+        "signed write from bootstrapped identity",
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn identity_bootstrap_can_share_one_explicit_issuer_across_projects() {
+    let temp = TempDir::new();
+    let project_a = temp.file("project-a");
+    let project_b = temp.file("project-b");
+    fs::create_dir_all(&project_a).expect("create project a");
+    fs::create_dir_all(&project_b).expect("create project b");
+    let issuer_key = temp
+        .file("home/.config/dent8/projects/shared/issuer.key")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8_in(
+            &project_a,
+            &[
+                "identity",
+                "bootstrap",
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "project a identity bootstrap",
+    );
+    assert_success(
+        &run_dent8_in(
+            &project_b,
+            &[
+                "identity",
+                "bootstrap",
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "project b identity bootstrap",
+    );
+
+    let bundle_a = project_a.join(".dent8");
+    let bundle_b = project_b.join(".dent8");
+    let trust_a = bundle_a.join("trust.json");
+    let trust_b = bundle_b.join("trust.json");
+    let grant_a = bundle_a.join("grants/source_codex.grant.json");
+    let grant_b = bundle_b.join("grants/source_codex.grant.json");
+    let source_key_a = bundle_a.join("identities/source_codex.key");
+    let source_key_b = bundle_b.join("identities/source_codex.key");
+
+    assert!(std::path::Path::new(&issuer_key).exists());
+    assert!(std::path::Path::new(&format!("{issuer_key}.pub")).exists());
+    assert!(
+        !bundle_a.join("issuer.key").exists(),
+        "project a must not contain the issuer private key"
+    );
+    assert!(
+        !bundle_b.join("issuer.key").exists(),
+        "project b must not contain the issuer private key"
+    );
+    assert_eq!(
+        read_file(&trust_a),
+        read_file(&trust_b),
+        "shared issuer key should produce matching trust registries"
+    );
+    assert_ne!(
+        read_file(&source_key_a),
+        read_file(&source_key_b),
+        "each project should still get its own source private key"
+    );
+
+    let trust_a_str = trust_a.to_string_lossy().into_owned();
+    let grant_a_str = grant_a.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &["identity", "grant-verify", &grant_a_str],
+            &[("DENT8_TRUST", &trust_a_str)],
+        ),
+        "project a grant verify",
+    );
+
+    let trust_b_str = trust_b.to_string_lossy().into_owned();
+    let grant_b_str = grant_b.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &["identity", "grant-verify", &grant_b_str],
+            &[("DENT8_TRUST", &trust_b_str)],
+        ),
+        "project b grant verify",
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn identity_bootstrap_project_specific_issuer_keys_isolate_trust_roots() {
+    let temp = TempDir::new();
+    let project_a = temp.file("project-a");
+    let project_b = temp.file("project-b");
+    fs::create_dir_all(&project_a).expect("create project a");
+    fs::create_dir_all(&project_b).expect("create project b");
+    let issuer_key_a = temp
+        .file("home/.config/dent8/projects/project-a/issuer.key")
+        .to_string_lossy()
+        .into_owned();
+    let issuer_key_b = temp
+        .file("home/.config/dent8/projects/project-b/issuer.key")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8_in(
+            &project_a,
+            &[
+                "identity",
+                "bootstrap",
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key_a,
+            ],
+            &[],
+        ),
+        "project a identity bootstrap",
+    );
+    assert_success(
+        &run_dent8_in(
+            &project_b,
+            &[
+                "identity",
+                "bootstrap",
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key_b,
+            ],
+            &[],
+        ),
+        "project b identity bootstrap",
+    );
+
+    let bundle_a = project_a.join(".dent8");
+    let bundle_b = project_b.join(".dent8");
+    let trust_a = bundle_a.join("trust.json");
+    let trust_b = bundle_b.join("trust.json");
+    let grant_a = bundle_a.join("grants/source_codex.grant.json");
+    let grant_b = bundle_b.join("grants/source_codex.grant.json");
+    let source_key_a = bundle_a.join("identities/source_codex.key");
+    let source_key_b = bundle_b.join("identities/source_codex.key");
+
+    assert_ne!(
+        read_file(std::path::Path::new(&issuer_key_a)),
+        read_file(std::path::Path::new(&issuer_key_b)),
+        "project-specific issuer private keys should differ"
+    );
+    assert_ne!(
+        read_file(std::path::Path::new(&format!("{issuer_key_a}.pub"))),
+        read_file(std::path::Path::new(&format!("{issuer_key_b}.pub"))),
+        "project-specific issuer public keys should differ"
+    );
+    assert_ne!(
+        read_file(&trust_a),
+        read_file(&trust_b),
+        "project-specific issuer keys should produce isolated trust roots"
+    );
+    assert_ne!(
+        read_file(&source_key_a),
+        read_file(&source_key_b),
+        "each project should get its own source private key"
+    );
+
+    let trust_a_str = trust_a.to_string_lossy().into_owned();
+    let trust_b_str = trust_b.to_string_lossy().into_owned();
+    let grant_a_str = grant_a.to_string_lossy().into_owned();
+    let grant_b_str = grant_b.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &["identity", "grant-verify", &grant_a_str],
+            &[("DENT8_TRUST", &trust_a_str)],
+        ),
+        "project a grant verify",
+    );
+    assert_success(
+        &run_dent8(
+            &["identity", "grant-verify", &grant_b_str],
+            &[("DENT8_TRUST", &trust_b_str)],
+        ),
+        "project b grant verify",
+    );
+
+    let project_b_grant_with_project_a_trust = run_dent8(
+        &["identity", "grant-verify", &grant_b_str],
+        &[("DENT8_TRUST", &trust_a_str)],
+    );
+    assert_eq!(project_b_grant_with_project_a_trust.status.code(), Some(1));
+    assert!(
+        stderr(&project_b_grant_with_project_a_trust).contains("grant signature does not verify")
+    );
+
+    let project_a_grant_with_project_b_trust = run_dent8(
+        &["identity", "grant-verify", &grant_a_str],
+        &[("DENT8_TRUST", &trust_b_str)],
+    );
+    assert_eq!(project_a_grant_with_project_b_trust.status.code(), Some(1));
+    assert!(
+        stderr(&project_a_grant_with_project_b_trust).contains("grant signature does not verify")
+    );
+}
+
 #[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -446,13 +794,31 @@ fn signed_identity_grant_is_required_and_bound_to_the_write() {
 }
 
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
+    run_dent8_inner(None, args, envs)
+}
+
+#[cfg(feature = "identity")]
+fn run_dent8_in(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
+    run_dent8_inner(Some(cwd), args, envs)
+}
+
+fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut command = Command::new(dent8_bin());
-    command.args(args).env_remove("DENT8_STORE_URL");
+    command
+        .args(args)
+        .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
+        .env_remove("DENT8_AUTHORITY")
+        .env_remove("DENT8_REQUIRE_AUTHORITY");
     command
         .env_remove("DENT8_TRUST")
         .env_remove("DENT8_GRANT")
         .env_remove("DENT8_IDENTITY_KEY")
+        .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -474,6 +840,11 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[cfg(feature = "identity")]
+fn read_file(path: &Path) -> Vec<u8> {
+    fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
 fn dent8_bin() -> PathBuf {

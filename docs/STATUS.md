@@ -25,10 +25,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `DENT8_LOG` or `DENT8_STORE_URL`), and initializes the file dev log for the default file
   store. It refuses to rewrite the env file unless `--force` is passed.
 - **`dent8 doctor [--write-check]`** — diagnoses the current setup: binary path, selected
-  store, authority registry/grant, `verify`, and MCP availability. By default it is
-  read-only; with `--write-check`, it runs an explicit Alice-style acceptance probe against
-  the configured store: high-authority `favorite_drink=tea` is accepted, a low-authority
-  supersession to `coffee` is rejected, `explain` still returns `tea`, and `verify` passes.
+  store, authority registry/grant, signed identity configuration when present, `verify`, and
+  MCP availability. By default it is read-only; with `--write-check`, it runs an explicit
+  Alice-style acceptance probe against the configured store: high-authority
+  `favorite_drink=tea` is accepted, a low-authority supersession to `coffee` from the same
+  configured source is rejected, `explain` still returns `tea`, and `verify` passes.
 - **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and
@@ -146,9 +147,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
   boundary. The ceiling caps *what a source may claim*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary.
-- **`dent8 identity issuer-keygen | agent-keygen | trust-add | trust-list | grant-issue |
-  grant-verify`** — the **signed source identity layer (authn)**, behind `--features
-  identity`. This is the non-bearer-token form: an operator-held issuer key signs a grant that
+- **`dent8 identity bootstrap | issuer-keygen | agent-keygen | trust-add | trust-list |
+  grant-issue | grant-verify`** — the **signed source identity layer (authn)**, behind
+  `--features identity`. `bootstrap` is the happy path: it creates or reuses an operator issuer
+  key outside the project/agent bundle, then creates a source key, trust registry, grant, and
+  shell-loadable `.dent8/identity.env` for one source. The lower level commands remain
+  available for custom paths, rotation, expiration, and exact subject scopes. This is the
+  non-bearer-token form: an operator-held issuer key signs a grant that
   binds `source` -> source public key + max authority + optional subject scope/expiration, and
   each write verifies the grant plus source-key possession before the candidate event reaches
   the firewall. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or

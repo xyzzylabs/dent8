@@ -30,6 +30,7 @@ Postgres profile (requires a `--features postgres` build).
 | `DENT8_REQUIRE_IDENTITY` | every write (`--features identity`) | *(unset / false)* | Fail-closed identity guard. When true, a missing trust registry, grant, or source key rejects writes. Without `--features identity`, setting this or configuring identity produces a build-hint error. |
 | `DENT8_GRANT` | every write (`--features identity`) | *(unset)* | Signed source grant JSON binding the configured source id to a source public key and maximum authority. |
 | `DENT8_IDENTITY_KEY` | every write (`--features identity`) | *(unset)* | Source private signing key. On Unix, dent8 requires owner-only permissions (`0600`). |
+| `DENT8_ISSUER_KEY` | `dent8 identity bootstrap` (`--features identity`) | `$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key` | Optional operator issuer signing-key path for bootstrap. This key should stay outside the project/agent workspace. |
 | `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
 | `DENT8_WITNESS_PUBKEY` | `dent8 witness verify` | `<DENT8_WITNESS_KEY>.pub` | Override the public key used for verification (e.g. when verifying a published head without the signing key). |
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
@@ -77,22 +78,37 @@ server: the operator holds an issuer key and issues grants to agent/source keys.
 ```sh
 cargo build -p dent8-cli --features identity
 
-mkdir -p .dent8/identities .dent8/grants
-dent8 identity issuer-keygen --out .dent8/issuer.key
-dent8 identity agent-keygen source:codex --out .dent8/identities/codex.key
-export DENT8_TRUST=.dent8/trust.json
-dent8 identity trust-add owner .dent8/issuer.key.pub
-dent8 identity grant-issue source:codex \
-  --public-key .dent8/identities/codex.key.pub \
-  --max high \
-  --issuer owner \
-  --issuer-key .dent8/issuer.key \
-  --scope repo:dent8 \
-  --out .dent8/grants/codex.grant.json
+dent8 init --source source:codex
+dent8 identity bootstrap --source source:codex
 
-export DENT8_REQUIRE_IDENTITY=1
-export DENT8_GRANT=.dent8/grants/codex.grant.json
-export DENT8_IDENTITY_KEY=.dent8/identities/codex.key
+set -a
+. .dent8/env
+. .dent8/identity.env
+set +a
+
+dent8 doctor --source source:codex --write-check
+```
+
+`identity bootstrap` creates or reuses an operator issuer key outside the project bundle
+(`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
+`$HOME/.config/dent8/issuer.key`), then writes `.dent8/trust.json`, a per-source key under
+`.dent8/identities/`, a grant under `.dent8/grants/`, and `.dent8/identity.env`. It refuses to
+write the issuer key inside the bundle and refuses to overwrite existing project identity
+material. The manual subcommands (`issuer-keygen`, `agent-keygen`, `trust-add`, `grant-issue`,
+`grant-verify`) remain available when you need custom paths, rotation, expiration, or exact
+subject scopes.
+
+By default, the issuer key is shared across all projects bootstrapped by the same OS user. That
+is convenient for a single operator: one owner/admin key can issue grants for many project
+bundles, while the key itself stays out of agent-readable workspaces. The tradeoff is blast
+radius: compromising that one issuer key lets an attacker mint grants for any project that
+trusts it. For project-level isolation, pass a project-specific issuer key outside the project
+workspace:
+
+```sh
+dent8 identity bootstrap \
+  --source source:codex \
+  --issuer-key "$HOME/.config/dent8/projects/my-project/issuer.key"
 ```
 
 Each agent should have a distinct source key and grant. A shared MCP process can only prove

@@ -17,8 +17,8 @@ caller must prove possession of the matching private key on each write.
 
 Add an opt-in signed source identity layer at the CLI/MCP write boundary.
 
-- An **issuer key** is the owner/admin authority. The operator generates it and configures
-  dent8 to trust its public key.
+- An **issuer key** is the owner/admin authority. The operator keeps it outside the
+  project/agent workspace and configures dent8 to trust its public key.
 - A **source key** belongs to one agent/source, for example `source:codex` or
   `source:claude-code`.
 - A **signed source grant** binds:
@@ -40,28 +40,30 @@ Add an opt-in signed source identity layer at the CLI/MCP write boundary.
 The v0 CLI is behind `--features identity`:
 
 ```sh
-mkdir -p .dent8/identities .dent8/grants
-dent8 identity issuer-keygen --out .dent8/issuer.key
-dent8 identity agent-keygen source:codex --out .dent8/identities/codex.key
-export DENT8_TRUST=.dent8/trust.json
-dent8 identity trust-add owner .dent8/issuer.key.pub
-dent8 identity grant-issue source:codex \
-  --public-key .dent8/identities/codex.key.pub \
-  --max high \
-  --issuer owner \
-  --issuer-key .dent8/issuer.key \
-  --scope repo:dent8 \
-  --out .dent8/grants/codex.grant.json
-dent8 identity grant-verify .dent8/grants/codex.grant.json
+dent8 identity bootstrap --source source:codex
+dent8 identity grant-verify .dent8/grants/source_codex.grant.json
 ```
+
+`bootstrap` creates or reuses an operator issuer key outside the project bundle
+(`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
+`$HOME/.config/dent8/issuer.key`), then writes the project-local trust registry, source key,
+grant, and `.dent8/identity.env`. It refuses to place the issuer private key inside the
+project bundle. The lower-level `issuer-keygen`, `agent-keygen`, `trust-add`, and
+`grant-issue` commands remain available for manual rotation and custom layouts.
+
+The default issuer key is scoped to the OS user, not the project: bootstrapping several
+projects with the default path reuses one owner/admin key. That is acceptable for the v0 local
+operator model because agents receive source keys and grants, not the issuer key. It also means
+the issuer key is a cross-project root of trust; operators who want project-level blast-radius
+isolation should pass a distinct `--issuer-key` outside each project workspace.
 
 Agent runtime configuration:
 
 ```sh
 DENT8_TRUST=.dent8/trust.json
 DENT8_REQUIRE_IDENTITY=1
-DENT8_GRANT=.dent8/grants/codex.grant.json
-DENT8_IDENTITY_KEY=.dent8/identities/codex.key
+DENT8_GRANT=.dent8/grants/source_codex.grant.json
+DENT8_IDENTITY_KEY=.dent8/identities/source_codex.key
 ```
 
 ## Security properties
