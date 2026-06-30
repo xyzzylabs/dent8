@@ -4,6 +4,20 @@ dent8 is configured by **environment variables** (for paths and the backend) and
 features** (for opt-in capabilities). This is the single source of truth for both; the stock
 binary needs none of them (it uses a local file log).
 
+For a project-local setup, run `dent8 init`, then load the generated env file:
+
+```sh
+dent8 init
+set -a
+. .dent8/env
+set +a
+dent8 doctor --write-check
+```
+
+`dent8 init --store sqlite` writes a `sqlite://…` `DENT8_STORE_URL` profile (requires a
+`--features sqlite` build). `dent8 init --store postgres --store-url postgres://…` writes a
+Postgres profile (requires a `--features postgres` build).
+
 ## Environment variables
 
 | Variable | Used by | Default | Purpose |

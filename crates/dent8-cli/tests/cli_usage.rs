@@ -174,6 +174,62 @@ fn color_always_paints_status_words_even_when_captured() {
     assert!(stdout(&output).contains("\x1b[32;1mACCEPTED\x1b[0m"));
 }
 
+#[test]
+fn init_bootstraps_authority_env_and_doctor_write_check() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+
+    let init = run_dent8(&["init", "--dir", &dir], &[]);
+    assert_success(&init, "init");
+    assert!(stdout(&init).contains("initialized dent8"));
+    assert!(stdout(&init).contains("dent8 doctor --write-check"));
+
+    let env_path = temp.file(".dent8/env");
+    let authority_path = temp.file(".dent8/authority.json");
+    let log_path = temp.file(".dent8/memory.jsonl");
+    let env_file = fs::read_to_string(&env_path).expect("env file");
+    assert!(env_file.contains("DENT8_REQUIRE_AUTHORITY=1"));
+    assert!(env_file.contains("DENT8_LOG="));
+    assert!(env_file.contains("DENT8_AUTHORITY="));
+
+    let authority = fs::read_to_string(&authority_path).expect("authority registry");
+    assert!(authority.contains("source:local"));
+    assert!(authority.contains("High"));
+    assert!(log_path.exists(), "init should create the file dev log");
+
+    let log = log_path.to_string_lossy().into_owned();
+    let authority = authority_path.to_string_lossy().into_owned();
+    let doctor = run_dent8(
+        &["doctor", "--write-check"],
+        &[
+            ("DENT8_LOG", &log),
+            ("DENT8_AUTHORITY", &authority),
+            ("DENT8_REQUIRE_AUTHORITY", "1"),
+        ],
+    );
+    assert_success(&doctor, "doctor --write-check");
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("write-check: accepted trusted person:alice-doctor-"));
+    assert!(stdout.contains("rejected low-authority coffee"));
+    assert!(stdout.contains("verify OK"));
+}
+
+#[test]
+fn init_refuses_to_rewrite_env_without_force() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+
+    assert_success(&run_dent8(&["init", "--dir", &dir], &[]), "first init");
+    let second = run_dent8(&["init", "--dir", &dir], &[]);
+    assert_eq!(second.status.code(), Some(1));
+    assert!(stderr(&second).contains("--force"), "{}", stderr(&second));
+
+    assert_success(
+        &run_dent8(&["init", "--dir", &dir, "--force"], &[]),
+        "forced init",
+    );
+}
+
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut command = Command::new(dent8_bin());
     command.args(args).env_remove("DENT8_STORE_URL");

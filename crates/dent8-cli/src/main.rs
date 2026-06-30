@@ -68,6 +68,8 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Verify) => cmd_verify(),
         Some(CliCommand::Conflicts) => cmd_conflicts(),
         Some(CliCommand::Eval) => cmd_eval(),
+        Some(CliCommand::Init(args)) => cmd_init(&args),
+        Some(CliCommand::Doctor(args)) => cmd_doctor(&args),
         Some(CliCommand::Completions(args)) => cmd_completions(args.shell),
         Some(CliCommand::Export(args)) => {
             #[cfg(feature = "export")]
@@ -211,6 +213,10 @@ enum CliCommand {
     Conflicts,
     /// Run the adversarial corpus.
     Eval,
+    /// Bootstrap a local dent8 project configuration.
+    Init(InitArgs),
+    /// Diagnose the current dent8 setup.
+    Doctor(DoctorArgs),
     /// Generate shell completion scripts.
     #[command(visible_aliases = ["completion", "autocomplete"])]
     Completions(CompletionsArgs),
@@ -301,6 +307,45 @@ struct CompletionsArgs {
     /// Shell to generate completions for.
     #[arg(value_enum)]
     shell: Shell,
+}
+
+#[derive(Args, Debug)]
+struct InitArgs {
+    /// Directory for dent8's local project config.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Store profile to write into the env file.
+    #[arg(long, value_enum, default_value = "file")]
+    store: InitStore,
+    /// Store URL for non-file backends.
+    #[arg(long, value_name = "URL")]
+    store_url: Option<String>,
+    /// Source to grant in the authority registry.
+    #[arg(long, default_value = "source:local", value_parser = parse_source)]
+    source: String,
+    /// Maximum authority for the granted source.
+    #[arg(long, value_enum, default_value = "high")]
+    authority: CliAuthority,
+    /// Overwrite the generated env file if it already exists.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum InitStore {
+    File,
+    Sqlite,
+    Postgres,
+}
+
+#[derive(Args, Debug)]
+struct DoctorArgs {
+    /// Also run an explicit assert -> rejected supersede -> explain -> verify write check.
+    #[arg(long)]
+    write_check: bool,
+    /// High-authority source to use for --write-check.
+    #[arg(long, default_value = "source:local", value_parser = parse_source)]
+    source: String,
 }
 
 #[derive(Args, Debug)]
@@ -869,16 +914,23 @@ fn load_authority_registry_for_edit() -> Result<Option<SourceRegistry>, String> 
 
 fn save_authority_registry(registry: &SourceRegistry) -> Result<(), String> {
     let path = authority_registry_path();
+    save_authority_registry_at(&path, registry)
+}
+
+fn save_authority_registry_at(path: &str, registry: &SourceRegistry) -> Result<(), String> {
     let json =
         serde_json::to_string_pretty(registry).map_err(|error| format!("serialize: {error}"))?;
     // Atomic write: a torn save would corrupt the registry, and a corrupt registry fails
     // *closed* (every write is then blocked). Stage a sibling temp file, then rename it over
     // the target — rename is atomic within a filesystem. Concurrent writers remain
     // last-write-wins, which is acceptable for a human-managed config file.
+    write_atomic(path, &format!("{json}\n"))
+}
+
+fn write_atomic(path: &str, contents: &str) -> Result<(), String> {
     let tmp = format!("{path}.tmp.{}", std::process::id());
-    std::fs::write(&tmp, format!("{json}\n"))
-        .map_err(|error| format!("cannot write {tmp}: {error}"))?;
-    std::fs::rename(&tmp, &path).map_err(|error| format!("cannot install {path}: {error}"))
+    std::fs::write(&tmp, contents).map_err(|error| format!("cannot write {tmp}: {error}"))?;
+    std::fs::rename(&tmp, path).map_err(|error| format!("cannot install {path}: {error}"))
 }
 
 /// The authz gate, run before the firewall on every write: reject a stated `authority` above
@@ -1037,6 +1089,344 @@ fn cmd_authority_remove(source: &str) -> i32 {
             eprintln!("{error}");
             1
         }
+    }
+}
+
+fn cmd_init(args: &InitArgs) -> i32 {
+    match init_project(args) {
+        Ok(message) => {
+            println!("{message}");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+fn init_project(args: &InitArgs) -> Result<String, String> {
+    let dir = std::path::PathBuf::from(&args.dir);
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create {}: {error}", args.dir))?;
+    let dir = absolute_path(&dir)?;
+    let authority_path = dir.join("authority.json");
+    let env_path = dir.join("env");
+    if env_path.exists() && !args.force {
+        return Err(format!(
+            "{} already exists; pass `--force` to rewrite the generated env file",
+            env_path.display()
+        ));
+    }
+
+    let (store_line, store_summary) = init_store_line(args.store, args.store_url.as_deref(), &dir)?;
+    if args.store == InitStore::File {
+        let log_path = dir.join("memory.jsonl");
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|error| format!("cannot create {}: {error}", log_path.display()))?;
+    }
+
+    let authority_path_str = authority_path.to_string_lossy().into_owned();
+    let mut registry = load_authority_registry_at(&authority_path_str, false)?.unwrap_or_default();
+    registry.sources.insert(
+        args.source.clone(),
+        SourceGrant {
+            max_authority: args.authority.level(),
+            issuer: None,
+            scope: None,
+        },
+    );
+    save_authority_registry_at(&authority_path_str, &registry)?;
+
+    let env_contents = format!(
+        "# dent8 local environment\n\
+         # Load with: set -a; . {}; set +a\n\
+         DENT8_AUTHORITY={}\n\
+         DENT8_REQUIRE_AUTHORITY=1\n\
+         {store_line}\n",
+        shell_quote(&env_path.to_string_lossy()),
+        shell_quote(&authority_path.to_string_lossy()),
+    );
+    write_atomic(&env_path.to_string_lossy(), &env_contents)?;
+
+    Ok(format!(
+        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --write-check",
+        dir.display(),
+        authority_path.display(),
+        args.source,
+        args.authority.level(),
+        env_path.display(),
+        shell_quote(&env_path.to_string_lossy()),
+    ))
+}
+
+fn init_store_line(
+    store: InitStore,
+    store_url: Option<&str>,
+    dir: &std::path::Path,
+) -> Result<(String, String), String> {
+    match store {
+        InitStore::File => {
+            let log = dir.join("memory.jsonl");
+            let value = log.to_string_lossy();
+            Ok((
+                format!("DENT8_LOG={}", shell_quote(&value)),
+                format!("file dev log at {}", log.display()),
+            ))
+        }
+        InitStore::Sqlite => {
+            let url = store_url.map_or_else(
+                || format!("sqlite://{}", dir.join("dent8.db").display()),
+                str::to_string,
+            );
+            Ok((
+                format!("DENT8_STORE_URL={}", shell_quote(&url)),
+                format!("SQLite backend at {url} (requires `--features sqlite` build)"),
+            ))
+        }
+        InitStore::Postgres => {
+            let Some(url) = store_url else {
+                return Err(
+                    "`dent8 init --store postgres` needs `--store-url postgres://...`".to_string(),
+                );
+            };
+            Ok((
+                format!("DENT8_STORE_URL={}", shell_quote(url)),
+                format!("Postgres backend at {url} (requires `--features postgres` build)"),
+            ))
+        }
+    }
+}
+
+fn absolute_path(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("cannot read current directory: {error}"))
+            .map(|cwd| cwd.join(path))
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn cmd_doctor(args: &DoctorArgs) -> i32 {
+    let report = doctor_report(args);
+    print!("{}", report.output);
+    i32::from(!report.ok)
+}
+
+struct DoctorReport {
+    output: String,
+    ok: bool,
+}
+
+fn doctor_report(args: &DoctorArgs) -> DoctorReport {
+    let mut output = String::from("dent8 doctor\n");
+    let mut ok = true;
+
+    doctor_line(
+        &mut output,
+        "OK",
+        &format!(
+            "binary: {}",
+            std::env::current_exe().map_or_else(
+                |error| format!("unknown ({error})"),
+                |path| path.display().to_string(),
+            )
+        ),
+    );
+
+    if let Err(error) = doctor_store(&mut output) {
+        ok = false;
+        doctor_line(&mut output, "FAIL", &error);
+    }
+    if let Err(error) = doctor_authority(&mut output, &args.source) {
+        ok = false;
+        doctor_line(&mut output, "FAIL", &error);
+    }
+    match verify_log(&log_path()) {
+        Ok(message) => doctor_line(
+            &mut output,
+            "OK",
+            &format!("verify: {}", first_line(&message)),
+        ),
+        Err(error) => {
+            ok = false;
+            doctor_line(&mut output, "FAIL", &format!("verify: {error}"));
+        }
+    }
+
+    doctor_line(
+        &mut output,
+        "OK",
+        "mcp: `dent8 mcp serve` is available over stdio",
+    );
+
+    if args.write_check {
+        match doctor_write_check(&args.source) {
+            Ok(message) => doctor_line(&mut output, "OK", &message),
+            Err(error) => {
+                ok = false;
+                doctor_line(&mut output, "FAIL", &format!("write-check: {error}"));
+            }
+        }
+    } else {
+        doctor_line(
+            &mut output,
+            "WARN",
+            "write-check: skipped (pass `--write-check` to run assert -> reject -> explain)",
+        );
+    }
+
+    DoctorReport { output, ok }
+}
+
+fn doctor_store(output: &mut String) -> Result<(), String> {
+    if let Some(url) = store_url() {
+        let scheme = store_scheme(&url);
+        doctor_line(
+            output,
+            "OK",
+            &format!("store: DENT8_STORE_URL={url} (scheme={scheme})"),
+        );
+        load_store(&log_path()).map(|store| {
+            doctor_line(
+                output,
+                "OK",
+                &format!("store load: {} event(s)", store.len()),
+            );
+        })?;
+    } else {
+        let path = log_path();
+        if let Some(parent) = parent_dir(&path)
+            && !parent.exists()
+        {
+            return Err(format!(
+                "file store parent does not exist: {}",
+                parent.display()
+            ));
+        }
+        let store = load_store(&path)?;
+        let detail = if std::path::Path::new(&path).exists() {
+            format!("file dev store: {path} ({} event(s))", store.len())
+        } else {
+            format!("file dev store: {path} (will be created on first write)")
+        };
+        doctor_line(output, "OK", &detail);
+    }
+    Ok(())
+}
+
+fn doctor_authority(output: &mut String, source: &str) -> Result<(), String> {
+    let required = authority_required()?;
+    let path = authority_registry_path();
+    match load_authority_registry_at(&path, required)? {
+        Some(registry) => {
+            let grant = registry.sources.get(source);
+            let source_note = match grant {
+                Some(grant) => format!("; {source} max={:?}", grant.max_authority),
+                None => format!("; {source} is not granted"),
+            };
+            let level = if grant.is_some() { "OK" } else { "WARN" };
+            doctor_line(
+                output,
+                level,
+                &format!(
+                    "authority: {path} ({} source(s){source_note})",
+                    registry.sources.len()
+                ),
+            );
+        }
+        None if required => {
+            return Err(format!(
+                "authority: DENT8_REQUIRE_AUTHORITY=1 but no registry exists at {path}"
+            ));
+        }
+        None => doctor_line(
+            output,
+            "WARN",
+            &format!("authority: no registry at {path}; dev mode is permissive"),
+        ),
+    }
+    Ok(())
+}
+
+fn doctor_write_check(source: &str) -> Result<String, String> {
+    let subject_key = format!(
+        "alice-doctor-{}-{}",
+        std::process::id(),
+        now_millis().as_unix_millis()
+    );
+    op_assert(
+        &log_path(),
+        "person",
+        &subject_key,
+        "favorite_drink",
+        "tea",
+        AuthorityLevel::High,
+        source,
+    )
+    .map_err(|error| error.message().to_string())?;
+
+    match op_supersede(
+        &log_path(),
+        "person",
+        &subject_key,
+        "favorite_drink",
+        "coffee",
+        AuthorityLevel::Low,
+        "source:doctor-low",
+    ) {
+        Ok(message) => {
+            return Err(format!(
+                "low-authority override was accepted unexpectedly: {message}"
+            ));
+        }
+        Err(OpError::Rejected(_)) => {}
+        Err(error) => return Err(error.message().to_string()),
+    }
+
+    let explained = op_explain(&log_path(), "person", &subject_key, "favorite_drink")
+        .map_err(|error| error.message().to_string())?;
+    if !explained.contains("value         : \"tea\"") {
+        return Err(format!(
+            "expected trusted value tea to remain; got:\n{explained}"
+        ));
+    }
+    verify_log(&log_path())?;
+    Ok(format!(
+        "write-check: accepted trusted person:{subject_key} favorite_drink=tea, rejected low-authority coffee, verify OK"
+    ))
+}
+
+fn doctor_line(output: &mut String, level: &str, message: &str) {
+    output.push_str("  ");
+    output.push_str(level);
+    output.push_str("  ");
+    output.push_str(message);
+    output.push('\n');
+}
+
+fn first_line(message: &str) -> &str {
+    message.lines().next().unwrap_or(message)
+}
+
+fn store_scheme(url: &str) -> &str {
+    url.split_once(':').map_or("", |(scheme, _)| scheme)
+}
+
+fn parent_dir(path: &str) -> Option<&std::path::Path> {
+    let parent = std::path::Path::new(path).parent()?;
+    if parent.as_os_str().is_empty() {
+        None
+    } else {
+        Some(parent)
     }
 }
 

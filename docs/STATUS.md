@@ -18,6 +18,17 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `branch.status` fact goes stale on its **registered default TTL**; and `explain` returns
   an integrity receipt (value, lifecycle, authority, freshness, evidence, supersession,
   contradiction, replay position, `event_hash`, chain-verified).
+- **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]`** —
+  bootstraps an adoptable local setup: creates the dent8 config directory, writes an
+  authority registry granting a chosen source (default `source:local` / High), creates a
+  shell-loadable env file (`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`, and either
+  `DENT8_LOG` or `DENT8_STORE_URL`), and initializes the file dev log for the default file
+  store. It refuses to rewrite the env file unless `--force` is passed.
+- **`dent8 doctor [--write-check]`** — diagnoses the current setup: binary path, selected
+  store, authority registry/grant, `verify`, and MCP availability. By default it is
+  read-only; with `--write-check`, it runs an explicit Alice-style acceptance probe against
+  the configured store: high-authority `favorite_drink=tea` is accepted, a low-authority
+  supersession to `coffee` is rejected, `explain` still returns `tea`, and `verify` passes.
 - **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and

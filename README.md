@@ -44,6 +44,9 @@ operational **Postgres** backend (`--features postgres`, selected by a `postgres
 ## Quickstart
 
 ```sh
+dent8 init                                                 # create .dent8/env + authority registry
+set -a; . .dent8/env; set +a
+dent8 doctor --write-check                                # verify setup + prove the firewall path
 dent8 eval                                                 # why: 5/5 attacks blocked vs a recency baseline
 dent8 assert person:alice favorite_drink tea --authority high --source user:alice
 dent8 supersede person:alice favorite_drink coffee --authority low --source note:old  # REJECTED
@@ -57,7 +60,7 @@ dent8 completions zsh                                      # generate shell comp
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
 `derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
-`completions`/`mcp serve`). Use the global `--color auto|always|never` flag to control
+`init`/`doctor`/`completions`/`mcp serve`). Use the global `--color auto|always|never` flag to control
 colored help, errors, and verdict words in human-facing output.
 
 The core primitive is a claim event, not a generic memory item: every accepted write
@@ -76,7 +79,7 @@ source of truth for what is built.** In short:
   **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
   self-demonstrating benchmark), and **`export`** (the whole log to Parquet for offline DuckDB
   forensics/audit, behind `--features export` — see [examples/duckdb/](examples/duckdb/)),
-  `dent8 authority` / `dent8 witness` (the latter behind
+  `dent8 init` / `dent8 doctor`, `dent8 authority` / `dent8 witness` (the latter behind
   `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
@@ -144,6 +147,10 @@ Workspace crates:
 Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 
 - `dent8 demo`: run the firewall + registry + replay/explain loop end to end (in-memory).
+- `dent8 init`: create a local `.dent8/` setup: env file, authority registry, and selected
+  file/SQLite/Postgres store profile.
+- `dent8 doctor [--write-check]`: inspect binary, store, authority, verify, MCP availability;
+  with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow.
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the
