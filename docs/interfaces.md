@@ -60,16 +60,17 @@ Current v0 MCP tools:
 - `explain`
 - `replay`
 
-Tool results keep human-readable `content`, and also return MCP 2025-11-25
-`structuredContent` for agents. `initialize` prefers `2025-11-25` and also accepts
-`2025-06-18` clients because dent8's v0 tool result shape is valid on both revisions. The
-structured payloads carry a stable `status` (`accepted`, `rejected`, `contested`, `ok`,
-`invalid`, `failed`, or `integrity_issues`). Writes include an `accepted_events` array with
-every committed event's id/kind/hash, plus a current-state receipt
-(`receipt_kind: "current_state"`) when the subject still resolves to an explainable fact.
-Refused firewall writes carry `rejection_reason`; malformed calls carry `error_reason` with
-`status: "invalid"`. For older clients that ignore `structuredContent`, dent8 also includes
-a serialized JSON mirror as a second text content block.
+Tool definitions advertise `outputSchema` for every `structuredContent` shape. Tool results
+keep human-readable `content`, and also return MCP 2025-11-25 `structuredContent` for
+agents. `initialize` prefers `2025-11-25` and also accepts `2025-06-18` clients because
+dent8's v0 tool result shape is valid on both revisions. The structured payloads carry a
+stable `status` (`accepted`, `rejected`, `contested`, `ok`, `invalid`, `failed`, or
+`integrity_issues`). Writes include an `accepted_events` array with every committed event's
+id/kind/hash, plus a current-state receipt (`receipt_kind: "current_state"`) when the
+subject still resolves to an explainable fact. Refused firewall writes carry
+`rejection_reason`; malformed calls carry `error_reason` with `status: "invalid"`. For
+older clients that ignore `structuredContent`, dent8 also includes a serialized JSON mirror
+as a second text content block.
 
 Recommended behavior:
 
@@ -79,7 +80,7 @@ Recommended behavior:
 - Put the core usage workflow in MCP server instructions so Codex, Claude Code, Gemini CLI,
   Devin/Cascade, Cursor, Grok Build, Hecate, and other MCP-aware agent hosts know to inspect
   dent8 before relying on durable project facts.
-- Use tool output schemas once the Rust types settle.
+- Keep tool output schemas synchronized with `structuredContent`.
 
 Client setup examples live under [`examples/mcp/`](../examples/mcp/):
 [`Codex`](../examples/codex/), [`Claude Code`](../examples/claude-code/),

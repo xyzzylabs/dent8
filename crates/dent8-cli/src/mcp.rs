@@ -1105,7 +1105,349 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
             "required": required,
             "additionalProperties": false,
         },
+        "outputSchema": output_schema_for(name),
     })
+}
+
+fn output_schema_for(name: &str) -> Value {
+    match name {
+        "list_facts" => with_tool_error_schema(name, list_facts_output_schema()),
+        "verify" => with_tool_error_schema(name, verify_output_schema()),
+        "conflicts" => with_tool_error_schema(name, conflicts_output_schema()),
+        "assert" | "supersede" | "retract" | "reinforce" | "expire" => {
+            with_tool_error_schema(name, write_output_schema(name, &["accepted"]))
+        }
+        "derive" => with_tool_error_schema(name, write_output_schema(name, &["accepted"])),
+        "contradict" => with_tool_error_schema(name, write_output_schema(name, &["contested"])),
+        "explain" | "replay" => with_tool_error_schema(name, read_output_schema(name)),
+        _ => with_tool_error_schema(name, generic_output_schema(name)),
+    }
+}
+
+fn with_tool_error_schema(tool: &str, success: Value) -> Value {
+    let mut schema = serde_json::Map::new();
+    schema.insert(
+        "$schema".to_string(),
+        json!("https://json-schema.org/draft/2020-12/schema"),
+    );
+    schema.insert(
+        "oneOf".to_string(),
+        Value::Array(vec![success, tool_error_output_schema(tool)]),
+    );
+    Value::Object(schema)
+}
+
+fn list_facts_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "const": "ok" },
+            "tool": { "const": "list_facts" },
+            "count": { "type": "integer", "minimum": 0 },
+            "facts": {
+                "type": "array",
+                "items": object_schema(
+                    json!({
+                        "uri": { "type": "string" },
+                        "subject": subject_output_schema(),
+                        "predicate": { "type": "string" },
+                    }),
+                    &["uri", "subject", "predicate"],
+                ),
+            },
+        }),
+        &["status", "tool", "count", "facts"],
+    )
+}
+
+fn verify_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "integrity_issues"] },
+            "tool": { "const": "verify" },
+            "integrity_verified": { "type": "boolean" },
+        }),
+        &["status", "tool", "integrity_verified"],
+    )
+}
+
+fn conflicts_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "contested"] },
+            "tool": { "const": "conflicts" },
+            "message": { "type": "string" },
+        }),
+        &["status", "tool", "message"],
+    )
+}
+
+fn write_output_schema(tool: &str, statuses: &[&str]) -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": statuses },
+            "tool": { "const": tool },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "attempted_value": nullable_string_schema(),
+            "authority": authority_schema(),
+            "source": { "type": "string" },
+            "accepted_events": {
+                "type": "array",
+                "items": accepted_event_output_schema(),
+            },
+            "message": { "type": "string" },
+            "claim_id": { "type": "string" },
+            "receipt_kind": { "const": "current_state" },
+            "event_hash": digest_schema(),
+            "event_hash_kind": { "const": "current_state_latest_event" },
+            "event_hash_short": { "type": "string" },
+            "replay_position": { "type": "integer", "minimum": 0 },
+            "current_value": claim_value_output_schema(),
+            "current_receipt": receipt_output_schema(),
+            "receipt": receipt_output_schema(),
+            "derived_from": derived_from_output_schema(),
+        }),
+        &[
+            "status",
+            "tool",
+            "subject",
+            "predicate",
+            "attempted_value",
+            "authority",
+            "source",
+            "accepted_events",
+            "message",
+        ],
+    )
+}
+
+fn read_output_schema(tool: &str) -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "contested"] },
+            "tool": { "const": tool },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "claim_id": { "type": "string" },
+            "current_value": claim_value_output_schema(),
+            "event_hash": digest_schema(),
+            "event_hash_short": { "type": "string" },
+            "replay_position": { "type": "integer", "minimum": 0 },
+            "receipt_kind": { "const": "current_state" },
+            "current_receipt": receipt_output_schema(),
+            "receipt": receipt_output_schema(),
+        }),
+        &["status", "tool", "subject", "predicate"],
+    )
+}
+
+fn generic_output_schema(tool: &str) -> Value {
+    object_schema(
+        json!({
+            "status": { "type": "string" },
+            "tool": { "const": tool },
+        }),
+        &["status", "tool"],
+    )
+}
+
+fn tool_error_output_schema(tool: &str) -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["invalid", "rejected", "failed"] },
+            "tool": { "const": tool },
+            "rejection_reason": nullable_string_schema(),
+            "error_reason": { "type": "string" },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "attempted_value": { "type": "string" },
+            "authority": {
+                "anyOf": [
+                    authority_schema(),
+                    { "type": "string" }
+                ]
+            },
+            "authority_raw": { "type": "string" },
+            "source": { "type": "string" },
+        }),
+        &["status", "tool", "rejection_reason", "error_reason"],
+    )
+}
+
+fn accepted_event_output_schema() -> Value {
+    object_schema(
+        json!({
+            "event_id": { "type": "string" },
+            "claim_id": { "type": "string" },
+            "kind": {
+                "enum": [
+                    "Asserted",
+                    "Superseded",
+                    "Contradicted",
+                    "Retracted",
+                    "Expired",
+                    "Reinforced",
+                    "Retrieved",
+                    "UsedInDecision"
+                ]
+            },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "value": {
+                "anyOf": [
+                    claim_value_output_schema(),
+                    { "type": "null" }
+                ]
+            },
+            "authority": authority_schema(),
+            "source": { "type": "string" },
+            "event_hash": digest_schema(),
+            "event_hash_short": { "type": "string" },
+        }),
+        &[
+            "event_id",
+            "claim_id",
+            "kind",
+            "subject",
+            "predicate",
+            "value",
+            "authority",
+            "source",
+            "event_hash",
+            "event_hash_short",
+        ],
+    )
+}
+
+fn receipt_output_schema() -> Value {
+    object_schema(
+        json!({
+            "claim_id": { "type": "string" },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "value": claim_value_output_schema(),
+            "lifecycle": {
+                "enum": ["Active", "Contested", "Superseded", "Retracted", "Expired"]
+            },
+            "authority": authority_schema(),
+            "fresh": { "type": "boolean" },
+            "expires_at": {
+                "anyOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                ]
+            },
+            "evidence_count": { "type": "integer", "minimum": 0 },
+            "corroboration": { "type": "integer", "minimum": 0 },
+            "superseded_by": nullable_string_schema(),
+            "contradicted_by": {
+                "type": "array",
+                "items": { "type": "string" },
+            },
+            "replay_position": { "type": "integer", "minimum": 0 },
+            "event_hash": digest_schema(),
+            "event_hash_short": { "type": "string" },
+            "chain_verified": { "type": "boolean" },
+        }),
+        &[
+            "claim_id",
+            "subject",
+            "predicate",
+            "value",
+            "lifecycle",
+            "authority",
+            "fresh",
+            "expires_at",
+            "evidence_count",
+            "corroboration",
+            "superseded_by",
+            "contradicted_by",
+            "replay_position",
+            "event_hash",
+            "event_hash_short",
+            "chain_verified",
+        ],
+    )
+}
+
+fn claim_value_output_schema() -> Value {
+    json!({
+        "oneOf": [
+            object_schema(
+                json!({
+                    "kind": { "const": "text" },
+                    "text": { "type": "string" },
+                    "display": { "type": "string" },
+                }),
+                &["kind", "text", "display"],
+            ),
+            object_schema(
+                json!({
+                    "kind": { "const": "json" },
+                    "canonical": { "type": "string" },
+                    "json": true,
+                    "display": { "type": "string" },
+                }),
+                &["kind", "canonical", "json", "display"],
+            ),
+            object_schema(
+                json!({
+                    "kind": { "const": "redacted" },
+                    "display": { "type": "string" },
+                }),
+                &["kind", "display"],
+            ),
+        ]
+    })
+}
+
+fn derived_from_output_schema() -> Value {
+    object_schema(
+        json!({
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+        }),
+        &["subject", "predicate"],
+    )
+}
+
+fn subject_output_schema() -> Value {
+    object_schema(
+        json!({
+            "kind": { "type": "string" },
+            "key": { "type": "string" },
+        }),
+        &["kind", "key"],
+    )
+}
+
+fn authority_schema() -> Value {
+    json!({ "enum": ["Unknown", "Low", "Medium", "High", "Canonical"] })
+}
+
+fn digest_schema() -> Value {
+    json!({
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$",
+    })
+}
+
+fn nullable_string_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "string" },
+            { "type": "null" }
+        ]
+    })
+}
+
+fn object_schema(properties: Value, required: &[&str]) -> Value {
+    let mut schema = serde_json::Map::new();
+    schema.insert("type".to_string(), json!("object"));
+    schema.insert("properties".to_string(), properties);
+    schema.insert("required".to_string(), json!(required));
+    schema.insert("additionalProperties".to_string(), json!(false));
+    Value::Object(schema)
 }
 
 /// Shallow-merge two JSON objects (for composing tool input-schema properties).
@@ -1355,6 +1697,248 @@ mod tests {
         handle(&request, path).expect("response")["result"].clone()
     }
 
+    fn advertised_output_schema(name: &str) -> Value {
+        let request = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+        let response = handle(&request, "/tmp/unused.jsonl").expect("response");
+        response["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing tool: {name}"))["outputSchema"]
+            .clone()
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn assert_tool_output_matches_schema(path: &str, name: &str, arguments: Value) -> Value {
+        let result = call_tool_result(path, name, arguments);
+        let structured = &result["structuredContent"];
+        assert_matches_advertised_output_schema(name, structured);
+        result
+    }
+
+    fn assert_matches_advertised_output_schema(name: &str, structured: &Value) {
+        let schema = advertised_output_schema(name);
+        if let Err(error) = validate_json_schema_subset(&schema, structured, "$") {
+            panic!(
+                "{name} structuredContent does not match advertised outputSchema: {error}\n\
+                 structuredContent: {structured:#}\noutputSchema: {schema:#}"
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn validate_json_schema_subset(
+        schema: &Value,
+        value: &Value,
+        path: &str,
+    ) -> Result<(), String> {
+        if let Some(allowed) = schema.as_bool() {
+            return if allowed {
+                Ok(())
+            } else {
+                Err(format!("{path}: boolean schema false rejected the value"))
+            };
+        }
+        let object = schema
+            .as_object()
+            .ok_or_else(|| format!("{path}: schema must be an object or boolean"))?;
+
+        if let Some(one_of) = object.get("oneOf") {
+            let schemas = one_of
+                .as_array()
+                .ok_or_else(|| format!("{path}: oneOf must be an array"))?;
+            let mut matches = 0_u8;
+            let mut first_error = None;
+            for branch in schemas {
+                match validate_json_schema_subset(branch, value, path) {
+                    Ok(()) => matches = matches.saturating_add(1),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            return match matches {
+                1 => Ok(()),
+                0 => Err(format!(
+                    "{path}: matched no oneOf branch; first error: {}",
+                    first_error.unwrap_or_else(|| "none".to_string())
+                )),
+                count => Err(format!("{path}: matched {count} oneOf branches")),
+            };
+        }
+
+        if let Some(any_of) = object.get("anyOf") {
+            let schemas = any_of
+                .as_array()
+                .ok_or_else(|| format!("{path}: anyOf must be an array"))?;
+            let mut first_error = None;
+            for branch in schemas {
+                match validate_json_schema_subset(branch, value, path) {
+                    Ok(()) => return Ok(()),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+            return Err(format!(
+                "{path}: matched no anyOf branch; first error: {}",
+                first_error.unwrap_or_else(|| "none".to_string())
+            ));
+        }
+
+        if let Some(expected) = object.get("const")
+            && value != expected
+        {
+            return Err(format!("{path}: expected const {expected}, got {value}"));
+        }
+
+        if let Some(allowed) = object.get("enum") {
+            let options = allowed
+                .as_array()
+                .ok_or_else(|| format!("{path}: enum must be an array"))?;
+            if !options.iter().any(|option| option == value) {
+                return Err(format!("{path}: {value} is not one of {allowed}"));
+            }
+        }
+
+        if let Some(type_name) = object.get("type").and_then(Value::as_str) {
+            validate_json_type(type_name, value, path)?;
+        }
+
+        if object.contains_key("properties")
+            || object.contains_key("required")
+            || matches!(object.get("additionalProperties"), Some(Value::Bool(false)))
+        {
+            validate_object_keywords(object, value, path)?;
+        }
+
+        if let Some(items_schema) = object.get("items") {
+            let array = value
+                .as_array()
+                .ok_or_else(|| format!("{path}: expected array for items validation"))?;
+            for (index, item) in array.iter().enumerate() {
+                validate_json_schema_subset(items_schema, item, &format!("{path}[{index}]"))?;
+            }
+        }
+
+        if let Some(minimum) = object.get("minimum") {
+            validate_minimum(minimum, value, path)?;
+        }
+
+        if let Some(pattern) = object.get("pattern").and_then(Value::as_str) {
+            validate_pattern(pattern, value, path)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_json_type(type_name: &str, value: &Value, path: &str) -> Result<(), String> {
+        let matches = match type_name {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "integer" => is_json_integer(value),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            other => return Err(format!("{path}: unsupported schema type {other:?}")),
+        };
+        if matches {
+            Ok(())
+        } else {
+            Err(format!("{path}: expected {type_name}, got {value}"))
+        }
+    }
+
+    fn is_json_integer(value: &Value) -> bool {
+        match value {
+            Value::Number(number) => number.as_i64().is_some() || number.as_u64().is_some(),
+            _ => false,
+        }
+    }
+
+    fn validate_object_keywords(
+        schema: &serde_json::Map<String, Value>,
+        value: &Value,
+        path: &str,
+    ) -> Result<(), String> {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: expected object for object-keyword validation"))?;
+        let properties = schema.get("properties").and_then(Value::as_object);
+
+        if let Some(required) = schema.get("required").and_then(Value::as_array) {
+            for field in required {
+                let field = field
+                    .as_str()
+                    .ok_or_else(|| format!("{path}: required entries must be strings"))?;
+                if !object.contains_key(field) {
+                    return Err(format!("{path}: missing required property {field:?}"));
+                }
+            }
+        }
+
+        if let Some(properties) = properties {
+            for (field, field_schema) in properties {
+                if let Some(field_value) = object.get(field) {
+                    validate_json_schema_subset(
+                        field_schema,
+                        field_value,
+                        &format!("{path}.{field}"),
+                    )?;
+                }
+            }
+        }
+
+        if matches!(schema.get("additionalProperties"), Some(Value::Bool(false))) {
+            for field in object.keys() {
+                if properties.is_none_or(|known| !known.contains_key(field)) {
+                    return Err(format!("{path}: unexpected property {field:?}"));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_minimum(minimum: &Value, value: &Value, path: &str) -> Result<(), String> {
+        let Some(minimum) = minimum.as_i64() else {
+            return Err(format!("{path}: unsupported non-integer minimum {minimum}"));
+        };
+        if minimum != 0 {
+            return Err(format!(
+                "{path}: unsupported minimum {minimum}; tests only need 0"
+            ));
+        }
+        match value {
+            Value::Number(number)
+                if number.as_u64().is_some()
+                    || number.as_i64().is_some_and(|number| number >= 0) =>
+            {
+                Ok(())
+            }
+            _ => Err(format!("{path}: expected number >= {minimum}, got {value}")),
+        }
+    }
+
+    fn validate_pattern(pattern: &str, value: &Value, path: &str) -> Result<(), String> {
+        let text = value
+            .as_str()
+            .ok_or_else(|| format!("{path}: expected string for pattern validation"))?;
+        match pattern {
+            "^[0-9a-f]{64}$"
+                if text.len() == 64
+                    && text
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+            {
+                Ok(())
+            }
+            "^[0-9a-f]{64}$" => Err(format!("{path}: value does not match {pattern}: {text:?}")),
+            other => Err(format!("{path}: unsupported pattern {other:?}")),
+        }
+    }
+
     fn database(value: &str, authority: &str) -> Value {
         json!({
             "subject_kind": "repo", "subject_key": "p", "predicate": "database",
@@ -1519,6 +2103,138 @@ mod tests {
             .unwrap();
         assert_eq!(list_facts["inputSchema"]["type"], "object");
         assert_eq!(list_facts["inputSchema"]["additionalProperties"], false);
+        for tool in tools {
+            assert!(
+                tool["outputSchema"]["oneOf"].is_array(),
+                "{} should advertise an output schema",
+                tool["name"]
+            );
+        }
+        let assert_tool = tools.iter().find(|tool| tool["name"] == "assert").unwrap();
+        assert_eq!(
+            assert_tool["outputSchema"]["oneOf"][0]["properties"]["accepted_events"]["type"],
+            "array"
+        );
+        assert_eq!(
+            assert_tool["outputSchema"]["oneOf"][1]["properties"]["status"]["enum"],
+            json!(["invalid", "rejected", "failed"])
+        );
+        let verify_tool = tools.iter().find(|tool| tool["name"] == "verify").unwrap();
+        assert_eq!(
+            verify_tool["outputSchema"]["oneOf"][0]["properties"]["status"]["enum"],
+            json!(["ok", "integrity_issues"])
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn structured_content_matches_advertised_output_schemas() {
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "list_facts", json!({}));
+        assert_tool_output_matches_schema(&path, "verify", json!({}));
+        assert_tool_output_matches_schema(&path, "conflicts", json!({}));
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        let read_args = json!({
+            "subject_kind": "repo",
+            "subject_key": "p",
+            "predicate": "database",
+        });
+        assert_tool_output_matches_schema(&path, "explain", read_args.clone());
+        assert_tool_output_matches_schema(&path, "replay", read_args);
+        assert_tool_output_matches_schema(&path, "supersede", database("mysql", "high"));
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        assert_tool_output_matches_schema(
+            &path,
+            "reinforce",
+            json!({
+                "subject_kind": "repo",
+                "subject_key": "p",
+                "predicate": "database",
+                "authority": "high",
+                "source": "src",
+            }),
+        );
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        assert_tool_output_matches_schema(
+            &path,
+            "retract",
+            json!({
+                "subject_kind": "repo",
+                "subject_key": "p",
+                "predicate": "database",
+                "authority": "high",
+                "source": "src",
+            }),
+        );
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        assert_tool_output_matches_schema(
+            &path,
+            "expire",
+            json!({
+                "subject_kind": "repo",
+                "subject_key": "p",
+                "predicate": "database",
+                "authority": "high",
+                "source": "src",
+            }),
+        );
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        assert_tool_output_matches_schema(
+            &path,
+            "derive",
+            json!({
+                "subject_kind": "service",
+                "subject_key": "api",
+                "predicate": "datastore",
+                "value": "postgres",
+                "authority": "high",
+                "source": "src",
+                "from_kind": "repo",
+                "from_key": "p",
+                "from_predicate": "database",
+            }),
+        );
+        assert_tool_output_matches_schema(
+            &path,
+            "retract",
+            json!({
+                "subject_kind": "repo",
+                "subject_key": "p",
+                "predicate": "database",
+                "authority": "high",
+                "source": "src",
+            }),
+        );
+        assert_tool_output_matches_schema(&path, "verify", json!({}));
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        assert_tool_output_matches_schema(&path, "contradict", database("mysql", "high"));
+        assert_tool_output_matches_schema(&path, "conflicts", json!({}));
+
+        let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(
+            &path,
+            "assert",
+            json!({
+                "subject_kind": "repo",
+                "subject_key": "p",
+                "predicate": "database",
+                "value": "postgres",
+                "authority": "high",
+            }),
+        );
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "low"));
     }
 
     #[test]
