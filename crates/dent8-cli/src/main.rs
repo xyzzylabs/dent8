@@ -1106,10 +1106,10 @@ fn hook_candidate_strings(value: &serde_json::Value) -> Vec<&str> {
         match value {
             serde_json::Value::Object(map) => {
                 for (key, child) in map {
-                    if PATH_KEYS.contains(&key.as_str()) {
-                        if let Some(path) = child.as_str() {
-                            out.push(path);
-                        }
+                    if PATH_KEYS.contains(&key.as_str())
+                        && let Some(path) = child.as_str()
+                    {
+                        out.push(path);
                     }
                     walk(child, out);
                 }
@@ -1174,14 +1174,20 @@ fn is_native_memory_path(path: &str) -> bool {
     }
 
     let in_cursor_rules = path.starts_with(".cursor/rules/") || path.contains("/.cursor/rules/");
-    if in_cursor_rules && (path.ends_with(".md") || path.ends_with(".mdc")) {
+    let has_rule_ext = std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("mdc"));
+    if in_cursor_rules && has_rule_ext {
         return true;
     }
 
     let in_devin_rules = path.starts_with(".devin/rules/") || path.contains("/.devin/rules/");
     let in_windsurf_rules =
         path.starts_with(".windsurf/rules/") || path.contains("/.windsurf/rules/");
-    (in_devin_rules || in_windsurf_rules) && path.ends_with(".md")
+    let has_md_ext = std::path::Path::new(path)
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+    (in_devin_rules || in_windsurf_rules) && has_md_ext
 }
 
 /// Run the adversarial corpus and print the firewall-vs-recency-baseline contrast — the
