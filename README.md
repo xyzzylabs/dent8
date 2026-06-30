@@ -55,7 +55,7 @@ dent8 verify                                               # …and verify flags
 
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
-`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`witness`/`mcp serve`).
+`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/`mcp serve`).
 
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
@@ -79,9 +79,12 @@ source of truth for what is built.** In short:
   non-transactional) — the *operational* backend is Postgres (M2b). `dent8 mcp serve` exposes
   the full belief surface plus read/audit tools to agents over MCP (stdio JSON-RPC), through
   the same firewall — see [examples/mcp/](examples/mcp/), [examples/codex/](examples/codex/),
-  [examples/claude-code/](examples/claude-code/), [examples/cursor/](examples/cursor/),
+  [examples/claude-code/](examples/claude-code/), [examples/gemini/](examples/gemini/),
+  [examples/cascade/](examples/cascade/), [examples/cursor/](examples/cursor/),
   [examples/grok-build/](examples/grok-build/), and [examples/hecate/](examples/hecate/) for
-  agent-client wiring.
+  agent-client wiring. Optional native memory/rules hook guards use the built-in
+  `dent8 hook native-memory-guard`; provider profiles live in
+  [examples/agent-hooks/](examples/agent-hooks/).
 - **Implemented as a tested library:** the `ClaimEvent` model and replay fold; the
   unbypassable write-path firewall (`EventStore::append`) with authority-weighted
   arbitration + retraction, an anti-laundering challenger check, and the
@@ -149,6 +152,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   is what it is.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
+- `dent8 hook native-memory-guard`: provider hook helper for session verification and
+  native memory/rules write guards.
 - `dent8 schema postgres`: print the initial Postgres schema.
 - `dent8 mcp serve`: expose read/audit tools, the full belief surface, resources, and
   JSON-RPC batches to agents over MCP (stdio JSON-RPC).

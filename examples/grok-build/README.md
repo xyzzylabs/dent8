@@ -42,3 +42,10 @@ dependency:<package> version
 branch:<branch> status
 user:<name> preference
 ```
+
+## Optional hook guard
+
+If your Grok Build host exposes Claude-compatible hooks, adapt the Claude Code sample in
+[`../agent-hooks/claude-code/settings.sample.json`](../agent-hooks/claude-code/settings.sample.json).
+If Grok Build is supervised through Hecate, put the hook policy at the Hecate or child-agent
+profile layer instead. See [`../agent-hooks/grok-build/`](../agent-hooks/grok-build/).

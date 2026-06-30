@@ -65,3 +65,8 @@ Run verify before broad edits that depend on remembered facts.
 For Hecate-supervised Codex, Claude Code, Cursor Agent, or Grok Build sessions, change the
 source id to the supervised agent (`source:codex`, `source:claude-code`, `source:cursor`, or
 `source:grok-build`) and grant that source in `dent8 authority`.
+
+## Optional hook guard
+
+Use Hecate as the policy distributor: mount the same dent8 MCP server and pass the matching
+hook profile to the supervised agent. See [`../agent-hooks/hecate/`](../agent-hooks/hecate/).

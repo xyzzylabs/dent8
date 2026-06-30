@@ -123,6 +123,13 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
             );
             2
         }
+        [command, subcommand] if command == "hook" && subcommand == "native-memory-guard" => {
+            cmd_hook_native_memory_guard()
+        }
+        [command] if command == "hook" => {
+            eprintln!("usage: dent8 hook native-memory-guard");
+            2
+        }
         [command, subcommand] if command == "mcp" && subcommand == "serve" => mcp::serve(),
         [command, rest @ ..] if command == "witness" => run_witness(rest),
         [command] => usage_error(command),
@@ -237,6 +244,9 @@ Usage:
                           ./dent8-events.parquet; needs --features export)
   dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
                           manage the source -> authority ceiling (authz)
+  dent8 hook native-memory-guard
+                          provider hook helper: verify on session boundaries and block
+                          direct writes to native memory/rules files when enforced
   dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
                           emit/verify Ed25519 signed tree heads to detect a history
                           rewrite or rollback; `serve` is the cadence signer, `head`
@@ -990,6 +1000,188 @@ fn cmd_verify() -> i32 {
             1
         }
     }
+}
+
+/// Built-in helper for provider hook systems. It intentionally does not write native memory
+/// files; it only runs `verify` or blocks writes that would bypass the claim-event firewall.
+fn cmd_hook_native_memory_guard() -> i32 {
+    let payload = read_hook_payload();
+    let mode = std::env::var("DENT8_HOOK_MODE")
+        .unwrap_or_else(|_| "guard-native-memory-write".to_string());
+
+    if mode == "session-start" {
+        return hook_verify("session start");
+    }
+
+    let touched = native_memory_paths(&payload);
+    if mode == "post-write-audit" {
+        if touched.is_empty() {
+            return 0;
+        }
+        return hook_verify(&format!(
+            "native memory/rules changed: {}",
+            touched.join(", ")
+        ));
+    }
+
+    if mode != "guard-native-memory-write" {
+        eprintln!("dent8 hook: unknown DENT8_HOOK_MODE={mode}");
+        return 2;
+    }
+
+    if touched.is_empty() {
+        return 0;
+    }
+
+    eprintln!(
+        "dent8 native memory/rules guard: direct writes to {} bypass the claim-event firewall. \
+         Use dent8 MCP tools or an explicit reviewed export from dent8. Set \
+         DENT8_ALLOW_NATIVE_MEMORY_WRITE=1 to bypass this local guard.",
+        touched.join(", ")
+    );
+
+    if std::env::var("DENT8_ALLOW_NATIVE_MEMORY_WRITE").as_deref() == Ok("1") {
+        return 0;
+    }
+    if std::env::var("DENT8_HOOK_ENFORCE").as_deref() == Ok("1") {
+        return 2;
+    }
+    0
+}
+
+fn read_hook_payload() -> serde_json::Value {
+    let mut raw = String::new();
+    let mut stdin = std::io::stdin();
+    if let Err(error) = std::io::Read::read_to_string(&mut stdin, &mut raw) {
+        eprintln!("dent8 hook: could not read hook JSON: {error}");
+        return serde_json::Value::Null;
+    }
+    if raw.trim().is_empty() {
+        return serde_json::Value::Null;
+    }
+    serde_json::from_str(&raw).unwrap_or_else(|error| {
+        eprintln!("dent8 hook: could not parse hook JSON: {error}");
+        serde_json::Value::Null
+    })
+}
+
+fn hook_verify(reason: &str) -> i32 {
+    eprintln!("dent8 hook: verify ({reason})");
+    match verify_log(&log_path()) {
+        Ok(report) => {
+            eprintln!("{report}");
+            0
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
+fn native_memory_paths(payload: &serde_json::Value) -> Vec<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    for candidate in hook_candidate_strings(payload) {
+        let normalized = candidate.replace('\\', "/");
+        if is_native_memory_path(&normalized) {
+            paths.insert(normalized);
+        }
+    }
+    paths.into_iter().collect()
+}
+
+fn hook_candidate_strings(value: &serde_json::Value) -> Vec<&str> {
+    fn walk<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+        const PATH_KEYS: &[&str] = &[
+            "absolute_path",
+            "file",
+            "filePath",
+            "file_path",
+            "new_path",
+            "old_path",
+            "path",
+            "relative_path",
+            "target_file",
+        ];
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, child) in map {
+                    if PATH_KEYS.contains(&key.as_str()) {
+                        if let Some(path) = child.as_str() {
+                            out.push(path);
+                        }
+                    }
+                    walk(child, out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items {
+                    walk(child, out);
+                }
+            }
+            serde_json::Value::String(text) if hook_string_looks_like_path(text) => {
+                out.push(text);
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = Vec::new();
+    walk(value, &mut out);
+    out
+}
+
+fn hook_string_looks_like_path(value: &str) -> bool {
+    [
+        "/",
+        "\\",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CLAUDE.local.md",
+        "GEMINI.md",
+        "MEMORY.md",
+        ".cursor/rules",
+        ".devin/rules",
+        ".windsurf/rules",
+        ".windsurfrules",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker))
+}
+
+fn is_native_memory_path(path: &str) -> bool {
+    let path = path.trim_start_matches("./");
+    let ends_with_named_file = [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CLAUDE.local.md",
+        "GEMINI.md",
+        "MEMORY.md",
+    ]
+    .iter()
+    .any(|name| {
+        path == *name
+            || path
+                .strip_suffix(name)
+                .is_some_and(|prefix| prefix.ends_with('/'))
+    });
+    if ends_with_named_file {
+        return true;
+    }
+
+    if path == ".windsurfrules" || path.ends_with("/.windsurfrules") {
+        return true;
+    }
+
+    let in_cursor_rules = path.starts_with(".cursor/rules/") || path.contains("/.cursor/rules/");
+    if in_cursor_rules && (path.ends_with(".md") || path.ends_with(".mdc")) {
+        return true;
+    }
+
+    let in_devin_rules = path.starts_with(".devin/rules/") || path.contains("/.devin/rules/");
+    let in_windsurf_rules =
+        path.starts_with(".windsurf/rules/") || path.contains("/.windsurf/rules/");
+    (in_devin_rules || in_windsurf_rules) && path.ends_with(".md")
 }
 
 /// Run the adversarial corpus and print the firewall-vs-recency-baseline contrast — the

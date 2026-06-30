@@ -34,9 +34,14 @@ Client-specific examples:
 
 - [Codex](../codex/) — `config.toml` stdio MCP setup.
 - [Claude Code](../claude-code/) — `claude mcp add` and project `.mcp.json` setup.
+- [Gemini CLI](../gemini/) — project `.gemini/settings.json` / `gemini mcp add` setup.
+- [Devin/Cascade](../cascade/) — Cascade MCP config + rules/memory guard stance.
 - [Cursor](../cursor/) — project/global `mcp.json` setup.
 - [Grok Build](../grok-build/) — client-neutral stdio MCP profile for Grok Build hosts.
 - [Hecate](../hecate/) — Hecate task / external-agent MCP server config.
+
+Optional hook guards for native memory/rules files live in
+[`../agent-hooks/`](../agent-hooks/). Install MCP first; hooks only catch bypasses.
 
 ## Try it without a client
 

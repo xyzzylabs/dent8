@@ -60,3 +60,11 @@ dependency:<package> version
 branch:<branch> status
 user:<name> preference
 ```
+
+## Optional hook guard
+
+After MCP works, merge
+[`../agent-hooks/claude-code/settings.sample.json`](../agent-hooks/claude-code/settings.sample.json)
+into `.claude/settings.json` or another Claude Code settings scope. The sample blocks direct
+edits to `CLAUDE.md`, `MEMORY.md`, and `AGENTS.md` unless you explicitly set
+`DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`.
