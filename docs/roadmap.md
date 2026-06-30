@@ -32,10 +32,11 @@ now runs end to end through the CLI and MCP surfaces:
 
 What remains to make it a hardened multi-user product:
 
-- **Signed identity operations.** `dent8 identity` now provides the feature-gated authn
-  primitive: issuer-signed grants binding source ids to source public keys, plus per-write
-  source-key possession checks at the CLI/MCP boundary. Product hardening remains: key
-  distribution/rotation, hardware or secret-store-backed keys, and team policy workflows.
+- **Signed identity operations.** The stock CLI now includes the authn primitive:
+  `dent8 init --identity` / `dent8 init --agent <profile>` create issuer-signed grants binding
+  source ids to source public keys, and every configured write checks source-key possession at
+  the CLI/MCP boundary. Product hardening remains: key distribution/rotation, hardware or
+  secret-store-backed keys, and team policy workflows.
 - **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
   the remaining product work is running it on separate infrastructure, publishing heads,
   monitoring rollback/rewrite alarms, and rotating keys.
@@ -237,7 +238,7 @@ DONE: serde canonical form + hash chain
 DONE: Postgres adapter + AsyncEventStore boundary + SQLite proof backend
 DONE: replay/explain CLI + full lifecycle + clap/completions/colors
 DONE: v0 MCP stdio JSON-RPC surface
-DONE: signed source identity primitive (feature-gated)
+DONE: signed source identity primitive + secure init path
 ONGOING: evals/formal hardening, mainly fuzzing + append/projection model checking
 ```
 

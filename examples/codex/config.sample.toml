@@ -8,3 +8,7 @@ tool_timeout_sec = 60
 DENT8_LOG = "/abs/path/to/project/.dent8/codex-memory.jsonl"
 DENT8_AUTHORITY = "/abs/path/to/project/.dent8/authority.json"
 DENT8_REQUIRE_AUTHORITY = "1"
+DENT8_TRUST = "/abs/path/to/project/.dent8/trust.json"
+DENT8_REQUIRE_IDENTITY = "1"
+DENT8_GRANT = "/abs/path/to/project/.dent8/grants/source_codex.grant.json"
+DENT8_IDENTITY_KEY = "/abs/path/to/project/.dent8/identities/source_codex.key"

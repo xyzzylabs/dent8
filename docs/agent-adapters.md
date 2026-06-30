@@ -14,10 +14,11 @@ provider-specific memory provider. The invariant is simple:
    `dent8 hook native-memory-guard` to run `dent8 verify` and block direct native
    memory/rules writes that would bypass dent8. Provider profiles live in
    [`examples/agent-hooks/`](../examples/agent-hooks/).
-3. **Signed source identity, feature-gated.** With `--features identity`, give each agent a
-   distinct source key and issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Run one
-   `dent8 mcp serve` process per agent identity when per-agent provenance matters; a shared
-   MCP server can only prove the identity whose key it holds.
+3. **Signed source identity, default build.** Use `dent8 init --agent <profile>` or
+   `dent8 init --identity --source <source>` to give each agent a distinct source key and
+   issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Run one `dent8 mcp serve`
+   process per agent identity when per-agent provenance matters; a shared MCP server can only
+   prove the identity whose key it holds.
 4. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
    `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
    authority candidate events. Imported facts need provenance and review.

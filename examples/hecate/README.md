@@ -17,8 +17,7 @@ Start Hecate, then create an `agent_loop` task with dent8 mounted as an MCP serv
 
 ```sh
 PROJECT=/abs/path/to/project
-mkdir -p "$PROJECT/.dent8"
-DENT8_AUTHORITY="$PROJECT/.dent8/authority.json" dent8 authority add source:hecate high
+(cd "$PROJECT" && dent8 init --agent hecate)
 
 curl -sS \
   -H 'content-type: application/json' \
@@ -44,7 +43,11 @@ In Hecate's "New task -> Agent loop -> MCP servers" form, add:
   "env": {
     "DENT8_LOG": "/abs/path/to/project/.dent8/hecate-memory.jsonl",
     "DENT8_AUTHORITY": "/abs/path/to/project/.dent8/authority.json",
-    "DENT8_REQUIRE_AUTHORITY": "1"
+    "DENT8_REQUIRE_AUTHORITY": "1",
+    "DENT8_TRUST": "/abs/path/to/project/.dent8/trust.json",
+    "DENT8_REQUIRE_IDENTITY": "1",
+    "DENT8_GRANT": "/abs/path/to/project/.dent8/grants/source_hecate.grant.json",
+    "DENT8_IDENTITY_KEY": "/abs/path/to/project/.dent8/identities/source_hecate.key"
   },
   "approval_policy": "require_approval"
 }
@@ -64,7 +67,7 @@ Run verify before broad edits that depend on remembered facts.
 
 For Hecate-supervised Codex, Claude Code, Cursor Agent, or Grok Build sessions, change the
 source id to the supervised agent (`source:codex`, `source:claude-code`, `source:cursor`, or
-`source:grok-build`) and grant that source in `dent8 authority`.
+`source:grok-build`) and run the matching `dent8 init --agent ...` profile.
 
 ## Optional hook guard
 

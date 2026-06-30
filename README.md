@@ -37,10 +37,10 @@ cargo install --git https://github.com/xyzzylabs/dent8 dent8-cli   # installs th
 cargo run -p dent8-cli -- demo
 ```
 
-The stock `dent8` binary uses a local file log and needs no services. Opt-in builds add the
-operational **Postgres** backend (`--features postgres`, selected by a `postgres://`
-`DENT8_STORE_URL`), signed source identity (`--features identity`), and the Ed25519
-**witness** (`--features witness`).
+The stock `dent8` binary uses a local file log, needs no services, and includes signed source
+identity. Opt-in builds add the operational **Postgres** backend (`--features postgres`,
+selected by a `postgres://` `DENT8_STORE_URL`) and the Ed25519 **witness**
+(`--features witness`).
 
 ## Quickstart
 
@@ -58,18 +58,19 @@ dent8 verify                                               # flags the now-taint
 dent8 completions zsh                                      # generate shell completions
 ```
 
-Signed source identity is opt-in. With an identity-enabled build, bootstrap a local grant
-bundle and load it alongside the normal env:
+For a protected agent setup, let `init` create the authority registry and signed source
+identity bundle together:
 
 ```sh
-cargo build -p dent8-cli --features identity
-dent8 init --source source:codex
-dent8 identity bootstrap --source source:codex
+dent8 init --agent codex                  # implies source:codex + signed identity
 set -a; . .dent8/env; . .dent8/identity.env; set +a
 dent8 doctor --source source:codex --write-check
 ```
 
-`identity bootstrap` keeps the issuer key outside `.dent8` by default
+Use `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
+available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and
+`hecate`. `identity bootstrap` remains available for manual rotation/custom layouts and keeps
+the issuer key outside `.dent8` by default
 (`$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key`; override with
 `--issuer-key`). The project bundle contains only the trust registry, per-source key, grant,
 and env snippet an agent needs. The default issuer key is shared across projects for the same
@@ -98,8 +99,8 @@ source of truth for what is built.** In short:
   **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
   self-demonstrating benchmark), and **`export`** (the whole log to Parquet for offline DuckDB
   forensics/audit, behind `--features export` — see [examples/duckdb/](examples/duckdb/)),
-  `dent8 init` / `dent8 doctor`, `dent8 authority`, `dent8 identity` (behind
-  `--features identity`), `dent8 witness` (behind `--features witness`), and
+  `dent8 init` / `dent8 doctor`, `dent8 authority`, `dent8 identity`, `dent8 witness`
+  (behind `--features witness`), and
   `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
@@ -143,8 +144,9 @@ The runnable surface persists either way: a local file dev log by default, or �
 Postgres backend** (each multi-event operation committed as one transaction). An opt-in
 **authority ceiling** (`dent8 authority`) caps what each source may assert, rejecting a
 write above its registered ceiling. Signed source identity — **`dent8 identity`**
-(`--features identity`) — binds a source id to a source public key via an issuer-signed grant
-and verifies source-key possession on every CLI/MCP write when a trust root is configured.
+— included in the default CLI build — binds a source id to a source public key via an
+issuer-signed grant and verifies source-key possession on every CLI/MCP write when a trust
+root is configured.
 The witness is runnable as a *primitive* — **`dent8 witness`** (`--features witness`) emits
 Ed25519 signed tree heads and detects a history rewrite or rollback that an internal chain
 re-verify cannot. The remaining gap to a hardened multi-user product is operating those
@@ -174,8 +176,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 doctor [--write-check]`: inspect binary, store, authority, verify, MCP availability;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow.
 - `dent8 identity bootstrap`: create a local signed source identity bundle (operator issuer
-  key outside the bundle, source key, trust registry, grant, and `.dent8/identity.env`; needs
-  `--features identity`).
+  key outside the bundle, source key, trust registry, grant, and `.dent8/identity.env`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the

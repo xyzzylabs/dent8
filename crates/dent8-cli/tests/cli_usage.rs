@@ -182,7 +182,7 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
     let init = run_dent8(&["init", "--dir", &dir], &[]);
     assert_success(&init, "init");
     assert!(stdout(&init).contains("initialized dent8"));
-    assert!(stdout(&init).contains("dent8 doctor --write-check"));
+    assert!(stdout(&init).contains("dent8 doctor --source source:local --write-check"));
 
     let env_path = temp.file(".dent8/env");
     let authority_path = temp.file(".dent8/authority.json");
@@ -227,6 +227,292 @@ fn init_refuses_to_rewrite_env_without_force() {
     assert_success(
         &run_dent8(&["init", "--dir", &dir, "--force"], &[]),
         "forced init",
+    );
+}
+
+#[test]
+fn init_rejects_agent_source_override() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--source",
+            "source:hecate",
+        ],
+        &[],
+    );
+    assert_eq!(init.status.code(), Some(2));
+    assert!(stderr(&init).contains("cannot be used with"));
+    assert!(
+        !temp.file(".dent8").exists(),
+        "conflicting init args should fail before creating config state"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_identity_bootstraps_a_usable_secure_local_setup() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir,
+            "--source",
+            "source:codex",
+            "--identity",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&init, "init --identity");
+    let stdout = stdout(&init);
+    assert!(stdout.contains("identity env:"));
+    assert!(stdout.contains(".dent8/identity.env"));
+    assert!(stdout.contains("dent8 doctor --source source:codex --write-check"));
+
+    let env_path = temp.file(".dent8/env");
+    let identity_env_path = temp.file(".dent8/identity.env");
+    let authority_path = temp.file(".dent8/authority.json");
+    let trust_path = temp.file(".dent8/trust.json");
+    let grant_path = temp.file(".dent8/grants/source_codex.grant.json");
+    let key_path = temp.file(".dent8/identities/source_codex.key");
+    let log_path = temp.file(".dent8/memory.jsonl");
+
+    assert!(env_path.exists(), "init should write env");
+    assert!(identity_env_path.exists(), "init should write identity.env");
+    assert!(trust_path.exists(), "init should write trust registry");
+    assert!(grant_path.exists(), "init should write source grant");
+    assert!(key_path.exists(), "init should write source key");
+    assert!(std::path::Path::new(&issuer_key).exists());
+    assert!(
+        !temp.file(".dent8/issuer.key").exists(),
+        "issuer private key must stay outside the project bundle"
+    );
+
+    let authority = fs::read_to_string(&authority_path).expect("authority registry");
+    assert!(authority.contains("source:codex"));
+    let identity_env = fs::read_to_string(&identity_env_path).expect("identity env");
+    assert!(identity_env.contains("DENT8_REQUIRE_IDENTITY=1"));
+    assert!(identity_env.contains("DENT8_TRUST="));
+    assert!(identity_env.contains("DENT8_GRANT="));
+    assert!(identity_env.contains("DENT8_IDENTITY_KEY="));
+
+    let log = log_path.to_string_lossy().into_owned();
+    let authority_path = authority_path.to_string_lossy().into_owned();
+    let trust = trust_path.to_string_lossy().into_owned();
+    let grant = grant_path.to_string_lossy().into_owned();
+    let key = key_path.to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", authority_path.as_str()),
+        ("DENT8_REQUIRE_AUTHORITY", "1"),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    assert_success(
+        &run_dent8(
+            &["doctor", "--source", "source:codex", "--write-check"],
+            &envs,
+        ),
+        "doctor with init identity bundle",
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_agent_profile_selects_source_and_implies_identity() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&init, "init --agent codex");
+    let stdout = stdout(&init);
+    assert!(stdout.contains("agent profile: examples/codex/"));
+    assert!(stdout.contains("dent8 doctor --source source:codex --write-check"));
+    assert!(stdout.contains(".dent8/identity.env"));
+
+    let authority = fs::read_to_string(temp.file(".dent8/authority.json"))
+        .expect("authority registry from agent init");
+    assert!(authority.contains("source:codex"));
+    let env = fs::read_to_string(temp.file(".dent8/env")).expect("agent init env");
+    assert!(env.contains("codex-memory.jsonl"));
+    assert!(temp.file(".dent8/codex-memory.jsonl").exists());
+    assert!(
+        !temp.file(".dent8/memory.jsonl").exists(),
+        "agent profile should not initialize a second default log"
+    );
+    assert!(temp.file(".dent8/identity.env").exists());
+    assert!(temp.file(".dent8/grants/source_codex.grant.json").exists());
+    assert!(temp.file(".dent8/identities/source_codex.key").exists());
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_agent_profiles_match_documented_source_and_slug_paths() {
+    let profiles = [
+        (
+            "codex",
+            "source:codex",
+            "source_codex",
+            "codex-memory.jsonl",
+        ),
+        (
+            "claude-code",
+            "source:claude-code",
+            "source_claude-code",
+            "claude-memory.jsonl",
+        ),
+        (
+            "cursor",
+            "source:cursor",
+            "source_cursor",
+            "cursor-memory.jsonl",
+        ),
+        (
+            "grok-build",
+            "source:grok-build",
+            "source_grok-build",
+            "grok-build-memory.jsonl",
+        ),
+        (
+            "gemini",
+            "source:gemini",
+            "source_gemini",
+            "gemini-memory.jsonl",
+        ),
+        (
+            "cascade",
+            "source:cascade",
+            "source_cascade",
+            "cascade-memory.jsonl",
+        ),
+        (
+            "hecate",
+            "source:hecate",
+            "source_hecate",
+            "hecate-memory.jsonl",
+        ),
+    ];
+
+    for (agent, source, slug, log_name) in profiles {
+        let temp = TempDir::new();
+        let dir = temp.file(".dent8").to_string_lossy().into_owned();
+        let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+        let init = run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                agent,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        );
+        assert_success(&init, &format!("init --agent {agent}"));
+        let authority = fs::read_to_string(temp.file(".dent8/authority.json"))
+            .expect("authority registry from agent init");
+        assert!(
+            authority.contains(source),
+            "{agent} should grant {source}, got {authority}"
+        );
+        assert!(
+            temp.file(&format!(".dent8/grants/{slug}.grant.json"))
+                .exists(),
+            "{agent} should write documented grant slug {slug}"
+        );
+        assert!(
+            temp.file(&format!(".dent8/identities/{slug}.key")).exists(),
+            "{agent} should write documented source key slug {slug}"
+        );
+        let env = fs::read_to_string(temp.file(".dent8/env"))
+            .expect("generated profile env should be readable");
+        assert!(
+            env.contains(log_name),
+            "{agent} env should use documented log name {log_name}, got {env}"
+        );
+        assert!(
+            temp.file(&format!(".dent8/{log_name}")).exists(),
+            "{agent} should initialize documented file log {log_name}"
+        );
+    }
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_identity_preflights_existing_identity_before_writing_authority() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8");
+    fs::create_dir_all(&dir).expect("create dent8 dir");
+    fs::write(dir.join("identity.env"), "already here\n").expect("seed identity env");
+    let dir_arg = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir_arg,
+            "--source",
+            "source:codex",
+            "--identity",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_eq!(init.status.code(), Some(1));
+    assert!(stderr(&init).contains("refusing to overwrite identity bootstrap output"));
+    assert!(
+        !temp.file(".dent8/authority.json").exists(),
+        "identity preflight failure should not create authority registry"
+    );
+    assert!(
+        !temp.file(".dent8/memory.jsonl").exists(),
+        "identity preflight failure should not create a log"
+    );
+    assert!(
+        !temp.file(".dent8/env").exists(),
+        "identity preflight failure should not create env"
+    );
+}
+
+#[cfg(not(feature = "identity"))]
+#[test]
+fn init_identity_explains_feature_gate_without_identity_build() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let init = run_dent8(&["init", "--dir", &dir, "--identity"], &[]);
+    assert_eq!(init.status.code(), Some(1));
+    assert!(stderr(&init).contains("--features identity"));
+    assert!(
+        !temp.file(".dent8").exists(),
+        "feature-gated identity init should fail before creating config state"
     );
 }
 
@@ -377,6 +663,7 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
 
 #[cfg(feature = "identity")]
 #[test]
+#[allow(clippy::similar_names)]
 fn identity_bootstrap_can_share_one_explicit_issuer_across_projects() {
     let temp = TempDir::new();
     let project_a = temp.file("project-a");
@@ -472,6 +759,7 @@ fn identity_bootstrap_can_share_one_explicit_issuer_across_projects() {
 
 #[cfg(feature = "identity")]
 #[test]
+#[allow(clippy::similar_names, clippy::too_many_lines)]
 fn identity_bootstrap_project_specific_issuer_keys_isolate_trust_roots() {
     let temp = TempDir::new();
     let project_a = temp.file("project-a");

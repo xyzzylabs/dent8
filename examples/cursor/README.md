@@ -8,8 +8,8 @@ so Cursor can use dent8 as a project memory firewall while it works in a reposit
 From the target project:
 
 ```sh
-mkdir -p .cursor .dent8
-DENT8_AUTHORITY="$PWD/.dent8/authority.json" dent8 authority add source:cursor high
+mkdir -p .cursor
+dent8 init --agent cursor
 cp /path/to/dent8/examples/cursor/mcp.sample.json .cursor/mcp.json
 ```
 

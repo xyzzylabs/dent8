@@ -261,9 +261,10 @@ explicit (§10) that the stock binary uses a single-writer **dev** store; the op
 transactional Postgres backend (`PostgresEventStore`) is built, **DB-verified**, and **driven
 by the CLI/MCP** when `DENT8_STORE_URL` is set (a `--features postgres` build), each
 multi-event operation committed transactionally. The remaining productization step is
-operationalizing signed caller identity (the feature-gated primitive is built as
-`dent8 identity`; source→authority ceiling authz is `dent8 authority`) and an *operated*
-witness service (the signed-tree-head witness primitive is built — `dent8 witness`).
+operationalizing signed caller identity (the default CLI includes `dent8 init --identity`,
+`dent8 init --agent <profile>`, and `dent8 identity`; source→authority ceiling authz is
+`dent8 authority`) and an *operated* witness service (the signed-tree-head witness primitive is
+built — `dent8 witness`).
 
 ## 9. Evaluation
 

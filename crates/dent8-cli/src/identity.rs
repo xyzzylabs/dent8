@@ -72,6 +72,65 @@ struct WriteSignatureSource<'a> {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct BootstrapOutput {
+    pub(crate) issuer: String,
+    pub(crate) source: String,
+    pub(crate) max_authority: AuthorityLevel,
+    pub(crate) scope: String,
+    pub(crate) issuer_key_path: PathBuf,
+    pub(crate) trust_file: PathBuf,
+    pub(crate) grant_file: PathBuf,
+    pub(crate) source_key_path: PathBuf,
+    pub(crate) env_file: PathBuf,
+    bundle_dir: PathBuf,
+}
+
+impl BootstrapOutput {
+    pub(crate) fn message(&self) -> String {
+        format!(
+            "bootstrapped signed identity in {}\n  issuer: {} ({})\n  source: {} max={:?} scope={}\n  trust: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
+            self.bundle_dir.display(),
+            self.issuer,
+            self.issuer_key_path.display(),
+            self.source,
+            self.max_authority,
+            self.scope,
+            self.trust_file.display(),
+            self.grant_file.display(),
+            self.source_key_path.display(),
+            self.env_file.display(),
+            shell_quote(&path_string(&self.env_file)),
+            self.source,
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BootstrapPlan {
+    dir: PathBuf,
+    identities_dir: PathBuf,
+    grants_dir: PathBuf,
+    issuer_key_path: PathBuf,
+    source_key_path: PathBuf,
+    source_public_path: PathBuf,
+    trust_file: PathBuf,
+    grant_file: PathBuf,
+    env_file: PathBuf,
+}
+
+impl BootstrapPlan {
+    fn identity_outputs(&self) -> [&Path; 5] {
+        [
+            self.source_key_path.as_path(),
+            self.source_public_path.as_path(),
+            self.trust_file.as_path(),
+            self.grant_file.as_path(),
+            self.env_file.as_path(),
+        ]
+    }
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct DoctorLine {
     pub(crate) level: &'static str,
     pub(crate) message: String,
@@ -179,7 +238,7 @@ pub(crate) fn bootstrap(
     scope: &str,
     expires_at_ms: Option<i64>,
 ) -> i32 {
-    match bootstrap_inner(
+    match bootstrap_bundle(
         dir,
         source,
         issuer,
@@ -188,8 +247,8 @@ pub(crate) fn bootstrap(
         scope,
         expires_at_ms,
     ) {
-        Ok(message) => {
-            println!("{message}");
+        Ok(output) => {
+            println!("{}", output.message());
             0
         }
         Err(error) => {
@@ -502,7 +561,7 @@ pub(crate) fn grant_verify(path: &str) -> i32 {
     }
 }
 
-fn bootstrap_inner(
+pub(crate) fn bootstrap_bundle(
     dir: &str,
     source: &str,
     issuer: &str,
@@ -510,48 +569,19 @@ fn bootstrap_inner(
     max_authority: CliAuthority,
     scope: &str,
     expires_at_ms: Option<i64>,
-) -> Result<String, String> {
-    parse_source(source)?;
-    if issuer.trim().is_empty() {
-        return Err("identity issuer must not be empty".to_string());
-    }
-    if scope.trim().is_empty() {
-        return Err("identity grant scope must not be empty; use `*` for all subjects".to_string());
-    }
+) -> Result<BootstrapOutput, String> {
+    let plan = bootstrap_plan(dir, source, issuer, issuer_key, scope)?;
+    preflight_bootstrap_plan(&plan)?;
 
     let mut rollback = BootstrapRollback::default();
-    let dir = PathBuf::from(dir);
-    ensure_dir(&dir, &mut rollback)?;
-    let dir = dir
-        .canonicalize()
-        .map_err(|error| format!("cannot canonicalize {}: {error}", dir.display()))?;
-    let identities_dir = dir.join("identities");
-    let grants_dir = dir.join("grants");
-    ensure_dir(&identities_dir, &mut rollback)?;
-    ensure_dir(&grants_dir, &mut rollback)?;
+    ensure_dir(&plan.dir, &mut rollback)?;
+    ensure_dir(&plan.identities_dir, &mut rollback)?;
+    ensure_dir(&plan.grants_dir, &mut rollback)?;
 
-    let slug = source_slug(source);
-    let issuer_key_path = bootstrap_issuer_key_path(issuer_key, &dir)?;
-    let source_key_path = identities_dir.join(format!("{slug}.key"));
-    let source_public_path = public_key_path(&source_key_path);
-    let trust_file = dir.join("trust.json");
-    let grant_file = grants_dir.join(format!("{slug}.grant.json"));
-    let env_file = dir.join("identity.env");
-
-    for path in [
-        source_key_path.as_path(),
-        source_public_path.as_path(),
-        trust_file.as_path(),
-        grant_file.as_path(),
-        env_file.as_path(),
-    ] {
-        ensure_absent(path)?;
-    }
-
-    let issuer_key = load_or_create_issuer_key(&issuer_key_path, &mut rollback)?;
+    let issuer_key = load_or_create_issuer_key(&plan.issuer_key_path, &mut rollback)?;
     let source_key = generate_signing_key()?;
-    write_key_pair(&source_key_path, &source_key)?;
-    rollback.record_key_pair(&source_key_path);
+    write_key_pair(&plan.source_key_path, &source_key)?;
+    rollback.record_key_pair(&plan.source_key_path);
 
     let mut trust = TrustedIssuers::default();
     trust.issuers.insert(
@@ -560,8 +590,8 @@ fn bootstrap_inner(
             public_key: hex::encode(issuer_key.verifying_key().to_bytes()),
         },
     );
-    write_json_path(&trust_file, &trust)?;
-    rollback.record_file(&trust_file);
+    write_json_path(&plan.trust_file, &trust)?;
+    rollback.record_file(&plan.trust_file);
 
     let grant = SourceGrantPayload {
         version: 1,
@@ -573,8 +603,8 @@ fn bootstrap_inner(
         expires_at_ms,
     };
     let signature = hex::encode(issuer_key.sign(&framed(GRANT_DOMAIN, &grant)?).to_bytes());
-    write_json_path(&grant_file, &SignedSourceGrant { grant, signature })?;
-    rollback.record_file(&grant_file);
+    write_json_path(&plan.grant_file, &SignedSourceGrant { grant, signature })?;
+    rollback.record_file(&plan.grant_file);
 
     let env_contents = format!(
         "# dent8 signed source identity environment\n\
@@ -583,27 +613,92 @@ fn bootstrap_inner(
          DENT8_REQUIRE_IDENTITY=1\n\
          DENT8_GRANT={}\n\
          DENT8_IDENTITY_KEY={}\n",
-        shell_quote(&path_string(&env_file)),
-        shell_quote(&path_string(&trust_file)),
-        shell_quote(&path_string(&grant_file)),
-        shell_quote(&path_string(&source_key_path)),
+        shell_quote(&path_string(&plan.env_file)),
+        shell_quote(&path_string(&plan.trust_file)),
+        shell_quote(&path_string(&plan.grant_file)),
+        shell_quote(&path_string(&plan.source_key_path)),
     );
-    write_text_path(&env_file, &env_contents)?;
-    rollback.record_file(&env_file);
+    write_text_path(&plan.env_file, &env_contents)?;
+    rollback.record_file(&plan.env_file);
     rollback.commit();
 
-    Ok(format!(
-        "bootstrapped signed identity in {}\n  issuer: {issuer} ({})\n  source: {source} max={:?} scope={scope}\n  trust: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
-        dir.display(),
-        issuer_key_path.display(),
-        max_authority.level(),
-        trust_file.display(),
-        grant_file.display(),
-        source_key_path.display(),
-        env_file.display(),
-        shell_quote(&path_string(&env_file)),
-        source,
-    ))
+    Ok(BootstrapOutput {
+        issuer: issuer.to_string(),
+        source: source.to_string(),
+        max_authority: max_authority.level(),
+        scope: scope.to_string(),
+        issuer_key_path: plan.issuer_key_path,
+        trust_file: plan.trust_file,
+        grant_file: plan.grant_file,
+        source_key_path: plan.source_key_path,
+        env_file: plan.env_file,
+        bundle_dir: plan.dir,
+    })
+}
+
+pub(crate) fn preflight_bootstrap_bundle(
+    dir: &str,
+    source: &str,
+    issuer: &str,
+    issuer_key: Option<&str>,
+    scope: &str,
+) -> Result<(), String> {
+    let plan = bootstrap_plan(dir, source, issuer, issuer_key, scope)?;
+    preflight_bootstrap_plan(&plan)
+}
+
+fn bootstrap_plan(
+    dir: &str,
+    source: &str,
+    issuer: &str,
+    issuer_key: Option<&str>,
+    scope: &str,
+) -> Result<BootstrapPlan, String> {
+    parse_source(source)?;
+    if issuer.trim().is_empty() {
+        return Err("identity issuer must not be empty".to_string());
+    }
+    if scope.trim().is_empty() {
+        return Err("identity grant scope must not be empty; use `*` for all subjects".to_string());
+    }
+
+    let dir = absolute_dir_for_new(&PathBuf::from(dir))?;
+    let identities_dir = dir.join("identities");
+    let grants_dir = dir.join("grants");
+
+    let slug = source_slug(source);
+    let issuer_key_path = bootstrap_issuer_key_path(issuer_key, &dir)?;
+    let source_key_path = identities_dir.join(format!("{slug}.key"));
+    let source_public_path = public_key_path(&source_key_path);
+    let trust_file = dir.join("trust.json");
+    let grant_file = grants_dir.join(format!("{slug}.grant.json"));
+    let env_file = dir.join("identity.env");
+
+    Ok(BootstrapPlan {
+        dir,
+        identities_dir,
+        grants_dir,
+        issuer_key_path,
+        source_key_path,
+        source_public_path,
+        trust_file,
+        grant_file,
+        env_file,
+    })
+}
+
+fn preflight_bootstrap_plan(plan: &BootstrapPlan) -> Result<(), String> {
+    for path in [
+        plan.dir.as_path(),
+        plan.identities_dir.as_path(),
+        plan.grants_dir.as_path(),
+    ] {
+        ensure_dir_available(path)?;
+    }
+    for path in plan.identity_outputs() {
+        ensure_absent(path)?;
+    }
+    preflight_issuer_key(&plan.issuer_key_path)
 }
 
 fn keygen(out: &str, label: &str) -> i32 {
@@ -722,7 +817,21 @@ fn default_issuer_key_path() -> Result<PathBuf, String> {
     )
 }
 
+fn absolute_dir_for_new(path: &Path) -> Result<PathBuf, String> {
+    let candidate = absolute_candidate(path)?;
+    if candidate.exists() {
+        return candidate
+            .canonicalize()
+            .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()));
+    }
+    canonicalize_parent_for_new(&candidate)
+}
+
 fn absolute_path_for_new(path: &Path) -> Result<PathBuf, String> {
+    canonicalize_parent_for_new(&absolute_candidate(path)?)
+}
+
+fn absolute_candidate(path: &Path) -> Result<PathBuf, String> {
     let candidate = if path.is_absolute() {
         Ok(path.to_path_buf())
     } else {
@@ -730,15 +839,26 @@ fn absolute_path_for_new(path: &Path) -> Result<PathBuf, String> {
             .map(|cwd| cwd.join(path))
             .map_err(|error| format!("cannot resolve {}: {error}", path.display()))
     }?;
-    if let (Some(parent), Some(file_name)) = (candidate.parent(), candidate.file_name())
-        && parent.exists()
-    {
-        return parent
-            .canonicalize()
+    Ok(candidate)
+}
+
+fn canonicalize_parent_for_new(candidate: &Path) -> Result<PathBuf, String> {
+    if let (Some(parent), Some(file_name)) = (candidate.parent(), candidate.file_name()) {
+        return canonicalize_existing_prefix(parent)
             .map(|parent| parent.join(file_name))
             .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()));
     }
-    Ok(candidate)
+    Ok(candidate.to_path_buf())
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> Result<PathBuf, std::io::Error> {
+    if path.exists() {
+        return path.canonicalize();
+    }
+    if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
+        return canonicalize_existing_prefix(parent).map(|parent| parent.join(file_name));
+    }
+    Ok(path.to_path_buf())
 }
 
 fn load_or_create_issuer_key(
@@ -766,6 +886,35 @@ fn load_or_create_issuer_key(
     write_key_pair(path, &signing)?;
     rollback.record_key_pair(path);
     Ok(signing)
+}
+
+fn preflight_issuer_key(path: &Path) -> Result<(), String> {
+    if path.exists() {
+        let signing = load_signing_key(&path_string(path))?;
+        let public_path = public_key_path(path);
+        if public_path.exists() {
+            let actual = read_hex_file(&path_string(&public_path))?;
+            let expected = hex::encode(signing.verifying_key().to_bytes());
+            if actual != expected {
+                return Err(format!(
+                    "{} does not match issuer key {}",
+                    public_path.display(),
+                    path.display()
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    let public_path = public_key_path(path);
+    if public_path.exists() {
+        return Err(format!(
+            "{} exists but {} does not; refusing to pair a public key with a newly generated issuer key",
+            public_path.display(),
+            path.display()
+        ));
+    }
+    ensure_parent_available(path)
 }
 
 fn ensure_public_key_for_key(
@@ -831,6 +980,31 @@ fn ensure_dir(path: &Path, rollback: &mut BootstrapRollback) -> Result<(), Strin
         .map_err(|error| format!("cannot create {}: {error}", path.display()))?;
     rollback.record_dir(path);
     Ok(())
+}
+
+fn ensure_dir_available(path: &Path) -> Result<(), String> {
+    if path.exists() && !path.is_dir() {
+        return Err(format!("{} exists but is not a directory", path.display()));
+    }
+    Ok(())
+}
+
+fn ensure_parent_available(path: &Path) -> Result<(), String> {
+    let Some(mut cursor) = parent_dir(path) else {
+        return Ok(());
+    };
+    loop {
+        if cursor.exists() {
+            return ensure_dir_available(cursor);
+        }
+        let Some(parent) = parent_dir(cursor) else {
+            return Ok(());
+        };
+        if parent == cursor {
+            return Ok(());
+        }
+        cursor = parent;
+    }
 }
 
 fn parent_dir(path: &Path) -> Option<&Path> {

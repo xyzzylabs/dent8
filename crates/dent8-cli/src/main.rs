@@ -319,21 +319,88 @@ struct InitArgs {
     /// Directory for dent8's local project config.
     #[arg(long, default_value = ".dent8", value_name = "DIR")]
     dir: String,
+    /// Agent profile shortcut. Implies --identity and selects the default source id.
+    #[arg(long, value_enum, conflicts_with = "source")]
+    agent: Option<InitAgent>,
     /// Store profile to write into the env file.
     #[arg(long, value_enum, default_value = "file")]
     store: InitStore,
     /// Store URL for non-file backends.
     #[arg(long, value_name = "URL")]
     store_url: Option<String>,
-    /// Source to grant in the authority registry.
-    #[arg(long, default_value = "source:local", value_parser = parse_source)]
-    source: String,
+    /// Source to grant in the authority registry. Defaults from --agent, or source:local.
+    #[arg(long, value_parser = parse_source)]
+    source: Option<String>,
     /// Maximum authority for the granted source.
     #[arg(long, value_enum, default_value = "high")]
     authority: CliAuthority,
+    /// Also bootstrap signed source identity for this source.
+    #[arg(long)]
+    identity: bool,
+    /// Stable issuer name used inside the signed identity grant.
+    #[arg(long, default_value = "owner")]
+    issuer: String,
+    /// Operator issuer signing-key path. Defaults outside the project bundle.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
+    /// Signed identity subject scope: "*" or exact <kind>:<key>.
+    #[arg(long, default_value = "*", value_name = "SCOPE")]
+    identity_scope: String,
+    /// Optional signed identity expiration as Unix milliseconds.
+    #[arg(long, value_name = "MILLIS")]
+    identity_expires_at_ms: Option<i64>,
     /// Overwrite the generated env file if it already exists.
     #[arg(long)]
     force: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum InitAgent {
+    Codex,
+    ClaudeCode,
+    Cursor,
+    GrokBuild,
+    Gemini,
+    Cascade,
+    Hecate,
+}
+
+impl InitAgent {
+    fn source(self) -> &'static str {
+        match self {
+            Self::Codex => "source:codex",
+            Self::ClaudeCode => "source:claude-code",
+            Self::Cursor => "source:cursor",
+            Self::GrokBuild => "source:grok-build",
+            Self::Gemini => "source:gemini",
+            Self::Cascade => "source:cascade",
+            Self::Hecate => "source:hecate",
+        }
+    }
+
+    fn example_path(self) -> &'static str {
+        match self {
+            Self::Codex => "examples/codex/",
+            Self::ClaudeCode => "examples/claude-code/",
+            Self::Cursor => "examples/cursor/",
+            Self::GrokBuild => "examples/grok-build/",
+            Self::Gemini => "examples/gemini/",
+            Self::Cascade => "examples/cascade/",
+            Self::Hecate => "examples/hecate/",
+        }
+    }
+
+    fn file_log_name(self) -> &'static str {
+        match self {
+            Self::Codex => "codex-memory.jsonl",
+            Self::ClaudeCode => "claude-memory.jsonl",
+            Self::Cursor => "cursor-memory.jsonl",
+            Self::GrokBuild => "grok-build-memory.jsonl",
+            Self::Gemini => "gemini-memory.jsonl",
+            Self::Cascade => "cascade-memory.jsonl",
+            Self::Hecate => "hecate-memory.jsonl",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -1352,9 +1419,17 @@ fn cmd_init(args: &InitArgs) -> i32 {
 
 fn init_project(args: &InitArgs) -> Result<String, String> {
     let dir = std::path::PathBuf::from(&args.dir);
-    std::fs::create_dir_all(&dir)
-        .map_err(|error| format!("cannot create {}: {error}", args.dir))?;
     let dir = absolute_path(&dir)?;
+    let source = init_source(args);
+    let bootstrap_identity = args.identity || args.agent.is_some();
+    #[cfg(not(feature = "identity"))]
+    if bootstrap_identity {
+        return Err(
+            "`dent8 init --identity` requires signed source identity; default builds include it, \
+             or rebuild this binary with `--features identity`"
+                .to_string(),
+        );
+    }
     let authority_path = dir.join("authority.json");
     let env_path = dir.join("env");
     if env_path.exists() && !args.force {
@@ -1364,9 +1439,15 @@ fn init_project(args: &InitArgs) -> Result<String, String> {
         ));
     }
 
-    let (store_line, store_summary) = init_store_line(args.store, args.store_url.as_deref(), &dir)?;
+    preflight_identity(args, &dir, &source, bootstrap_identity)?;
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
+
+    let (store_line, store_summary) =
+        init_store_line(args.store, args.store_url.as_deref(), &dir, args.agent)?;
     if args.store == InitStore::File {
-        let log_path = dir.join("memory.jsonl");
+        let log_path = init_file_log_path(&dir, args.agent);
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1377,7 +1458,7 @@ fn init_project(args: &InitArgs) -> Result<String, String> {
     let authority_path_str = authority_path.to_string_lossy().into_owned();
     let mut registry = load_authority_registry_at(&authority_path_str, false)?.unwrap_or_default();
     registry.sources.insert(
-        args.source.clone(),
+        source.clone(),
         SourceGrant {
             max_authority: args.authority.level(),
             issuer: None,
@@ -1385,6 +1466,14 @@ fn init_project(args: &InitArgs) -> Result<String, String> {
         },
     );
     save_authority_registry_at(&authority_path_str, &registry)?;
+
+    let identity = init_identity(args, &dir, &source, bootstrap_identity)?;
+    let agent_summary = args.agent.map_or(String::new(), |agent| {
+        format!("\n  agent profile: {}", agent.example_path())
+    });
+    let agent_next = args.agent.map_or(String::new(), |agent| {
+        format!("\n\nAgent wiring:\n  see {}", agent.example_path())
+    });
 
     let env_contents = format!(
         "# dent8 local environment\n\
@@ -1398,24 +1487,116 @@ fn init_project(args: &InitArgs) -> Result<String, String> {
     write_atomic(&env_path.to_string_lossy(), &env_contents)?;
 
     Ok(format!(
-        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --write-check",
+        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
         dir.display(),
         authority_path.display(),
-        args.source,
+        source,
         args.authority.level(),
         env_path.display(),
+        identity.summary,
+        agent_summary,
         shell_quote(&env_path.to_string_lossy()),
+        identity.env_load,
+        source,
+        agent_next,
     ))
+}
+
+#[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
+fn preflight_identity(
+    args: &InitArgs,
+    dir: &std::path::Path,
+    source: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    #[cfg(feature = "identity")]
+    {
+        if enabled {
+            identity::preflight_bootstrap_bundle(
+                &dir.to_string_lossy(),
+                source,
+                &args.issuer,
+                args.issuer_key.as_deref(),
+                &args.identity_scope,
+            )?;
+        }
+        Ok(())
+    }
+    #[cfg(not(feature = "identity"))]
+    {
+        let _ = (args, dir, source, enabled);
+        Ok(())
+    }
+}
+
+struct InitIdentityOutput {
+    summary: String,
+    env_load: String,
+}
+
+#[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
+fn init_identity(
+    args: &InitArgs,
+    dir: &std::path::Path,
+    source: &str,
+    enabled: bool,
+) -> Result<InitIdentityOutput, String> {
+    #[cfg(feature = "identity")]
+    {
+        if !enabled {
+            return Ok(InitIdentityOutput {
+                summary: String::new(),
+                env_load: String::new(),
+            });
+        }
+        let identity = identity::bootstrap_bundle(
+            &dir.to_string_lossy(),
+            source,
+            &args.issuer,
+            args.issuer_key.as_deref(),
+            args.authority,
+            &args.identity_scope,
+            args.identity_expires_at_ms,
+        )?;
+        Ok(InitIdentityOutput {
+            summary: format!(
+                "\n  identity: {} (source key: {})\n  identity env: {}",
+                identity.grant_file.display(),
+                identity.source_key_path.display(),
+                identity.env_file.display(),
+            ),
+            env_load: format!(
+                "\n  . {}",
+                shell_quote(&identity.env_file.to_string_lossy())
+            ),
+        })
+    }
+    #[cfg(not(feature = "identity"))]
+    {
+        let _ = (args, dir, source, enabled);
+        Ok(InitIdentityOutput {
+            summary: String::new(),
+            env_load: String::new(),
+        })
+    }
+}
+
+fn init_source(args: &InitArgs) -> String {
+    args.source
+        .clone()
+        .or_else(|| args.agent.map(|agent| agent.source().to_string()))
+        .unwrap_or_else(|| "source:local".to_string())
 }
 
 fn init_store_line(
     store: InitStore,
     store_url: Option<&str>,
     dir: &std::path::Path,
+    agent: Option<InitAgent>,
 ) -> Result<(String, String), String> {
     match store {
         InitStore::File => {
-            let log = dir.join("memory.jsonl");
+            let log = init_file_log_path(dir, agent);
             let value = log.to_string_lossy();
             Ok((
                 format!("DENT8_LOG={}", shell_quote(&value)),
@@ -1444,6 +1625,10 @@ fn init_store_line(
             ))
         }
     }
+}
+
+fn init_file_log_path(dir: &std::path::Path, agent: Option<InitAgent>) -> std::path::PathBuf {
+    dir.join(agent.map_or("memory.jsonl", InitAgent::file_log_name))
 }
 
 fn absolute_path(path: &std::path::Path) -> Result<std::path::PathBuf, String> {

@@ -37,7 +37,24 @@ Add an opt-in signed source identity layer at the CLI/MCP write boundary.
 
 ## Commands
 
-The v0 CLI is behind `--features identity`:
+Signed source identity is included in the default CLI build. The secure onboarding path is:
+
+```sh
+dent8 init --agent codex
+set -a
+. .dent8/env
+. .dent8/identity.env
+set +a
+dent8 doctor --source source:codex --write-check
+```
+
+For a custom source id, use:
+
+```sh
+dent8 init --identity --source source:codex
+```
+
+Manual commands remain available:
 
 ```sh
 dent8 identity bootstrap --source source:codex

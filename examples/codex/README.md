@@ -5,6 +5,12 @@ Codex supports local stdio MCP servers through `config.toml`. dent8 exposes exac
 
 ## Installed binary
 
+From the target project:
+
+```sh
+dent8 init --agent codex
+```
+
 Add this to `~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`:
 
 ```toml
@@ -18,6 +24,10 @@ tool_timeout_sec = 60
 DENT8_LOG = "/abs/path/to/project/.dent8/codex-memory.jsonl"
 DENT8_AUTHORITY = "/abs/path/to/project/.dent8/authority.json"
 DENT8_REQUIRE_AUTHORITY = "1"
+DENT8_TRUST = "/abs/path/to/project/.dent8/trust.json"
+DENT8_REQUIRE_IDENTITY = "1"
+DENT8_GRANT = "/abs/path/to/project/.dent8/grants/source_codex.grant.json"
+DENT8_IDENTITY_KEY = "/abs/path/to/project/.dent8/identities/source_codex.key"
 ```
 
 ## From a dent8 checkout
@@ -36,15 +46,14 @@ tool_timeout_sec = 60
 DENT8_LOG = "/abs/path/to/project/.dent8/codex-memory.jsonl"
 DENT8_AUTHORITY = "/abs/path/to/project/.dent8/authority.json"
 DENT8_REQUIRE_AUTHORITY = "1"
+DENT8_TRUST = "/abs/path/to/project/.dent8/trust.json"
+DENT8_REQUIRE_IDENTITY = "1"
+DENT8_GRANT = "/abs/path/to/project/.dent8/grants/source_codex.grant.json"
+DENT8_IDENTITY_KEY = "/abs/path/to/project/.dent8/identities/source_codex.key"
 ```
 
-Before enabling fail-closed mode, create the registry:
-
-```sh
-mkdir -p /abs/path/to/project/.dent8
-DENT8_AUTHORITY=/abs/path/to/project/.dent8/authority.json \
-  dent8 authority add source:codex high
-```
+`dent8 init --agent codex` creates the profile log, authority registry, and signed source
+identity bundle referenced above. It keeps the issuer key outside `.dent8`.
 
 Then ask Codex to use dent8:
 

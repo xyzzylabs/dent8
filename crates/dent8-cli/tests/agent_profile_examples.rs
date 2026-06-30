@@ -28,6 +28,10 @@ fn gemini_and_cascade_mcp_samples_are_valid_and_use_distinct_logs() {
             "{agent} should keep a distinct dent8 log"
         );
         assert_eq!(server["env"]["DENT8_REQUIRE_AUTHORITY"], "1");
+        assert_eq!(server["env"]["DENT8_REQUIRE_IDENTITY"], "1");
+        assert!(server["env"]["DENT8_TRUST"].as_str().is_some());
+        assert!(server["env"]["DENT8_GRANT"].as_str().is_some());
+        assert!(server["env"]["DENT8_IDENTITY_KEY"].as_str().is_some());
     }
 }
 
@@ -67,4 +71,6 @@ fn vercel_ai_sdk_example_uses_dent8_mcp_and_source_id() {
     assert!(script.contains("mcpClient.tools()"));
     assert!(script.contains("stepCountIs(8)"));
     assert!(script.contains("source:vercel-ai-sdk"));
+    assert!(script.contains("DENT8_REQUIRE_IDENTITY"));
+    assert!(script.contains("source_vercel-ai-sdk.grant.json"));
 }

@@ -16,8 +16,9 @@ tamper-resistance, and an **asymmetric (publicly-verifiable) signed-tree-head an
 adapter — incl. the materialized projection/edge graph — is DB-verified against `postgres:16`,
 and with `DENT8_STORE_URL` the runnable surface uses it, each multi-event operation
 committed transactionally; the stock binary keeps the file dev store). Still gated on
-implementation: **identity operations** (the feature-gated signed identity primitive is built
-as `dent8 identity`; remaining work is key distribution/rotation and external signers), the
+implementation: **identity operations** (the signed identity primitive and secure init path are
+built as `dent8 init --identity`, `dent8 init --agent <profile>`, and `dent8 identity`;
+remaining work is key distribution/rotation and external signers), the
 official **`rmcp` SDK** (the v0 stdio server already does tools, resources, and JSON-RPC
 batches, and reads apply freshness), and a **published anchor cadence** (a witness that
 signs/publishes the head on its own infra).

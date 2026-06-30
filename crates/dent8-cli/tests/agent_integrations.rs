@@ -55,6 +55,8 @@ fn agent_example_configs_are_valid_and_use_distinct_sources() {
                 .contains(expected_log),
             "{agent} should keep a distinct dent8 log"
         );
+        assert_eq!(server["env"]["DENT8_REQUIRE_AUTHORITY"], "1");
+        assert_identity_env(agent, &server["env"]);
     }
 
     let hecate = serde_json::from_str::<Value>(include_str!(
@@ -71,6 +73,8 @@ fn agent_example_configs_are_valid_and_use_distinct_sources() {
             .expect("DENT8_LOG string")
             .contains("hecate-memory.jsonl")
     );
+    assert_eq!(server["env"]["DENT8_REQUIRE_AUTHORITY"], "1");
+    assert_identity_env("hecate", &server["env"]);
 
     let codex = include_str!("../../../examples/codex/config.sample.toml");
     assert!(codex.contains("[mcp_servers.dent8]"));
@@ -79,6 +83,16 @@ fn agent_example_configs_are_valid_and_use_distinct_sources() {
     assert!(codex.contains("DENT8_LOG = \"/abs/path/to/project/.dent8/codex-memory.jsonl\""));
     assert!(codex.contains("DENT8_AUTHORITY = \"/abs/path/to/project/.dent8/authority.json\""));
     assert!(codex.contains("DENT8_REQUIRE_AUTHORITY = \"1\""));
+    assert!(codex.contains("DENT8_TRUST = \"/abs/path/to/project/.dent8/trust.json\""));
+    assert!(codex.contains("DENT8_REQUIRE_IDENTITY = \"1\""));
+    assert!(
+        codex.contains(
+            "DENT8_GRANT = \"/abs/path/to/project/.dent8/grants/source_codex.grant.json\""
+        )
+    );
+    assert!(codex.contains(
+        "DENT8_IDENTITY_KEY = \"/abs/path/to/project/.dent8/identities/source_codex.key\""
+    ));
 
     let source_ids = [
         ("examples/codex/README.md", "source:codex"),
@@ -103,6 +117,31 @@ fn agent_example_configs_are_valid_and_use_distinct_sources() {
             "{path} should document the source id {source}"
         );
     }
+}
+
+fn assert_identity_env(agent: &str, env: &Value) {
+    assert_eq!(env["DENT8_REQUIRE_IDENTITY"], "1");
+    assert!(
+        env["DENT8_TRUST"]
+            .as_str()
+            .expect("DENT8_TRUST string")
+            .contains("trust.json"),
+        "{agent} should point at the signed identity trust registry"
+    );
+    assert!(
+        env["DENT8_GRANT"]
+            .as_str()
+            .expect("DENT8_GRANT string")
+            .contains(".grant.json"),
+        "{agent} should point at a signed source grant"
+    );
+    assert!(
+        env["DENT8_IDENTITY_KEY"]
+            .as_str()
+            .expect("DENT8_IDENTITY_KEY string")
+            .contains("identities/"),
+        "{agent} should point at a source identity key"
+    );
 }
 
 #[test]

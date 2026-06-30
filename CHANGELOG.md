@@ -29,15 +29,17 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   `DENT8_REQUIRE_AUTHORITY=1` to **fail closed** — a missing registry is an error, not
   permissive dev mode (the `authority` edit commands stay exempt so the registry can be
   bootstrapped).
-- **Signed source identity** (`dent8 identity`, `--features identity`): `identity bootstrap`
-  creates or reuses an operator issuer key outside the project bundle, then creates a local
-  source key, trust registry, grant, and `.dent8/identity.env`; the lower-level commands still
-  expose Ed25519 issuer/source key generation, trusted-issuer registry management, signed
-  source grants, grant verification, and write-boundary source-key possession checks for
-  CLI/MCP writes. Identity fails closed when configured without a matching feature build, when
-  identity material points at a missing trust registry, when the grant source/key/scope does not
-  match the write, or when the write exceeds the grant's authority ceiling
-  ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).
+- **Signed source identity** (`dent8 init --identity`, `dent8 init --agent <profile>`,
+  `dent8 identity`): included in the default CLI build. `init --identity` creates or reuses an
+  operator issuer key outside the project bundle, then creates a local source key, trust
+  registry, grant, and `.dent8/identity.env`; `init --agent` selects a known agent source id
+  (`codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, `hecate`) and implies
+  identity. The lower-level commands still expose Ed25519 issuer/source key generation,
+  trusted-issuer registry management, signed source grants, grant verification, and
+  write-boundary source-key possession checks for CLI/MCP writes. Identity fails closed when
+  configured in a `--no-default-features` build, when identity material points at a missing
+  trust registry, when the grant source/key/scope does not match the write, or when the write
+  exceeds the grant's authority ceiling ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).
 - **Witness** (`dent8 witness`, `--features witness`): Ed25519 signed tree heads with
   `keygen` / `sign` / `verify` / `head` / `serve` (cadence signer) to detect a history
   rewrite or rollback.
@@ -48,10 +50,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   on Postgres), `dent8 conflicts` (contested facts), and `dent8 eval` (the self-demonstrating
   adversarial benchmark: firewall vs a recency-only baseline).
 - **Adoption and CLI ergonomics**: `dent8 init` creates a project-local env file, authority
-  registry, and selected store profile; `dent8 doctor [--write-check]` diagnoses the binary,
-  store, authority, signed identity when configured, MCP availability, verification, and an
-  optional trusted write path. The CLI now uses `clap` with named write arguments, targeted
-  usage errors, global
+  registry, selected store profile, and optionally the signed identity bundle; `dent8 doctor
+  [--write-check]` diagnoses the binary, store, authority, signed identity when configured,
+  MCP availability, verification, and an optional trusted write path. The CLI now uses `clap`
+  with named write arguments, targeted usage errors, global
   `--color auto|always|never`, `--version`, and
   `dent8 completions <bash|elvish|fish|powershell|zsh>`.
 - **MCP server** (`dent8 mcp serve`): the full belief surface as stdio JSON-RPC tools +

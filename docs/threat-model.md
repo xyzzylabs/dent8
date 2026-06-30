@@ -78,10 +78,10 @@ So end-to-end firewall behavior *is* runnable — and the CLI/MCP run on `Postgr
 when `DENT8_STORE_URL` is set (a `--features postgres` build), with each multi-event
 operation committed in one transaction. The remaining gap is *productization*, not
 enforcement: an opt-in **authority ceiling** caps what each source may assert (`dent8
-authority`), and an opt-in **signed source identity** layer (`dent8 identity`, behind
-`--features identity`) proves source-key possession at the CLI/MCP boundary when a trust
-root is configured. The witness is a runnable *primitive* (`dent8 witness`) but not yet an
-*operated* service on separate infrastructure.
+authority`), and the stock CLI's **signed source identity** layer (`dent8 init --identity`,
+`dent8 init --agent <profile>`, or `dent8 identity`) proves source-key possession at the
+CLI/MCP boundary when a trust root is configured. The witness is a runnable *primitive*
+(`dent8 witness`) but not yet an *operated* service on separate infrastructure.
 See [STATUS.md](STATUS.md).
 
 ## Residual risks & honest limits
@@ -111,11 +111,12 @@ See [STATUS.md](STATUS.md).
 - **Source identity is proven only at the dent8 boundary.** The opt-in **authority registry**
   (`dent8 authority`) caps a stated `Authority` at the source's registered ceiling and
   *rejects* an over-ceiling write — so a low-trust source cannot mint `canonical` even by
-  passing it. The opt-in **signed source identity** layer (`dent8 identity`, feature-gated)
-  adds authn: a trusted issuer signs a grant binding source id -> source public key +
-  authority ceiling + optional subject scope/expiration, and each write proves possession of
-  the source private key before the candidate event reaches the firewall. This closes the
-  "copy a grant but not the key" and "claim to be `source:owner`" gap for CLI/MCP writes.
+  passing it. The stock CLI's **signed source identity** layer (`dent8 init --identity`,
+  `dent8 init --agent <profile>`, or `dent8 identity`) adds authn: a trusted issuer signs a
+  grant binding source id -> source public key + authority ceiling + optional subject
+  scope/expiration, and each write proves possession of the source private key before the
+  candidate event reaches the firewall. This closes the "copy a grant but not the key" and
+  "claim to be `source:owner`" gap for CLI/MCP writes.
   Residuals: a compromised source private key or same-OS-user process that can read the key
   can still impersonate the source; a compromised issuer can issue bad grants; direct DB
   writes or direct adapter calls bypass this boundary; and a shared MCP server can only prove

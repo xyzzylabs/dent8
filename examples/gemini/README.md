@@ -9,8 +9,8 @@ Gemini-native memory (`GEMINI.md` and `/memory`) as a projection or reminder sur
 From the target project:
 
 ```sh
-mkdir -p .gemini .dent8
-DENT8_AUTHORITY="$PWD/.dent8/authority.json" dent8 authority add source:gemini high
+mkdir -p .gemini
+dent8 init --agent gemini
 cp /path/to/dent8/examples/gemini/settings.sample.json .gemini/settings.json
 ```
 
@@ -27,6 +27,10 @@ gemini mcp add \
   -e DENT8_LOG="$PWD/.dent8/gemini-memory.jsonl" \
   -e DENT8_AUTHORITY="$PWD/.dent8/authority.json" \
   -e DENT8_REQUIRE_AUTHORITY=1 \
+  -e DENT8_TRUST="$PWD/.dent8/trust.json" \
+  -e DENT8_REQUIRE_IDENTITY=1 \
+  -e DENT8_GRANT="$PWD/.dent8/grants/source_gemini.grant.json" \
+  -e DENT8_IDENTITY_KEY="$PWD/.dent8/identities/source_gemini.key" \
   dent8 dent8 mcp serve
 ```
 

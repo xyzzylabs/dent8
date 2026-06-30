@@ -19,9 +19,8 @@ Grok Build also has a **native** config — `[mcp_servers.dent8]` in `~/.grok/co
 `grok mcp add dent8 --command dent8 --args "mcp serve"`.
 
 ```sh
-mkdir -p /abs/path/to/project/.dent8
-DENT8_AUTHORITY=/abs/path/to/project/.dent8/authority.json \
-  dent8 authority add source:grok-build high
+cd /abs/path/to/project
+dent8 init --agent grok-build
 ```
 
 ## Prompt Grok Build

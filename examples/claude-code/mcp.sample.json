@@ -6,7 +6,11 @@
       "env": {
         "DENT8_LOG": "${CLAUDE_PROJECT_DIR:-.}/.dent8/claude-memory.jsonl",
         "DENT8_AUTHORITY": "${CLAUDE_PROJECT_DIR:-.}/.dent8/authority.json",
-        "DENT8_REQUIRE_AUTHORITY": "1"
+        "DENT8_REQUIRE_AUTHORITY": "1",
+        "DENT8_TRUST": "${CLAUDE_PROJECT_DIR:-.}/.dent8/trust.json",
+        "DENT8_REQUIRE_IDENTITY": "1",
+        "DENT8_GRANT": "${CLAUDE_PROJECT_DIR:-.}/.dent8/grants/source_claude-code.grant.json",
+        "DENT8_IDENTITY_KEY": "${CLAUDE_PROJECT_DIR:-.}/.dent8/identities/source_claude-code.key"
       },
       "timeout": 60000
     }

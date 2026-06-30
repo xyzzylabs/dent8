@@ -25,6 +25,9 @@ import { resolve } from "node:path";
 const dent8Dir = resolve(".dent8");
 const dent8Log = resolve(dent8Dir, "vercel-ai-sdk-memory.jsonl");
 const dent8Authority = resolve(dent8Dir, "authority.json");
+const dent8Trust = resolve(dent8Dir, "trust.json");
+const dent8Grant = resolve(dent8Dir, "grants/source_vercel-ai-sdk.grant.json");
+const dent8IdentityKey = resolve(dent8Dir, "identities/source_vercel-ai-sdk.key");
 
 async function main(): Promise<void> {
   mkdirSync(dent8Dir, { recursive: true });
@@ -37,6 +40,11 @@ async function main(): Promise<void> {
         ...process.env,
         DENT8_LOG: dent8Log,
         DENT8_AUTHORITY: process.env.DENT8_AUTHORITY ?? dent8Authority,
+        DENT8_REQUIRE_AUTHORITY: process.env.DENT8_REQUIRE_AUTHORITY ?? "1",
+        DENT8_TRUST: process.env.DENT8_TRUST ?? dent8Trust,
+        DENT8_REQUIRE_IDENTITY: process.env.DENT8_REQUIRE_IDENTITY ?? "1",
+        DENT8_GRANT: process.env.DENT8_GRANT ?? dent8Grant,
+        DENT8_IDENTITY_KEY: process.env.DENT8_IDENTITY_KEY ?? dent8IdentityKey,
       } as Record<string, string>,
     }),
   });

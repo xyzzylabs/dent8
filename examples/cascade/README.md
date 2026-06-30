@@ -9,8 +9,7 @@ Cascade can use local MCP servers through its MCP config. dent8 exposes
 From the target project:
 
 ```sh
-mkdir -p .dent8
-DENT8_AUTHORITY="$PWD/.dent8/authority.json" dent8 authority add source:cascade high
+dent8 init --agent cascade
 ```
 
 Then merge [`mcp_config.sample.json`](mcp_config.sample.json) into Cascade's MCP config

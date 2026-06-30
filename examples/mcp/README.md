@@ -8,7 +8,12 @@ receipt.
 
 ## Wire it into an MCP client
 
-Add dent8 to your client's MCP server config (e.g. an agent's `mcpServers` block):
+Initialize a protected local profile, then add dent8 to your client's MCP server config (e.g.
+an agent's `mcpServers` block):
+
+```sh
+dent8 init --identity --source source:assistant
+```
 
 ```json
 {
@@ -16,7 +21,15 @@ Add dent8 to your client's MCP server config (e.g. an agent's `mcpServers` block
     "dent8": {
       "command": "dent8",
       "args": ["mcp", "serve"],
-      "env": { "DENT8_LOG": "/abs/path/to/agent-memory.jsonl" }
+      "env": {
+        "DENT8_LOG": "/abs/path/to/project/.dent8/agent-memory.jsonl",
+        "DENT8_AUTHORITY": "/abs/path/to/project/.dent8/authority.json",
+        "DENT8_REQUIRE_AUTHORITY": "1",
+        "DENT8_TRUST": "/abs/path/to/project/.dent8/trust.json",
+        "DENT8_REQUIRE_IDENTITY": "1",
+        "DENT8_GRANT": "/abs/path/to/project/.dent8/grants/source_assistant.grant.json",
+        "DENT8_IDENTITY_KEY": "/abs/path/to/project/.dent8/identities/source_assistant.key"
+      }
     }
   }
 }
@@ -27,8 +40,7 @@ The agent then gets these tools — `list_facts`, `verify`, `conflicts`, `assert
 `replay` — plus readable `dent8://{kind}/{key}/{predicate}` resources. A rejected write
 comes back as a tool **error with the reason**, so the agent learns *why* (e.g.
 "repo.database requires authority High, got Low"). For an operational backend, set
-`DENT8_STORE_URL` and run a `--features postgres` (or `--features sqlite`) build; to cap what a
-source may assert, configure `dent8 authority`.
+`DENT8_STORE_URL` and run a `--features postgres` (or `--features sqlite`) build.
 
 Client-specific examples:
 

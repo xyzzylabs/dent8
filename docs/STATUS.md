@@ -18,12 +18,17 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `branch.status` fact goes stale on its **registered default TTL**; and `explain` returns
   an integrity receipt (value, lifecycle, authority, freshness, evidence, supersession,
   contradiction, replay position, `event_hash`, chain-verified).
-- **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]`** —
+- **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
+  [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]`** —
   bootstraps an adoptable local setup: creates the dent8 config directory, writes an
   authority registry granting a chosen source (default `source:local` / High), creates a
   shell-loadable env file (`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`, and either
   `DENT8_LOG` or `DENT8_STORE_URL`), and initializes the file dev log for the default file
-  store. It refuses to rewrite the env file unless `--force` is passed.
+  store (`--agent` profiles use the matching per-agent log name shown in `examples/`). With
+  `--identity`, it also creates a signed source identity bundle and `.dent8/identity.env`;
+  `--agent` selects the source id for a known agent and implies `--identity`. It refuses to
+  rewrite the env file unless `--force` is passed and refuses to overwrite existing identity
+  key/grant material.
 - **`dent8 doctor [--write-check]`** — diagnoses the current setup: binary path, selected
   store, authority registry/grant, signed identity configuration when present, `verify`, and
   MCP availability. By default it is read-only; with `--write-check`, it runs an explicit
@@ -148,21 +153,22 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   boundary. The ceiling caps *what a source may claim*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary.
 - **`dent8 identity bootstrap | issuer-keygen | agent-keygen | trust-add | trust-list |
-  grant-issue | grant-verify`** — the **signed source identity layer (authn)**, behind
-  `--features identity`. `bootstrap` is the happy path: it creates or reuses an operator issuer
-  key outside the project/agent bundle, then creates a source key, trust registry, grant, and
-  shell-loadable `.dent8/identity.env` for one source. The lower level commands remain
-  available for custom paths, rotation, expiration, and exact subject scopes. This is the
-  non-bearer-token form: an operator-held issuer key signs a grant that
+  grant-issue | grant-verify`** — the **signed source identity layer (authn)**, included in
+  the default CLI build. `init --identity` / `init --agent <profile>` are the happy path;
+  `bootstrap` remains the manual path: it creates or reuses an operator issuer key outside the
+  project/agent bundle, then creates a source key, trust registry, grant, and shell-loadable
+  `.dent8/identity.env` for one source. The lower level commands remain available for custom
+  paths, rotation, expiration, and exact subject scopes. This is the non-bearer-token form: an
+  operator-held issuer key signs a grant that
   binds `source` -> source public key + max authority + optional subject scope/expiration, and
   each write verifies the grant plus source-key possession before the candidate event reaches
   the firewall. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
   `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`;
-  otherwise local dev mode stays permissive. A binary without `--features identity` fails
-  closed with a build hint if identity is configured. Limits: source keys are local files
-  (`0600` required on Unix), so this distinguishes honestly configured agents on one machine
-  but is not a sandbox against malware or another process running as the same OS user; direct
-  DB/adapter writes still bypass the CLI/MCP boundary. See
+  otherwise local dev mode stays permissive. A `--no-default-features` binary fails closed with
+  a build hint if identity is configured. Limits: source keys are local files (`0600` required
+  on Unix), so this distinguishes honestly configured agents on one machine but is not a
+  sandbox against malware or another process running as the same OS user; direct DB/adapter
+  writes still bypass the CLI/MCP boundary. See
   [ADR 0012](decisions/0012-signed-source-identity.md).
 - **`dent8 witness keygen | sign | verify | head | serve`** — the **witness** (behind
   `--features witness`), built on the Ed25519 signed tree head. `keygen` writes a keypair
