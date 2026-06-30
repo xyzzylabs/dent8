@@ -42,7 +42,7 @@ duckdb -c "SELECT sequence, kind, value, authority, source FROM 'audit.parquet'
 duckdb -c "COPY (SELECT * FROM 'audit.parquet') TO 'audit.json' (FORMAT json)"
 ```
 
-The export is backend-aware: with `DENT8_DATABASE_URL` set (and a `--features postgres,export`
+The export is backend-aware: with `DENT8_STORE_URL` set (and a `--features postgres,export`
 build) it snapshots the Postgres log instead of the file.
 
 ## Run the worked example
