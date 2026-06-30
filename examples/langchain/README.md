@@ -39,6 +39,32 @@ A rejected write comes back as a tool **error with the reason** (e.g. "repo.data
 authority High, got Low"), so the model learns *why* instead of silently overwriting trusted
 memory.
 
+## LangChain.js (TypeScript)
+
+[`dent8_memory_agent.ts`](dent8_memory_agent.ts) is the same agent in TypeScript, using
+[`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-mcp-adapters)
+— the JS twin of the Python adapter:
+
+```ts
+import { MultiServerMCPClient } from "@langchain/mcp-adapters";
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
+import { ChatOpenAI } from "@langchain/openai";
+
+const client = new MultiServerMCPClient({
+  mcpServers: {
+    dent8: { transport: "stdio", command: "dent8", args: ["mcp", "serve"] },
+  },
+});
+const tools = await client.getTools();      // dent8's firewall tools, as LangChain tools
+const agent = createReactAgent({ llm: new ChatOpenAI({ model: "gpt-4o-mini" }), tools });
+```
+
+```sh
+npm i @langchain/mcp-adapters @langchain/langgraph @langchain/openai
+export OPENAI_API_KEY=...          # any LangChain-supported model works
+npx tsx dent8_memory_agent.ts
+```
+
 ## Other frameworks
 
 The same `dent8 mcp serve` server is framework- and language-agnostic — any MCP client works.
