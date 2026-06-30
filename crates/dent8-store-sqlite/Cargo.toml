@@ -1,0 +1,31 @@
+[package]
+name = "dent8-store-sqlite"
+description = "Embedded SQLite adapter for the dent8 event log, implementing AsyncEventStore."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "dent8_store_sqlite"
+path = "src/lib.rs"
+
+[dependencies]
+dent8-core = { path = "../dent8-core" }
+dent8-store = { path = "../dent8-store", features = ["async-store"] }
+serde_json = "1"
+# Embedded SQLite via sqlx (bundled libsqlite3 — no server, no system dependency). The whole
+# crate is the adapter, so sqlx is a direct dep (unlike Postgres, which gates it for a
+# schema-only mode).
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio",
+    "sqlite",
+] }
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

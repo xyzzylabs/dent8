@@ -9,7 +9,7 @@ binary needs none of them (it uses a local file log).
 | Variable | Used by | Default | Purpose |
 |---|---|---|---|
 | `DENT8_LOG` | CLI / MCP (file backend) | `./dent8-log.jsonl` | Path to the JSON-lines dev-store log. |
-| `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | *(unset → file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`postgres://…` needs `--features postgres`). When set, reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
+| `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | *(unset → file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`postgres://…` needs `--features postgres`; `sqlite://…` needs `--features sqlite`). When set, reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
 | `DENT8_AUTHORITY` | `dent8 authority` + every write | `./dent8-authority.json` | Path to the source→authority **ceiling** registry. Enforcement is **opt-in**: it activates only once this file exists (created by `dent8 authority add`); then it is deny-by-default. |
 | `DENT8_REQUIRE_AUTHORITY` | every write | *(unset / false)* | Fail-closed deployment guard. When true (`1`, `true`, `yes`, or `on`), a missing authority registry is an error instead of permissive dev mode. |
 | `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
@@ -26,15 +26,17 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 |---|---|---|
 | *(none)* | the full firewall + lifecycle over the **file dev store**, plus `eval`, `verify`, `conflicts`, `authority`, MCP | yes |
 | `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by a `postgres://` `DENT8_STORE_URL` | no |
+| `sqlite` | the embedded **SQLite backend** (sqlx + bundled libsqlite3, no server), selected by a `sqlite://` `DENT8_STORE_URL` | no |
 | `witness` | the `dent8 witness` Ed25519 signed-tree-head commands | no |
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
 ```sh
 cargo build -p dent8-cli                                    # stock: file store only
 cargo build -p dent8-cli --features postgres                # + Postgres backend
+cargo build -p dent8-cli --features sqlite                  # + embedded SQLite backend
 cargo build -p dent8-cli --features witness                 # + witness
 cargo build -p dent8-cli --features export                  # + Parquet export for DuckDB
-cargo build -p dent8-cli --features postgres,witness,export # all
+cargo build -p dent8-cli --features postgres,sqlite,witness,export # all
 ```
 
 Off by default so the stock binary stays free of the async sqlx and signature stacks. The

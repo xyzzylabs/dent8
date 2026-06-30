@@ -6,6 +6,7 @@ members = [
     "crates/dent8-export",
     "crates/dent8-store",
     "crates/dent8-store-postgres",
+    "crates/dent8-store-sqlite",
 ]
 resolver = "3"
 

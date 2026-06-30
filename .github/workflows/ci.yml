@@ -31,6 +31,10 @@ jobs:
       - run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
       # The CLI's Parquet export lane (arrow/parquet) is feature-gated; lint + test.
       - run: cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
+      # The embedded SQLite backend (sqlx) — the second async backend; lint + test (it runs
+      # in-memory, no server needed, so its tests run in the default `cargo test --workspace`).
+      - run: cargo clippy -p dent8-store-sqlite --all-targets -- -D warnings
+      - run: cargo clippy -p dent8-cli --features sqlite --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo test -p dent8-core --features signed-anchor
       - run: cargo test -p dent8-cli --features witness

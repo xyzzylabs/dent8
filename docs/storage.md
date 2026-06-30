@@ -30,9 +30,13 @@ backend stores bytes; the *meaning* lives in `dent8-core`.
 > file/in-memory store, and a feature-gated **`AsyncEventStore`** (`async_trait(?Send)`,
 > carrying `append_many` as the atomic primitive) for async backends — bridged at the call edge
 > with `block_on`, not unified (the file store is genuinely sync I/O). Both share the firewall
-> via the pure `arbitrate_events`, so they cannot diverge. `PostgresEventStore` implements
-> `AsyncEventStore`, and the CLI holds a `Box<dyn AsyncEventStore>` chosen by URL scheme, so a
-> second backend is one `connect_backend` arm. See the Postgres-adapter section below.
+> via the pure `arbitrate_events`, so they cannot diverge. `PostgresEventStore` and
+> `SqliteEventStore` both implement `AsyncEventStore`, and the CLI holds a
+> `Box<dyn AsyncEventStore>` chosen by URL scheme — so adding a backend is one `connect_backend`
+> arm. **`dent8-store-sqlite`** is that second backend (embedded, `sqlite://…`), built precisely
+> to prove the boundary holds: it has *different* primitives (no advisory lock — SQLite
+> serializes writers itself; TEXT not JSONB) yet the same firewall + hash chain. See the
+> Postgres-adapter section below.
 
 ## What the log must guarantee
 

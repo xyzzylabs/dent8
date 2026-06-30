@@ -15,6 +15,8 @@ path = "src/main.rs"
 dent8-core = { path = "../dent8-core" }
 dent8-store = { path = "../dent8-store" }
 dent8-store-postgres = { path = "../dent8-store-postgres" }
+# Opt-in: the embedded SQLite backend (sqlx + bundled libsqlite3), selected by a sqlite:// URL.
+dent8-store-sqlite = { path = "../dent8-store-sqlite", optional = true }
 # Pure logic over core/store (no extra heavy deps) — powers the self-demonstrating
 # `dent8 eval` benchmark.
 dent8-evals = { path = "../dent8-evals" }
@@ -39,6 +41,7 @@ dent8-export = { path = "../dent8-export", optional = true }
 # feature (e.g. `postgres`) turns it on; selection is by URL scheme at runtime.
 async-store = ["dent8-store/async-store", "dep:tokio"]
 postgres = ["dent8-store-postgres/adapter", "async-store"]
+sqlite = ["dep:dent8-store-sqlite", "async-store"]
 witness = ["dent8-core/signed-anchor", "dep:ed25519-dalek", "dep:getrandom", "dep:hex"]
 export = ["dep:dent8-export"]
 

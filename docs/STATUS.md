@@ -272,10 +272,13 @@ subject+predicate.
   (`append_many`). Both the *adapter* **and the CLI-over-Postgres path** are **CI-verified**
   against live Postgres (the gated `postgres` job runs the adapter tests *and* a live
   `assert → supersede → explain → verify` end-to-end). The stock binary keeps the file dev
-  store (sqlx is opt-in). The async side is now a backend-agnostic **`AsyncEventStore`** trait
-  (`?Send`, with atomic `append_many`) that `PostgresEventStore` implements; the CLI's
-  `connect_backend` dispatches by URL scheme into a `Box<dyn AsyncEventStore>`, so a second
-  async backend is a localized addition, not a CLI rewrite.
+  store (sqlx is opt-in). The async side is a backend-agnostic **`AsyncEventStore`** trait
+  (`?Send`, with atomic `append_many`) that both `PostgresEventStore` and **`SqliteEventStore`**
+  implement; the CLI's `connect_backend` dispatches by URL scheme into a
+  `Box<dyn AsyncEventStore>`. The **embedded SQLite backend** (`dent8-store-sqlite`,
+  `--features sqlite`, a `sqlite://` URL) is **runnable + tested** — assert/supersede/explain/verify
+  run end-to-end over it (it runs in-memory, so its tests run in plain `cargo test`, no server),
+  proving the boundary is genuinely backend-agnostic.
   What remains *design-only*: **cryptographic caller identity**
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
   is calling is still asserted, not proven by a signed token), a richer per-column event

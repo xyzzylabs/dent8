@@ -1247,9 +1247,20 @@ async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventSto
                 .map_err(|error| error.to_string())?;
             Ok(Box::new(store))
         }
+        #[cfg(feature = "sqlite")]
+        "sqlite" => {
+            use dent8_store_sqlite::SqliteEventStore;
+            let store = SqliteEventStore::connect(url)
+                .await
+                .map_err(|error| error.to_string())?;
+            dent8_store::AsyncEventStore::migrate(&store)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(Box::new(store))
+        }
         _ => Err(format!(
             "unsupported store URL `{url}`: no matching backend in this build \
-             (a postgres:// URL needs a `--features postgres` build)"
+             (postgres:// needs `--features postgres`, sqlite:// needs `--features sqlite`)"
         )),
     }
 }

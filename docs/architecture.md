@@ -24,8 +24,9 @@ The durable storage design is the append-only event log, its projection, the edg
 dent8/
   crates/
     dent8-core/            # claim-event model, lifecycle state machine, invariants
-    dent8-store/           # store traits, replay boundary, invariant result types
-    dent8-store-postgres/  # Postgres migrations and adapter implementation
+    dent8-store/           # store traits (sync EventStore + async AsyncEventStore), replay boundary
+    dent8-store-postgres/  # Postgres migrations and adapter (AsyncEventStore)
+    dent8-store-sqlite/    # embedded SQLite adapter (AsyncEventStore) — the second backend
     dent8-cli/             # CLI commands for schema, replay, explain, MCP
     dent8-evals/           # adversarial corpus behind the self-demonstrating `dent8 eval`
     dent8-export/          # Parquet export for DuckDB analysis (opt-in, `--features export`)
