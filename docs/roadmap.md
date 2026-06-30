@@ -34,10 +34,13 @@ What remains to make it a *product*, not a demo:
   graph) — the `DATABASE_URL`-gated tests pass against a live `postgres:16`. Sharing the pure
   `arbitrate_events` means the firewall decision is the same tested code on both backends.
   The CLI/MCP **run on it** (`DENT8_STORE_URL`, a `--features postgres` build), each
-  multi-event operation committed transactionally (`append_many`). What remains for a
-  multi-user product is cryptographic caller identity (an authority *ceiling* per source is
-  built — `dent8 authority`) and an *operated* witness service (the signed-tree-head witness
-  *primitive* is built and runnable — `dent8 witness`).
+  multi-event operation committed transactionally (`append_many`). A **second** async backend —
+  embedded **SQLite** (`dent8-store-sqlite`, `--features sqlite`, a `sqlite://` URL) — implements
+  the same `AsyncEventStore` (serializing writers with `BEGIN IMMEDIATE` + WAL + `busy_timeout`),
+  so adding a backend is one `connect_backend` arm and the boundary is proven backend-agnostic.
+  What remains for a multi-user product is cryptographic caller identity (an authority *ceiling*
+  per source is built — `dent8 authority`) and an *operated* witness service (the signed-tree-head
+  witness *primitive* is built and runnable — `dent8 witness`).
 - `assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`
   are built (retract authority-gated per [ADR 0008](decisions/0008-retraction-authority.md);
   contradict + uniqueness-vs-contestation per [ADR 0009](decisions/0009-uniqueness-and-contestation.md);
@@ -53,8 +56,9 @@ What remains to make it a *product*, not a demo:
   Remaining eval work:
   property tests (`proptest`), fuzzing (`cargo-fuzz`), and golden replay fixtures.
 
-Closing the remaining gap — *operational* persistence (Postgres) — turns the tool into a
-product.
+Operational persistence is no longer the gap — it is **built and runnable on two backends**
+(Postgres and embedded SQLite, behind the `AsyncEventStore` boundary). The remaining gap is
+*productization*: cryptographic caller identity (authn) and an *operated* witness service.
 
 ## 0. Core fold work (mostly done — arbitration, LFI, freshness, policy replay landed)
 

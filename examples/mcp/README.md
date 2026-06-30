@@ -26,7 +26,7 @@ The agent then gets these tools — `list_facts`, `verify`, `conflicts`, `assert
 `supersede`, `retract`, `contradict`, `reinforce`, `expire`, `derive`, `explain`,
 `replay` — plus readable `dent8://{kind}/{key}/{predicate}` resources. A rejected write
 comes back as a tool **error with the reason**, so the agent learns *why* (e.g.
-"repo.database requires authority High, got Low"). For the operational backend, set
+"repo.database requires authority High, got Low"). For an operational backend, set
 `DENT8_STORE_URL` and run a `--features postgres` (or `--features sqlite`) build; to cap what a
 source may assert, configure `dent8 authority`.
 

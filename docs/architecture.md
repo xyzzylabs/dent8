@@ -16,7 +16,7 @@ The integrity semantics behind these surfaces have a formal identity — dent8 i
 
 ## Storage
 
-The durable storage design is the append-only event log, its projection, the edge graph, and a tamper-evident hash chain — expressed against the `EventStore` trait. **Postgres is the first adapter that realizes it, not the architecture.** The full design (backend-agnostic event log + Postgres adapter + canonicalization) lives in [storage.md](storage.md); the decision to start Postgres-first (and not SQLite) is [ADR 0001](decisions/0001-postgres-first.md). DuckDB and Parquet are an **export-only** analytical lane that consumes *exported* event streams, never runtime writes — built as `dent8-export` / `dent8 export` (see [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
+The durable storage design is the append-only event log, its projection, the edge graph, and a tamper-evident hash chain — expressed against the `EventStore` / `AsyncEventStore` traits. **Postgres and embedded SQLite are adapters that realize it, not the architecture** — both implement the async boundary and share the same firewall and hash chain. The full design (backend-agnostic event log + adapters + canonicalization) lives in [storage.md](storage.md); the original Postgres-first choice is [ADR 0001](decisions/0001-postgres-first.md), with the SQLite backend added later as the second adapter that proves the boundary holds. DuckDB and Parquet are an **export-only** analytical lane that consumes *exported* event streams, never runtime writes — built as `dent8-export` / `dent8 export` (see [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 
 ## Rust Workspace
 

@@ -2,13 +2,14 @@
 
 The durable design in dent8 is not "Postgres" — it is the **append-only event log
 with a derived projection, an edge graph, and a tamper-evident hash chain**. That
-design is expressed against the `EventStore` trait in
+design is expressed against the `EventStore` / `AsyncEventStore` traits in
 [`crates/dent8-store/src/lib.rs`](../crates/dent8-store/src/lib.rs); Postgres is the
-*first adapter* that realizes it, not the architecture itself. This document
-describes the backend-agnostic design first, then the Postgres adapter as a
-subordinate section. The *decision* to start with Postgres (and not SQLite) lives in
-[ADR 0001](decisions/0001-postgres-first.md); the canonicalization/hash-chain
-decision in [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md).
+*first adapter* that realizes it, and embedded **SQLite** the second — neither is the
+architecture itself. This document describes the backend-agnostic design first, then
+the Postgres adapter as a subordinate section. The original *decision* to start with
+Postgres (rather than SQLite) lives in [ADR 0001](decisions/0001-postgres-first.md) —
+SQLite was added later as the second adapter; the canonicalization/hash-chain decision
+in [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md).
 
 ## The storage boundary
 

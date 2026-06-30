@@ -76,7 +76,8 @@ source of truth for what is built.** In short:
   `dent8 authority` / `dent8 witness` (the latter behind
   `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
-  non-transactional) — the *operational* backend is Postgres (M2b). `dent8 mcp serve` exposes
+  non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
+  SQLite**, selected by `DENT8_STORE_URL` (M2b). `dent8 mcp serve` exposes
   the full belief surface plus read/audit tools to agents over MCP (stdio JSON-RPC), through
   the same firewall — see [examples/mcp/](examples/mcp/), [examples/codex/](examples/codex/),
   [examples/claude-code/](examples/claude-code/), [examples/gemini/](examples/gemini/),
@@ -124,14 +125,17 @@ separate infrastructure. The [Roadmap](docs/roadmap.md) and
 
 ## Initial Shape
 
-This repository starts Postgres-first. Postgres is the operational source of truth for append-only claim events, projections, audit queries, and future multi-user use. DuckDB and Parquet are an **export-only** analytical lane — built as `dent8 export` (Parquet, queried directly by DuckDB) for replay, forensic inspection, and benchmark analysis, never a runtime write store.
+The durable design is a backend-agnostic append-only event log (the `EventStore` / `AsyncEventStore` traits), not a database choice. Postgres was the first operational adapter — the source of truth for append-only claim events, projections, audit queries, and multi-user use — and an **embedded SQLite** backend is the second; both are selected by `DENT8_STORE_URL` and share the same firewall and hash chain. DuckDB and Parquet are an **export-only** analytical lane — built as `dent8 export` (Parquet, queried directly by DuckDB) for replay, forensic inspection, and benchmark analysis, never a runtime write store.
 
 Workspace crates:
 
 - `dent8-core`: typed domain model, claim-event state machine, invariants.
-- `dent8-store`: storage and replay traits shared by backends.
-- `dent8-store-postgres`: Postgres schema and migration boundary.
+- `dent8-store`: storage and replay traits (`EventStore` + async `AsyncEventStore`) shared by backends.
+- `dent8-store-postgres`: Postgres adapter, schema, and migration boundary.
+- `dent8-store-sqlite`: embedded SQLite adapter (the second `AsyncEventStore` backend).
 - `dent8-cli`: operator and developer CLI surface.
+- `dent8-evals`: adversarial corpus behind the self-demonstrating `dent8 eval`.
+- `dent8-export`: Parquet export for offline DuckDB analysis (opt-in, `--features export`).
 
 Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 

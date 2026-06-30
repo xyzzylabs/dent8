@@ -4,7 +4,11 @@ Date: 2026-06-26
 
 ## Status
 
-Accepted.
+Accepted. **Updated 2026-06-30:** the Postgres-first decision held — Postgres was the first
+adapter. An embedded **SQLite** backend was *later* added as a second adapter behind the
+`AsyncEventStore` boundary (see [storage.md](../storage.md)); this ADR records the original
+first-backend choice, not a standing exclusion of SQLite. "SQLite is not part of the **initial**
+runtime plan" below should be read in that historical context.
 
 ## Context
 

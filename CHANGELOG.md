@@ -20,9 +20,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   check, the canonical-contradiction hard-alarm, and per-predicate policy (the coding-agent
   registry). Runnable as `assert` / `supersede` / `retract` / `contradict` / `reinforce` /
   `expire` / `explain` / `replay`.
-- **Persistence on either backend**: a local file dev store (default) or the **DB-verified
-  transactional Postgres backend** (`--features postgres`, `DENT8_DATABASE_URL`), with each
-  multi-event operation committed atomically and concurrent CLI writers auto-retried.
+- **Persistence on a pluggable backend**: a local file dev store (default), or a transactional
+  async backend selected by `DENT8_STORE_URL` — the **DB-verified Postgres backend**
+  (`--features postgres`) or the **embedded SQLite backend** (`--features sqlite`) — each
+  committing multi-event operations atomically with concurrent CLI writers auto-retried.
 - **Authority layer** (`dent8 authority`): an opt-in source→authority *ceiling* that rejects
   an over-ceiling write before the firewall (deny-by-default once a registry exists). Set
   `DENT8_REQUIRE_AUTHORITY=1` to **fail closed** — a missing registry is an error, not
