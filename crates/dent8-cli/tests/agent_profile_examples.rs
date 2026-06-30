@@ -53,3 +53,18 @@ fn gemini_and_cascade_docs_name_their_source_ids() {
         );
     }
 }
+
+#[test]
+fn vercel_ai_sdk_example_uses_dent8_mcp_and_source_id() {
+    let readme = include_str!("../../../examples/vercel-ai-sdk/README.md");
+    let script = include_str!("../../../examples/vercel-ai-sdk/dent8_memory_agent.ts");
+
+    assert!(readme.contains("@ai-sdk/mcp"));
+    assert!(readme.contains("source:vercel-ai-sdk"));
+    assert!(script.contains("createMCPClient"));
+    assert!(script.contains("StdioClientTransport"));
+    assert!(script.contains("args: [\"mcp\", \"serve\"]"));
+    assert!(script.contains("mcpClient.tools()"));
+    assert!(script.contains("stepCountIs(8)"));
+    assert!(script.contains("source:vercel-ai-sdk"));
+}

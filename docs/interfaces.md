@@ -75,8 +75,10 @@ Client setup examples live under [`examples/mcp/`](../examples/mcp/):
 [`Codex`](../examples/codex/), [`Claude Code`](../examples/claude-code/),
 [`Gemini CLI`](../examples/gemini/), [`Devin/Cascade`](../examples/cascade/),
 [`Cursor`](../examples/cursor/), [`Grok Build`](../examples/grok-build/), and
-[`Hecate`](../examples/hecate/). These are integration profiles, not separate memory
-semantics; every write still enters through the shared firewall path.
+[`Hecate`](../examples/hecate/). Framework examples live under
+[`examples/langchain/`](../examples/langchain/) and
+[`examples/vercel-ai-sdk/`](../examples/vercel-ai-sdk/). These are integration profiles, not
+separate memory semantics; every write still enters through the shared firewall path.
 
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.

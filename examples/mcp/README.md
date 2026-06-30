@@ -40,7 +40,9 @@ Client-specific examples:
 - [Grok Build](../grok-build/) — client-neutral stdio MCP profile for Grok Build hosts.
 - [Hecate](../hecate/) — Hecate task / external-agent MCP server config.
 - [LangChain / in-process Python·TS](../langchain/) — use dent8 as a memory firewall from a
-  framework (LangChain, LlamaIndex, Vercel AI SDK, Mastra) over MCP.
+  framework over MCP.
+- [Vercel AI SDK](../vercel-ai-sdk/) — discover dent8 MCP tools with `@ai-sdk/mcp` and pass
+  them to `generateText`.
 
 Optional hook guards for native memory/rules files live in
 [`../agent-hooks/`](../agent-hooks/). Install MCP first; hooks only catch bypasses.

@@ -248,6 +248,7 @@ ATMS-style assumption-environment replay for the debugger ·
 [valid-time intervals (`valid_to`)](decisions/0005-belief-base-revision-semantics.md) ·
 predicate-level volatility policy · HTTP API · **client SDKs** (`pip install dent8` /
 `npm i dent8` with first-class in-process framework adapters — LangChain, LlamaIndex, Vercel AI
-SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/)) ·
+SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/) and
+[examples/vercel-ai-sdk](../examples/vercel-ai-sdk/)) ·
 adapters for existing memory providers · an external witness (published signed tree head) for
 non-repudiation.

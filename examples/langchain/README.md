@@ -71,7 +71,7 @@ The same `dent8 mcp serve` server is framework- and language-agnostic — any MC
 Point each at `{ command: "dent8", args: ["mcp", "serve"] }`:
 
 - **LlamaIndex** (Python): `llama-index-tools-mcp`.
-- **Vercel AI SDK** (TypeScript): `experimental_createMCPClient` over a stdio transport.
+- **Vercel AI SDK** (TypeScript): see [`../vercel-ai-sdk/`](../vercel-ai-sdk/).
 - **Mastra** (TypeScript): its `MCPClient` MCP tools.
 
 ## Notes

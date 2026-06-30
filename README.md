@@ -85,8 +85,9 @@ source of truth for what is built.** In short:
   the same firewall — see [examples/mcp/](examples/mcp/), [examples/codex/](examples/codex/),
   [examples/claude-code/](examples/claude-code/), [examples/gemini/](examples/gemini/),
   [examples/cascade/](examples/cascade/), [examples/cursor/](examples/cursor/),
-  [examples/grok-build/](examples/grok-build/), and [examples/hecate/](examples/hecate/) for
-  agent-client wiring. Optional native memory/rules hook guards use the built-in
+  [examples/grok-build/](examples/grok-build/), [examples/hecate/](examples/hecate/), and
+  [examples/vercel-ai-sdk/](examples/vercel-ai-sdk/) for agent-client wiring. Optional native
+  memory/rules hook guards use the built-in
   `dent8 hook native-memory-guard`; provider profiles live in
   [examples/agent-hooks/](examples/agent-hooks/).
 - **Implemented as a tested library:** the `ClaimEvent` model and replay fold; the
