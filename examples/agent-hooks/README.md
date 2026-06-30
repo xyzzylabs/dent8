@@ -29,26 +29,21 @@ Provider profiles:
    absolute path to the binary.
 4. Keep `DENT8_HOOK_ENFORCE=1` only after the team has confirmed the hook runs correctly.
 
-The default helper is built into the CLI:
+The guard is built into the CLI — one command, no extra runtime:
 
 ```sh
 DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard
 ```
 
-Two dependency-light script equivalents are kept for hosts where calling the installed dent8
-binary is inconvenient:
-
-- [`bin/dent8-native-memory-guard.py`](bin/dent8-native-memory-guard.py) is the Python fallback.
-- [`bin/dent8-native-memory-guard.ts`](bin/dent8-native-memory-guard.ts) is the TypeScript equivalent for Node-based agent setups.
-
-All helpers read hook JSON on stdin, recognize common provider payload shapes, and exit with
-code `2` when an enforced native memory/rules write should be blocked. To use the TypeScript
-helper, replace `dent8 hook native-memory-guard` with `node .../dent8-native-memory-guard.ts`
-on Node versions that support built-in TypeScript type stripping, or run it through your
-existing TypeScript runner.
+It reads hook JSON on stdin, recognizes common provider payload shapes, and exits with code
+`2` when an enforced native memory/rules write should be blocked (`DENT8_HOOK_ENFORCE` accepts
+`1`/`true`/`yes`/`on`; an unreadable payload under enforcement fails **closed**).
 
 ## Why hooks are not enough
 
 Hooks are provider-specific and can be disabled, misconfigured, or bypassed by a different
 client. dent8's integrity boundary remains the event-sourced store plus MCP/CLI write path.
-The hook layer is a seatbelt around native files, not the engine.
+The hook layer is a seatbelt around native files, not the engine. For an **in-process** Python
+or TypeScript app (LangChain, LlamaIndex, Vercel AI SDK, …) there is no native-memory file to
+guard — wire dent8 in as a memory firewall over MCP instead (see
+[`../langchain/`](../langchain/) and [`../mcp/`](../mcp/)).

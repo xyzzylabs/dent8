@@ -27,8 +27,8 @@ The agent then gets these tools — `list_facts`, `verify`, `conflicts`, `assert
 `replay` — plus readable `dent8://{kind}/{key}/{predicate}` resources. A rejected write
 comes back as a tool **error with the reason**, so the agent learns *why* (e.g.
 "repo.database requires authority High, got Low"). For the operational backend, set
-`DENT8_DATABASE_URL` and run a `--features postgres` build; to cap what a source may assert,
-configure `dent8 authority`.
+`DENT8_STORE_URL` and run a `--features postgres` (or `--features sqlite`) build; to cap what a
+source may assert, configure `dent8 authority`.
 
 Client-specific examples:
 
@@ -39,6 +39,8 @@ Client-specific examples:
 - [Cursor](../cursor/) — project/global `mcp.json` setup.
 - [Grok Build](../grok-build/) — client-neutral stdio MCP profile for Grok Build hosts.
 - [Hecate](../hecate/) — Hecate task / external-agent MCP server config.
+- [LangChain / in-process Python·TS](../langchain/) — use dent8 as a memory firewall from a
+  framework (LangChain, LlamaIndex, Vercel AI SDK, Mastra) over MCP.
 
 Optional hook guards for native memory/rules files live in
 [`../agent-hooks/`](../agent-hooks/). Install MCP first; hooks only catch bypasses.
