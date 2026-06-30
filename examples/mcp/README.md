@@ -58,8 +58,8 @@ $ ./demo.sh
 {... "result": { "serverInfo": { "name": "dent8", ... } } }          # initialize
 {... "result": { "tools": [ {"name":"list_facts"}, {"name":"assert"}, ... ] } } # tools/list
 {... "no dent8 facts recorded yet" ... }                              # list_facts
-{... "ACCEPTED  repo:myproj database = \"postgres\"  (authority=High) ..." }   # assert
-{... "REJECTED: repo.database requires authority High, got Low" ... "isError": true }  # supersede
+{... "structuredContent": {"status":"accepted","accepted_events":[...],"receipt":{...}} ... } # assert
+{... "structuredContent": {"status":"rejected","rejection_reason":"..."} ... "isError": true } # supersede
 {... "value : \"postgres\" ... lifecycle : Active ..." }             # explain — the trusted fact stood
 {... "STRUCTURAL integrity holds" ... }                               # verify
 ```

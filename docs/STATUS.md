@@ -99,6 +99,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `derive` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
   The initialize response includes server instructions that tell MCP-aware agents to inspect
   dent8 before relying on durable project facts and to treat rejected writes as safety signals.
+  Tool calls return human-readable `content` plus MCP 2025-11-25 `structuredContent` with
+  stable agent fields: `status`, `accepted_events` (one entry per committed event, including
+  event hash), current-state receipt fields (`claim_id`, `event_hash`, `replay_position`,
+  `current_value`, `receipt_kind: "current_state"`, `receipt`), and `rejection_reason` when a
+  firewall write is refused. The server prefers protocol `2025-11-25`, also negotiates
+  `2025-06-18`, and includes a serialized JSON mirror as a second text content block for
+  clients that ignore `structuredContent`. Malformed calls are `status: "invalid"` rather
+  than `status: "rejected"`, so clients do not confuse usage errors with integrity decisions.
   Setup examples are checked in for Codex, Claude Code, Gemini CLI, Devin/Cascade, Cursor,
   Grok Build, and Hecate under `examples/`; they are client wiring only, not alternate
   semantics. Optional hook guard profiles under `examples/agent-hooks/` call the built-in

@@ -177,7 +177,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   native memory/rules write guards.
 - `dent8 schema postgres`: print the initial Postgres schema.
 - `dent8 mcp serve`: expose read/audit tools, the full belief surface, resources, and
-  JSON-RPC batches to agents over MCP (stdio JSON-RPC).
+  JSON-RPC batches to agents over MCP (stdio JSON-RPC), with `structuredContent` fields
+  for accepted/rejected/contested decisions, accepted event hashes, and integrity receipts.
 
 ## Project Docs
 

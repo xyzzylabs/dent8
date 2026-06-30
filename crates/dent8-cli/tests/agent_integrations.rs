@@ -124,7 +124,68 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
         String::from_utf8_lossy(&authority.stderr)
     );
 
-    let requests = [
+    let requests = mcp_authority_scenario_requests();
+    let output = run_mcp_server(
+        &(requests + "\n"),
+        &[
+            ("DENT8_LOG", log_path.to_string_lossy().into_owned()),
+            (
+                "DENT8_AUTHORITY",
+                authority_path.to_string_lossy().into_owned(),
+            ),
+            ("DENT8_REQUIRE_AUTHORITY", "1".to_string()),
+        ],
+    );
+    let responses = output
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("JSON-RPC response"))
+        .collect::<Vec<_>>();
+
+    let init = response_with_id(&responses, 1);
+    assert_eq!(init["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(init["result"]["serverInfo"]["name"], "dent8");
+    let instructions = init["result"]["instructions"]
+        .as_str()
+        .expect("server instructions");
+    assert!(instructions.contains("memory integrity firewall"));
+    assert!(instructions.contains("list_facts"));
+
+    let tools = response_with_id(&responses, 2)["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect::<Vec<_>>();
+    assert_eq!(tools, MCP_TOOLS);
+
+    let accepted = response_with_id(&responses, 3);
+    assert!(!tool_is_error(accepted));
+    assert!(tool_text(accepted).contains("ACCEPTED"));
+    assert_accepted_assert_structured(accepted);
+
+    let rejected = response_with_id(&responses, 4);
+    assert!(tool_is_error(rejected));
+    let rejected_text = tool_text(rejected);
+    assert!(
+        rejected_text.contains("authority ceiling"),
+        "{rejected_text}"
+    );
+    assert!(rejected_text.contains("source:cursor"), "{rejected_text}");
+    assert_rejected_supersede_structured(rejected);
+
+    let facts = response_with_id(&responses, 5);
+    assert!(!tool_is_error(facts));
+    assert!(tool_text(facts).contains("dent8://repo/myproj/database"));
+    assert_list_facts_structured(facts);
+
+    let verify = response_with_id(&responses, 6);
+    assert!(!tool_is_error(verify));
+    assert!(tool_text(verify).contains("STRUCTURAL integrity holds"));
+    assert_verify_structured(verify);
+}
+
+fn mcp_authority_scenario_requests() -> String {
+    [
         json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
         json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         json!({
@@ -161,60 +222,61 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
     .into_iter()
     .map(|request| serde_json::to_string(&request).expect("serialize request"))
     .collect::<Vec<_>>()
-    .join("\n");
+    .join("\n")
+}
 
-    let output = run_mcp_server(
-        &(requests + "\n"),
-        &[
-            ("DENT8_LOG", log_path.to_string_lossy().into_owned()),
-            (
-                "DENT8_AUTHORITY",
-                authority_path.to_string_lossy().into_owned(),
-            ),
-            ("DENT8_REQUIRE_AUTHORITY", "1".to_string()),
-        ],
+fn assert_accepted_assert_structured(response: &Value) {
+    let structured = tool_structured(response);
+    assert_eq!(structured["status"], "accepted");
+    assert_eq!(structured["tool"], "assert");
+    assert_eq!(structured["claim_id"], "claim:repo:myproj:database:0");
+    assert_eq!(structured["current_value"]["text"], "postgres");
+    assert_eq!(structured["receipt"]["lifecycle"], "Active");
+    assert_eq!(structured["receipt"]["authority"], "High");
+    assert_eq!(structured["receipt"]["chain_verified"], true);
+    assert_eq!(structured["receipt_kind"], "current_state");
+    assert_eq!(structured["event_hash_kind"], "current_state_latest_event");
+    let events = structured["accepted_events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["kind"], "Asserted");
+    assert_eq!(events[0]["event_id"], "event:0");
+    assert_eq!(
+        structured["event_hash"].as_str().expect("event hash").len(),
+        64
     );
-    let responses = output
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("JSON-RPC response"))
-        .collect::<Vec<_>>();
+}
 
-    let init = response_with_id(&responses, 1);
-    assert_eq!(init["result"]["serverInfo"]["name"], "dent8");
-    let instructions = init["result"]["instructions"]
-        .as_str()
-        .expect("server instructions");
-    assert!(instructions.contains("memory integrity firewall"));
-    assert!(instructions.contains("list_facts"));
-
-    let tools = response_with_id(&responses, 2)["result"]["tools"]
-        .as_array()
-        .expect("tools array")
-        .iter()
-        .map(|tool| tool["name"].as_str().expect("tool name"))
-        .collect::<Vec<_>>();
-    assert_eq!(tools, MCP_TOOLS);
-
-    let accepted = response_with_id(&responses, 3);
-    assert!(!tool_is_error(accepted));
-    assert!(tool_text(accepted).contains("ACCEPTED"));
-
-    let rejected = response_with_id(&responses, 4);
-    assert!(tool_is_error(rejected));
-    let rejected_text = tool_text(rejected);
+fn assert_rejected_supersede_structured(response: &Value) {
+    let structured = tool_structured(response);
+    assert_eq!(structured["status"], "rejected");
+    assert_eq!(structured["tool"], "supersede");
+    assert_eq!(structured["source"], "source:cursor");
+    assert_eq!(structured["subject"]["kind"], "repo");
+    assert_eq!(structured["subject"]["key"], "myproj");
+    assert_eq!(structured["predicate"], "database");
+    assert_eq!(structured["attempted_value"], "mysql");
     assert!(
-        rejected_text.contains("authority ceiling"),
-        "{rejected_text}"
+        structured["rejection_reason"]
+            .as_str()
+            .expect("rejection reason")
+            .contains("authority ceiling")
     );
-    assert!(rejected_text.contains("source:cursor"), "{rejected_text}");
+}
 
-    let facts = response_with_id(&responses, 5);
-    assert!(!tool_is_error(facts));
-    assert!(tool_text(facts).contains("dent8://repo/myproj/database"));
+fn assert_list_facts_structured(response: &Value) {
+    let structured = tool_structured(response);
+    assert_eq!(structured["status"], "ok");
+    assert_eq!(structured["count"], 1);
+    assert_eq!(
+        structured["facts"][0]["uri"],
+        "dent8://repo/myproj/database"
+    );
+}
 
-    let verify = response_with_id(&responses, 6);
-    assert!(!tool_is_error(verify));
-    assert!(tool_text(verify).contains("STRUCTURAL integrity holds"));
+fn assert_verify_structured(response: &Value) {
+    let structured = tool_structured(response);
+    assert_eq!(structured["status"], "ok");
+    assert_eq!(structured["integrity_verified"], true);
 }
 
 /// Run a `dent8` subcommand with a controlled environment (per-process, so no env races).
@@ -411,6 +473,12 @@ fn tool_text(response: &Value) -> &str {
     response["result"]["content"][0]["text"]
         .as_str()
         .expect("tool text")
+}
+
+fn tool_structured(response: &Value) -> &Value {
+    response["result"]
+        .get("structuredContent")
+        .expect("tool structuredContent")
 }
 
 fn dent8_bin() -> PathBuf {

@@ -3245,19 +3245,29 @@ fn op_explain(
     subject_key: &str,
     predicate: &str,
 ) -> Result<String, OpError> {
+    let receipt = op_explain_receipt(path, subject_kind, subject_key, predicate)?;
+    let annotation = read_annotation(receipt.lifecycle, receipt.fresh);
+    Ok(format!(
+        "explain {subject_kind}:{subject_key} {predicate}{annotation}\n{}",
+        format_receipt(&receipt)
+    ))
+}
+
+/// Resolve the believed (or terminal) fact as a typed receipt. The CLI renders this as text;
+/// MCP uses the same receipt as `structuredContent` so agents do not need to parse prose.
+fn op_explain_receipt(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+) -> Result<IntegrityReceipt, OpError> {
     let store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
     match store.explain_latest(&subject, &predicate_parsed, now_millis()) {
-        Ok(Some(receipt)) => {
-            let annotation = read_annotation(receipt.lifecycle, receipt.fresh);
-            Ok(format!(
-                "explain {subject_kind}:{subject_key} {predicate}{annotation}\n{}",
-                format_receipt(&receipt)
-            ))
-        }
+        Ok(Some(receipt)) => Ok(receipt),
         Ok(None) => Err(OpError::Rejected(format!(
             "no claim for {subject_kind}:{subject_key} {predicate}"
         ))),

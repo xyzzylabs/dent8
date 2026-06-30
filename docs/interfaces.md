@@ -43,7 +43,7 @@ MCP is an adapter, not the product boundary.
 
 The Model Context Protocol lets servers expose tools that language models can call. Tool definitions include names, descriptions, input schemas, optional output schemas, and structured or unstructured results. The spec also calls out human-in-the-loop and security expectations for tool invocation.
 
-Source: [MCP tools specification](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+Source: [MCP tools specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)
 
 Current v0 MCP tools:
 
@@ -60,9 +60,19 @@ Current v0 MCP tools:
 - `explain`
 - `replay`
 
+Tool results keep human-readable `content`, and also return MCP 2025-11-25
+`structuredContent` for agents. `initialize` prefers `2025-11-25` and also accepts
+`2025-06-18` clients because dent8's v0 tool result shape is valid on both revisions. The
+structured payloads carry a stable `status` (`accepted`, `rejected`, `contested`, `ok`,
+`invalid`, `failed`, or `integrity_issues`). Writes include an `accepted_events` array with
+every committed event's id/kind/hash, plus a current-state receipt
+(`receipt_kind: "current_state"`) when the subject still resolves to an explainable fact.
+Refused firewall writes carry `rejection_reason`; malformed calls carry `error_reason` with
+`status: "invalid"`. For older clients that ignore `structuredContent`, dent8 also includes
+a serialized JSON mirror as a second text content block.
+
 Recommended behavior:
 
-- Return structured content with explicit integrity fields.
 - Treat writes as candidate events through the firewall.
 - Require evidence/provenance fields for assertions.
 - Make stale, contested, expired, or superseded claims visible to clients.
@@ -91,7 +101,7 @@ adapter design is tracked in
 
 MCP resources provide context such as files, database schemas, or application-specific information identified by URI. For dent8, resources are a good fit for read-only explain and replay artifacts.
 
-Source: [MCP resources specification](https://modelcontextprotocol.io/specification/2025-06-18/server/resources)
+Source: [MCP resources specification](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
 
 Possible resources:
 

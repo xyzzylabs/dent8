@@ -16,16 +16,20 @@
 
 use std::io::{BufRead, Write};
 
+use dent8_core::{AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimLifecycle, ClaimValue};
+use dent8_store::{EventFilter, EventStore, IntegrityReceipt};
 use serde_json::{Value, json};
 
 use crate::{
-    OpError, log_path, op_assert, op_conflicts, op_contradict, op_derive, op_expire, op_explain,
-    op_list_subjects, op_reinforce, op_replay, op_retract, op_supersede, parse_authority,
-    verify_log, with_write_retry,
+    OpError, display_value, load_store, log_path, op_assert, op_conflicts, op_contradict,
+    op_derive, op_expire, op_explain, op_explain_receipt, op_list_subjects, op_reinforce,
+    op_replay, op_retract, op_supersede, parse_authority, short, verify_log, with_write_retry,
 };
 
-/// The MCP protocol revision we advertise (negotiated in `initialize`).
-const PROTOCOL_VERSION: &str = "2024-11-05";
+/// The latest MCP protocol revision this server prefers.
+const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+/// Older revisions this adapter still speaks without changing its response shape.
+const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, "2025-06-18"];
 
 /// Server-wide guidance consumed by MCP clients that support `instructions` (including Codex).
 const SERVER_INSTRUCTIONS: &str = "\
@@ -132,8 +136,11 @@ fn handle(request: &Value, path: &str) -> Option<Value> {
         "initialize" => Some(result_response(
             &id,
             &json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": { "tools": {}, "resources": {} },
+                "protocolVersion": negotiated_protocol_version(request.get("params")),
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "resources": {},
+                },
                 "instructions": SERVER_INSTRUCTIONS,
                 "serverInfo": { "name": "dent8", "version": env!("CARGO_PKG_VERSION") },
             }),
@@ -150,11 +157,61 @@ fn handle(request: &Value, path: &str) -> Option<Value> {
     }
 }
 
+fn negotiated_protocol_version(params: Option<&Value>) -> &'static str {
+    let requested = params
+        .and_then(|params| params.get("protocolVersion"))
+        .and_then(Value::as_str);
+    requested
+        .and_then(|requested| {
+            SUPPORTED_PROTOCOL_VERSIONS
+                .iter()
+                .copied()
+                .find(|supported| *supported == requested)
+        })
+        .unwrap_or(LATEST_PROTOCOL_VERSION)
+}
+
 /// A tool dispatch failure: `Unknown` is a protocol error (bad tool name), `Failed` is a
 /// tool-execution error surfaced to the agent as an `isError` result.
 enum ToolError {
     Unknown(String),
+    Invalid(String),
+    Rejected(String),
     Failed(String),
+}
+
+impl ToolError {
+    fn message(&self) -> &str {
+        match self {
+            Self::Unknown(message)
+            | Self::Invalid(message)
+            | Self::Rejected(message)
+            | Self::Failed(message) => message,
+        }
+    }
+
+    fn status(&self) -> &'static str {
+        match self {
+            Self::Unknown(_) | Self::Invalid(_) => "invalid",
+            Self::Rejected(_) => "rejected",
+            Self::Failed(_) => "failed",
+        }
+    }
+}
+
+/// A successful MCP tool result: human-facing text plus machine-facing fields for agents.
+struct ToolOutput {
+    text: String,
+    structured: Value,
+}
+
+impl ToolOutput {
+    fn new(text: impl Into<String>, structured: Value) -> Self {
+        Self {
+            text: text.into(),
+            structured,
+        }
+    }
 }
 
 fn handle_tool_call(id: &Value, params: Option<&Value>, path: &str) -> Value {
@@ -167,9 +224,12 @@ fn handle_tool_call(id: &Value, params: Option<&Value>, path: &str) -> Value {
         .cloned()
         .unwrap_or_else(|| json!({}));
     match dispatch_tool(name, &arguments, path) {
-        Ok(text) => result_response(id, &tool_content(&text, false)),
+        Ok(output) => result_response(id, &tool_content(&output.text, false, &output.structured)),
         Err(ToolError::Unknown(message)) => error_response(id, -32602, &message),
-        Err(ToolError::Failed(message)) => result_response(id, &tool_content(&message, true)),
+        Err(error) => {
+            let structured = error_structured(name, &arguments, &error);
+            result_response(id, &tool_content(error.message(), true, &structured))
+        }
     }
 }
 
@@ -286,7 +346,7 @@ fn decode_segment(segment: &str) -> Option<String> {
 
 // A flat one-arm-per-tool dispatch; grows with the tool set, not in complexity.
 #[allow(clippy::too_many_lines)]
-fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, ToolError> {
+fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput, ToolError> {
     let kind = || arg(arguments, "subject_kind");
     let key = || arg(arguments, "subject_key");
     let predicate = || arg(arguments, "predicate");
@@ -297,10 +357,31 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
         // audit's whole point, not a failed tool call. Surface the verdict text as a normal
         // result (the agent reads "INTEGRITY ISSUES" / "TAINTED" / "OK" from the content);
         // mapping it to isError would read as "verify itself broke," masking the alarm.
-        "verify" => Ok(match verify_log(path) {
-            Ok(report) | Err(report) => report,
-        }),
-        "conflicts" => op_conflicts(path).map_err(into_failed),
+        "verify" => {
+            let (verified, report) = match verify_log(path) {
+                Ok(report) => (true, report),
+                Err(report) => (false, report),
+            };
+            Ok(ToolOutput::new(
+                report,
+                json!({
+                    "status": if verified { "ok" } else { "integrity_issues" },
+                    "tool": "verify",
+                    "integrity_verified": verified,
+                }),
+            ))
+        }
+        "conflicts" => {
+            let text = op_conflicts(path).map_err(into_tool_error)?;
+            Ok(ToolOutput::new(
+                text.clone(),
+                json!({
+                    "status": if text.starts_with("no contested") { "ok" } else { "contested" },
+                    "tool": "conflicts",
+                    "message": text,
+                }),
+            ))
+        }
         "assert" => {
             let (kind, key, predicate, value, authority, source) = (
                 kind()?,
@@ -310,10 +391,20 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            with_write_retry(|| {
-                op_assert(path, &kind, &key, &predicate, &value, authority, &source)
-            })
-            .map_err(into_failed)
+            run_write_tool(
+                "assert",
+                "accepted",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: Some(&value),
+                    authority,
+                    source: &source,
+                },
+                || op_assert(path, &kind, &key, &predicate, &value, authority, &source),
+            )
         }
         "supersede" => {
             let (kind, key, predicate, value, authority, source) = (
@@ -324,10 +415,20 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            with_write_retry(|| {
-                op_supersede(path, &kind, &key, &predicate, &value, authority, &source)
-            })
-            .map_err(into_failed)
+            run_write_tool(
+                "supersede",
+                "accepted",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: Some(&value),
+                    authority,
+                    source: &source,
+                },
+                || op_supersede(path, &kind, &key, &predicate, &value, authority, &source),
+            )
         }
         "retract" => {
             let (kind, key, predicate, authority, source) = (
@@ -337,8 +438,20 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            with_write_retry(|| op_retract(path, &kind, &key, &predicate, authority, &source))
-                .map_err(into_failed)
+            run_write_tool(
+                "retract",
+                "accepted",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: None,
+                    authority,
+                    source: &source,
+                },
+                || op_retract(path, &kind, &key, &predicate, authority, &source),
+            )
         }
         "reinforce" => {
             let (kind, key, predicate, authority, source) = (
@@ -348,8 +461,20 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            with_write_retry(|| op_reinforce(path, &kind, &key, &predicate, authority, &source))
-                .map_err(into_failed)
+            run_write_tool(
+                "reinforce",
+                "accepted",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: None,
+                    authority,
+                    source: &source,
+                },
+                || op_reinforce(path, &kind, &key, &predicate, authority, &source),
+            )
         }
         "expire" => {
             let (kind, key, predicate, authority, source) = (
@@ -359,8 +484,20 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            with_write_retry(|| op_expire(path, &kind, &key, &predicate, authority, &source))
-                .map_err(into_failed)
+            run_write_tool(
+                "expire",
+                "accepted",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: None,
+                    authority,
+                    source: &source,
+                },
+                || op_expire(path, &kind, &key, &predicate, authority, &source),
+            )
         }
         "derive" => {
             let (kind, key, predicate, value, authority, source) = (
@@ -376,21 +513,43 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg(arguments, "from_key")?,
                 arg(arguments, "from_predicate")?,
             );
-            with_write_retry(|| {
-                op_derive(
-                    path,
-                    &kind,
-                    &key,
-                    &predicate,
-                    &value,
+            let mut output = run_write_tool(
+                "derive",
+                "accepted",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: Some(&value),
                     authority,
-                    &source,
-                    &from_kind,
-                    &from_key,
-                    &from_predicate,
-                )
-            })
-            .map_err(into_failed)
+                    source: &source,
+                },
+                || {
+                    op_derive(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        authority,
+                        &source,
+                        &from_kind,
+                        &from_key,
+                        &from_predicate,
+                    )
+                },
+            )?;
+            if let Some(object) = output.structured.as_object_mut() {
+                object.insert(
+                    "derived_from".to_string(),
+                    json!({
+                        "subject": { "kind": from_kind, "key": from_key },
+                        "predicate": from_predicate,
+                    }),
+                );
+            }
+            Ok(output)
         }
         "contradict" => {
             let (kind, key, predicate, value, authority, source) = (
@@ -401,39 +560,385 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<String, To
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            with_write_retry(|| {
-                op_contradict(path, &kind, &key, &predicate, &value, authority, &source)
-            })
-            .map_err(into_failed)
+            run_write_tool(
+                "contradict",
+                "contested",
+                path,
+                WriteContext {
+                    subject_kind: &kind,
+                    subject_key: &key,
+                    predicate: &predicate,
+                    attempted_value: Some(&value),
+                    authority,
+                    source: &source,
+                },
+                || op_contradict(path, &kind, &key, &predicate, &value, authority, &source),
+            )
         }
-        "explain" => op_explain(path, &kind()?, &key()?, &predicate()?).map_err(into_failed),
-        "replay" => op_replay(path, &kind()?, &key()?, &predicate()?).map_err(into_failed),
+        "explain" => {
+            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
+            let text = op_explain(path, &kind, &key, &predicate).map_err(into_tool_error)?;
+            let receipt =
+                op_explain_receipt(path, &kind, &key, &predicate).map_err(into_tool_error)?;
+            Ok(ToolOutput::new(
+                text,
+                explain_structured("explain", &receipt),
+            ))
+        }
+        "replay" => {
+            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
+            let text = op_replay(path, &kind, &key, &predicate).map_err(into_tool_error)?;
+            let structured = match op_explain_receipt(path, &kind, &key, &predicate) {
+                Ok(receipt) => explain_structured("replay", &receipt),
+                Err(_) => json!({
+                    "status": "ok",
+                    "tool": "replay",
+                    "subject": { "kind": kind, "key": key },
+                    "predicate": predicate,
+                }),
+            };
+            Ok(ToolOutput::new(text, structured))
+        }
         other => Err(ToolError::Unknown(format!("unknown tool: {other}"))),
     }
 }
 
-fn list_facts(path: &str) -> Result<String, ToolError> {
-    let subjects = op_list_subjects(path).map_err(into_failed)?;
+fn list_facts(path: &str) -> Result<ToolOutput, ToolError> {
+    let subjects = op_list_subjects(path).map_err(into_tool_error)?;
     if subjects.is_empty() {
-        return Ok("no dent8 facts recorded yet".to_string());
+        return Ok(ToolOutput::new(
+            "no dent8 facts recorded yet",
+            json!({ "status": "ok", "tool": "list_facts", "count": 0, "facts": [] }),
+        ));
     }
-    let lines: Vec<String> = subjects
+    let facts: Vec<Value> = subjects
         .iter()
         .map(|(kind, key, predicate)| {
+            json!({
+                "uri": resource_uri(kind, key, predicate),
+                "subject": { "kind": kind, "key": key },
+                "predicate": predicate,
+            })
+        })
+        .collect();
+    let lines: Vec<String> = facts
+        .iter()
+        .map(|fact| {
+            let kind = fact["subject"]["kind"].as_str().unwrap_or("");
+            let key = fact["subject"]["key"].as_str().unwrap_or("");
+            let predicate = fact["predicate"].as_str().unwrap_or("");
             format!(
                 "- {}  ({}:{} {})",
-                resource_uri(kind, key, predicate),
+                fact["uri"].as_str().unwrap_or(""),
                 kind,
                 key,
                 predicate
             )
         })
         .collect();
-    Ok(format!(
-        "{} dent8 fact stream(s):\n{}",
-        subjects.len(),
-        lines.join("\n")
+    let count = facts.len();
+    Ok(ToolOutput::new(
+        format!("{count} dent8 fact stream(s):\n{}", lines.join("\n")),
+        json!({
+            "status": "ok",
+            "tool": "list_facts",
+            "count": count,
+            "facts": facts,
+        }),
     ))
+}
+
+#[derive(Clone, Copy)]
+struct WriteContext<'a> {
+    subject_kind: &'a str,
+    subject_key: &'a str,
+    predicate: &'a str,
+    attempted_value: Option<&'a str>,
+    authority: AuthorityLevel,
+    source: &'a str,
+}
+
+fn write_output(
+    tool: &str,
+    status: &str,
+    path: &str,
+    context: WriteContext<'_>,
+    text: String,
+    accepted_events: &[AcceptedEvent],
+) -> ToolOutput {
+    let mut structured = json!({
+        "status": status,
+        "tool": tool,
+        "subject": { "kind": context.subject_kind, "key": context.subject_key },
+        "predicate": context.predicate,
+        "attempted_value": context.attempted_value,
+        "authority": context.authority.name(),
+        "source": context.source,
+        "accepted_events": accepted_events.iter().map(AcceptedEvent::to_json).collect::<Vec<_>>(),
+        "message": text,
+    });
+    if let Ok(receipt) = op_explain_receipt(
+        path,
+        context.subject_kind,
+        context.subject_key,
+        context.predicate,
+    ) && let Some(object) = structured.as_object_mut()
+    {
+        object.insert("claim_id".to_string(), json!(receipt.claim_id.as_str()));
+        object.insert("receipt_kind".to_string(), json!("current_state"));
+        object.insert("event_hash".to_string(), json!(&receipt.event_hash));
+        object.insert(
+            "event_hash_kind".to_string(),
+            json!("current_state_latest_event"),
+        );
+        object.insert(
+            "event_hash_short".to_string(),
+            json!(short(&receipt.event_hash)),
+        );
+        object.insert(
+            "replay_position".to_string(),
+            json!(receipt.replay_position),
+        );
+        object.insert(
+            "current_value".to_string(),
+            claim_value_structured(&receipt.value),
+        );
+        object.insert("current_receipt".to_string(), receipt_structured(&receipt));
+        object.insert("receipt".to_string(), receipt_structured(&receipt));
+    }
+    ToolOutput::new(text, structured)
+}
+
+fn run_write_tool(
+    tool: &str,
+    status: &str,
+    path: &str,
+    context: WriteContext<'_>,
+    mut op: impl FnMut() -> Result<String, OpError>,
+) -> Result<ToolOutput, ToolError> {
+    let before = all_events(path)?;
+    let text = with_write_retry(&mut op).map_err(into_tool_error)?;
+    let after = all_events(path)?;
+    let accepted_events = accepted_events_since(&after, before.len())?;
+    Ok(write_output(
+        tool,
+        status,
+        path,
+        context,
+        text,
+        &accepted_events,
+    ))
+}
+
+fn all_events(path: &str) -> Result<Vec<ClaimEvent>, ToolError> {
+    let store = load_store(path).map_err(ToolError::Failed)?;
+    store
+        .scan_events(&EventFilter::default())
+        .map_err(|error| ToolError::Failed(error.to_string()))
+}
+
+fn accepted_events_since(
+    events: &[ClaimEvent],
+    start: usize,
+) -> Result<Vec<AcceptedEvent>, ToolError> {
+    let hashes = dent8_core::hash_chain(events)
+        .map_err(|error| ToolError::Failed(format!("could not hash accepted events: {error}")))?;
+    Ok(events
+        .iter()
+        .zip(hashes)
+        .skip(start)
+        .map(|(event, event_hash)| AcceptedEvent {
+            event_id: event.event_id.as_str().to_string(),
+            claim_id: event.claim_id.as_str().to_string(),
+            kind: event_kind_name(&event.kind),
+            subject_kind: event.subject.kind().to_string(),
+            subject_key: event.subject.key().to_string(),
+            predicate: event.predicate.as_str().to_string(),
+            value: event.value.as_ref().map(claim_value_structured),
+            authority: event.authority.level.name(),
+            source: event.provenance.source.as_str().to_string(),
+            event_hash,
+        })
+        .collect())
+}
+
+struct AcceptedEvent {
+    event_id: String,
+    claim_id: String,
+    kind: &'static str,
+    subject_kind: String,
+    subject_key: String,
+    predicate: String,
+    value: Option<Value>,
+    authority: &'static str,
+    source: String,
+    event_hash: String,
+}
+
+impl AcceptedEvent {
+    fn to_json(&self) -> Value {
+        json!({
+            "event_id": self.event_id,
+            "claim_id": self.claim_id,
+            "kind": self.kind,
+            "subject": {
+                "kind": self.subject_kind,
+                "key": self.subject_key,
+            },
+            "predicate": self.predicate,
+            "value": self.value,
+            "authority": self.authority,
+            "source": self.source,
+            "event_hash": self.event_hash,
+            "event_hash_short": short(&self.event_hash),
+        })
+    }
+}
+
+fn explain_structured(tool: &str, receipt: &IntegrityReceipt) -> Value {
+    json!({
+        "status": receipt_status(receipt),
+        "tool": tool,
+        "claim_id": receipt.claim_id.as_str(),
+        "subject": {
+            "kind": receipt.subject.kind(),
+            "key": receipt.subject.key(),
+        },
+        "predicate": receipt.predicate.as_str(),
+        "current_value": claim_value_structured(&receipt.value),
+        "event_hash": &receipt.event_hash,
+        "event_hash_short": short(&receipt.event_hash),
+        "replay_position": receipt.replay_position,
+        "receipt_kind": "current_state",
+        "current_receipt": receipt_structured(receipt),
+        "receipt": receipt_structured(receipt),
+    })
+}
+
+fn error_structured(tool: &str, arguments: &Value, error: &ToolError) -> Value {
+    let mut structured = json!({
+        "status": error.status(),
+        "tool": tool,
+        "rejection_reason": if matches!(error, ToolError::Rejected(_)) {
+            Some(error.message())
+        } else {
+            None
+        },
+        "error_reason": error.message(),
+    });
+    if let Some(object) = structured.as_object_mut() {
+        if let Some(subject_kind) = argument_string(arguments, "subject_kind") {
+            let subject_key = argument_string(arguments, "subject_key").unwrap_or_default();
+            object.insert(
+                "subject".to_string(),
+                json!({ "kind": subject_kind, "key": subject_key }),
+            );
+        }
+        if let Some(predicate) = argument_string(arguments, "predicate") {
+            object.insert("predicate".to_string(), json!(predicate));
+        }
+        if let Some(value) = argument_string(arguments, "value") {
+            object.insert("attempted_value".to_string(), json!(value));
+        }
+        if let Some(authority) = argument_string(arguments, "authority") {
+            if let Some(level) = parse_authority(&authority) {
+                object.insert("authority".to_string(), json!(level.name()));
+                object.insert("authority_raw".to_string(), json!(authority));
+            } else {
+                object.insert("authority".to_string(), json!(authority));
+            }
+        }
+        if let Some(source) = argument_string(arguments, "source") {
+            object.insert("source".to_string(), json!(source));
+        }
+    }
+    structured
+}
+
+fn argument_string(arguments: &Value, name: &str) -> Option<String> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn receipt_status(receipt: &IntegrityReceipt) -> &'static str {
+    if receipt.lifecycle == ClaimLifecycle::Contested {
+        "contested"
+    } else {
+        "ok"
+    }
+}
+
+fn receipt_structured(receipt: &IntegrityReceipt) -> Value {
+    json!({
+        "claim_id": receipt.claim_id.as_str(),
+        "subject": {
+            "kind": receipt.subject.kind(),
+            "key": receipt.subject.key(),
+        },
+        "predicate": receipt.predicate.as_str(),
+        "value": claim_value_structured(&receipt.value),
+        "lifecycle": lifecycle_name(receipt.lifecycle),
+        "authority": receipt.authority.name(),
+        "fresh": receipt.fresh,
+        "expires_at": receipt.expires_at.map(dent8_core::TimestampMillis::as_unix_millis),
+        "evidence_count": receipt.evidence_count,
+        "corroboration": receipt.corroboration,
+        "superseded_by": receipt.superseded_by.as_ref().map(dent8_core::ClaimId::as_str),
+        "contradicted_by": receipt
+            .contradicted_by
+            .iter()
+            .map(dent8_core::ClaimId::as_str)
+            .collect::<Vec<_>>(),
+        "replay_position": receipt.replay_position,
+        "event_hash": &receipt.event_hash,
+        "event_hash_short": short(&receipt.event_hash),
+        "chain_verified": receipt.chain_verified,
+    })
+}
+
+fn lifecycle_name(lifecycle: ClaimLifecycle) -> &'static str {
+    match lifecycle {
+        ClaimLifecycle::Active => "Active",
+        ClaimLifecycle::Contested => "Contested",
+        ClaimLifecycle::Superseded => "Superseded",
+        ClaimLifecycle::Retracted => "Retracted",
+        ClaimLifecycle::Expired => "Expired",
+    }
+}
+
+fn event_kind_name(kind: &ClaimEventKind) -> &'static str {
+    match kind {
+        ClaimEventKind::Asserted => "Asserted",
+        ClaimEventKind::Superseded { .. } => "Superseded",
+        ClaimEventKind::Contradicted { .. } => "Contradicted",
+        ClaimEventKind::Retracted { .. } => "Retracted",
+        ClaimEventKind::Expired { .. } => "Expired",
+        ClaimEventKind::Reinforced { .. } => "Reinforced",
+        ClaimEventKind::Retrieved { .. } => "Retrieved",
+        ClaimEventKind::UsedInDecision { .. } => "UsedInDecision",
+    }
+}
+
+fn claim_value_structured(value: &ClaimValue) -> Value {
+    match value {
+        ClaimValue::Text(text) => json!({
+            "kind": "text",
+            "text": text,
+            "display": display_value(value),
+        }),
+        ClaimValue::Json(canonical) => json!({
+            "kind": "json",
+            "canonical": canonical.as_str(),
+            "json": serde_json::from_str::<Value>(canonical.as_str()).ok(),
+            "display": display_value(value),
+        }),
+        ClaimValue::Redacted => json!({
+            "kind": "redacted",
+            "display": display_value(value),
+        }),
+    }
 }
 
 /// A required string argument, or a tool error naming the missing field.
@@ -442,23 +947,26 @@ fn arg(arguments: &Value, name: &str) -> Result<String, ToolError> {
         .get(name)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| ToolError::Failed(format!("missing required string argument: {name}")))
+        .ok_or_else(|| ToolError::Invalid(format!("missing required string argument: {name}")))
 }
 
 /// The required `authority` argument, parsed to a level.
 fn arg_authority(arguments: &Value) -> Result<dent8_core::AuthorityLevel, ToolError> {
     let raw = arg(arguments, "authority")?;
     parse_authority(&raw).ok_or_else(|| {
-        ToolError::Failed(format!(
+        ToolError::Invalid(format!(
             "unknown authority '{raw}' (expected: low | medium | high | canonical)"
         ))
     })
 }
 
-// By-value so it works as `map_err(into_failed)`.
+// By-value so it works as `map_err(into_tool_error)`.
 #[allow(clippy::needless_pass_by_value)]
-fn into_failed(error: OpError) -> ToolError {
-    ToolError::Failed(error.message().to_string())
+fn into_tool_error(error: OpError) -> ToolError {
+    match error {
+        OpError::Invalid(message) => ToolError::Invalid(message),
+        OpError::Rejected(message) | OpError::Conflict(message) => ToolError::Rejected(message),
+    }
 }
 
 /// The advertised tools and their JSON-Schema inputs.
@@ -591,7 +1099,12 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
     json!({
         "name": name,
         "description": description,
-        "inputSchema": { "type": "object", "properties": properties, "required": required },
+        "inputSchema": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+            "additionalProperties": false,
+        },
     })
 }
 
@@ -606,8 +1119,16 @@ fn merge(a: &Value, b: &Value) -> Value {
     Value::Object(out)
 }
 
-fn tool_content(text: &str, is_error: bool) -> Value {
-    json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+fn tool_content(text: &str, is_error: bool, structured: &Value) -> Value {
+    let structured_text = serde_json::to_string(structured).unwrap_or_else(|_| "{}".to_string());
+    json!({
+        "content": [
+            { "type": "text", "text": text },
+            { "type": "text", "text": structured_text },
+        ],
+        "structuredContent": structured,
+        "isError": is_error,
+    })
 }
 
 fn result_response(id: &Value, result: &Value) -> Value {
@@ -633,14 +1154,39 @@ mod tests {
     fn initialize_advertises_tools_and_resources() {
         let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} });
         let response = handle(&request, "/tmp/unused.jsonl").expect("response");
+        assert_eq!(response["result"]["protocolVersion"], "2025-11-25");
         assert_eq!(response["result"]["serverInfo"]["name"], "dent8");
         assert!(response["result"]["capabilities"]["tools"].is_object());
+        assert_eq!(
+            response["result"]["capabilities"]["tools"]["listChanged"],
+            false
+        );
         assert!(response["result"]["capabilities"]["resources"].is_object());
         let instructions = response["result"]["instructions"]
             .as_str()
             .expect("server instructions");
         assert!(instructions.contains("memory integrity firewall"));
         assert!(instructions.contains("list_facts"));
+    }
+
+    #[test]
+    fn initialize_negotiates_a_supported_older_protocol_version() {
+        let request = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-06-18" },
+        });
+        let response = handle(&request, "/tmp/unused.jsonl").expect("response");
+        assert_eq!(response["result"]["protocolVersion"], "2025-06-18");
+    }
+
+    #[test]
+    fn initialize_falls_forward_when_the_requested_protocol_is_unsupported() {
+        let request = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2024-11-05" },
+        });
+        let response = handle(&request, "/tmp/unused.jsonl").expect("response");
+        assert_eq!(response["result"]["protocolVersion"], "2025-11-25");
     }
 
     #[test]
@@ -792,16 +1338,21 @@ mod tests {
 
     #[allow(clippy::needless_pass_by_value)]
     fn call_tool_text(path: &str, name: &str, arguments: Value) -> (bool, String) {
-        let request = json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": { "name": name, "arguments": arguments },
-        });
-        let result = handle(&request, path).expect("response")["result"].clone();
+        let result = call_tool_result(path, name, arguments);
         let text = result["content"][0]["text"]
             .as_str()
             .unwrap_or("")
             .to_string();
         (result["isError"].as_bool().unwrap_or(true), text)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn call_tool_result(path: &str, name: &str, arguments: Value) -> Value {
+        let request = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments },
+        });
+        handle(&request, path).expect("response")["result"].clone()
     }
 
     fn database(value: &str, authority: &str) -> Value {
@@ -853,6 +1404,62 @@ mod tests {
     }
 
     #[test]
+    fn malformed_tool_input_is_invalid_not_rejected() {
+        let (_guard, path) = temp_log();
+        let result = call_tool_result(
+            &path,
+            "assert",
+            json!({
+                "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+                "value": "postgres", "authority": "high",
+            }),
+        );
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["status"], "invalid");
+        assert_eq!(result["structuredContent"]["tool"], "assert");
+        assert!(result["structuredContent"]["rejection_reason"].is_null());
+        assert!(
+            result["structuredContent"]["error_reason"]
+                .as_str()
+                .unwrap()
+                .contains("source")
+        );
+    }
+
+    #[test]
+    fn firewall_refusal_is_structured_as_rejected() {
+        let (_guard, path) = temp_log();
+        let result = call_tool_result(&path, "assert", database("postgres", "low"));
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["status"], "rejected");
+        assert_eq!(result["structuredContent"]["authority"], "Low");
+        assert!(
+            result["structuredContent"]["rejection_reason"]
+                .as_str()
+                .unwrap()
+                .contains("requires authority")
+        );
+    }
+
+    #[test]
+    fn multi_event_write_exposes_every_accepted_event() {
+        let (_guard, path) = temp_log();
+        assert!(!call_tool(&path, "assert", database("postgres", "high")).0);
+        let result = call_tool_result(&path, "supersede", database("mysql", "high"));
+        assert_eq!(result["isError"], false);
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["status"], "accepted");
+        assert_eq!(structured["receipt_kind"], "current_state");
+        assert_eq!(structured["event_hash_kind"], "current_state_latest_event");
+        let events = structured["accepted_events"].as_array().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0]["kind"], "Asserted");
+        assert_eq!(events[1]["kind"], "Superseded");
+        assert_eq!(events[0]["event_hash"].as_str().unwrap().len(), 64);
+        assert_eq!(events[1]["event_hash"].as_str().unwrap().len(), 64);
+    }
+
+    #[test]
     fn an_id_less_tools_call_is_dropped_and_does_not_write() {
         // JSON-RPC: a notification (no id) gets no response — and a side-effecting
         // tools/call must NOT execute when sent as one.
@@ -884,9 +1491,8 @@ mod tests {
     fn tools_list_includes_the_full_belief_surface() {
         let request = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
         let response = handle(&request, "/tmp/unused.jsonl").expect("response");
-        let names: Vec<&str> = response["result"]["tools"]
-            .as_array()
-            .unwrap()
+        let tools = response["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect();
@@ -907,6 +1513,21 @@ mod tests {
                 "replay"
             ]
         );
+        let list_facts = tools
+            .iter()
+            .find(|tool| tool["name"] == "list_facts")
+            .unwrap();
+        assert_eq!(list_facts["inputSchema"]["type"], "object");
+        assert_eq!(list_facts["inputSchema"]["additionalProperties"], false);
+    }
+
+    #[test]
+    fn structured_content_is_mirrored_as_json_text_for_compatibility() {
+        let (_guard, path) = temp_log();
+        let result = call_tool_result(&path, "assert", database("postgres", "high"));
+        let mirrored: Value =
+            serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(mirrored, result["structuredContent"]);
     }
 
     #[test]
@@ -965,6 +1586,9 @@ mod tests {
             text.contains("TAINTED"),
             "verify should report the taint: {text}"
         );
+        let result = call_tool_result(&path, "verify", json!({}));
+        assert_eq!(result["structuredContent"]["status"], "integrity_issues");
+        assert_eq!(result["structuredContent"]["integrity_verified"], false);
     }
 
     #[test]
