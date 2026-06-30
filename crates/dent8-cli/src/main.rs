@@ -29,12 +29,12 @@ fn main() {
     std::process::exit(code);
 }
 
-fn run(args: impl IntoIterator<Item = String>) -> i32 {
-    let args: Vec<String> = args.into_iter().collect();
-    let color = requested_color(&args).unwrap_or(CliColor::Auto);
+fn run(raw_args: impl IntoIterator<Item = String>) -> i32 {
+    let raw_args: Vec<String> = raw_args.into_iter().collect();
+    let color = requested_color(&raw_args).unwrap_or(CliColor::Auto);
     set_color(color);
 
-    let argv = std::iter::once("dent8".to_string()).chain(args);
+    let argv = std::iter::once("dent8".to_string()).chain(raw_args);
     let command = Cli::command()
         .color(color.clap_choice())
         .styles(cli_styles());
@@ -83,15 +83,15 @@ fn run_cli(cli: Cli) -> i32 {
                 2
             }
         }
-        Some(CliCommand::Assert(args)) => cmd_assert(args),
-        Some(CliCommand::Derive(args)) => cmd_derive(args),
-        Some(CliCommand::Supersede(args)) => cmd_supersede(args),
-        Some(CliCommand::Retract(args)) => cmd_retract(args),
-        Some(CliCommand::Reinforce(args)) => cmd_reinforce(args),
-        Some(CliCommand::Expire(args)) => cmd_expire(args),
-        Some(CliCommand::Contradict(args)) => cmd_contradict(args),
-        Some(CliCommand::Explain(args)) => cmd_explain(args),
-        Some(CliCommand::Replay(args)) => cmd_replay(args),
+        Some(CliCommand::Assert(args)) => cmd_assert(&args),
+        Some(CliCommand::Derive(args)) => cmd_derive(&args),
+        Some(CliCommand::Supersede(args)) => cmd_supersede(&args),
+        Some(CliCommand::Retract(args)) => cmd_retract(&args),
+        Some(CliCommand::Reinforce(args)) => cmd_reinforce(&args),
+        Some(CliCommand::Expire(args)) => cmd_expire(&args),
+        Some(CliCommand::Contradict(args)) => cmd_contradict(&args),
+        Some(CliCommand::Explain(args)) => cmd_explain(&args),
+        Some(CliCommand::Replay(args)) => cmd_replay(&args),
         Some(CliCommand::Authority(args)) => match args.command {
             AuthorityCommand::List => cmd_authority_list(),
             AuthorityCommand::Add(args) => cmd_authority_add(
@@ -214,7 +214,7 @@ enum CliCommand {
     /// Generate shell completion scripts.
     #[command(visible_aliases = ["completion", "autocomplete"])]
     Completions(CompletionsArgs),
-    /// Export the log to Parquet for DuckDB analysis.
+    /// Export the log to Parquet for `DuckDB` analysis.
     Export(ExportArgs),
     /// Manage the source -> authority ceiling.
     Authority(AuthorityArgs),
@@ -2076,7 +2076,7 @@ fn op_assert(
     ))
 }
 
-fn cmd_assert(args: ValueWriteArgs) -> i32 {
+fn cmd_assert(args: &ValueWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_assert(
             &log_path(),
@@ -2161,7 +2161,7 @@ fn op_derive(
     ))
 }
 
-fn cmd_derive(args: DeriveWriteArgs) -> i32 {
+fn cmd_derive(args: &DeriveWriteArgs) -> i32 {
     let from_subject = match CliSubject::from_str(&args.from[0]) {
         Ok(subject) => subject,
         Err(message) => {
@@ -2361,7 +2361,7 @@ fn op_supersede(
 /// incumbent, so a lower-authority revision is rejected; uniqueness holds in the end state
 /// because all believed incumbents become terminal. Shared by `dent8 supersede` and the
 /// MCP `supersede` tool.
-fn cmd_supersede(args: ValueWriteArgs) -> i32 {
+fn cmd_supersede(args: &ValueWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_supersede(
             &log_path(),
@@ -2467,7 +2467,7 @@ fn op_retract(
 /// there is no replacement; unlike a contradiction (dissent) it is authority-gated — the
 /// core fold rejects a retraction that under-ranks its incumbent, so a low-authority actor
 /// cannot delete a trusted fact. Shared by `dent8 retract` and the MCP `retract` tool.
-fn cmd_retract(args: FactWriteArgs) -> i32 {
+fn cmd_retract(args: &FactWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_retract(
             &log_path(),
@@ -2598,7 +2598,7 @@ fn build_per_incumbent(
     Ok(events)
 }
 
-fn cmd_reinforce(args: FactWriteArgs) -> i32 {
+fn cmd_reinforce(args: &FactWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_reinforce(
             &log_path(),
@@ -2611,7 +2611,7 @@ fn cmd_reinforce(args: FactWriteArgs) -> i32 {
     }))
 }
 
-fn cmd_expire(args: FactWriteArgs) -> i32 {
+fn cmd_expire(args: &FactWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_expire(
             &log_path(),
@@ -2740,7 +2740,7 @@ fn op_contradict(
 /// low-authority source can flag a wrong fact without overriding it — the one exception
 /// being a `Canonical` incumbent, which hard-alarms. Shared by `dent8 contradict` and the
 /// MCP `contradict` tool.
-fn cmd_contradict(args: ValueWriteArgs) -> i32 {
+fn cmd_contradict(args: &ValueWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_contradict(
             &log_path(),
@@ -2838,7 +2838,7 @@ fn op_replay(
     Ok(out)
 }
 
-fn cmd_replay(args: ReadFactArgs) -> i32 {
+fn cmd_replay(args: &ReadFactArgs) -> i32 {
     present(op_replay(
         &log_path(),
         &args.subject.kind,
@@ -2875,7 +2875,7 @@ fn op_explain(
     }
 }
 
-fn cmd_explain(args: ReadFactArgs) -> i32 {
+fn cmd_explain(args: &ReadFactArgs) -> i32 {
     present(op_explain(
         &log_path(),
         &args.subject.kind,

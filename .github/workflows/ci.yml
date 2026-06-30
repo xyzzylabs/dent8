@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -12,37 +19,52 @@ jobs:
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
+      - name: Format
+        run: cargo fmt --all -- --check
       # The workspace is kept clippy-clean; treat any warning as an error in CI.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Clippy workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
       # The Postgres adapter is feature-gated; compile-check + lint it too.
-      - run: cargo clippy -p dent8-store-postgres --features adapter --all-targets -- -D warnings
+      - name: Clippy Postgres adapter
+        run: cargo clippy -p dent8-store-postgres --features adapter --all-targets -- -D warnings
       # The CLI's Postgres backend is feature-gated; compile-check + lint it too.
-      - run: cargo clippy -p dent8-cli --features postgres --all-targets -- -D warnings
+      - name: Clippy CLI Postgres feature
+        run: cargo clippy -p dent8-cli --features postgres --all-targets -- -D warnings
       # The CLI's witness commands (Ed25519 signed tree heads) are feature-gated; lint + test.
-      - run: cargo clippy -p dent8-cli --features witness --all-targets -- -D warnings
+      - name: Clippy CLI witness feature
+        run: cargo clippy -p dent8-cli --features witness --all-targets -- -D warnings
       # The asymmetric (signed) anchor is feature-gated; lint + test it too.
-      - run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
+      - name: Clippy signed-anchor feature
+        run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
       # The CLI's Parquet export lane (arrow/parquet) is feature-gated; lint + test.
-      - run: cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
+      - name: Clippy CLI export feature
+        run: cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
       # The embedded SQLite backend (sqlx) — the second async backend; lint + test (it runs
       # in-memory, no server needed, so its tests run in the default `cargo test --workspace`).
-      - run: cargo clippy -p dent8-store-sqlite --all-targets -- -D warnings
-      - run: cargo clippy -p dent8-cli --features sqlite --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo test -p dent8-core --features signed-anchor
-      - run: cargo test -p dent8-cli --features witness
-      - run: cargo test -p dent8-export
+      - name: Clippy SQLite adapter
+        run: cargo clippy -p dent8-store-sqlite --all-targets -- -D warnings
+      - name: Clippy CLI SQLite feature
+        run: cargo clippy -p dent8-cli --features sqlite --all-targets -- -D warnings
+      - name: Test workspace
+        run: cargo test --workspace
+      - name: Test signed-anchor feature
+        run: cargo test -p dent8-core --features signed-anchor
+      - name: Test CLI witness feature
+        run: cargo test -p dent8-cli --features witness
+      - name: Test export crate
+        run: cargo test -p dent8-export
 
   postgres:
-    name: M2b adapter (live Postgres)
+    name: Postgres adapter + CLI smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16
@@ -67,20 +89,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The integration tests share one database; they self-serialize (a process-static
       # mutex) and retry the initial connection, so no special flags are needed.
-      - run: cargo test -p dent8-store-postgres --features adapter
+      - name: Test Postgres adapter
+        run: cargo test -p dent8-store-postgres --features adapter
       # The CLI/MCP-over-Postgres path itself (not just the adapter crate): build it and run a
       # live end-to-end assert -> supersede -> explain -> verify, so the runnable Postgres
       # surface is regression-covered.
-      - run: cargo build -p dent8-cli --features postgres
+      - name: Build CLI with Postgres feature
+        run: cargo build -p dent8-cli --features postgres
       - name: CLI end-to-end over live Postgres
         env:
-          DENT8_DATABASE_URL: postgres://postgres:dent8@localhost:5432/dent8
+          DENT8_STORE_URL: postgres://postgres:dent8@localhost:5432/dent8
         run: |
           set -euo pipefail
           BIN=target/debug/dent8
-          "$BIN" assert repo ci-e2e database postgres high owner
-          "$BIN" supersede repo ci-e2e database mysql high owner
-          "$BIN" explain repo ci-e2e database | grep -q mysql
+          "$BIN" assert repo:ci-e2e database postgres --authority high --source source:ci
+          "$BIN" supersede repo:ci-e2e database mysql --authority high --source source:ci
+          output="$("$BIN" explain repo:ci-e2e database)"
+          printf '%s\n' "$output"
+          grep -q 'value         : "mysql"' <<< "$output"
           "$BIN" verify
 
   # A `cargo kani` CI job over the dent8-core proof harnesses was attempted but reverted: the
