@@ -32,9 +32,10 @@ now runs end to end through the CLI and MCP surfaces:
 
 What remains to make it a hardened multi-user product:
 
-- **Cryptographic caller identity (authn).** `dent8 authority` provides source→authority
-  ceilings (authz), but the caller's source id is still asserted rather than proven by a
-  signed grant/token.
+- **Signed identity operations.** `dent8 identity` now provides the feature-gated authn
+  primitive: issuer-signed grants binding source ids to source public keys, plus per-write
+  source-key possession checks at the CLI/MCP boundary. Product hardening remains: key
+  distribution/rotation, hardware or secret-store-backed keys, and team policy workflows.
 - **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
   the remaining product work is running it on separate infrastructure, publishing heads,
   monitoring rollback/rewrite alarms, and rotating keys.
@@ -49,7 +50,8 @@ What remains to make it a hardened multi-user product:
 
 Operational persistence is no longer the gap — it is **built and runnable on two backends**
 (Postgres and embedded SQLite, behind the `AsyncEventStore` boundary). The remaining gap is
-*productization*: cryptographic caller identity (authn) and an *operated* witness service.
+*productization*: operating signed source identity well and running an *operated* witness
+service.
 
 ## Core Fold Work — Done For MVP
 
@@ -136,7 +138,8 @@ SQLite is implemented as the second async backend (`--features sqlite`, `sqlite:
 Postgres is an adapter, not the architecture.
 
 **Remaining.** DB-assigned ids for heavy fan-out, richer per-column event tables /
-`uses_as_evidence` edges, operational tuning, and authn are future product work.
+`uses_as_evidence` edges, operational tuning, and identity operations (key distribution /
+rotation / external signers) are future product work.
 
 ## Replay / Explain CLI — Done
 
@@ -234,11 +237,12 @@ DONE: serde canonical form + hash chain
 DONE: Postgres adapter + AsyncEventStore boundary + SQLite proof backend
 DONE: replay/explain CLI + full lifecycle + clap/completions/colors
 DONE: v0 MCP stdio JSON-RPC surface
+DONE: signed source identity primitive (feature-gated)
 ONGOING: evals/formal hardening, mainly fuzzing + append/projection model checking
 ```
 
 The dependency chain that originally blocked the MVP is now complete. The next dependency
-chain is product hardening: signed caller identity -> operated witness -> richer transports /
+chain is product hardening: identity operations -> operated witness -> richer transports /
 debugger surfaces -> SDKs and production deployment packaging.
 
 ## Later

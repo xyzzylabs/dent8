@@ -123,6 +123,6 @@ surface runs through the same firewall path, with an additional source->authorit
 ceiling registry at the `op_*` layer. The Postgres adapter commits accepted events
 transactionally under an advisory-lock-serialized append, and the read surface applies
 freshness by flagging stale receipts. Remaining product gaps are operational: signed
-caller identity, an operated witness service, DB-assigned ids, richer transports, and
+identity key distribution/rotation, an operated witness service, DB-assigned ids, richer transports, and
 more live Postgres smoke coverage. See [STATUS.md](STATUS.md), [roadmap.md](roadmap.md),
 and [threat-model.md](threat-model.md).

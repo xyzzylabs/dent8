@@ -16,11 +16,11 @@ tamper-resistance, and an **asymmetric (publicly-verifiable) signed-tree-head an
 adapter — incl. the materialized projection/edge graph — is DB-verified against `postgres:16`,
 and with `DENT8_STORE_URL` the runnable surface uses it, each multi-event operation
 committed transactionally; the stock binary keeps the file dev store). Still gated on
-implementation: **cryptographic caller identity** (authn — the source→authority *ceiling*
-authz is built, `dent8 authority`), the official **`rmcp`
-SDK** (the v0 stdio server already does tools, resources, and JSON-RPC batches, and reads
-apply freshness), and a **published anchor cadence** (a witness that signs/publishes the head
-on its own infra).
+implementation: **identity operations** (the feature-gated signed identity primitive is built
+as `dent8 identity`; remaining work is key distribution/rotation and external signers), the
+official **`rmcp` SDK** (the v0 stdio server already does tools, resources, and JSON-RPC
+batches, and reads apply freshness), and a **published anchor cadence** (a witness that
+signs/publishes the head on its own infra).
 The plan separates what is *claimable now* from what is *gated on
 implementation*, and is explicit about the weakest novelty claims. Prior art and the
 fact-checked basis are in [related-work.md](../related-work.md) and

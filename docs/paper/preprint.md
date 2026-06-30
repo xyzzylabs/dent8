@@ -261,9 +261,9 @@ explicit (§10) that the stock binary uses a single-writer **dev** store; the op
 transactional Postgres backend (`PostgresEventStore`) is built, **DB-verified**, and **driven
 by the CLI/MCP** when `DENT8_STORE_URL` is set (a `--features postgres` build), each
 multi-event operation committed transactionally. The remaining productization step is
-cryptographic caller identity (authn; the source→authority ceiling authz is built —
-`dent8 authority`) and an *operated* witness service (the signed-tree-head witness primitive
-is built — `dent8 witness`).
+operationalizing signed caller identity (the feature-gated primitive is built as
+`dent8 identity`; source→authority ceiling authz is `dent8 authority`) and an *operated*
+witness service (the signed-tree-head witness primitive is built — `dent8 witness`).
 
 ## 9. Evaluation
 
@@ -343,11 +343,12 @@ model with authority-weighted belief revision can make poisoning *visible, attri
 and — for the headline non-resurrection property — refutable by construction*, with a
 reproducible adversarial evaluation and a tamper-evident log made tamper-resistant under an
 external-witness deployment (§6, §10). The honest frontier is the operational layer:
-**caller authentication** that binds a *verified* caller to a source — the source→authority
-*ceiling* authz is built (`dent8 authority` rejects an over-ceiling write at the write
-boundary), but *which* source is calling is still asserted, not cryptographically proven — a
-published anchor cadence (the asymmetric signed-tree-head primitive is built and runnable as
-`dent8 witness`; the operated signing/publishing witness is not), a `valid_to` validity interval
+**caller authentication operations** — the source→authority *ceiling* authz is built
+(`dent8 authority` rejects an over-ceiling write at the write boundary), and the feature-gated
+signed identity primitive is built (`dent8 identity` issuer-signed grants + per-write
+source-key possession), but key distribution/rotation and external signers remain operational
+work — a published anchor cadence (the asymmetric signed-tree-head primitive is built and
+runnable as `dent8 witness`; the operated signing/publishing witness is not), a `valid_to` validity interval
 (reads already apply TTL freshness — `explain` flags stale facts), the official `rmcp` SDK
 (the v0 server already does tools, resources, and batches), and a broader
 property/fixture suite.

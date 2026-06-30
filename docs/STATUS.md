@@ -144,8 +144,21 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   it per instance). Caveats: a grant's `issuer`/`scope` are **recorded but not enforced** in
   v0 (scope does not restrict predicates); the ceiling is an `op_*`-layer check, so a process
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
-  boundary; and cryptographic verification of *which source is calling* (signed tokens) is
-  deferred — the ceiling caps *what a source may claim*, not *who it is*.
+  boundary. The ceiling caps *what a source may claim*; use signed source identity below to
+  prove *who is holding that source's key* at the CLI/MCP boundary.
+- **`dent8 identity issuer-keygen | agent-keygen | trust-add | trust-list | grant-issue |
+  grant-verify`** — the **signed source identity layer (authn)**, behind `--features
+  identity`. This is the non-bearer-token form: an operator-held issuer key signs a grant that
+  binds `source` -> source public key + max authority + optional subject scope/expiration, and
+  each write verifies the grant plus source-key possession before the candidate event reaches
+  the firewall. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
+  `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`;
+  otherwise local dev mode stays permissive. A binary without `--features identity` fails
+  closed with a build hint if identity is configured. Limits: source keys are local files
+  (`0600` required on Unix), so this distinguishes honestly configured agents on one machine
+  but is not a sandbox against malware or another process running as the same OS user; direct
+  DB/adapter writes still bypass the CLI/MCP boundary. See
+  [ADR 0012](decisions/0012-signed-source-identity.md).
 - **`dent8 witness keygen | sign | verify | head | serve`** — the **witness** (behind
   `--features witness`), built on the Ed25519 signed tree head. `keygen` writes a keypair
   (private key `0600`, with the warning to keep it off the log-writer's machine); `sign` emits
@@ -317,10 +330,10 @@ subject+predicate.
   `--features sqlite`, a `sqlite://` URL) is **runnable + tested** — assert/supersede/explain/verify
   run end-to-end over it (it runs in-memory, so its tests run in plain `cargo test`, no server),
   proving the boundary is genuinely backend-agnostic.
-  What remains *design-only*: **cryptographic caller identity**
-  (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
-  is calling is still asserted, not proven by a signed token), a richer per-column event
-  table + `uses_as_evidence` edges (a possible later design), and operational tuning.
+  What remains *design-only*: a richer per-column event table + `uses_as_evidence` edges (a
+  possible later design) and operational tuning. Cryptographic caller identity is now a
+  runnable feature-gated CLI/MCP boundary layer (`dent8 identity`, above); production still
+  needs key distribution/rotation and stronger secret storage.
 - **Persistent CLI/MCP remaining gaps — productization, not persistence.** The full surface — `assert` /
   `supersede` / `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` /
   `replay` / `verify` / `conflicts` / `eval` — across invocations is **Runnable** (above) over
@@ -342,9 +355,10 @@ subject+predicate.
   best-effort**: the retry lets ordinary concurrent writers through, but under heavy write
   fan-out a writer can still be cleanly rejected (retry the command), and **DB-assigned ids
   remain the end-state** that removes the contention entirely. Authz (source→authority ceilings)
-  is built (`dent8 authority`, above)
-  and the witness *primitive* is runnable (`dent8 witness`, above); the remaining product gap
-  is cryptographic caller identity and the *operated* witness service.
+  is built (`dent8 authority`, above), authn is a runnable feature-gated boundary layer
+  (`dent8 identity`, above), and the witness *primitive* is runnable (`dent8 witness`, above).
+  The remaining product gap is operating those controls: source-key provisioning/rotation,
+  hardware/secret-store-backed keys, and the *operated* witness service.
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
   surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.

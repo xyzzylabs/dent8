@@ -14,12 +14,16 @@ provider-specific memory provider. The invariant is simple:
    `dent8 hook native-memory-guard` to run `dent8 verify` and block direct native
    memory/rules writes that would bypass dent8. Provider profiles live in
    [`examples/agent-hooks/`](../examples/agent-hooks/).
-3. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
+3. **Signed source identity, feature-gated.** With `--features identity`, give each agent a
+   distinct source key and issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Run one
+   `dent8 mcp serve` process per agent identity when per-agent provenance matters; a shared
+   MCP server can only prove the identity whose key it holds.
+4. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
    `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
    authority candidate events. Imported facts need provenance and review.
-4. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
+5. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
    receipts. Exported files should carry dent8 claim ids and hash receipts in comments.
-5. **Reconcile, design-only.** Compare native files with dent8 projections and report stale,
+6. **Reconcile, design-only.** Compare native files with dent8 projections and report stale,
    superseded, unverified, or low-authority facts that are still visible to an agent.
 
 ## Provider stance

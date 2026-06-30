@@ -230,9 +230,229 @@ fn init_refuses_to_rewrite_env_without_force() {
     );
 }
 
+#[cfg(not(feature = "identity"))]
+#[test]
+fn identity_command_explains_feature_gate_without_identity_build() {
+    let output = run_dent8(&["identity", "trust-list"], &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("--features identity"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn signed_identity_grant_is_required_and_bound_to_the_write() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let trust = temp.file("trust.json").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let codex_key = temp.file("codex.key").to_string_lossy().into_owned();
+    let cursor_key = temp.file("cursor.key").to_string_lossy().into_owned();
+    let grant = temp.file("codex.grant.json").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(&["identity", "issuer-keygen", "--out", &issuer_key], &[]),
+        "issuer keygen",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "agent-keygen",
+                "source:codex",
+                "--out",
+                &codex_key,
+            ],
+            &[],
+        ),
+        "codex keygen",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "agent-keygen",
+                "source:cursor",
+                "--out",
+                &cursor_key,
+            ],
+            &[],
+        ),
+        "cursor keygen",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "trust-add",
+                "owner",
+                &format!("{issuer_key}.pub"),
+            ],
+            &[("DENT8_TRUST", &trust)],
+        ),
+        "trust add",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "grant-issue",
+                "source:codex",
+                "--public-key",
+                &format!("{codex_key}.pub"),
+                "--max",
+                "high",
+                "--issuer",
+                "owner",
+                "--issuer-key",
+                &issuer_key,
+                "--scope",
+                "person:alice",
+                "--out",
+                &grant,
+            ],
+            &[],
+        ),
+        "grant issue",
+    );
+    assert_success(
+        &run_dent8(
+            &["identity", "grant-verify", &grant],
+            &[("DENT8_TRUST", &trust)],
+        ),
+        "grant verify",
+    );
+
+    let missing_trust = temp
+        .file("missing-trust.json")
+        .to_string_lossy()
+        .into_owned();
+    let missing_trust_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", missing_trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", codex_key.as_str()),
+    ];
+    let missing_registry = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_shape",
+            "circle",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &missing_trust_env,
+    );
+    assert_eq!(missing_registry.status.code(), Some(2));
+    assert!(stderr(&missing_registry).contains("identity trust registry is required"));
+
+    let identity_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", codex_key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &identity_env,
+        ),
+        "signed identity write",
+    );
+
+    let wrong_source = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_color",
+            "green",
+            "--authority",
+            "high",
+            "--source",
+            "source:claude",
+        ],
+        &identity_env,
+    );
+    assert_eq!(wrong_source.status.code(), Some(2));
+    assert!(stderr(&wrong_source).contains("does not match write source"));
+
+    let wrong_key_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", cursor_key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    let wrong_key = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_snack",
+            "apple",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &wrong_key_env,
+    );
+    assert_eq!(wrong_key.status.code(), Some(2));
+    assert!(stderr(&wrong_key).contains("identity key does not match"));
+
+    let too_high = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_city",
+            "paris",
+            "--authority",
+            "canonical",
+            "--source",
+            "source:codex",
+        ],
+        &identity_env,
+    );
+    assert_eq!(too_high.status.code(), Some(2));
+    assert!(stderr(&too_high).contains("may assert at most High"));
+
+    let out_of_scope = run_dent8(
+        &[
+            "assert",
+            "person:bob",
+            "favorite_drink",
+            "coffee",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &identity_env,
+    );
+    assert_eq!(out_of_scope.status.code(), Some(2));
+    assert!(stderr(&out_of_scope).contains("does not cover write subject"));
+}
+
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     let mut command = Command::new(dent8_bin());
     command.args(args).env_remove("DENT8_STORE_URL");
+    command
+        .env_remove("DENT8_TRUST")
+        .env_remove("DENT8_GRANT")
+        .env_remove("DENT8_IDENTITY_KEY")
+        .env_remove("DENT8_REQUIRE_IDENTITY");
     for (key, value) in envs {
         command.env(key, value);
     }

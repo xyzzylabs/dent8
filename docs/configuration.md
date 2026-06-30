@@ -26,6 +26,10 @@ Postgres profile (requires a `--features postgres` build).
 | `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | *(unset → file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`postgres://…` needs `--features postgres`; `sqlite://…` needs `--features sqlite`). When set, reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
 | `DENT8_AUTHORITY` | `dent8 authority` + every write | `./dent8-authority.json` | Path to the source→authority **ceiling** registry. Enforcement is **opt-in**: it activates only once this file exists (created by `dent8 authority add`); then it is deny-by-default. |
 | `DENT8_REQUIRE_AUTHORITY` | every write | *(unset / false)* | Fail-closed deployment guard. When true (`1`, `true`, `yes`, or `on`), a missing authority registry is an error instead of permissive dev mode. |
+| `DENT8_TRUST` | signed identity (`--features identity`) | `./dent8-trust.json` | Path to trusted issuer public keys. If this file exists, signed source identity is active for every write. |
+| `DENT8_REQUIRE_IDENTITY` | every write (`--features identity`) | *(unset / false)* | Fail-closed identity guard. When true, a missing trust registry, grant, or source key rejects writes. Without `--features identity`, setting this or configuring identity produces a build-hint error. |
+| `DENT8_GRANT` | every write (`--features identity`) | *(unset)* | Signed source grant JSON binding the configured source id to a source public key and maximum authority. |
+| `DENT8_IDENTITY_KEY` | every write (`--features identity`) | *(unset)* | Source private signing key. On Unix, dent8 requires owner-only permissions (`0600`). |
 | `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
 | `DENT8_WITNESS_PUBKEY` | `dent8 witness verify` | `<DENT8_WITNESS_KEY>.pub` | Override the public key used for verification (e.g. when verifying a published head without the signing key). |
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
@@ -44,6 +48,7 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 | *(none)* | the full firewall + lifecycle over the **file dev store**, plus `eval`, `verify`, `conflicts`, `authority`, MCP | yes |
 | `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by a `postgres://` `DENT8_STORE_URL` | no |
 | `sqlite` | the embedded **SQLite backend** (sqlx + bundled libsqlite3, no server), selected by a `sqlite://` `DENT8_STORE_URL` | no |
+| `identity` | Ed25519 signed source identity commands and write-boundary grant verification | no |
 | `witness` | the `dent8 witness` Ed25519 signed-tree-head commands | no |
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
@@ -51,16 +56,48 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 cargo build -p dent8-cli                                    # stock: file store only
 cargo build -p dent8-cli --features postgres                # + Postgres backend
 cargo build -p dent8-cli --features sqlite                  # + embedded SQLite backend
+cargo build -p dent8-cli --features identity                # + signed source identity
 cargo build -p dent8-cli --features witness                 # + witness
 cargo build -p dent8-cli --features export                  # + Parquet export for DuckDB
-cargo build -p dent8-cli --features postgres,sqlite,witness,export # all
+cargo build -p dent8-cli --features postgres,sqlite,identity,witness,export # all
 ```
 
 Off by default so the stock binary stays free of the async sqlx and signature stacks. The
-authority registry and witness keys are **host-local config**, independent of the event
-backend — a Postgres deployment still reads `DENT8_AUTHORITY` / the witness key from the local
-filesystem, so provision them per instance. Set `DENT8_REQUIRE_AUTHORITY=1` for deployments
-that must fail closed if the registry was not provisioned.
+authority registry, identity trust/grants/keys, and witness keys are **host-local config**,
+independent of the event backend — a Postgres deployment still reads these from the local
+filesystem, so provision them per instance. Set `DENT8_REQUIRE_AUTHORITY=1` and
+`DENT8_REQUIRE_IDENTITY=1` for deployments that must fail closed if registry or identity
+material was not provisioned.
+
+## Signed source identity flow
+
+Signed identity proves source-key possession at the CLI/MCP boundary. It is not a login
+server: the operator holds an issuer key and issues grants to agent/source keys.
+
+```sh
+cargo build -p dent8-cli --features identity
+
+mkdir -p .dent8/identities .dent8/grants
+dent8 identity issuer-keygen --out .dent8/issuer.key
+dent8 identity agent-keygen source:codex --out .dent8/identities/codex.key
+export DENT8_TRUST=.dent8/trust.json
+dent8 identity trust-add owner .dent8/issuer.key.pub
+dent8 identity grant-issue source:codex \
+  --public-key .dent8/identities/codex.key.pub \
+  --max high \
+  --issuer owner \
+  --issuer-key .dent8/issuer.key \
+  --scope repo:dent8 \
+  --out .dent8/grants/codex.grant.json
+
+export DENT8_REQUIRE_IDENTITY=1
+export DENT8_GRANT=.dent8/grants/codex.grant.json
+export DENT8_IDENTITY_KEY=.dent8/identities/codex.key
+```
+
+Each agent should have a distinct source key and grant. A shared MCP process can only prove
+the single identity whose private key it holds. See
+[ADR 0012](decisions/0012-signed-source-identity.md) for the security model and limits.
 
 See [STATUS.md](STATUS.md) for what each surface does, and [storage.md](storage.md) for the
 backend design.

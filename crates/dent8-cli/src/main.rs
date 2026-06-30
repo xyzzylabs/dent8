@@ -20,6 +20,8 @@ use dent8_store::{
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
+#[cfg(feature = "identity")]
+mod identity;
 mod mcp;
 #[cfg(feature = "witness")]
 mod witness;
@@ -104,6 +106,7 @@ fn run_cli(cli: Cli) -> i32 {
             ),
             AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source),
         },
+        Some(CliCommand::Identity(args)) => run_identity(&args.command),
         Some(CliCommand::Hook(args)) => match args.command {
             HookCommand::NativeMemoryGuard => cmd_hook_native_memory_guard(),
         },
@@ -224,6 +227,8 @@ enum CliCommand {
     Export(ExportArgs),
     /// Manage the source -> authority ceiling.
     Authority(AuthorityArgs),
+    /// Manage signed source identity keys and grants.
+    Identity(IdentityArgs),
     /// Provider hook helpers.
     Hook(HookArgs),
     /// Emit/verify Ed25519 signed tree heads.
@@ -378,6 +383,88 @@ struct AuthorityAddArgs {
 struct AuthorityRemoveArgs {
     #[arg(value_parser = parse_source)]
     source: String,
+}
+
+#[derive(Args, Debug)]
+struct IdentityArgs {
+    #[command(subcommand)]
+    command: IdentityCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum IdentityCommand {
+    /// Generate an issuer/admin signing key.
+    IssuerKeygen(IdentityKeygenArgs),
+    /// Generate a source/agent signing key.
+    AgentKeygen(IdentityAgentKeygenArgs),
+    /// Trust an issuer public key.
+    TrustAdd(IdentityTrustAddArgs),
+    /// List trusted issuer public keys.
+    TrustList,
+    /// Issue a signed source grant.
+    GrantIssue(IdentityGrantIssueArgs),
+    /// Verify a signed source grant against the local trust registry.
+    GrantVerify(IdentityGrantVerifyArgs),
+}
+
+#[derive(Args, Debug)]
+struct IdentityKeygenArgs {
+    /// Private signing-key path to create. The public key is written to <out>.pub.
+    #[arg(long, value_name = "PATH")]
+    out: String,
+}
+
+#[derive(Args, Debug)]
+struct IdentityAgentKeygenArgs {
+    /// Source id this key will represent.
+    #[arg(value_parser = parse_source)]
+    source: String,
+    /// Private signing-key path to create. The public key is written to <out>.pub.
+    #[arg(long, value_name = "PATH")]
+    out: String,
+}
+
+#[derive(Args, Debug)]
+struct IdentityTrustAddArgs {
+    /// Stable issuer name used inside grants.
+    issuer: String,
+    /// Issuer public-key file.
+    #[arg(value_name = "ISSUER_PUBKEY")]
+    public_key: String,
+}
+
+#[derive(Args, Debug)]
+struct IdentityGrantIssueArgs {
+    /// Source id to grant.
+    #[arg(value_parser = parse_source)]
+    source: String,
+    /// Source/agent public-key file.
+    #[arg(long, value_name = "SOURCE_PUBKEY")]
+    public_key: String,
+    /// Maximum authority this source key may claim.
+    #[arg(long, value_enum)]
+    max: CliAuthority,
+    /// Issuer name. Must match a trusted issuer name on verification.
+    #[arg(long)]
+    issuer: String,
+    /// Issuer private signing-key path.
+    #[arg(long, value_name = "ISSUER_KEY")]
+    issuer_key: String,
+    /// Grant JSON path to create.
+    #[arg(long, value_name = "PATH")]
+    out: String,
+    /// Optional subject scope: "*" or exact <kind>:<key>.
+    #[arg(long, value_name = "SCOPE")]
+    scope: Option<String>,
+    /// Optional expiration as Unix milliseconds.
+    #[arg(long, value_name = "MILLIS")]
+    expires_at_ms: Option<i64>,
+}
+
+#[derive(Args, Debug)]
+struct IdentityGrantVerifyArgs {
+    /// Grant JSON path.
+    grant: String,
 }
 
 #[derive(Args, Debug)]
@@ -574,6 +661,33 @@ fn parse_predicate(raw: &str) -> Result<String, String> {
 fn parse_source(raw: &str) -> Result<String, String> {
     ActorId::new(raw).map_err(|error| format!("invalid source '{raw}': {error}"))?;
     Ok(raw.to_string())
+}
+
+fn run_identity(command: &IdentityCommand) -> i32 {
+    #[cfg(not(feature = "identity"))]
+    {
+        let _ = command;
+        eprintln!("`dent8 identity` requires a build with `--features identity`");
+        2
+    }
+    #[cfg(feature = "identity")]
+    match command {
+        IdentityCommand::IssuerKeygen(args) => identity::issuer_keygen(&args.out),
+        IdentityCommand::AgentKeygen(args) => identity::agent_keygen(&args.source, &args.out),
+        IdentityCommand::TrustAdd(args) => identity::trust_add(&args.issuer, &args.public_key),
+        IdentityCommand::TrustList => identity::trust_list(),
+        IdentityCommand::GrantIssue(args) => identity::grant_issue(
+            &args.source,
+            &args.public_key,
+            args.max,
+            &args.issuer,
+            &args.issuer_key,
+            &args.out,
+            args.scope.as_deref(),
+            args.expires_at_ms,
+        ),
+        IdentityCommand::GrantVerify(args) => identity::grant_verify(&args.grant),
+    }
 }
 
 /// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
@@ -862,6 +976,70 @@ fn authority_registry_path() -> String {
     std::env::var("DENT8_AUTHORITY").unwrap_or_else(|_| DEFAULT_AUTHORITY.to_string())
 }
 
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "identity"), allow(dead_code))]
+struct WriteAuth<'a> {
+    operation: &'a str,
+    subject_kind: &'a str,
+    subject_key: &'a str,
+    predicate: &'a str,
+    value: Option<&'a str>,
+    authority: AuthorityLevel,
+    source: &'a str,
+    derived_from: Option<WriteAuthSource<'a>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[cfg_attr(not(feature = "identity"), allow(dead_code))]
+struct WriteAuthSource<'a> {
+    subject_kind: &'a str,
+    subject_key: &'a str,
+    predicate: &'a str,
+}
+
+impl<'a> WriteAuth<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        operation: &'a str,
+        subject_kind: &'a str,
+        subject_key: &'a str,
+        predicate: &'a str,
+        value: Option<&'a str>,
+        authority: AuthorityLevel,
+        source: &'a str,
+    ) -> Self {
+        Self {
+            operation,
+            subject_kind,
+            subject_key,
+            predicate,
+            value,
+            authority,
+            source,
+            derived_from: None,
+        }
+    }
+
+    fn with_derived_from(
+        mut self,
+        subject_kind: &'a str,
+        subject_key: &'a str,
+        predicate: &'a str,
+    ) -> Self {
+        self.derived_from = Some(WriteAuthSource {
+            subject_kind,
+            subject_key,
+            predicate,
+        });
+        self
+    }
+
+    #[cfg(feature = "identity")]
+    fn subject(&self) -> String {
+        format!("{}:{}", self.subject_kind, self.subject_key)
+    }
+}
+
 fn parse_flag(name: &str, value: &str) -> Result<bool, String> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -939,6 +1117,37 @@ fn write_atomic(path: &str, contents: &str) -> Result<(), String> {
 fn enforce_source_ceiling(source: &str, requested: AuthorityLevel) -> Result<(), OpError> {
     let registry = load_authority_registry().map_err(OpError::Invalid)?;
     ceiling_check(registry.as_ref(), source, requested)
+}
+
+/// The write-boundary auth gate: source→authority ceiling first (authz), then optional
+/// signed source identity (authn) when a trust root is configured.
+fn enforce_write_authority(auth: &WriteAuth<'_>) -> Result<(), OpError> {
+    enforce_source_ceiling(auth.source, auth.authority)?;
+    enforce_source_identity(auth).map_err(OpError::Invalid)
+}
+
+#[cfg(feature = "identity")]
+fn enforce_source_identity(auth: &WriteAuth<'_>) -> Result<(), String> {
+    identity::enforce_write(auth, now_millis())
+}
+
+#[cfg(not(feature = "identity"))]
+fn enforce_source_identity(_auth: &WriteAuth<'_>) -> Result<(), String> {
+    let required = env_flag("DENT8_REQUIRE_IDENTITY")?;
+    let trust_path =
+        std::env::var("DENT8_TRUST").unwrap_or_else(|_| "dent8-trust.json".to_string());
+    let configured = required
+        || std::env::var_os("DENT8_GRANT").is_some()
+        || std::env::var_os("DENT8_IDENTITY_KEY").is_some()
+        || std::path::Path::new(&trust_path).exists();
+    if configured {
+        return Err(
+            "signed source identity is configured, but this binary was built without \
+             `--features identity`"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 /// The pure decision: reject `requested` above the source's ceiling. `None` registry is
@@ -2431,7 +2640,15 @@ fn op_assert(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
-    enforce_source_ceiling(source, authority)?;
+    enforce_write_authority(&WriteAuth::new(
+        "assert",
+        subject_kind,
+        subject_key,
+        predicate,
+        Some(value),
+        authority,
+        source,
+    ))?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let now = now_millis();
     // A fresh claim per assertion (keyed by sequence); the registry's uniqueness governs
@@ -2498,7 +2715,18 @@ fn op_derive(
     from_key: &str,
     from_predicate: &str,
 ) -> Result<String, OpError> {
-    enforce_source_ceiling(source, authority)?;
+    enforce_write_authority(
+        &WriteAuth::new(
+            "derive",
+            subject_kind,
+            subject_key,
+            predicate,
+            Some(value),
+            authority,
+            source,
+        )
+        .with_derived_from(from_kind, from_key, from_predicate),
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let from_subject = EntityRef::new(from_kind, from_key)
         .map_err(|error| OpError::Invalid(format!("invalid source subject: {error}")))?;
@@ -2671,7 +2899,15 @@ fn op_supersede(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
-    enforce_source_ceiling(source, authority)?;
+    enforce_write_authority(&WriteAuth::new(
+        "supersede",
+        subject_kind,
+        subject_key,
+        predicate,
+        Some(new_value),
+        authority,
+        source,
+    ))?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -2809,7 +3045,15 @@ fn op_retract(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
-    enforce_source_ceiling(source, authority)?;
+    enforce_write_authority(&WriteAuth::new(
+        "retract",
+        subject_kind,
+        subject_key,
+        predicate,
+        None,
+        authority,
+        source,
+    ))?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -2945,7 +3189,15 @@ fn build_per_incumbent(
     verb: &str,
     kind_for: impl Fn(&ClaimId) -> ClaimEventKind,
 ) -> Result<Vec<ClaimEvent>, OpError> {
-    enforce_source_ceiling(source, authority)?;
+    enforce_write_authority(&WriteAuth::new(
+        verb,
+        subject_kind,
+        subject_key,
+        predicate,
+        None,
+        authority,
+        source,
+    ))?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -3071,7 +3323,15 @@ fn op_contradict(
     authority: AuthorityLevel,
     source: &str,
 ) -> Result<String, OpError> {
-    enforce_source_ceiling(source, authority)?;
+    enforce_write_authority(&WriteAuth::new(
+        "contradict",
+        subject_kind,
+        subject_key,
+        predicate,
+        Some(opposing_value),
+        authority,
+        source,
+    ))?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;

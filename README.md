@@ -39,7 +39,8 @@ cargo run -p dent8-cli -- demo
 
 The stock `dent8` binary uses a local file log and needs no services. Opt-in builds add the
 operational **Postgres** backend (`--features postgres`, selected by a `postgres://`
-`DENT8_STORE_URL`) and the Ed25519 **witness** (`--features witness`).
+`DENT8_STORE_URL`), signed source identity (`--features identity`), and the Ed25519
+**witness** (`--features witness`).
 
 ## Quickstart
 
@@ -79,8 +80,9 @@ source of truth for what is built.** In short:
   **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
   self-demonstrating benchmark), and **`export`** (the whole log to Parquet for offline DuckDB
   forensics/audit, behind `--features export` — see [examples/duckdb/](examples/duckdb/)),
-  `dent8 init` / `dent8 doctor`, `dent8 authority` / `dent8 witness` (the latter behind
-  `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
+  `dent8 init` / `dent8 doctor`, `dent8 authority`, `dent8 identity` (behind
+  `--features identity`), `dent8 witness` (behind `--features witness`), and
+  `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
   SQLite**, selected by `DENT8_STORE_URL`. `dent8 mcp serve` exposes
@@ -122,12 +124,14 @@ The runnable surface persists either way: a local file dev log by default, or �
 `DENT8_STORE_URL` set and a `--features postgres` build — the **DB-verified transactional
 Postgres backend** (each multi-event operation committed as one transaction). An opt-in
 **authority ceiling** (`dent8 authority`) caps what each source may assert, rejecting a
-write above its registered ceiling. The witness is runnable as a *primitive* — **`dent8
-witness`** (`--features witness`) emits Ed25519 signed tree heads and detects a history
-rewrite or rollback that an internal chain re-verify cannot. The remaining gap to a hardened
-multi-user product is **cryptographic caller identity** (signed grants — *which* source is
-calling is still asserted) and an **operated witness service** that signs on a cadence from
-separate infrastructure. The [Roadmap](docs/roadmap.md) and
+write above its registered ceiling. Signed source identity — **`dent8 identity`**
+(`--features identity`) — binds a source id to a source public key via an issuer-signed grant
+and verifies source-key possession on every CLI/MCP write when a trust root is configured.
+The witness is runnable as a *primitive* — **`dent8 witness`** (`--features witness`) emits
+Ed25519 signed tree heads and detects a history rewrite or rollback that an internal chain
+re-verify cannot. The remaining gap to a hardened multi-user product is operating those
+controls well: key distribution/rotation, stronger secret storage, and an **operated witness
+service** that signs on a cadence from separate infrastructure. The [Roadmap](docs/roadmap.md) and
 [docs/STATUS.md](docs/STATUS.md) track exactly that.
 
 ## Initial Shape

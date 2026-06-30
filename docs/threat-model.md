@@ -78,9 +78,10 @@ So end-to-end firewall behavior *is* runnable — and the CLI/MCP run on `Postgr
 when `DENT8_STORE_URL` is set (a `--features postgres` build), with each multi-event
 operation committed in one transaction. The remaining gap is *productization*, not
 enforcement: an opt-in **authority ceiling** caps what each source may assert (`dent8
-authority`), but *which* source is calling is still asserted, not cryptographically proven
-("authority is asserted, not proven", below), and the witness is a runnable *primitive*
-(`dent8 witness`) but not yet an *operated* service on separate infrastructure.
+authority`), and an opt-in **signed source identity** layer (`dent8 identity`, behind
+`--features identity`) proves source-key possession at the CLI/MCP boundary when a trust
+root is configured. The witness is a runnable *primitive* (`dent8 witness`) but not yet an
+*operated* service on separate infrastructure.
 See [STATUS.md](STATUS.md).
 
 ## Residual risks & honest limits
@@ -107,17 +108,21 @@ See [STATUS.md](STATUS.md).
     (which checks each head against the current log prefix and that counts never decrease — the
     monotonic, append-only check above). The remaining piece is *operating* the witness on
     separate infrastructure with a published cadence and key rotation.
-- **Authority is ceiling-capped, but the source identity is asserted, not proven.** The
-  opt-in **authority registry** (`dent8 authority`) caps a stated `Authority` at the source's
-  registered ceiling and *rejects* an over-ceiling write — so a low-trust source cannot mint
-  `canonical` even by passing it. What is *not yet* proven is the source identity itself: a
-  caller can still claim to *be* a high-ceiling source. A compromised high-authority actor is
-  out of scope; cryptographic caller identity (signed grants) is the deferred next layer.
-  Authority arbitration plus the ceiling chiefly defends against *low*-privilege injection
-  (the MINJA case). Two scope notes: the ceiling is enforced at the CLI/MCP `op_*` write
-  layer, so a process driving the Postgres adapter *directly* is outside this boundary; and a
-  grant's `issuer`/`scope` are recorded but **not enforced** in v0 (scope does not yet
-  restrict which predicates a source may write).
+- **Source identity is proven only at the dent8 boundary.** The opt-in **authority registry**
+  (`dent8 authority`) caps a stated `Authority` at the source's registered ceiling and
+  *rejects* an over-ceiling write — so a low-trust source cannot mint `canonical` even by
+  passing it. The opt-in **signed source identity** layer (`dent8 identity`, feature-gated)
+  adds authn: a trusted issuer signs a grant binding source id -> source public key +
+  authority ceiling + optional subject scope/expiration, and each write proves possession of
+  the source private key before the candidate event reaches the firewall. This closes the
+  "copy a grant but not the key" and "claim to be `source:owner`" gap for CLI/MCP writes.
+  Residuals: a compromised source private key or same-OS-user process that can read the key
+  can still impersonate the source; a compromised issuer can issue bad grants; direct DB
+  writes or direct adapter calls bypass this boundary; and a shared MCP server can only prove
+  the single identity whose key it holds. Stronger deployments need separate OS users,
+  hardware/secret-store-backed keys, external signers, and key rotation. Authority arbitration
+  plus the ceiling/identity chiefly defends against *low*-privilege injection (the MINJA
+  case); a compromised high-authority actor remains out of scope.
 - **The firewall cannot judge truth.** It governs provenance, freshness, authority,
   and contradiction *visibility* — not whether a well-formed, well-sourced claim is
   factually correct. That is the correct scope for an integrity layer.
