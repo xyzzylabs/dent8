@@ -1,3 +1,12 @@
+use std::{
+    io::IsTerminal,
+    str::FromStr,
+    sync::atomic::{AtomicU8, Ordering},
+};
+
+use clap::builder::styling::{AnsiColor, Styles};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
+use clap_complete::{Shell, generate};
 use dent8_core::{
     ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
     ClaimLifecycle, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId,
@@ -20,168 +29,506 @@ fn main() {
     std::process::exit(code);
 }
 
-#[allow(clippy::too_many_lines)] // a flat command-dispatch table; splitting it would obscure it
 fn run(args: impl IntoIterator<Item = String>) -> i32 {
-    let args = args.into_iter().collect::<Vec<_>>();
-    match args.as_slice() {
-        [] => {
-            print_help();
-            0
-        }
-        [arg] if arg == "--help" || arg == "-h" => {
-            print_help();
-            0
-        }
-        [command] if command == "--version" || command == "-V" => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
-            0
-        }
-        [command, backend] if command == "schema" && backend == "postgres" => {
-            // Print exactly the schema `migrate()` deploys (the event-log table + the
-            // materialized projection/edges), so an operator who pre-creates it gets the tables
-            // the runtime actually uses (a richer per-column layout is a possible later design).
-            print!("{EVENT_LOG_SCHEMA_SQL}{MATERIALIZATION_SCHEMA_SQL}");
-            0
-        }
-        [command] if command == "demo" => {
-            demo();
-            0
-        }
-        [command] if command == "verify" => cmd_verify(),
-        [command] if command == "conflicts" => cmd_conflicts(),
-        [command] if command == "eval" => cmd_eval(),
-        #[cfg(feature = "export")]
-        [command, out] if command == "export" => cmd_export(out),
-        #[cfg(feature = "export")]
-        [command] if command == "export" => cmd_export("dent8-events.parquet"),
-        #[cfg(feature = "export")]
-        [command, ..] if command == "export" => {
-            // Wrong arity on an export-enabled build: a targeted usage, not the generic help.
-            eprintln!("usage: dent8 export [out.parquet]");
-            2
-        }
-        #[cfg(not(feature = "export"))]
-        [command, ..] if command == "export" => {
-            eprintln!(
-                "`dent8 export` (Parquet for DuckDB) requires a build with `--features export`"
-            );
-            2
-        }
-        [command, kind, key, predicate, value, authority, source] if command == "assert" => {
-            cmd_assert(kind, key, predicate, value, authority, source)
-        }
-        [
-            command,
-            kind,
-            key,
-            predicate,
-            value,
-            authority,
-            source,
-            fk,
-            fkey,
-            fpred,
-        ] if command == "derive" => cmd_derive(
-            kind, key, predicate, value, authority, source, fk, fkey, fpred,
-        ),
-        [command, kind, key, predicate, value, authority, source] if command == "supersede" => {
-            cmd_supersede(kind, key, predicate, value, authority, source)
-        }
-        [command, kind, key, predicate, authority, source] if command == "retract" => {
-            cmd_retract(kind, key, predicate, authority, source)
-        }
-        [command, kind, key, predicate, authority, source] if command == "reinforce" => {
-            cmd_reinforce(kind, key, predicate, authority, source)
-        }
-        [command, kind, key, predicate, authority, source] if command == "expire" => {
-            cmd_expire(kind, key, predicate, authority, source)
-        }
-        [command, kind, key, predicate, value, authority, source] if command == "contradict" => {
-            cmd_contradict(kind, key, predicate, value, authority, source)
-        }
-        [command, kind, key, predicate] if command == "explain" => {
-            cmd_explain(kind, key, predicate)
-        }
-        [command, kind, key, predicate] if command == "replay" => cmd_replay(kind, key, predicate),
-        [command, sub] if command == "authority" && sub == "list" => cmd_authority_list(),
-        [command, sub, source, max] if command == "authority" && sub == "add" => {
-            cmd_authority_add(source, max, None, None)
-        }
-        [command, sub, source, max, issuer] if command == "authority" && sub == "add" => {
-            cmd_authority_add(source, max, Some(issuer), None)
-        }
-        [command, sub, source, max, issuer, scope] if command == "authority" && sub == "add" => {
-            cmd_authority_add(source, max, Some(issuer), Some(scope))
-        }
-        [command, sub, source] if command == "authority" && sub == "remove" => {
-            cmd_authority_remove(source)
-        }
-        [command] if command == "authority" => {
-            eprintln!(
-                "usage: dent8 authority <list | add <source> <max> [issuer] [scope] | \
-                 remove <source>>"
-            );
-            2
-        }
-        [command, subcommand] if command == "hook" && subcommand == "native-memory-guard" => {
-            cmd_hook_native_memory_guard()
-        }
-        [command] if command == "hook" => {
-            eprintln!("usage: dent8 hook native-memory-guard");
-            2
-        }
-        [command, subcommand] if command == "mcp" && subcommand == "serve" => mcp::serve(),
-        [command, rest @ ..] if command == "witness" => run_witness(rest),
-        [command] => usage_error(command),
-        _ => {
-            print_help();
-            2
+    let args: Vec<String> = args.into_iter().collect();
+    let color = requested_color(&args).unwrap_or(CliColor::Auto);
+    set_color(color);
+
+    let argv = std::iter::once("dent8".to_string()).chain(args);
+    let command = Cli::command()
+        .color(color.clap_choice())
+        .styles(cli_styles());
+    match command
+        .try_get_matches_from(argv)
+        .and_then(|matches| Cli::from_arg_matches(&matches))
+    {
+        Ok(cli) => run_cli(cli),
+        Err(error) => {
+            let _ = error.print();
+            error.exit_code()
         }
     }
 }
 
-/// A known verb invoked with the wrong arity prints its specific usage (exit 2); anything else
-/// falls back to the general help. Keeps the per-verb usage text out of the dispatch match.
-fn usage_error(command: &str) -> i32 {
-    let usage = match command {
-        "assert" => {
-            "dent8 assert <subject-kind> <subject-key> <predicate> <value> <authority> <source>\
-             \n  e.g.  dent8 assert repo myproj database postgres high owner"
+fn run_cli(cli: Cli) -> i32 {
+    set_color(cli.color);
+    match cli.command {
+        None => {
+            let mut command = Cli::command()
+                .color(cli.color.clap_choice())
+                .styles(cli_styles());
+            let _ = command.print_help();
+            println!();
+            0
         }
-        "supersede" => {
-            "dent8 supersede <subject-kind> <subject-key> <predicate> <new-value> <authority> \
-             <source>\n  e.g.  dent8 supersede repo myproj database mysql high owner"
+        Some(CliCommand::Demo) => {
+            demo();
+            0
         }
-        "retract" => {
-            "dent8 retract <subject-kind> <subject-key> <predicate> <authority> <source>\
-             \n  e.g.  dent8 retract repo myproj database high owner"
+        Some(CliCommand::Verify) => cmd_verify(),
+        Some(CliCommand::Conflicts) => cmd_conflicts(),
+        Some(CliCommand::Eval) => cmd_eval(),
+        Some(CliCommand::Completions(args)) => cmd_completions(args.shell),
+        Some(CliCommand::Export(args)) => {
+            #[cfg(feature = "export")]
+            {
+                cmd_export(&args.out)
+            }
+            #[cfg(not(feature = "export"))]
+            {
+                let _ = args;
+                eprintln!(
+                    "`dent8 export` (Parquet for DuckDB) requires a build with `--features export`"
+                );
+                2
+            }
         }
-        "derive" => {
-            "dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> \
-             <from-key> <from-predicate>\n  e.g.  dent8 derive repo myproj deploy_target pg high \
-             agent repo myproj database"
+        Some(CliCommand::Assert(args)) => cmd_assert(args),
+        Some(CliCommand::Derive(args)) => cmd_derive(args),
+        Some(CliCommand::Supersede(args)) => cmd_supersede(args),
+        Some(CliCommand::Retract(args)) => cmd_retract(args),
+        Some(CliCommand::Reinforce(args)) => cmd_reinforce(args),
+        Some(CliCommand::Expire(args)) => cmd_expire(args),
+        Some(CliCommand::Contradict(args)) => cmd_contradict(args),
+        Some(CliCommand::Explain(args)) => cmd_explain(args),
+        Some(CliCommand::Replay(args)) => cmd_replay(args),
+        Some(CliCommand::Authority(args)) => match args.command {
+            AuthorityCommand::List => cmd_authority_list(),
+            AuthorityCommand::Add(args) => cmd_authority_add(
+                &args.source,
+                args.max.level(),
+                args.issuer.as_deref(),
+                args.scope.as_deref(),
+            ),
+            AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source),
+        },
+        Some(CliCommand::Hook(args)) => match args.command {
+            HookCommand::NativeMemoryGuard => cmd_hook_native_memory_guard(),
+        },
+        Some(CliCommand::Mcp(args)) => match args.command {
+            McpCommand::Serve => mcp::serve(),
+        },
+        Some(CliCommand::Schema(args)) => match args.command {
+            SchemaCommand::Postgres => {
+                // Print exactly the schema `migrate()` deploys (the event-log table + the
+                // materialized projection/edges), so an operator who pre-creates it gets the
+                // tables the runtime actually uses (a richer per-column layout is possible later).
+                print!("{EVENT_LOG_SCHEMA_SQL}{MATERIALIZATION_SCHEMA_SQL}");
+                0
+            }
+        },
+        Some(CliCommand::Witness(args)) => run_witness(&args.args),
+    }
+}
+
+const CLI_AFTER_HELP: &str = "\
+Subject is written as <kind>:<key>, e.g. person:alice or repo:dent8.
+Example: dent8 assert person:alice favorite_drink tea --authority high --source user:alice
+
+Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or an
+async backend selected by DENT8_STORE_URL, dispatched by scheme (postgres:// needs
+--features postgres). authority is one of: low | medium | high | canonical.
+Authority ceiling: a source may assert at most its registered max. Enforced once a registry
+exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
+source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
+DENT8_REQUIRE_AUTHORITY=1 is set. The registry is host-local config, independent of the event
+backend. issuer/scope are recorded but NOT enforced in v0. See docs/STATUS.md.";
+
+fn cli_styles() -> Styles {
+    Styles::styled()
+        .header(AnsiColor::Green.on_default().bold())
+        .usage(AnsiColor::Green.on_default().bold())
+        .literal(AnsiColor::Cyan.on_default().bold())
+        .placeholder(AnsiColor::Yellow.on_default())
+        .valid(AnsiColor::Green.on_default())
+        .invalid(AnsiColor::Red.on_default().bold())
+        .error(AnsiColor::Red.on_default().bold())
+}
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "dent8",
+    version,
+    about = "A memory firewall for coding agents",
+    after_help = CLI_AFTER_HELP,
+    styles = cli_styles(),
+    disable_help_subcommand = true
+)]
+struct Cli {
+    /// When to use terminal colors.
+    #[arg(long, global = true, value_enum, default_value_t = CliColor::Auto)]
+    color: CliColor,
+    #[command(subcommand)]
+    command: Option<CliCommand>,
+}
+
+#[derive(Subcommand, Debug)]
+enum CliCommand {
+    /// Run the firewall + replay/explain loop in memory.
+    Demo,
+    /// Assert a fact through the firewall, persisted to the log.
+    #[command(
+        override_usage = "dent8 assert <SUBJECT> <PREDICATE> <VALUE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Assert(ValueWriteArgs),
+    /// Revise the believed fact, rejected if it cannot out-rank the incumbent.
+    #[command(
+        override_usage = "dent8 supersede <SUBJECT> <PREDICATE> <NEW_VALUE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Supersede(ValueWriteArgs),
+    /// Remove the believed fact, rejected if it cannot out-rank the incumbent.
+    #[command(
+        override_usage = "dent8 retract <SUBJECT> <PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Retract(FactWriteArgs),
+    /// Flag a conflict (dissent): contest the fact, keep both.
+    #[command(
+        override_usage = "dent8 contradict <SUBJECT> <PREDICATE> <OPPOSING_VALUE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Contradict(ValueWriteArgs),
+    /// Assert a fact derived from another fact, recording a dependency edge.
+    #[command(
+        override_usage = "dent8 derive <SUBJECT> <PREDICATE> <VALUE> --from <SOURCE_SUBJECT> <SOURCE_PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Derive(DeriveWriteArgs),
+    /// Corroborate the believed fact without restating its value.
+    #[command(
+        override_usage = "dent8 reinforce <SUBJECT> <PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Reinforce(FactWriteArgs),
+    /// Terminally expire the believed fact.
+    #[command(
+        override_usage = "dent8 expire <SUBJECT> <PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+    )]
+    Expire(FactWriteArgs),
+    /// Explain the believed fact, with an integrity receipt.
+    Explain(ReadFactArgs),
+    /// Replay the full event history for a fact.
+    Replay(ReadFactArgs),
+    /// Check log integrity.
+    Verify,
+    /// List contested facts.
+    Conflicts,
+    /// Run the adversarial corpus.
+    Eval,
+    /// Generate shell completion scripts.
+    #[command(visible_aliases = ["completion", "autocomplete"])]
+    Completions(CompletionsArgs),
+    /// Export the log to Parquet for DuckDB analysis.
+    Export(ExportArgs),
+    /// Manage the source -> authority ceiling.
+    Authority(AuthorityArgs),
+    /// Provider hook helpers.
+    Hook(HookArgs),
+    /// Emit/verify Ed25519 signed tree heads.
+    Witness(WitnessArgs),
+    /// Print schemas.
+    Schema(SchemaArgs),
+    /// Serve dent8 over MCP.
+    Mcp(McpArgs),
+}
+
+#[derive(Args, Debug)]
+struct ValueWriteArgs {
+    /// Fact subject, written as <kind>:<key> (for example person:alice).
+    subject: CliSubject,
+    /// Predicate within the subject's fact stream.
+    #[arg(value_parser = parse_predicate)]
+    predicate: String,
+    /// Text value to assert.
+    value: String,
+    /// Claimed authority level.
+    #[arg(long, short = 'a', value_enum)]
+    authority: CliAuthority,
+    /// Provenance source for this write.
+    #[arg(long, short = 's', value_parser = parse_source)]
+    source: String,
+}
+
+#[derive(Args, Debug)]
+struct FactWriteArgs {
+    /// Fact subject, written as <kind>:<key> (for example person:alice).
+    subject: CliSubject,
+    /// Predicate within the subject's fact stream.
+    #[arg(value_parser = parse_predicate)]
+    predicate: String,
+    /// Claimed authority level.
+    #[arg(long, short = 'a', value_enum)]
+    authority: CliAuthority,
+    /// Provenance source for this write.
+    #[arg(long, short = 's', value_parser = parse_source)]
+    source: String,
+}
+
+#[derive(Args, Debug)]
+struct DeriveWriteArgs {
+    /// Fact subject, written as <kind>:<key> (for example person:alice).
+    subject: CliSubject,
+    /// Predicate within the subject's fact stream.
+    #[arg(value_parser = parse_predicate)]
+    predicate: String,
+    /// Text value to assert.
+    value: String,
+    /// Source fact to derive from: <source-subject> <source-predicate>.
+    #[arg(long, required = true, num_args = 2, value_names = ["SOURCE_SUBJECT", "SOURCE_PREDICATE"])]
+    from: Vec<String>,
+    /// Claimed authority level.
+    #[arg(long, short = 'a', value_enum)]
+    authority: CliAuthority,
+    /// Provenance source for this write.
+    #[arg(long, short = 's', value_parser = parse_source)]
+    source: String,
+}
+
+#[derive(Args, Debug)]
+struct ReadFactArgs {
+    /// Fact subject, written as <kind>:<key> (for example person:alice).
+    subject: CliSubject,
+    /// Predicate within the subject's fact stream.
+    #[arg(value_parser = parse_predicate)]
+    predicate: String,
+}
+
+#[derive(Args, Debug)]
+struct ExportArgs {
+    /// Parquet output path.
+    #[arg(default_value = "dent8-events.parquet", value_name = "OUT")]
+    out: String,
+}
+
+#[derive(Args, Debug)]
+struct CompletionsArgs {
+    /// Shell to generate completions for.
+    #[arg(value_enum)]
+    shell: Shell,
+}
+
+#[derive(Args, Debug)]
+struct AuthorityArgs {
+    #[command(subcommand)]
+    command: AuthorityCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum AuthorityCommand {
+    /// List source authority grants.
+    List,
+    /// Add or replace a source authority ceiling.
+    Add(AuthorityAddArgs),
+    /// Remove a source authority grant.
+    Remove(AuthorityRemoveArgs),
+}
+
+#[derive(Args, Debug)]
+struct AuthorityAddArgs {
+    #[arg(value_parser = parse_source)]
+    source: String,
+    #[arg(value_enum)]
+    max: CliAuthority,
+    issuer: Option<String>,
+    scope: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct AuthorityRemoveArgs {
+    #[arg(value_parser = parse_source)]
+    source: String,
+}
+
+#[derive(Args, Debug)]
+struct HookArgs {
+    #[command(subcommand)]
+    command: HookCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum HookCommand {
+    /// Verify on session boundaries and guard native memory/rules writes.
+    NativeMemoryGuard,
+}
+
+#[derive(Args, Debug)]
+struct SchemaArgs {
+    #[command(subcommand)]
+    command: SchemaCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum SchemaCommand {
+    /// Print the Postgres schema.
+    Postgres,
+}
+
+#[derive(Args, Debug)]
+struct McpArgs {
+    #[command(subcommand)]
+    command: McpCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum McpCommand {
+    /// Expose the belief surface over stdio JSON-RPC.
+    Serve,
+}
+
+#[derive(Args, Debug)]
+struct WitnessArgs {
+    /// Passed through to the witness feature implementation.
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
+static COLOR_MODE: AtomicU8 = AtomicU8::new(0);
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum CliColor {
+    Auto,
+    Always,
+    Never,
+}
+
+impl CliColor {
+    fn clap_choice(self) -> clap::ColorChoice {
+        match self {
+            Self::Auto => clap::ColorChoice::Auto,
+            Self::Always => clap::ColorChoice::Always,
+            Self::Never => clap::ColorChoice::Never,
         }
-        "reinforce" => {
-            "dent8 reinforce <subject-kind> <subject-key> <predicate> <authority> <source>\
-             \n  e.g.  dent8 reinforce repo myproj database high ci-system"
-        }
-        "expire" => {
-            "dent8 expire <subject-kind> <subject-key> <predicate> <authority> <source>\
-             \n  e.g.  dent8 expire repo myproj branch.status high owner"
-        }
-        "contradict" => {
-            "dent8 contradict <subject-kind> <subject-key> <predicate> <opposing-value> \
-             <authority> <source>\n  e.g.  dent8 contradict repo myproj database mysql low scanner"
-        }
-        "explain" => "dent8 explain <subject-kind> <subject-key> <predicate>",
-        "replay" => "dent8 replay <subject-kind> <subject-key> <predicate>",
-        _ => {
-            print_help();
-            return 2;
-        }
+    }
+}
+
+fn set_color(color: CliColor) {
+    let mode = match color {
+        CliColor::Auto => 0,
+        CliColor::Always => 1,
+        CliColor::Never => 2,
     };
-    eprintln!("usage: {usage}");
-    2
+    COLOR_MODE.store(mode, Ordering::Relaxed);
+}
+
+fn requested_color(args: &[String]) -> Option<CliColor> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--" {
+            return None;
+        }
+        if let Some(value) = arg.strip_prefix("--color=") {
+            return parse_cli_color(value);
+        }
+        if arg == "--color" {
+            return iter.next().and_then(|value| parse_cli_color(value));
+        }
+    }
+    None
+}
+
+fn parse_cli_color(value: &str) -> Option<CliColor> {
+    match value.to_ascii_lowercase().as_str() {
+        "auto" => Some(CliColor::Auto),
+        "always" => Some(CliColor::Always),
+        "never" => Some(CliColor::Never),
+        _ => None,
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum CliStream {
+    Stdout,
+    Stderr,
+}
+
+fn color_enabled(stream: CliStream) -> bool {
+    match COLOR_MODE.load(Ordering::Relaxed) {
+        1 => true,
+        2 => false,
+        _ if std::env::var_os("NO_COLOR").is_some() => false,
+        _ => match stream {
+            CliStream::Stdout => std::io::stdout().is_terminal(),
+            CliStream::Stderr => std::io::stderr().is_terminal(),
+        },
+    }
+}
+
+fn paint_status(message: &str, stream: CliStream) -> String {
+    if !color_enabled(stream) {
+        return message.to_string();
+    }
+    for (prefix, style) in [
+        ("ACCEPTED", "\x1b[32;1m"),
+        ("REJECTED", "\x1b[31;1m"),
+        ("CONTESTED", "\x1b[33;1m"),
+        ("OK:", "\x1b[32;1m"),
+        ("INTEGRITY FAILURE", "\x1b[31;1m"),
+        ("INTEGRITY ISSUES", "\x1b[31;1m"),
+    ] {
+        if let Some(rest) = message.strip_prefix(prefix) {
+            return format!("{style}{prefix}\x1b[0m{rest}");
+        }
+    }
+    message.to_string()
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum CliAuthority {
+    Low,
+    Medium,
+    High,
+    Canonical,
+}
+
+impl CliAuthority {
+    fn level(self) -> AuthorityLevel {
+        match self {
+            Self::Low => AuthorityLevel::Low,
+            Self::Medium => AuthorityLevel::Medium,
+            Self::High => AuthorityLevel::High,
+            Self::Canonical => AuthorityLevel::Canonical,
+        }
+    }
+}
+
+fn parse_authority(value: &str) -> Option<AuthorityLevel> {
+    match value.to_ascii_lowercase().as_str() {
+        "low" => Some(AuthorityLevel::Low),
+        "medium" => Some(AuthorityLevel::Medium),
+        "high" => Some(AuthorityLevel::High),
+        "canonical" => Some(AuthorityLevel::Canonical),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CliSubject {
+    kind: String,
+    key: String,
+}
+
+impl FromStr for CliSubject {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        let Some((kind, key)) = raw.split_once(':') else {
+            return Err(format!(
+                "invalid subject '{raw}' (expected <kind>:<key>, e.g. person:alice)"
+            ));
+        };
+        EntityRef::new(kind, key)
+            .map_err(|error| format!("invalid subject '{raw}' (expected <kind>:<key>): {error}"))?;
+        Ok(Self {
+            kind: kind.to_string(),
+            key: key.to_string(),
+        })
+    }
+}
+
+fn parse_predicate(raw: &str) -> Result<String, String> {
+    Predicate::new(raw).map_err(|error| format!("invalid predicate '{raw}': {error}"))?;
+    Ok(raw.to_string())
+}
+
+fn parse_source(raw: &str) -> Result<String, String> {
+    ActorId::new(raw).map_err(|error| format!("invalid source '{raw}': {error}"))?;
+    Ok(raw.to_string())
 }
 
 /// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
@@ -210,59 +557,11 @@ fn run_witness(args: &[String]) -> i32 {
     }
 }
 
-fn print_help() {
-    println!(
-        "\
-dent8 - a memory firewall for coding agents
-
-Usage:
-  dent8 demo              run the firewall + replay/explain loop (in-memory)
-  dent8 assert <kind> <key> <predicate> <value> <authority> <source>
-                          assert a fact through the firewall, persisted to the log
-  dent8 supersede <kind> <key> <predicate> <new-value> <authority> <source>
-                          revise the believed fact (rejected if it can't out-rank it)
-  dent8 retract <kind> <key> <predicate> <authority> <source>
-                          remove the believed fact (rejected if it can't out-rank it)
-  dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>
-                          flag a conflict (dissent): contest the fact, keep both
-  dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> <from-key> <from-predicate>
-                          assert a fact derived from another fact (records a dependency
-                          edge; retract the source → `verify` flags this as tainted)
-  dent8 reinforce <kind> <key> <predicate> <authority> <source>
-                          corroborate the believed fact (raise earned entrenchment)
-  dent8 expire <kind> <key> <predicate> <authority> <source>
-                          terminally expire the believed fact (authority-gated)
-  dent8 explain <kind> <key> <predicate>
-                          explain the believed fact, with an integrity receipt
-  dent8 replay <kind> <key> <predicate>
-                          replay the full event history (why the fact is what it is)
-  dent8 verify            check log integrity (structural on the file store; a real
-                          stored-hash-chain re-verification on Postgres)
-  dent8 conflicts         list contested facts (in dispute), across all entities
-  dent8 eval              run the adversarial corpus (firewall vs recency-only baseline)
-  dent8 export [out]      export the log to Parquet for DuckDB analysis (out defaults to
-                          ./dent8-events.parquet; needs --features export)
-  dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
-                          manage the source -> authority ceiling (authz)
-  dent8 hook native-memory-guard
-                          provider hook helper: verify on session boundaries and block
-                          direct writes to native memory/rules files when enforced
-  dent8 witness keygen | sign | verify | head | serve [interval] [max-heads]
-                          emit/verify Ed25519 signed tree heads to detect a history
-                          rewrite or rollback; `serve` is the cadence signer, `head`
-                          prints the latest head to publish (needs --features witness)
-  dent8 schema postgres   print the Postgres schema
-  dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
-
-Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or an
-async backend selected by DENT8_STORE_URL, dispatched by scheme (postgres:// needs
---features postgres). authority is one of: low | medium | high | canonical.
-Authority ceiling: a source may assert at most its registered max. Enforced once a registry
-exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
-source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
-DENT8_REQUIRE_AUTHORITY=1 is set. The registry is host-local config, independent of the event
-backend. issuer/scope are recorded but NOT enforced in v0. See docs/STATUS.md."
-    );
+fn cmd_completions(shell: Shell) -> i32 {
+    let mut command = Cli::command();
+    let name = command.get_name().to_string();
+    generate(shell, &mut command, name, &mut std::io::stdout());
+    0
 }
 
 /// A runnable, self-contained demonstration of the firewall + replay/explain loop,
@@ -473,7 +772,7 @@ fn short(hash: &str) -> String {
 // serialized `ClaimEvent` per line) so commands compose across separate invocations.
 // Each invocation rehydrates the store via the trusted-reload path, runs the firewall +
 // registry on a new write, and appends the admitted event. This is a *local* dev store;
-// the operational, transactional backend is Postgres (M2b).
+// operational, transactional backends are selected by DENT8_STORE_URL.
 
 const DEFAULT_LOG: &str = "dent8-log.jsonl";
 const DEFAULT_AUTHORITY: &str = "dent8-authority.json";
@@ -680,11 +979,12 @@ fn cmd_authority_list() -> i32 {
     }
 }
 
-fn cmd_authority_add(source: &str, max: &str, issuer: Option<&str>, scope: Option<&str>) -> i32 {
-    let Some(max_authority) = parse_authority(max) else {
-        eprintln!("unknown authority '{max}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_authority_add(
+    source: &str,
+    max_authority: AuthorityLevel,
+    issuer: Option<&str>,
+    scope: Option<&str>,
+) -> i32 {
     let mut registry = match load_authority_registry_for_edit() {
         Ok(registry) => registry.unwrap_or_default(),
         Err(error) => {
@@ -746,16 +1046,6 @@ fn now_millis() -> TimestampMillis {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |delta| delta.as_millis());
     TimestampMillis::from_unix_millis(i64::try_from(ms).unwrap_or(i64::MAX))
-}
-
-fn parse_authority(value: &str) -> Option<AuthorityLevel> {
-    match value.to_ascii_lowercase().as_str() {
-        "low" => Some(AuthorityLevel::Low),
-        "medium" => Some(AuthorityLevel::Medium),
-        "high" => Some(AuthorityLevel::High),
-        "canonical" => Some(AuthorityLevel::Canonical),
-        _ => None,
-    }
 }
 
 /// Rehydrate the durable log via the trusted-reload path (no re-arbitration of
@@ -992,11 +1282,11 @@ fn backend_verify(url: &str) -> Result<String, String> {
 fn cmd_verify() -> i32 {
     match verify_log(&log_path()) {
         Ok(report) => {
-            println!("{report}");
+            println!("{}", paint_status(&report, CliStream::Stdout));
             0
         }
         Err(message) => {
-            eprintln!("{message}");
+            eprintln!("{}", paint_status(&message, CliStream::Stderr));
             1
         }
     }
@@ -1465,7 +1755,7 @@ enum WriteError {
 /// Append admitted events to the durable log as JSON lines in a **single write** so a
 /// multi-event operation (e.g. a supersession's replacement + supersession events) lands
 /// all-or-nothing at the file boundary. This is best-effort file atomicity for the dev
-/// store; true transactional atomicity is the Postgres backend (M2b).
+/// store; true transactional atomicity belongs to the async backends.
 fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
     use std::io::Write;
     // An async backend commits the whole operation (assert / supersede / retract / contradict)
@@ -1786,27 +2076,16 @@ fn op_assert(
     ))
 }
 
-fn cmd_assert(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    value: &str,
-    authority: &str,
-    source: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_assert(args: ValueWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_assert(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            value,
-            authority_level,
-            source,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            &args.value,
+            args.authority.level(),
+            &args.source,
         )
     }))
 }
@@ -1882,34 +2161,33 @@ fn op_derive(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn cmd_derive(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    value: &str,
-    authority: &str,
-    source: &str,
-    from_kind: &str,
-    from_key: &str,
-    from_predicate: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
+fn cmd_derive(args: DeriveWriteArgs) -> i32 {
+    let from_subject = match CliSubject::from_str(&args.from[0]) {
+        Ok(subject) => subject,
+        Err(message) => {
+            eprintln!("{message}");
+            return 2;
+        }
+    };
+    let from_predicate = match parse_predicate(&args.from[1]) {
+        Ok(predicate) => predicate,
+        Err(message) => {
+            eprintln!("{message}");
+            return 2;
+        }
     };
     present(with_write_retry(|| {
         op_derive(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            value,
-            authority_level,
-            source,
-            from_kind,
-            from_key,
-            from_predicate,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            &args.value,
+            args.authority.level(),
+            &args.source,
+            &from_subject.kind,
+            &from_subject.key,
+            &from_predicate,
         )
     }))
 }
@@ -1919,15 +2197,15 @@ fn cmd_derive(
 fn present(outcome: Result<String, OpError>) -> i32 {
     match outcome {
         Ok(message) => {
-            println!("{message}");
+            println!("{}", paint_status(&message, CliStream::Stdout));
             0
         }
         Err(OpError::Invalid(message)) => {
-            eprintln!("{message}");
+            eprintln!("{}", paint_status(&message, CliStream::Stderr));
             2
         }
         Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
-            eprintln!("{message}");
+            eprintln!("{}", paint_status(&message, CliStream::Stderr));
             1
         }
     }
@@ -1988,8 +2266,8 @@ fn build_revision(
 
 /// Revise the believed fact for a subject+predicate via the sanctioned supersession path:
 /// assert a *replacement* claim and mark **every** believed incumbent superseded by it,
-/// persisted as one best-effort single write (true transactional atomicity is Postgres,
-/// M2b). The base firewall's anti-laundering enforces that the replacement out-ranks each
+/// persisted as one best-effort single write on the file dev store, or a real transaction on
+/// async backends. The base firewall's anti-laundering enforces that the replacement out-ranks each
 /// incumbent, so a lower-authority revision is rejected. Uniqueness holds in the end state
 /// because *all* believed incumbents become terminal — the replacement assertion goes
 /// through the base firewall directly (not the uniqueness-checking `admit` path) because
@@ -2083,27 +2361,16 @@ fn op_supersede(
 /// incumbent, so a lower-authority revision is rejected; uniqueness holds in the end state
 /// because all believed incumbents become terminal. Shared by `dent8 supersede` and the
 /// MCP `supersede` tool.
-fn cmd_supersede(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    new_value: &str,
-    authority: &str,
-    source: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_supersede(args: ValueWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_supersede(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            new_value,
-            authority_level,
-            source,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            &args.value,
+            args.authority.level(),
+            &args.source,
         )
     }))
 }
@@ -2200,25 +2467,15 @@ fn op_retract(
 /// there is no replacement; unlike a contradiction (dissent) it is authority-gated — the
 /// core fold rejects a retraction that under-ranks its incumbent, so a low-authority actor
 /// cannot delete a trusted fact. Shared by `dent8 retract` and the MCP `retract` tool.
-fn cmd_retract(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    authority: &str,
-    source: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_retract(args: FactWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_retract(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            authority_level,
-            source,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            args.authority.level(),
+            &args.source,
         )
     }))
 }
@@ -2341,48 +2598,28 @@ fn build_per_incumbent(
     Ok(events)
 }
 
-fn cmd_reinforce(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    authority: &str,
-    source: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_reinforce(args: FactWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_reinforce(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            authority_level,
-            source,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            args.authority.level(),
+            &args.source,
         )
     }))
 }
 
-fn cmd_expire(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    authority: &str,
-    source: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_expire(args: FactWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_expire(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            authority_level,
-            source,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            args.authority.level(),
+            &args.source,
         )
     }))
 }
@@ -2503,27 +2740,16 @@ fn op_contradict(
 /// low-authority source can flag a wrong fact without overriding it — the one exception
 /// being a `Canonical` incumbent, which hard-alarms. Shared by `dent8 contradict` and the
 /// MCP `contradict` tool.
-fn cmd_contradict(
-    subject_kind: &str,
-    subject_key: &str,
-    predicate: &str,
-    opposing_value: &str,
-    authority: &str,
-    source: &str,
-) -> i32 {
-    let Some(authority_level) = parse_authority(authority) else {
-        eprintln!("unknown authority '{authority}' (expected: low | medium | high | canonical)");
-        return 2;
-    };
+fn cmd_contradict(args: ValueWriteArgs) -> i32 {
     present(with_write_retry(|| {
         op_contradict(
             &log_path(),
-            subject_kind,
-            subject_key,
-            predicate,
-            opposing_value,
-            authority_level,
-            source,
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            &args.value,
+            args.authority.level(),
+            &args.source,
         )
     }))
 }
@@ -2612,8 +2838,13 @@ fn op_replay(
     Ok(out)
 }
 
-fn cmd_replay(subject_kind: &str, subject_key: &str, predicate: &str) -> i32 {
-    present(op_replay(&log_path(), subject_kind, subject_key, predicate))
+fn cmd_replay(args: ReadFactArgs) -> i32 {
+    present(op_replay(
+        &log_path(),
+        &args.subject.kind,
+        &args.subject.key,
+        &args.predicate,
+    ))
 }
 
 /// Explain the believed (or terminal) fact + its integrity receipt. Shared by
@@ -2644,12 +2875,12 @@ fn op_explain(
     }
 }
 
-fn cmd_explain(subject_kind: &str, subject_key: &str, predicate: &str) -> i32 {
+fn cmd_explain(args: ReadFactArgs) -> i32 {
     present(op_explain(
         &log_path(),
-        subject_kind,
-        subject_key,
-        predicate,
+        &args.subject.kind,
+        &args.subject.key,
+        &args.predicate,
     ))
 }
 

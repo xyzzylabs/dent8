@@ -4,7 +4,7 @@ Date: 2026-06-26
 
 ## Status
 
-Accepted; **implemented** in `dent8-core/src/hash.rs` (M0). One item amended from the
+Accepted; **implemented** in `dent8-core/src/hash.rs`. One item amended from the
 original plan (JCS → serde_json sorted-key form) and two recorded as decided below
 (`schema_version`, `ClaimValue::Json`).
 
@@ -105,6 +105,7 @@ Negative:
   independence, injective genesis/`previous`, tamper-cascade).
 - [DONE] `ClaimValue::Json` is canonical by construction via the `CanonicalJson` newtype
   (item 6) — canonicalized on build *and* on deserialize, with unit + hash-equality tests.
-- Wire `hash_chain` into the Postgres transactional append (populate
-  `event_hash`/`previous_event_hash`, reverify on replay) — roadmap §2.
-- See [storage.md](../storage.md) and [roadmap.md](../roadmap.md) §1.
+- [DONE] Wired `hash_chain` into the Postgres transactional append (populate
+  `event_hash`/`previous_event_hash`, reverify on replay).
+- See [storage.md](../storage.md), [STATUS.md](../STATUS.md), and
+  [roadmap.md](../roadmap.md).

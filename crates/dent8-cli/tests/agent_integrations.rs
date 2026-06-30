@@ -242,12 +242,13 @@ fn cli_expire_is_authority_gated() {
         run_dent8(
             &[
                 "assert",
-                "repo",
-                "p",
+                "repo:p",
                 "database",
                 "postgres",
+                "--authority",
                 "high",
-                "source:owner"
+                "--source",
+                "source:owner",
             ],
             envs,
         )
@@ -257,7 +258,15 @@ fn cli_expire_is_authority_gated() {
     );
 
     let low = run_dent8(
-        &["expire", "repo", "p", "database", "low", "source:owner"],
+        &[
+            "expire",
+            "repo:p",
+            "database",
+            "--authority",
+            "low",
+            "--source",
+            "source:owner",
+        ],
         envs,
     );
     assert!(
@@ -272,7 +281,15 @@ fn cli_expire_is_authority_gated() {
 
     assert!(
         run_dent8(
-            &["expire", "repo", "p", "database", "high", "source:owner"],
+            &[
+                "expire",
+                "repo:p",
+                "database",
+                "--authority",
+                "high",
+                "--source",
+                "source:owner",
+            ],
             envs,
         )
         .status

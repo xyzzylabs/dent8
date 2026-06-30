@@ -7,67 +7,59 @@ poisoned summaries, and unexplained context retrieval.**
 
 This roadmap is dependency-ordered: each item unlocks the next, and each is
 annotated with the integrity invariant it makes real. It supersedes the older
-phase-list MVP plan.
+MVP checklist.
 
 ## Where the code actually is
 
-See **[STATUS.md](STATUS.md)** for the authoritative tier list. In summary, the loop
-now *runs* end to end in memory:
+See **[STATUS.md](STATUS.md)** for the authoritative tier list. In summary, the MVP loop
+now runs end to end through the CLI and MCP surfaces:
 
 - **The firewall is enforced at the write boundary** (`EventStore::append` via
   `arbitrate`): authority-weighted supersession, the LFI canonical hard-alarm, and
-  entity-aware anti-laundering — runnable via `dent8 demo`.
-- serde + `canonical_bytes` + `event_hash`/`hash_chain` (M0) are wired into the
-  in-memory store's append + `verify_chain`.
-- The **coding-agent predicate registry** (M3) drives the firewall: per-predicate
+  entity-aware anti-laundering — runnable via `dent8 demo`, the lifecycle CLI commands,
+  and `dent8 mcp serve`.
+- serde + `canonical_bytes` + `event_hash`/`hash_chain` are wired into append and
+  verification; the Postgres adapter stores and re-verifies the global chain.
+- The **coding-agent predicate registry** drives the firewall: per-predicate
   authority floor, default TTL, and uniqueness.
-- `dent8 demo` exercises all of the above, and **`dent8 assert`/`dent8 explain` persist
-  across invocations** via a local file-backed log (a second `EventStore` backend behind
-  the same contract — `from_trusted_events` is the trusted-reload path).
+- The full lifecycle is runnable and persistent:
+  `assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/
+  `replay`/`verify`/`conflicts`/`eval`/`export`, plus MCP tools for the same belief
+  surface.
+- Persistence runs over the local file dev store by default, or over the transactional
+  async backends selected by `DENT8_STORE_URL`: Postgres (`--features postgres`) and
+  embedded SQLite (`--features sqlite`).
 
-What remains to make it a *product*, not a demo:
+What remains to make it a hardened multi-user product:
 
-- The file log is a **dev store** — single-writer, non-transactional, single-user. The
-  **operational** backend with atomic append + isolation is Postgres (§2 / M2b): the v0
-  `PostgresEventStore` is **DB-verified** (advisory-lock-serialized transactional append,
-  firewall via the shared `arbitrate_events`, JSONB event log + materialized projection/edge
-  graph) — the `DATABASE_URL`-gated tests pass against a live `postgres:16`. Sharing the pure
-  `arbitrate_events` means the firewall decision is the same tested code on both backends.
-  The CLI/MCP **run on it** (`DENT8_STORE_URL`, a `--features postgres` build), each
-  multi-event operation committed transactionally (`append_many`). A **second** async backend —
-  embedded **SQLite** (`dent8-store-sqlite`, `--features sqlite`, a `sqlite://` URL) — implements
-  the same `AsyncEventStore` (serializing writers with `BEGIN IMMEDIATE` + WAL + `busy_timeout`),
-  so adding a backend is one `connect_backend` arm and the boundary is proven backend-agnostic.
-  What remains for a multi-user product is cryptographic caller identity (an authority *ceiling*
-  per source is built — `dent8 authority`) and an *operated* witness service (the signed-tree-head
-  witness *primitive* is built and runnable — `dent8 witness`).
-- `assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`
-  are built (retract authority-gated per [ADR 0008](decisions/0008-retraction-authority.md);
-  contradict + uniqueness-vs-contestation per [ADR 0009](decisions/0009-uniqueness-and-contestation.md);
-  `derive` + retraction taint per [ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)),
-  plus the operator surfaces `verify` / `conflicts` / `eval` / `export`; the **MCP server**
-  (`dent8 mcp serve`) exposes that full belief surface over stdio JSON-RPC. The full lifecycle
-  is runnable.
-- The **analytical/export lane** is built: `dent8 export` (`--features export`) writes the
-  whole log — file *or* Postgres — to flattened Parquet for offline DuckDB forensics/audit,
-  with the dependency edges materialized ([storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
-- The **`dent8-evals` adversarial corpus** is built (firewall vs recency-only baseline:
-  0/5 attacks succeed against the firewall, 5/5 against the baseline; runnable as `dent8 eval`).
-  Remaining eval work:
-  property tests (`proptest`), fuzzing (`cargo-fuzz`), and golden replay fixtures.
+- **Cryptographic caller identity (authn).** `dent8 authority` provides source→authority
+  ceilings (authz), but the caller's source id is still asserted rather than proven by a
+  signed grant/token.
+- **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
+  the remaining product work is running it on separate infrastructure, publishing heads,
+  monitoring rollback/rewrite alarms, and rotating keys.
+- **Production ergonomics and heavy-concurrency polish.** The Postgres adapter serializes
+  appends and the CLI retries id collisions, but DB-assigned ids remain the end-state for
+  heavy write fan-out.
+- **Richer protocol/product surfaces.** The v0 MCP server is useful today; official `rmcp`,
+  richer transports, `resources/subscribe`, prompts, HTTP, SDKs, and a debugger UI are later.
+- **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
+  fixtures, and the adversarial corpus are built. `cargo-fuzz` and the Stateright-style
+  append/projection model remain open.
 
 Operational persistence is no longer the gap — it is **built and runnable on two backends**
 (Postgres and embedded SQLite, behind the `AsyncEventStore` boundary). The remaining gap is
 *productization*: cryptographic caller identity (authn) and an *operated* witness service.
 
-## 0. Core fold work (mostly done — arbitration, LFI, freshness, policy replay landed)
+## Core Fold Work — Done For MVP
 
 These are pure-`dent8-core` changes that make the integrity thesis true in the fold
 itself, independent of storage. They are cheap and they are what makes dent8 more
 than event-sourcing-with-nicer-words. They are also the prerequisite for *every*
 defensible novelty direction ([research/novelty.md](research/novelty.md)): the
 verified non-resurrection theorem proves a property of authority arbitration,
-policy-counterfactual replay varies it, and earned entrenchment feeds it.
+policy-counterfactual replay varies it, and earned entrenchment feeds it. The MVP
+mechanisms are built; the remaining bullets here are refinements, not blockers.
 
 - **[DONE] Authority-as-entrenchment resolution.** `apply_event` rejects a
   `Superseded` event whose challenger authority is strictly below the incumbent's
@@ -100,11 +92,12 @@ policy-counterfactual replay varies it, and earned entrenchment feeds it.
 - **[DONE] Cross-stream lineage check.** `replay_entity` folds all of an entity's
   claim streams into an `EntityProjection`; `lineage_issues()` flags dangling
   supersession, supersession-by-an-invalidated-claim, and supersession cycles
-  (including self-supersession). Still pending: the `explain` CLI that surfaces it.
+  (including self-supersession). `dent8 verify` surfaces lineage issues and retraction
+  taint; a richer debugger/explain tree remains future product work.
   Contradiction-edge integrity is deliberately out of scope (a contradictor may live
   in another entity).
 
-## 1. [DONE in core] Serde + canonical serialization feeding the hash-chain (keystone)
+## Canonical Serialization And Hash Chain — Done
 
 **Status.** Built and tested in [`dent8-core/src/hash.rs`](../crates/dent8-core/src/hash.rs):
 serde derives on the `ClaimEvent` graph; `canonical_bytes` (sorted-key `serde_json`
@@ -118,28 +111,34 @@ dropped. See [storage.md](storage.md) §Canonicalization and
 **Crates.** `serde`, `serde_json`, `sha2`, `hex` (no `serde_jcs` — JCS interop is not
 needed yet).
 
-**Remaining (rolls into §2):** wire `hash_chain` into the transactional Postgres append
-to populate `event_hash`/`previous_event_hash` and reverify on replay. (`ClaimValue::Json`
-canonicalization — ADR 0004 item 6 — is **done**: the `CanonicalJson` newtype is canonical
-by construction and on deserialize.)
+**Remaining.** No MVP blocker remains here. `ClaimValue::Json` canonicalization — ADR 0004
+item 6 — is **done** via the `CanonicalJson` newtype. A real JCS implementation remains
+deferred until there is a concrete cross-language interoperability requirement.
 
-## 2. dent8-store-postgres: sqlx adapter with transactional append + projection
+## Postgres Store Adapter — Done
 
-**Why.** The crate began as just the schema constants, `Migration`, and
-`validate_identifier` — no async, no adapter. This is where dent8 becomes a store of
-record.
+**Why.** This is where dent8 becomes a store of record rather than an in-memory/file-backed
+developer loop.
 
 **Invariant.** `projection == fold(events)` and append-atomicity.
 
-**Concretely.** Implement `EventStore::append` in one transaction following
-[storage.md](storage.md) §"Append transaction shape". Resolve the **sync-vs-async
-trait decision** up front. Map `StoreError::Conflict` to unique-violation on
-`event_id`/`event_hash`. Drop the `recorded_at DEFAULT now()` so the appender-supplied
-timestamp is authoritative (the Rust core already reads it as such).
+**Status.** Built and DB-verified. `PostgresEventStore` uses `sqlx`, transactional append,
+transaction-scoped advisory-lock serialization for the global chain, shared
+`arbitrate_events`, JSONB event storage, and materialized projection/edge tables. The
+adapter populates and verifies `event_hash` / `previous_event_hash`; DB-generated
+event timestamps were removed so appender-supplied timestamps remain authoritative.
+`DATABASE_URL`-gated tests pass against live `postgres:16`, including projection/edge
+materialization and a live CLI-over-Postgres path.
 
-**Crates.** `sqlx`, `tokio`, reuse `sha2`.
+**Also done.** The sync-vs-async decision is resolved as two traits: sync `EventStore` for
+the file/in-memory path and feature-gated `AsyncEventStore` for async backends. Embedded
+SQLite is implemented as the second async backend (`--features sqlite`, `sqlite://`), proving
+Postgres is an adapter, not the architecture.
 
-## 3. Replay / explain CLI — [DONE]
+**Remaining.** DB-assigned ids for heavy fan-out, richer per-column event tables /
+`uses_as_evidence` edges, operational tuning, and authn are future product work.
+
+## Replay / Explain CLI — Done
 
 **Why.** `dent8 replay`/`dent8 explain` are the demoable surface of the integrity thesis.
 **Both are built** (real commands, not stubs), alongside `verify` / `conflicts` / `derive` /
@@ -147,20 +146,24 @@ timestamp is authoritative (the Rust core already reads it as such).
 
 **Invariant.** Deterministic replay and auditability.
 
-**Concretely.** `replay <claim_id|--all>` folds events by `global_sequence`,
-re-derives each `event_hash`, asserts chain continuity, and records a `replay_runs`
-row with a signed tree head. `explain <claim_id>` walks `dent8_claim_edges` +
-provenance to print lineage, including the cross-stream lineage check from §0. Add
-`--as-of <transaction-time>` and `--valid-at <valid-time>` to exercise both
-bitemporal axes. Replace the hand-rolled arg match with `clap`.
+**Status.** Built as subject-first commands:
+`dent8 replay <subject> <predicate>` and `dent8 explain <subject> <predicate>`. They run
+over the file dev store and async backends, use the same trusted reload/integrity gates as
+the write path, show provenance/authority/freshness/lifecycle information, and share the
+same operation code as MCP. `verify` checks chain integrity, lineage issues, and retraction
+taint. The CLI parser is now `clap`, with generated shell completions and a global
+`--color auto|always|never` presentation flag.
 
-**Crates.** `clap`, `serde_json`, `anyhow`.
+**Remaining.** `replay_runs` persistence, `--as-of` / `--valid-at`, `valid_to` intervals,
+and a richer lineage/debugger view are future work.
 
-## 4. Evals harness: golden fixtures + proptest + cargo-fuzz (start now, against the pure core)
+**Crates.** `clap`, `clap_complete`, `serde_json`.
+
+## Evals Harness — Mostly Built
 
 **Why.** Integrity claims are only credible if measured.
 
-**Status.** Started. The `dent8-evals` adversarial corpus exists, and two `proptest` suites
+**Status.** Mostly built. The `dent8-evals` adversarial corpus exists, and `proptest` suites
 cover invariants (a): [`proptest_invariants.rs`](../crates/dent8-core/tests/proptest_invariants.rs)
 (canonicalization/hash/anchor — idempotency + reload-stability over arbitrary JSON, serde
 round-trips, tamper localization, anchor accept/reject) and
@@ -176,7 +179,9 @@ an encoding/hash/fold change is caught as a snapshot mismatch (regenerate with
 [`evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs) freezes whole-stream firewall
 outcomes (admitted vs rejected writes, per-claim end-state, read-time freshness, retraction
 taint) for `beginner_to_senior`, `ttl_expiry`, `summary_drift`, `consistency_required`, and
-`low_authority_injection`. Remaining: `cargo-fuzz` over the deserialize→apply→canonicalize path.
+`low_authority_injection`. Robustness tests cover adversarial deserialization and
+panic-freedom over malformed but parseable event streams. Remaining: `cargo-fuzz` over the
+deserialize→apply→canonicalize path and a Stateright-style append/projection model.
 
 **Invariant.** All stated invariants, mechanized — see the property list in
 [formal-verification.md](formal-verification.md) §(a).
@@ -184,16 +189,17 @@ taint) for `beginner_to_senior`, `ttl_expiry`, `summary_drift`, `consistency_req
 **Concretely.** `evals/fixtures` and `evals/replay` are seeded with the families from
 [evals.md](evals.md) — the supersession scenario ("beginner-in-January → senior-in-November"),
 the `consistency_required` LFI family, the `summary_drift` retraction taint, `ttl_expiry`, and
-`low_authority_injection` — each a frozen firewall outcome. Still open: a stateful/model-based
-harness with an independent reference model generating random `ClaimEvent` streams, and
-`cargo-fuzz` targets over the deserialize→apply→canonicalize path.
-Optionally escalate terminal-immutability and fold-determinism to Kani via `bolero`
-(documented as **bounded**, not universal).
+`low_authority_injection` — each a frozen firewall outcome. The independent-reference-model
+stateful fold harness is built in `proptest_fold.rs`; still open are `cargo-fuzz` targets over
+the deserialize→apply→canonicalize path and a model of append/projection atomicity. Optionally
+escalate terminal-immutability and fold-determinism to Kani/bolero (documented as **bounded**,
+not universal).
 
-**Crates.** `proptest`, `proptest-stateful`, `cargo-fuzz` + `libfuzzer-sys`,
-optionally `bolero`.
+**Crates.** `proptest` is in use. Future hardening should add `cargo-fuzz` +
+`libfuzzer-sys`; optionally use `bolero`/Kani and a Stateright-style model for
+append/projection atomicity.
 
-## 5. MCP adapter (v0 built)
+## MCP Adapter — V0 Built
 
 **Why late.** Pure orchestration over the store — it adds no integrity guarantee, so it
 shipped after replay/explain proved the loop. A **v0 is built**: `dent8 mcp serve` runs a
@@ -223,18 +229,17 @@ needed.
 ## Dependency summary
 
 ```
-§0 core arbitration (cheap, parallel)
-§1 serde canonical form + hash  ->  §2 sqlx adapter  ->  §3 replay/explain CLI  ->  §5 MCP
-§4 evals: start now against the pure core, grow with §1-3
+DONE: core arbitration + freshness + policy replay
+DONE: serde canonical form + hash chain
+DONE: Postgres adapter + AsyncEventStore boundary + SQLite proof backend
+DONE: replay/explain CLI + full lifecycle + clap/completions/colors
+DONE: v0 MCP stdio JSON-RPC surface
+ONGOING: evals/formal hardening, mainly fuzzing + append/projection model checking
 ```
 
-§1 is the keystone (blocks §2/§3 and the canonicalization fixtures in §4). §0 is
-cheap and parallel. §4 can begin immediately against the pure core. §5 is strictly
-last. Two decisions to resolve before coding the adapter:
-(a) `recorded_at` appender-supplied vs `DEFAULT now()` (resolved: drop the default);
-(b) sync-vs-async `EventStore` trait (resolved: **two** traits — sync `EventStore` for the
-file store, feature-gated `AsyncEventStore` (`?Send`, with atomic `append_many`) for async
-backends; the CLI selects a `Box<dyn AsyncEventStore>` by URL scheme).
+The dependency chain that originally blocked the MVP is now complete. The next dependency
+chain is product hardening: signed caller identity -> operated witness -> richer transports /
+debugger surfaces -> SDKs and production deployment packaging.
 
 ## Later
 

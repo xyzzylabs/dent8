@@ -23,13 +23,13 @@ What the prior art does **not** collectively provide is a single artifact in whi
 that gate is a deterministic, replayable, hash-pinnable fold over one append-only
 log.** dent8's defensible novelty is therefore necessarily *compositional and
 substrate-derived*, and it all routes through **authority arbitration in
-`apply_event`** — which, as of roadmap §0, **is now implemented** (the prerequisite
+`apply_event`** — which is now implemented (the prerequisite
 has landed; it is no longer vapor). Each surviving direction is *medium* novelty —
 pitch them as "first to unify / transplant," never "first to invent."
 
 ## The pivot: one change unlocks all three top directions (now landed)
 
-All three top-ranked directions depend on the same prerequisite — the roadmap §0
+All three top-ranked directions depend on the same prerequisite — the
 [authority-as-entrenchment](../decisions/0007-authority-as-entrenchment.md) change,
 which is **now implemented and tested** in `crates/dent8-core/src/state.rs`:
 `apply_event`'s `Superseded` arm rejects a challenger whose authority is strictly
@@ -192,4 +192,4 @@ and tested, with the exhaustive non-resurrection proof and a `#[cfg(kani)]` harn
 unbounded fold proof to upgrade rank 1 from "exhaustive over the lattice" to
 "machine-checked"; (2) extend rank 2 with a swappable contradiction-resolution rule
 and an entity-level (multi-claim) counterfactual surface; (3) carry the arbitration
-into the transactional write path once the Postgres adapter (roadmap §2) exists.
+into the transactional write path, which now exists through the Postgres adapter.

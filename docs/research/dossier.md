@@ -64,7 +64,7 @@ pass are folded into the topical docs and noted below.
 |---|---|---|
 | Belief-base + Recovery-non-postulate framing | Hansson; AGM | [ADR 0005](../decisions/0005-belief-base-revision-semantics.md) |
 | Paraconsistent contradiction tolerance ("contested") | LFI / paraconsistency | [belief-revision.md](../belief-revision.md) |
-| Authority-as-entrenchment arbitration | AGM entrenchment | [roadmap.md](../roadmap.md) §0 |
+| Authority-as-entrenchment arbitration | AGM entrenchment | [roadmap.md](../roadmap.md) / [ADR 0007](../decisions/0007-authority-as-entrenchment.md) |
 | LFI hard-alarm tier on canonical claims | Logics of Formal Inconsistency | [belief-revision.md](../belief-revision.md) §Adopt-3 |
 | RFC 8785 (JCS) canonicalization | IETF (Informational) | [ADR 0004](../decisions/0004-canonicalization-and-hash-chain.md) |
 | RFC 6962 domain-separated leaf/node hashing | Certificate Transparency | [storage.md](../storage.md) |

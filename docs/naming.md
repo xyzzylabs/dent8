@@ -26,19 +26,25 @@ The binary is `dent8`.
 Command groups:
 
 - `dent8 schema postgres`
-- `dent8 claim assert`
-- `dent8 claim reinforce`
-- `dent8 claim contradict`
-- `dent8 claim supersede`
-- `dent8 claim expire`
-- `dent8 claim retract`
-- `dent8 replay claim`
-- `dent8 replay entity`
-- `dent8 explain claim`
-- `dent8 conflicts list`
+- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`
+- `dent8 reinforce <subject> <predicate> --authority <level> --source <source>`
+- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`
+- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`
+- `dent8 expire <subject> <predicate> --authority <level> --source <source>`
+- `dent8 retract <subject> <predicate> --authority <level> --source <source>`
+- `dent8 replay <subject> <predicate>`
+- `dent8 explain <subject> <predicate>`
+- `dent8 conflicts`
+- `dent8 completions <bash|elvish|fish|powershell|zsh>`
 - `dent8 mcp serve`
 
-Prefer verbs that name integrity actions rather than generic memory actions. For example, use `claim supersede`, not `memory update`.
+Subjects use `<kind>:<key>` (`person:alice`, `repo:dent8`) so the fact reads left-to-right:
+subject, predicate, value. Authority and source are flags because they are provenance metadata.
+Global CLI flags, such as `--color auto|always|never`, should control presentation only and
+must not change firewall semantics.
+
+Prefer verbs that name integrity actions rather than generic memory actions. For example, use
+`supersede`, not `memory update`.
 
 ## Event Types
 
@@ -76,4 +82,3 @@ Use explicit prefixes in text IDs during early development:
 - `replay_...`
 
 The exact ID generator can change later. The important invariant is that IDs remain stable in the event log.
-

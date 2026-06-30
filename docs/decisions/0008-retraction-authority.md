@@ -92,7 +92,7 @@ Residual risk:
   (`TransitionError::InsufficientAuthority`), the exhaustive lattice test
   `authority_monotone_retraction_and_non_resurrection`, and a `#[cfg(kani)]` proof
   `retraction_is_authority_monotone_and_non_resurrecting`.
-- [DONE] `dent8 retract <kind> <key> <predicate> <authority> <source>` removes **every**
+- [DONE] `dent8 retract <subject> <predicate> --authority <level> --source <source>` removes **every**
   believed claim for the subject+predicate, each authority-gated; a low-authority retract
   of a high fact is rejected.
 - Future: option 2 (asserter-identity) / option 3 (reason-scoped trust-and-safety

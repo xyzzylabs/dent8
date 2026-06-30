@@ -17,8 +17,8 @@ checkers prove a model, not the code.
 
 ## Decision
 
-Adopt a **layered portfolio**, mapping invariants to the right tool, phased to the
-codebase:
+Adopt a **layered portfolio**, mapping invariants to the right tool and the maturity of
+the codebase:
 
 1. **proptest / bolero** (now, against the pure core) — fold determinism,
    `projection == fold`, reinforced-value-stability, terminal immutability,
@@ -49,7 +49,8 @@ Negative:
 
 ## Follow-Up
 
-- Seed `evals/` with the proptest stateful harness (roadmap §4).
+- Seed `evals/` with the proptest stateful harness (tracked in the roadmap's evals
+  hardening section).
 - Resolve canonicalization first ([ADR 0004](0004-canonicalization-and-hash-chain.md))
   so hash-link proofs have deterministic bytes.
 - See [formal-verification.md](../formal-verification.md).

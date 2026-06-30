@@ -162,7 +162,7 @@ as "first to unify/transplant," never "first to invent"):
   and assert that low-authority writes do not auto-supersede high-authority active
   claims (vs Graphiti's recency-only arbitration [7]), that poisoned writes are quarantined or out-ranked, and
   that the audit log + hash-chain trace every poisoned write to its provenance.
-  *(Note: this requires §0 arbitration to exist — cite the MemConflict-style scenario
+  *(Note: this depends on authority arbitration — cite the MemConflict-style scenario
   with its not-yet-peer-reviewed caveat.)*
 - **Comparison axes (integrity, not retrieval).** Provenance-on-write, deterministic
   replay, supersession-preserves-history, contradiction-is-auditable, authority-

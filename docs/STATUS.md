@@ -18,47 +18,49 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `branch.status` fact goes stale on its **registered default TTL**; and `explain` returns
   an integrity receipt (value, lifecycle, authority, freshness, evidence, supersession,
   contradiction, replay position, `event_hash`, chain-verified).
-- **`dent8 assert <kind> <key> <predicate> <value> <authority> <source>`** — asserts a
+- **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and
-  **never reaches the log**.
-- **`dent8 supersede <kind> <key> <predicate> <new-value> <authority> <source>`** — revises
+  **never reaches the log**. Subjects are written as `<kind>:<key>` (for example,
+  `person:alice` or `repo:dent8`); authority/source are explicit flags because they are
+  provenance metadata, not part of the fact.
+- **`dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`** — revises
   the believed fact via the sanctioned supersession path: it asserts a replacement and
   marks **every** believed incumbent superseded by it, persisted as one write. The base
   firewall's **anti-laundering rejects a revision that cannot out-rank each incumbent**;
   the end state is unique because all incumbents become terminal. Reload re-validates
   integrity: a torn write or external edit that leaves two fresh believed claims **or** a
   broken supersession lineage (dangling/cyclic) is rejected, not silently masked.
-- **`dent8 retract <kind> <key> <predicate> <authority> <source>`** — terminally removes
+- **`dent8 retract <subject> <predicate> --authority <level> --source <source>`** — terminally removes
   every believed claim for the subject+predicate. Unlike a contradiction (dissent), it is
   **authority-gated** ([ADR 0008](decisions/0008-retraction-authority.md)): a retraction
   that under-ranks its incumbent is rejected, so a low-authority actor cannot delete a
   trusted fact.
-- **`dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>`** —
+- **`dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`** —
   flags a conflict: asserts an opposing claim and moves the incumbent to `Contested`,
   keeping **both** (paraconsistency, [ADR 0009](decisions/0009-uniqueness-and-contestation.md)).
   This is **dissent** — *not* authority-gated, so a low-authority source can flag a wrong
   fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms.
-- **`dent8 reinforce <kind> <key> <predicate> <authority> <source>`** — corroborates the
+- **`dent8 reinforce <subject> <predicate> --authority <level> --source <source>`** — corroborates the
   believed fact: records an additional source/authority backing the same value, raising
   **earned entrenchment** without restating the value (no value-mismatch).
-- **`dent8 expire <kind> <key> <predicate> <authority> <source>`** — moves the believed
+- **`dent8 expire <subject> <predicate> --authority <level> --source <source>`** — moves the believed
   fact(s) to the terminal `Expired` lifecycle. This is an explicit policy close, not TTL
   staleness, and is **authority-gated** like retraction ([ADR 0011](decisions/0011-authority-gated-expiration.md)):
   a lower-authority source cannot expire a higher-authority incumbent.
-- **`dent8 derive <kind> <key> <predicate> <value> <authority> <source> <from-kind> <from-key>
-  <from-predicate>`** — asserts a fact **derived from** another (named by subject, resolved to
+- **`dent8 derive <subject> <predicate> <value> --from <source-subject> <source-predicate>
+  --authority <level> --source <source>`** — asserts a fact **derived from** another (named by subject, resolved to
   its believed claim id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
   "poison does not survive in derivatives" differentiator, demonstrated by the
   `poisoned_source_retraction` eval.
-- **`dent8 explain <kind> <key> <predicate>`** — replays the persisted log and prints the
+- **`dent8 explain <subject> <predicate>`** — replays the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
   a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
   receipt carries `fresh` + the `expires_at` instant. Composes with
   `assert`/`supersede`/`retract` across processes (and the same receipt backs the MCP
   `explain` tool and `resources/read`).
-- **`dent8 replay <kind> <key> <predicate>`** — prints the full ordered event history
+- **`dent8 replay <subject> <predicate>`** — prints the full ordered event history
   (every assertion, supersession, retraction, contradiction, with authority + source) and
   the current state — *why* the fact is what it is.
 - **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
@@ -136,8 +138,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   **`head`** prints the latest signed head as JSON to **publish**. What is *built* is the
   mechanism (cadence signing + publishable heads); what remains *operational* is running it on
   a host separate from the writer, with key rotation and external head publication/monitoring.
+- **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
+  scripts generated from the same `clap` command model as the parser. Visible aliases
+  `completion` and `autocomplete` are accepted.
 - `dent8 schema postgres` — prints the Postgres schema.
-- `dent8 --version`, `dent8 --help`.
+- `dent8 --version`, `dent8 --help`, and the global presentation flag
+  `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
+  data stays plain).
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload
@@ -147,8 +154,8 @@ and single-user. A long-lived `dent8 mcp serve` sharing one `DENT8_LOG` with ad-
 runs makes that race more reachable; corruption is *detected* on the next load
 (`validate_unique_log` rejects a duplicated belief, a duplicate `event_id` wedges the
 reload), not silently believed — but the operational store with atomic append + isolation
-is **Postgres (M2b)**. The file backend exists so the firewall loop is usable and to prove
-a *second* `EventStore` backend behind the same contract (de-risking M2b).
+is **Postgres**. The file backend exists so the firewall loop is usable and to prove
+a *second* `EventStore` backend behind the same contract.
 
 `explain` exits 0 whenever a claim exists (believed *or* terminal — a retracted/superseded
 fact still has an auditable receipt) and exits 1 only when no claim exists for the

@@ -45,17 +45,20 @@ operational **Postgres** backend (`--features postgres`, selected by a `postgres
 
 ```sh
 dent8 eval                                                 # why: 5/5 attacks blocked vs a recency baseline
-dent8 assert repo myproj database postgres high owner      # assert a trusted fact
-dent8 supersede repo myproj database mysql low web-scrape  # a low-authority override → REJECTED by the firewall
-dent8 explain repo myproj database                         # still "postgres", with an integrity receipt
-dent8 derive repo myproj deploy_target pg high agent repo myproj database  # derive a fact from it
-dent8 retract repo myproj database high owner              # retract the source…
-dent8 verify                                               # …and verify flags the now-tainted derivative
+dent8 assert person:alice favorite_drink tea --authority high --source user:alice
+dent8 supersede person:alice favorite_drink coffee --authority low --source note:old  # REJECTED
+dent8 explain person:alice favorite_drink                  # still "tea", with an integrity receipt
+dent8 derive person:alice shopping_item tea --from person:alice favorite_drink --authority medium --source assistant
+dent8 retract person:alice favorite_drink --authority high --source user:alice
+dent8 verify                                               # flags the now-tainted derivative
+dent8 completions zsh                                      # generate shell completions
 ```
 
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
-`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/`mcp serve`).
+`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
+`completions`/`mcp serve`). Use the global `--color auto|always|never` flag to control
+colored help, errors, and verdict words in human-facing output.
 
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
@@ -77,7 +80,7 @@ source of truth for what is built.** In short:
   `--features witness`), and `dent8 schema postgres`. State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
-  SQLite**, selected by `DENT8_STORE_URL` (M2b). `dent8 mcp serve` exposes
+  SQLite**, selected by `DENT8_STORE_URL`. `dent8 mcp serve` exposes
   the full belief surface plus read/audit tools to agents over MCP (stdio JSON-RPC), through
   the same firewall — see [examples/mcp/](examples/mcp/), [examples/codex/](examples/codex/),
   [examples/claude-code/](examples/claude-code/), [examples/gemini/](examples/gemini/),
@@ -96,7 +99,7 @@ source of truth for what is built.** In short:
   injection, authority laundering, canonical contradiction, Sybil corroboration, and
   **poisoned-source retraction** all **fail against the firewall (0/5)** while **compromising a
   recency-only baseline (5/5)** — see [docs/evals.md](docs/evals.md).
-- **DB-verified (M2b):** the v0 Postgres adapter (`PostgresEventStore`, behind
+- **DB-verified:** the v0 Postgres adapter (`PostgresEventStore`, behind
   `--features adapter`) — transactional append, firewall via the shared `arbitrate_events`,
   JSONB event log, **plus a materialized projection + edge graph** (migration 003) folded in
   the same transaction with a `projection == fold(log)` check. The `DATABASE_URL`-gated
@@ -140,22 +143,28 @@ Workspace crates:
 Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 
 - `dent8 demo`: run the firewall + registry + replay/explain loop end to end (in-memory).
-- `dent8 assert <kind> <key> <predicate> <value> <authority> <source>`: assert a fact
+- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
-- `dent8 supersede <kind> <key> <predicate> <new-value> <authority> <source>`: revise the
+- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the
   believed fact — rejected unless the revision can out-rank the incumbent.
-- `dent8 retract <kind> <key> <predicate> <authority> <source>`: remove the believed fact —
+- `dent8 retract <subject> <predicate> --authority <level> --source <source>`: remove the believed fact —
   also rejected unless it can out-rank the incumbent.
-- `dent8 contradict <kind> <key> <predicate> <opposing-value> <authority> <source>`: flag a
+- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`: flag a
   conflict (dissent) — contest the fact and keep both, even from low authority.
-- `dent8 expire <kind> <key> <predicate> <authority> <source>`: terminally close the
+- `dent8 derive <subject> <predicate> <value> --from <source-subject> <source-predicate>
+  --authority <level> --source <source>`: assert a fact derived from another fact, recording
+  the dependency edge that `verify` can later audit.
+- `dent8 reinforce <subject> <predicate> --authority <level> --source <source>`: corroborate
+  the believed fact without restating its value.
+- `dent8 expire <subject> <predicate> --authority <level> --source <source>`: terminally close the
   believed fact for policy retention — authority-gated like retraction; TTL staleness is
   read-time and non-mutating.
-- `dent8 explain <kind> <key> <predicate>`: print the believed (or terminal) fact's receipt.
-- `dent8 replay <kind> <key> <predicate>`: replay the full event history — *why* the fact
+- `dent8 explain <subject> <predicate>`: print the believed (or terminal) fact's receipt.
+- `dent8 replay <subject> <predicate>`: replay the full event history — *why* the fact
   is what it is.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
+- `dent8 completions <bash|elvish|fish|powershell|zsh>`: print a shell completion script.
 - `dent8 hook native-memory-guard`: provider hook helper for session verification and
   native memory/rules write guards.
 - `dent8 schema postgres`: print the initial Postgres schema.
@@ -204,7 +213,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo run -q -p dent8-cli -- demo
 
-# The Postgres adapter (M2b, DB-verified) is feature-gated; its integration tests are gated
+# The DB-verified Postgres adapter is feature-gated; its integration tests are gated
 # on DATABASE_URL (they skip without one). Throwaway DB via Docker:
 docker compose up -d
 DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \

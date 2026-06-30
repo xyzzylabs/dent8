@@ -9,24 +9,30 @@ The CLI is the first operator and developer surface.
 Initial command groups:
 
 - `dent8 schema postgres`
-- `dent8 init`
-- `dent8 claim assert`
-- `dent8 claim reinforce`
-- `dent8 claim contradict`
-- `dent8 claim supersede`
-- `dent8 claim expire`
-- `dent8 claim retract`
-- `dent8 replay claim`
-- `dent8 replay entity`
-- `dent8 explain claim`
-- `dent8 conflicts list`
+- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`
+- `dent8 reinforce <subject> <predicate> --authority <level> --source <source>`
+- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`
+- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`
+- `dent8 expire <subject> <predicate> --authority <level> --source <source>`
+- `dent8 retract <subject> <predicate> --authority <level> --source <source>`
+- `dent8 derive <subject> <predicate> <value> --from <subject> <predicate> --authority <level> --source <source>`
+- `dent8 replay <subject> <predicate>`
+- `dent8 explain <subject> <predicate>`
+- `dent8 conflicts`
+- `dent8 completions <bash|elvish|fish|powershell|zsh>`
 - `dent8 mcp serve`
 
+`<subject>` is written as `<kind>:<key>`, for example `person:alice` or `repo:dent8`.
+Authority and source are explicit flags so provenance metadata is not confused with the
+fact's subject/predicate/value.
+
 The CLI should show integrity metadata by default: lifecycle, freshness, authority, evidence count, contradiction count, supersession lineage, and replay position.
+Human-facing output supports `--color auto|always|never`; structured adapter surfaces
+should keep using plain data fields rather than ANSI formatting.
 
 Several of these are already backed by library functions in `dent8-store` and need
-only a CLI/store wiring: `replay claim` (`replay_claim`), `replay entity`
-(`replay_entity` → `EntityProjection` with `lineage_issues`), `conflicts list`
+only a CLI/store wiring: entity-level replay
+(`replay_entity` → `EntityProjection` with `lineage_issues`), `conflicts`
 (`EntityProjection::contested`), and freshness (`ClaimState::is_expired_at`).
 Counterfactual replay (`replay_claim_with_policy` / `replay_entity_with_policy` +
 `diff_states`) is available for a future `explain --distrust`-style surface.

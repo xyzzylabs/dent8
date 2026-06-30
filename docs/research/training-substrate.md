@@ -129,8 +129,9 @@ materialized. The remaining planks below build on that substrate:
    freshness flags, dedup groups.
 
 These reuse functions that already exist (`replay_entity`, `lineage_issues`,
-`unearned_supersessions`, `diff_states`, `is_expired_at`); the work is serialization
-(blocked on the serde keystone, [roadmap §1](../roadmap.md)) and a dataset schema.
+`unearned_supersessions`, `diff_states`, `is_expired_at`); serialization is no longer the
+blocker, so the remaining work is choosing the dataset schema and deciding which exported
+traces are product-critical rather than merely interesting.
 
 ## Honest caveats
 
