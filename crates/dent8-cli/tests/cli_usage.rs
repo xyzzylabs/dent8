@@ -5,6 +5,9 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
+#[cfg(feature = "identity")]
+use serde_json::Value;
+
 #[test]
 fn alice_fact_round_trips_with_subject_and_metadata_flags() {
     let temp = TempDir::new();
@@ -368,6 +371,324 @@ fn init_agent_profile_selects_source_and_implies_identity() {
     assert!(temp.file(".dent8/identity.env").exists());
     assert!(temp.file(".dent8/grants/source_codex.grant.json").exists());
     assert!(temp.file(".dent8/identities/source_codex.key").exists());
+}
+
+#[test]
+fn init_rejects_mcp_command_without_install_mcp() {
+    let output = run_dent8(&["init", "--mcp-command", "/usr/local/bin/dent8"], &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("--install-mcp"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let config_path = temp.file(".codex/config.toml");
+
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--issuer-key",
+            &issuer_key,
+            "--install-mcp",
+        ],
+        &[],
+    );
+    assert_success(&init, "init --agent codex --install-mcp");
+    let stdout = stdout(&init);
+    assert!(stdout.contains("created MCP config:"));
+    assert!(stdout.contains(&format!("--- {} ---", config_path.display())));
+
+    let config = fs::read_to_string(&config_path).expect("codex mcp config");
+    assert!(config.contains("[mcp_servers.dent8]"));
+    assert!(config.contains("[mcp_servers.dent8.env]"));
+    assert!(config.contains("command = \"dent8\""));
+    assert!(config.contains("args = [\"mcp\", \"serve\"]"));
+    assert!(config.contains("startup_timeout_sec = 20"));
+    assert!(config.contains("tool_timeout_sec = 60"));
+    assert!(config.contains(&format!(
+        "DENT8_LOG = \"{}\"",
+        temp.file(".dent8/codex-memory.jsonl").display()
+    )));
+    assert!(config.contains("DENT8_GRANT = "));
+    assert!(config.contains("source_codex.grant.json"));
+    assert!(config.contains("DENT8_IDENTITY_KEY = "));
+    assert!(config.contains("source_codex.key"));
+    assert!(
+        stdout.contains(&config),
+        "init should show the resulting config file"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_patches_json_config_and_preserves_other_servers() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "gemini",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent gemini",
+    );
+
+    let config_path = temp.file(".gemini/settings.json");
+    fs::create_dir_all(config_path.parent().expect("settings parent"))
+        .expect("create gemini config dir");
+    fs::write(
+        &config_path,
+        r#"{
+  "theme": "dark",
+  "mcpServers": {
+    "other": {
+      "command": "other-agent",
+      "args": ["serve"]
+    }
+  }
+}
+"#,
+    )
+    .expect("seed gemini settings");
+
+    let installed = run_dent8(&["mcp", "install", "--agent", "gemini", "--dir", &dir], &[]);
+    assert_success(&installed, "mcp install --agent gemini");
+    let stdout = stdout(&installed);
+    assert!(stdout.contains("updated MCP config:"));
+    assert!(stdout.contains(&format!("--- {} ---", config_path.display())));
+
+    let first = fs::read_to_string(&config_path).expect("patched gemini settings");
+    let parsed = serde_json::from_str::<Value>(&first).expect("patched JSON parses");
+    assert_eq!(parsed["theme"], "dark");
+    assert_eq!(parsed["mcpServers"]["other"]["command"], "other-agent");
+    let dent8 = &parsed["mcpServers"]["dent8"];
+    assert_eq!(dent8["command"], "dent8");
+    assert_eq!(dent8["args"], serde_json::json!(["mcp", "serve"]));
+    assert_eq!(dent8["timeout"], 30_000);
+    assert_eq!(dent8["trust"], false);
+    assert!(
+        dent8["env"]["DENT8_LOG"]
+            .as_str()
+            .expect("DENT8_LOG")
+            .ends_with(".dent8/gemini-memory.jsonl")
+    );
+    assert!(
+        dent8["env"]["DENT8_GRANT"]
+            .as_str()
+            .expect("DENT8_GRANT")
+            .ends_with(".dent8/grants/source_gemini.grant.json")
+    );
+    assert!(
+        stdout.contains(&first),
+        "install should show the resulting config file"
+    );
+
+    assert_success(
+        &run_dent8(&["mcp", "install", "--agent", "gemini", "--dir", &dir], &[]),
+        "idempotent mcp install --agent gemini",
+    );
+    let second = fs::read_to_string(&config_path).expect("repatched gemini settings");
+    assert_eq!(first, second, "mcp install should be idempotent");
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_dry_run_and_check_do_not_write() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+    let config_path = temp.file(".codex/config.toml");
+
+    let dry_run = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--command",
+            "/usr/local/bin/dent8",
+            "--dry-run",
+        ],
+        &[],
+    );
+    assert_success(&dry_run, "mcp install --dry-run");
+    let dry_run_stdout = stdout(&dry_run);
+    assert!(dry_run_stdout.contains("would create MCP config:"));
+    assert!(dry_run_stdout.contains("command = \"/usr/local/bin/dent8\""));
+    assert!(dry_run_stdout.contains("DENT8_LOG"));
+    assert!(
+        !config_path.exists(),
+        "dry-run should not create the MCP config file"
+    );
+
+    let stale_check = run_dent8(
+        &[
+            "mcp", "install", "--agent", "codex", "--dir", &dir, "--check",
+        ],
+        &[],
+    );
+    assert_eq!(stale_check.status.code(), Some(1));
+    assert!(stdout(&stale_check).contains("MCP config needs update:"));
+    assert!(
+        !config_path.exists(),
+        "check should not create the MCP config file"
+    );
+
+    assert_success(
+        &run_dent8(&["mcp", "install", "--agent", "codex", "--dir", &dir], &[]),
+        "mcp install --agent codex",
+    );
+    let up_to_date_check = run_dent8(
+        &[
+            "mcp", "install", "--agent", "codex", "--dir", &dir, "--check",
+        ],
+        &[],
+    );
+    assert_success(&up_to_date_check, "mcp install --check after install");
+    assert!(stdout(&up_to_date_check).contains("MCP config up to date:"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_requires_explicit_config_for_custom_dent8_dir_name() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8-custom").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex --dir dent8-custom",
+    );
+
+    let inferred = run_dent8(&["mcp", "install", "--agent", "codex", "--dir", &dir], &[]);
+    assert_eq!(inferred.status.code(), Some(1));
+    assert!(stderr(&inferred).contains("cannot infer an MCP config path"));
+    assert!(stderr(&inferred).contains("--config"));
+
+    let config_path = temp.file(".codex/config.toml");
+    let config = config_path.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "mcp", "install", "--agent", "codex", "--dir", &dir, "--config", &config,
+            ],
+            &[],
+        ),
+        "mcp install --config with custom dent8 dir",
+    );
+    assert!(config_path.exists());
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_install_mcp_reports_partial_success_when_config_patch_fails() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let config_path = temp.file(".codex/config.toml");
+    fs::create_dir_all(config_path.parent().expect("codex config parent"))
+        .expect("create codex config dir");
+    fs::write(&config_path, "not = [valid\n").expect("seed invalid codex config");
+
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--issuer-key",
+            &issuer_key,
+            "--install-mcp",
+        ],
+        &[],
+    );
+    assert_eq!(init.status.code(), Some(1));
+    let stdout = stdout(&init);
+    assert!(stdout.contains("initialized dent8 in"));
+    assert!(stdout.contains("MCP install failed:"));
+    assert!(stdout.contains("cannot parse TOML MCP config"));
+    assert!(stdout.contains("Run: dent8 mcp install --agent codex"));
+    assert!(
+        temp.file(".dent8/env").exists(),
+        "init should still complete"
+    );
+    assert!(temp.file(".dent8/identity.env").exists());
+    assert_eq!(
+        fs::read_to_string(&config_path).expect("codex config after failed patch"),
+        "not = [valid\n",
+        "failed MCP install should not rewrite invalid config"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_hecate_requires_explicit_config_path() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "hecate",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent hecate",
+    );
+
+    let installed = run_dent8(&["mcp", "install", "--agent", "hecate", "--dir", &dir], &[]);
+    assert_eq!(installed.status.code(), Some(1));
+    assert!(stderr(&installed).contains("needs --config"));
 }
 
 #[cfg(feature = "identity")]

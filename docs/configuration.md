@@ -22,7 +22,7 @@ Postgres profile (requires a `--features postgres` build).
 For the secure agent path, use `dent8 init --identity --source <source>` or an agent shortcut:
 
 ```sh
-dent8 init --agent codex
+dent8 init --agent codex --install-mcp
 set -a
 . .dent8/env
 . .dent8/identity.env
@@ -88,7 +88,7 @@ Signed identity proves source-key possession at the CLI/MCP boundary. It is not 
 server: the operator holds an issuer key and issues grants to agent/source keys.
 
 ```sh
-dent8 init --agent codex
+dent8 init --agent codex --install-mcp
 set -a
 . .dent8/env
 . .dent8/identity.env
@@ -100,8 +100,16 @@ dent8 doctor --source source:codex --write-check
 key outside the project bundle, then write the normal env plus `.dent8/trust.json`, a
 per-source key under `.dent8/identities/`, a grant under `.dent8/grants/`, and
 `.dent8/identity.env`. Agent profiles are `codex`, `claude-code`, `cursor`, `grok-build`,
-`gemini`, `cascade`, and `hecate`. `dent8 identity bootstrap` remains available for manual
-rotation/custom layouts. It creates or reuses an operator issuer key outside the project bundle
+`gemini`, `cascade`, and `hecate`. Add `--install-mcp` to patch the selected agent's MCP
+config and print the resulting file; run `dent8 mcp install --agent <profile>` later to
+regenerate it from the existing `.dent8` bundle. The installer supports `--dry-run` to render
+without writing and `--check` to fail CI or setup scripts when the file is stale. `--mcp-command`
+on `init` and `--command` on `mcp install` override the command written into the config, for
+example `/usr/local/bin/dent8` when dent8 is installed globally but not on the agent host's
+`PATH`. If you use a bundle directory not named `.dent8`, pass `--mcp-config` / `--config`
+because dent8 cannot infer the project-local MCP config path safely. `dent8 identity bootstrap` remains available
+for manual rotation/custom layouts. It creates or reuses an operator issuer key outside the
+project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
 `$HOME/.config/dent8/issuer.key`). Bootstrap refuses to write the issuer key inside the bundle
 and refuses to overwrite existing project identity material. The manual subcommands
@@ -121,8 +129,11 @@ dent8 identity bootstrap \
   --issuer-key "$HOME/.config/dent8/projects/my-project/issuer.key"
 ```
 
-Each agent should have a distinct source key and grant. A shared MCP process can only prove
-the single identity whose private key it holds. See
+Each agent should have a distinct source key and grant. Multiple agents can use the same
+globally installed `dent8` binary, and their stdio server subprocesses can share the same
+belief base by pointing at the same `DENT8_STORE_URL` and authority/trust registries. A shared
+MCP process can only prove the single identity whose private key it holds; a future HTTP or
+daemon transport needs per-request source authentication rather than one process-wide env. See
 [ADR 0012](decisions/0012-signed-source-identity.md) for the security model and limits.
 
 See [STATUS.md](STATUS.md) for what each surface does, and [storage.md](storage.md) for the

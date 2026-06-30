@@ -9,17 +9,15 @@ Gemini-native memory (`GEMINI.md` and `/memory`) as a projection or reminder sur
 From the target project:
 
 ```sh
-mkdir -p .gemini
-dent8 init --agent gemini
-cp /path/to/dent8/examples/gemini/settings.sample.json .gemini/settings.json
+dent8 init --agent gemini --install-mcp
 ```
 
-Then edit `.gemini/settings.json` and replace `/abs/path/to/project` with the project root.
-If you already have Gemini settings, merge only the `mcpServers.dent8` entry.
+This patches `.gemini/settings.json`, preserves unrelated settings/MCP servers, and prints
+the resulting file. Re-run `dent8 mcp install --agent gemini` to regenerate it later.
 
 ## CLI install shape
 
-Gemini's `mcp add` command can create the same entry:
+Gemini's `mcp add` command can also create the same entry manually:
 
 ```sh
 gemini mcp add \

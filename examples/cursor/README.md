@@ -8,12 +8,11 @@ so Cursor can use dent8 as a project memory firewall while it works in a reposit
 From the target project:
 
 ```sh
-mkdir -p .cursor
-dent8 init --agent cursor
-cp /path/to/dent8/examples/cursor/mcp.sample.json .cursor/mcp.json
+dent8 init --agent cursor --install-mcp
 ```
 
-Then edit `.cursor/mcp.json` and replace `/abs/path/to/project` with the project root.
+This patches `.cursor/mcp.json`, preserves unrelated MCP servers, and prints the resulting
+file. Re-run `dent8 mcp install --agent cursor` to regenerate it later.
 
 ## Global scope
 

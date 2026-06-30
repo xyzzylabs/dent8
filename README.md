@@ -62,15 +62,23 @@ For a protected agent setup, let `init` create the authority registry and signed
 identity bundle together:
 
 ```sh
-dent8 init --agent codex                  # implies source:codex + signed identity
+dent8 init --agent codex --install-mcp    # source:codex + signed identity + Codex config
 set -a; . .dent8/env; . .dent8/identity.env; set +a
 dent8 doctor --source source:codex --write-check
 ```
 
+Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP config later
+(`--dry-run` renders without writing; `--check` exits non-zero if the config would change).
 Use `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
 available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and
-`hecate`. `identity bootstrap` remains available for manual rotation/custom layouts and keeps
-the issuer key outside `.dent8` by default
+`hecate`. The installer writes `command = "dent8"` by default, so Codex, Claude Code, Cursor,
+Gemini, Grok Build, Cascade, and Hecate can all use one globally installed binary; pass
+`--mcp-command` / `--command` if the binary lives elsewhere. Stdio MCP clients normally launch
+their own dent8 subprocess, but those processes can share the same operational belief base by
+using the same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while
+keeping distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP
+daemon over HTTP is future transport work, not part of v0. `identity bootstrap` remains
+available for manual rotation/custom layouts and keeps the issuer key outside `.dent8` by default
 (`$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key`; override with
 `--issuer-key`). The project bundle contains only the trust registry, per-source key, grant,
 and env snippet an agent needs. The default issuer key is shared across projects for the same
@@ -80,7 +88,7 @@ projects.
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
 `derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
-`init`/`doctor`/`completions`/`mcp serve`). Use the global `--color auto|always|never` flag to control
+`init`/`doctor`/`completions`/`mcp serve`/`mcp install`). Use the global `--color auto|always|never` flag to control
 colored help, errors, and verdict words in human-facing output.
 
 The core primitive is a claim event, not a generic memory item: every accepted write
@@ -124,8 +132,9 @@ source of truth for what is built.** In short:
   injection, authority laundering, canonical contradiction, Sybil corroboration, and
   **poisoned-source retraction** all **fail against the firewall (0/5)** while **compromising a
   recency-only baseline (5/5)** — see [docs/evals.md](docs/evals.md).
-- **DB-verified:** the v0 Postgres adapter (`PostgresEventStore`, behind
-  `--features adapter`) — transactional append, firewall via the shared `arbitrate_events`,
+- **DB-verified:** the v0 Postgres adapter (`PostgresEventStore`, behind the store crate's
+  `adapter` feature; CLI users enable it with `--features postgres`) — transactional append,
+  firewall via the shared `arbitrate_events`,
   JSONB event log, **plus a materialized projection + edge graph** (migration 003) folded in
   the same transaction with a `projection == fold(log)` check. The `DATABASE_URL`-gated
   integration tests pass against a live `postgres:16`.
@@ -205,6 +214,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 mcp serve`: expose read/audit tools, the full belief surface, resources, and
   JSON-RPC batches to agents over MCP (stdio JSON-RPC), with `structuredContent` fields
   for accepted/rejected/contested decisions, accepted event hashes, and integrity receipts.
+- `dent8 mcp install --agent <profile> [--dry-run|--check] [--command dent8]`: patch the
+  selected agent's MCP config with dent8, write it atomically, and print the resulting file.
 
 ## Project Docs
 

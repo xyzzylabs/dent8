@@ -16,9 +16,12 @@ provider-specific memory provider. The invariant is simple:
    [`examples/agent-hooks/`](../examples/agent-hooks/).
 3. **Signed source identity, default build.** Use `dent8 init --agent <profile>` or
    `dent8 init --identity --source <source>` to give each agent a distinct source key and
-   issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Run one `dent8 mcp serve`
-   process per agent identity when per-agent provenance matters; a shared MCP server can only
-   prove the identity whose key it holds.
+   issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Several agents can use the
+   same globally installed `dent8` binary and the same backend store, but stdio MCP clients
+   typically launch one subprocess per client/profile. Run one `dent8 mcp serve` process per
+   agent identity when per-agent provenance matters; a shared MCP process can only prove the
+   identity whose key it holds. A future HTTP/daemon transport should authenticate the source
+   per request instead of relying on one process-wide identity env.
 4. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
    `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
    authority candidate events. Imported facts need provenance and review.

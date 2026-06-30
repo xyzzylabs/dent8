@@ -40,7 +40,7 @@ Add an opt-in signed source identity layer at the CLI/MCP write boundary.
 Signed source identity is included in the default CLI build. The secure onboarding path is:
 
 ```sh
-dent8 init --agent codex
+dent8 init --agent codex --install-mcp
 set -a
 . .dent8/env
 . .dent8/identity.env
@@ -110,8 +110,13 @@ isolation later should use separate OS users, hardware-backed keys, macOS Keycha
 
 - Multiple agents on one machine can be distinguished if each has a distinct source key and
   grant.
+- Multiple agents can use one globally installed `dent8` binary and one shared operational
+  store, but stdio MCP clients normally launch separate server subprocesses. That is fine:
+  provenance comes from each subprocess's grant/key env, and shared memory comes from the
+  backend URL.
 - Teams decide grant levels explicitly. dent8 does not infer trust from agent brand names.
 - The local source->authority registry remains useful as a simple authz layer and a dev-mode
   bootstrap path; signed identity is the production authn layer above it.
-- MCP deployments should run one dent8 server per agent identity if they need per-agent source
-  separation. A shared MCP process can only prove the identity whose key it holds.
+- MCP deployments should run one dent8 stdio server process per agent identity if they need
+  per-agent source separation. A shared MCP process can only prove the identity whose key it
+  holds; a future HTTP/daemon transport needs per-request source authentication.

@@ -56,6 +56,10 @@ In Hecate's "New task -> Agent loop -> MCP servers" form, add:
 `require_approval` is a good first posture because dent8 exposes mutating tools. Use `auto`
 only when the authority registry is provisioned and the task is expected to write memory.
 
+Hecate does not have one universal project config file for MCP servers. If you keep task
+payloads in JSON, `dent8 mcp install --agent hecate --config path/to/task.json` patches the
+`mcp_servers` array and prints the resulting file.
+
 ## Prompt Hecate or the supervised agent
 
 ```text

@@ -19,16 +19,21 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   an integrity receipt (value, lifecycle, authority, freshness, evidence, supersession,
   contradiction, replay position, `event_hash`, chain-verified).
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
-  [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]`** —
+  [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
+  [--install-mcp] [--mcp-config PATH] [--mcp-command COMMAND] [--mcp-dry-run|--mcp-check]`** —
   bootstraps an adoptable local setup: creates the dent8 config directory, writes an
   authority registry granting a chosen source (default `source:local` / High), creates a
   shell-loadable env file (`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`, and either
   `DENT8_LOG` or `DENT8_STORE_URL`), and initializes the file dev log for the default file
   store (`--agent` profiles use the matching per-agent log name shown in `examples/`). With
   `--identity`, it also creates a signed source identity bundle and `.dent8/identity.env`;
-  `--agent` selects the source id for a known agent and implies `--identity`. It refuses to
-  rewrite the env file unless `--force` is passed and refuses to overwrite existing identity
-  key/grant material.
+  `--agent` selects the source id for a known agent and implies `--identity`. With
+  `--install-mcp`, it also patches the selected agent's MCP config and prints the resulting
+  file; the MCP install step can be rendered (`--mcp-dry-run`) or checked without writing
+  (`--mcp-check`). If the MCP patch fails after init (for example invalid TOML/JSON), init
+  reports the partial success and prints the follow-up `dent8 mcp install ...` command instead
+  of hiding the created `.dent8` bundle. It refuses to rewrite the env file unless `--force` is passed and refuses to overwrite
+  existing identity key/grant material.
 - **`dent8 doctor [--write-check]`** — diagnoses the current setup: binary path, selected
   store, authority registry/grant, signed identity configuration when present, `verify`, and
   MCP availability. By default it is read-only; with `--write-check`, it runs an explicit
@@ -128,6 +133,23 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt) — and accepts
   **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
   omitted; an empty batch is `-32600`).
+- **`dent8 mcp install --agent <profile> [--dir .dent8] [--config PATH]
+  [--command COMMAND] [--dry-run|--check]`** — patches the selected agent's MCP config with
+  the local dent8 server entry, writes the file atomically, and prints the resulting file.
+  `--dry-run` renders the expected file without writing; `--check` does not write and exits
+  `0` only when the existing file already matches. It reads the generated `.dent8/env` + `.dent8/identity.env`
+  instead of asking the user to paste paths by hand. Built-in defaults cover Codex
+  (`.codex/config.toml`), Claude Code/Grok Build (`.mcp.json`), Cursor
+  (`.cursor/mcp.json`), Gemini (`.gemini/settings.json`), and Cascade
+  (`.windsurf/mcp_config.json`); Hecate requires `--config` because its MCP servers live in a
+  task/UI payload rather than a stable project config file. If `--dir` is not literally named
+  `.dent8`, pass `--config` (or `--mcp-config` through `dent8 init`) because the installer
+  cannot infer the project root safely. The default command is `dent8`,
+  which is intended for one globally installed binary used by many agents. Stdio MCP clients
+  generally launch separate dent8 subprocesses; sharing memory across those agents means
+  sharing the backend (`DENT8_STORE_URL`, preferably Postgres for operational concurrency)
+  and registries while keeping per-agent identity env values distinct. A single long-lived
+  local/remote HTTP MCP server is design-only.
 - **`dent8 hook native-memory-guard`** — a built-in provider hook helper. It reads hook JSON
   from stdin, recognizes common native memory/rules paths (`AGENTS.md`, `CLAUDE.md`,
   `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`, `.windsurf/rules`,

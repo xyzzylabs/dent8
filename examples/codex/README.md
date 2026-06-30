@@ -8,10 +8,11 @@ Codex supports local stdio MCP servers through `config.toml`. dent8 exposes exac
 From the target project:
 
 ```sh
-dent8 init --agent codex
+dent8 init --agent codex --install-mcp
 ```
 
-Add this to `~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`:
+This patches the trusted project's `.codex/config.toml` and prints the resulting file. The
+generated entry is equivalent to:
 
 ```toml
 [mcp_servers.dent8]
@@ -52,8 +53,9 @@ DENT8_GRANT = "/abs/path/to/project/.dent8/grants/source_codex.grant.json"
 DENT8_IDENTITY_KEY = "/abs/path/to/project/.dent8/identities/source_codex.key"
 ```
 
-`dent8 init --agent codex` creates the profile log, authority registry, and signed source
-identity bundle referenced above. It keeps the issuer key outside `.dent8`.
+`dent8 init --agent codex --install-mcp` creates the profile log, authority registry, signed
+source identity bundle, and Codex MCP config referenced above. It keeps the issuer key outside
+`.dent8`. Re-run `dent8 mcp install --agent codex` to patch/show the MCP config later.
 
 Then ask Codex to use dent8:
 

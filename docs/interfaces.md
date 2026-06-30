@@ -91,6 +91,13 @@ Client setup examples live under [`examples/mcp/`](../examples/mcp/):
 [`examples/vercel-ai-sdk/`](../examples/vercel-ai-sdk/). These are integration profiles, not
 separate memory semantics; every write still enters through the shared firewall path.
 
+Transport status: v0 is stdio only. `dent8 mcp install` writes configs that launch the
+globally installed `dent8` binary (`command = "dent8"` by default, overrideable with
+`--command`). Several agents can share one belief base by pointing their separate stdio
+server subprocesses at the same backend and registries, while keeping distinct grant/key env
+values for provenance. A single long-lived local or remote MCP server should use HTTP/streamable
+transport and per-request source authentication; that is design-only today.
+
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.
 These hooks are not an alternate write path; they run `dent8 verify` and block direct edits
@@ -115,6 +122,9 @@ Possible resources:
 ## HTTP API
 
 The HTTP API should come after the CLI and Postgres adapter have proven the core semantics.
+It is the natural home for a shared local daemon or remote dent8 service used by many agents;
+it must preserve the same firewall path, identity checks, and replay receipts as CLI/MCP,
+instead of becoming a generic memory provider.
 
 Likely routes:
 

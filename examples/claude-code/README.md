@@ -8,21 +8,11 @@ can use dent8 as a project memory firewall.
 From the target project:
 
 ```sh
-dent8 init --agent claude-code
-
-claude mcp add \
-  --env DENT8_LOG="$PWD/.dent8/claude-memory.jsonl" \
-  --env DENT8_AUTHORITY="$PWD/.dent8/authority.json" \
-  --env DENT8_REQUIRE_AUTHORITY=1 \
-  --env DENT8_TRUST="$PWD/.dent8/trust.json" \
-  --env DENT8_REQUIRE_IDENTITY=1 \
-  --env DENT8_GRANT="$PWD/.dent8/grants/source_claude-code.grant.json" \
-  --env DENT8_IDENTITY_KEY="$PWD/.dent8/identities/source_claude-code.key" \
-  --transport stdio \
-  dent8 -- dent8 mcp serve
+dent8 init --agent claude-code --install-mcp
 ```
 
-Check it inside Claude Code with:
+This patches project `.mcp.json`, preserves unrelated MCP servers, and prints the resulting
+file. Check it inside Claude Code with:
 
 ```text
 /mcp
@@ -30,16 +20,16 @@ Check it inside Claude Code with:
 
 ## Project scope
 
-For a team-shared setup, copy [`mcp.sample.json`](mcp.sample.json) to `.mcp.json` in the
-target project. Claude Code supports `${VAR:-default}` expansion in `.mcp.json`, so the sample
-keeps the log and authority file under `${CLAUDE_PROJECT_DIR:-.}` (the project root) and
-launches `${DENT8_BIN:-dent8}` — set `DENT8_BIN` to point at a specific build (e.g. a local
-checkout's `target/debug/dent8`), or leave it unset to use `dent8` from `PATH`.
+For a local project-scoped setup, run the same install command from the target project. The
+installer is idempotent for an existing `.mcp.json`:
 
 ```sh
-cp /path/to/dent8/examples/claude-code/mcp.sample.json .mcp.json
-dent8 init --agent claude-code
+dent8 mcp install --agent claude-code
 ```
+
+For a team-shared checked-in `.mcp.json`, start from [`mcp.sample.json`](mcp.sample.json)
+instead. It uses `${CLAUDE_PROJECT_DIR:-.}` and `${DENT8_BIN:-dent8}` placeholders so one
+developer's absolute `.dent8` paths are not committed for everyone else.
 
 Claude Code prompts before using project-scoped MCP servers from `.mcp.json`; approve dent8
 when it asks.

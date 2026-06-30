@@ -9,12 +9,15 @@ Cascade can use local MCP servers through its MCP config. dent8 exposes
 From the target project:
 
 ```sh
-dent8 init --agent cascade
+dent8 init --agent cascade --install-mcp
 ```
 
-Then merge [`mcp_config.sample.json`](mcp_config.sample.json) into Cascade's MCP config
-(`~/.codeium/windsurf/mcp_config.json` for the desktop app), replacing
-`/abs/path/to/project` with the project root.
+This patches `.windsurf/mcp_config.json`, preserves unrelated MCP servers, and prints the
+resulting file. For the desktop app's global config, pass an explicit path:
+
+```sh
+dent8 mcp install --agent cascade --config "$HOME/.codeium/windsurf/mcp_config.json"
+```
 
 For a team-shared setup, add `dent8` to the workspace MCP allowlist if your Cascade policy
 requires explicit MCP server approval.

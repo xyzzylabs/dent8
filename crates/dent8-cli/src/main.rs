@@ -23,6 +23,7 @@ use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 #[cfg(feature = "identity")]
 mod identity;
 mod mcp;
+mod mcp_config;
 #[cfg(feature = "witness")]
 mod witness;
 
@@ -112,6 +113,7 @@ fn run_cli(cli: Cli) -> i32 {
         },
         Some(CliCommand::Mcp(args)) => match args.command {
             McpCommand::Serve => mcp::serve(),
+            McpCommand::Install(args) => cmd_mcp_install(&args),
         },
         Some(CliCommand::Schema(args)) => match args.command {
             SchemaCommand::Postgres => {
@@ -349,9 +351,30 @@ struct InitArgs {
     /// Optional signed identity expiration as Unix milliseconds.
     #[arg(long, value_name = "MILLIS")]
     identity_expires_at_ms: Option<i64>,
+    #[command(flatten)]
+    mcp: InitMcpArgs,
     /// Overwrite the generated env file if it already exists.
     #[arg(long)]
     force: bool,
+}
+
+#[derive(Args, Debug)]
+struct InitMcpArgs {
+    /// Patch the selected agent's MCP config after init and show the resulting file.
+    #[arg(long, requires = "agent")]
+    install_mcp: bool,
+    /// MCP config file to patch when --install-mcp is set.
+    #[arg(long, value_name = "PATH", requires = "install_mcp")]
+    mcp_config: Option<String>,
+    /// Command written into the installed MCP config.
+    #[arg(long, value_name = "COMMAND", requires = "install_mcp")]
+    mcp_command: Option<String>,
+    /// Render the MCP config change after init without writing it.
+    #[arg(long, requires = "install_mcp", conflicts_with = "mcp_check")]
+    mcp_dry_run: bool,
+    /// Check whether the MCP config is already installed after init without writing it.
+    #[arg(long, requires = "install_mcp")]
+    mcp_check: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -366,6 +389,18 @@ enum InitAgent {
 }
 
 impl InitAgent {
+    fn cli_name(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::ClaudeCode => "claude-code",
+            Self::Cursor => "cursor",
+            Self::GrokBuild => "grok-build",
+            Self::Gemini => "gemini",
+            Self::Cascade => "cascade",
+            Self::Hecate => "hecate",
+        }
+    }
+
     fn source(self) -> &'static str {
         match self {
             Self::Codex => "source:codex",
@@ -400,6 +435,19 @@ impl InitAgent {
             Self::Cascade => "cascade-memory.jsonl",
             Self::Hecate => "hecate-memory.jsonl",
         }
+    }
+
+    fn source_slug(self) -> String {
+        self.source()
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect()
     }
 }
 
@@ -595,6 +643,30 @@ struct McpArgs {
 enum McpCommand {
     /// Expose the belief surface over stdio JSON-RPC.
     Serve,
+    /// Patch an agent MCP config with dent8 and show the resulting file.
+    Install(McpInstallArgs),
+}
+
+#[derive(Args, Debug)]
+struct McpInstallArgs {
+    /// Agent profile whose MCP config should be patched.
+    #[arg(long, value_enum)]
+    agent: InitAgent,
+    /// Directory for dent8's local project config.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// MCP config file to patch. Defaults to the agent's project-local config path.
+    #[arg(long, value_name = "PATH")]
+    config: Option<String>,
+    /// Command written into the installed MCP config.
+    #[arg(long, default_value = "dent8", value_name = "COMMAND")]
+    command: String,
+    /// Render the resulting file without writing it.
+    #[arg(long, conflicts_with = "check")]
+    dry_run: bool,
+    /// Exit 0 only when the existing config already matches the generated dent8 entry.
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1406,9 +1478,9 @@ fn cmd_authority_remove(source: &str) -> i32 {
 
 fn cmd_init(args: &InitArgs) -> i32 {
     match init_project(args) {
-        Ok(message) => {
-            println!("{message}");
-            0
+        Ok(outcome) => {
+            println!("{}", outcome.message);
+            outcome.exit_code
         }
         Err(error) => {
             eprintln!("{error}");
@@ -1417,7 +1489,33 @@ fn cmd_init(args: &InitArgs) -> i32 {
     }
 }
 
-fn init_project(args: &InitArgs) -> Result<String, String> {
+fn cmd_mcp_install(args: &McpInstallArgs) -> i32 {
+    let dir = std::path::PathBuf::from(&args.dir);
+    let mode = mcp_install_mode(args.dry_run, args.check);
+    match install_mcp_config(
+        args.agent,
+        &dir,
+        args.config.as_deref(),
+        &args.command,
+        mode,
+    ) {
+        Ok(outcome) => {
+            println!("{}", outcome.message);
+            outcome.exit_code
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+struct CommandOutcome {
+    message: String,
+    exit_code: i32,
+}
+
+fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
     let dir = std::path::PathBuf::from(&args.dir);
     let dir = absolute_path(&dir)?;
     let source = init_source(args);
@@ -1486,7 +1584,7 @@ fn init_project(args: &InitArgs) -> Result<String, String> {
     );
     write_atomic(&env_path.to_string_lossy(), &env_contents)?;
 
-    Ok(format!(
+    let mut message = format!(
         "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
         dir.display(),
         authority_path.display(),
@@ -1499,7 +1597,81 @@ fn init_project(args: &InitArgs) -> Result<String, String> {
         identity.env_load,
         source,
         agent_next,
-    ))
+    );
+    if let Some(exit_code) = append_init_mcp_install(args, &dir, &mut message)? {
+        return Ok(CommandOutcome { message, exit_code });
+    }
+    Ok(CommandOutcome {
+        message,
+        exit_code: 0,
+    })
+}
+
+fn append_init_mcp_install(
+    args: &InitArgs,
+    dir: &std::path::Path,
+    message: &mut String,
+) -> Result<Option<i32>, String> {
+    if !args.mcp.install_mcp {
+        return Ok(None);
+    }
+    let agent = args
+        .agent
+        .ok_or_else(|| "`dent8 init --install-mcp` requires --agent".to_string())?;
+    let mode = mcp_install_mode(args.mcp.mcp_dry_run, args.mcp.mcp_check);
+    match install_mcp_config(
+        agent,
+        dir,
+        args.mcp.mcp_config.as_deref(),
+        args.mcp.mcp_command.as_deref().unwrap_or("dent8"),
+        mode,
+    ) {
+        Ok(install) => {
+            message.push_str("\n\n");
+            message.push_str(&install.message);
+            Ok(Some(install.exit_code))
+        }
+        Err(error) => {
+            message.push_str("\n\nMCP install failed: ");
+            message.push_str(&error);
+            message.push_str("\nRun: dent8 mcp install --agent ");
+            message.push_str(agent.cli_name());
+            if let Some(config) = args.mcp.mcp_config.as_deref() {
+                message.push_str(" --config ");
+                message.push_str(&shell_quote(config));
+            }
+            Ok(Some(1))
+        }
+    }
+}
+
+fn install_mcp_config(
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    command: &str,
+    mode: mcp_config::InstallMode,
+) -> Result<CommandOutcome, String> {
+    let dir = absolute_path(dir)?;
+    mcp_config::install(&mcp_config::InstallOptions {
+        agent,
+        dent8_dir: dir,
+        config_path: config.map(std::path::PathBuf::from),
+        command: command.to_string(),
+        mode,
+    })
+    .map(|result| CommandOutcome {
+        message: result.message(),
+        exit_code: result.exit_code(),
+    })
+}
+
+fn mcp_install_mode(dry_run: bool, check: bool) -> mcp_config::InstallMode {
+    match (dry_run, check) {
+        (true, _) => mcp_config::InstallMode::DryRun,
+        (false, true) => mcp_config::InstallMode::Check,
+        (false, false) => mcp_config::InstallMode::Write,
+    }
 }
 
 #[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]

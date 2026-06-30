@@ -9,9 +9,9 @@ or a future HTTP transport; v0 is stdio.
 
 ## Local MCP profile
 
-Easiest: drop [`mcp.sample.json`](mcp.sample.json) at the project root as `.mcp.json` (Grok
-Build reads Claude Code's `.mcp.json`), or paste the `dent8` entry into an existing
-`mcpServers` block. Replace `/abs/path/to/project` with the target repository root.
+Easiest: run the installer from the target project. Grok Build reads Claude Code's
+project-root `.mcp.json`, so dent8 patches that file, preserves unrelated MCP servers, and
+prints the result.
 
 Grok Build also has a **native** config — `[mcp_servers.dent8]` in `~/.grok/config.toml`
 (global) or `.grok/config.toml` (project), the same TOML shape as the
@@ -20,8 +20,10 @@ Grok Build also has a **native** config — `[mcp_servers.dent8]` in `~/.grok/co
 
 ```sh
 cd /abs/path/to/project
-dent8 init --agent grok-build
+dent8 init --agent grok-build --install-mcp
 ```
+
+Re-run `dent8 mcp install --agent grok-build` to regenerate the config later.
 
 ## Prompt Grok Build
 

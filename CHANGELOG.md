@@ -52,7 +52,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
 - **Adoption and CLI ergonomics**: `dent8 init` creates a project-local env file, authority
   registry, selected store profile, and optionally the signed identity bundle; `dent8 doctor
   [--write-check]` diagnoses the binary, store, authority, signed identity when configured,
-  MCP availability, verification, and an optional trusted write path. The CLI now uses `clap`
+  MCP availability, verification, and an optional trusted write path. `dent8 init --agent
+  <profile> --install-mcp` and `dent8 mcp install --agent <profile>` patch/show known agent
+  MCP configs from the generated `.dent8` env files, preserving unrelated config; dry-run/check
+  modes make setup scripts reviewable and idempotent. The CLI now uses `clap`
   with named write arguments, targeted usage errors, global
   `--color auto|always|never`, `--version`, and
   `dent8 completions <bash|elvish|fish|powershell|zsh>`.

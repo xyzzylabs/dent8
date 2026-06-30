@@ -8,8 +8,18 @@ receipt.
 
 ## Wire it into an MCP client
 
-Initialize a protected local profile, then add dent8 to your client's MCP server config (e.g.
-an agent's `mcpServers` block):
+For a known agent, initialize a protected local profile and let dent8 patch the MCP config:
+
+```sh
+dent8 init --agent codex --install-mcp
+```
+
+Use `dent8 mcp install --agent <profile>` to regenerate the config later. Add `--dry-run` to
+preview the file without writing, `--check` to fail when a setup is stale, or `--command
+/abs/path/to/dent8` when the globally installed binary is not on the agent host's `PATH`.
+If your dent8 bundle directory is not named `.dent8`, pass `--config` because dent8 cannot
+infer the client config location safely.
+For a custom MCP client, initialize a custom source and add the equivalent server block manually:
 
 ```sh
 dent8 init --identity --source source:assistant
@@ -41,6 +51,13 @@ The agent then gets these tools — `list_facts`, `verify`, `conflicts`, `assert
 comes back as a tool **error with the reason**, so the agent learns *why* (e.g.
 "repo.database requires authority High, got Low"). For an operational backend, set
 `DENT8_STORE_URL` and run a `--features postgres` (or `--features sqlite`) build.
+
+The installed stdio config reuses one `dent8` binary, but each MCP client usually launches its
+own server subprocess. To share memory across Codex, Claude Code, Cursor, Gemini, Grok Build,
+Cascade, and Hecate, point those subprocesses at the same backend and authority/trust
+registries, while keeping distinct per-agent `DENT8_GRANT` and `DENT8_IDENTITY_KEY` values.
+For production multi-agent concurrency, prefer Postgres over the file dev store. A single
+long-lived local or remote HTTP MCP server is a future transport, not part of v0.
 
 Client-specific examples:
 
