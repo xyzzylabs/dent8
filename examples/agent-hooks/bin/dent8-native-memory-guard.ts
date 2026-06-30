@@ -47,12 +47,71 @@ const PATH_KEYS: ReadonlySet<string> = new Set([
   "target_file",
 ]);
 
+function parseFlag(name: string, value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["", "0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  throw new Error(
+    `${name} must be a boolean flag: use 1/true/yes/on or 0/false/no/off`,
+  );
+}
+
+function flagError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// DENT8_HOOK_ENFORCE; a malformed value fails closed (treated as enforcing).
+function hookEnforced(): boolean {
+  try {
+    return parseFlag("DENT8_HOOK_ENFORCE", process.env.DENT8_HOOK_ENFORCE ?? "");
+  } catch (error: unknown) {
+    console.error(`dent8 hook: ${flagError(error)}`);
+    return true;
+  }
+}
+
+// DENT8_ALLOW_NATIVE_MEMORY_WRITE; a malformed value never bypasses.
+function hookAllowBypass(): boolean {
+  try {
+    return parseFlag(
+      "DENT8_ALLOW_NATIVE_MEMORY_WRITE",
+      process.env.DENT8_ALLOW_NATIVE_MEMORY_WRITE ?? "",
+    );
+  } catch (error: unknown) {
+    console.error(`dent8 hook: ${flagError(error)}`);
+    return false;
+  }
+}
+
 function main(): number {
-  const payload = readPayload();
   const mode = process.env.DENT8_HOOK_MODE ?? "guard-native-memory-write";
 
   if (mode === "session-start") {
     return runVerify("session start");
+  }
+
+  if (mode !== "guard-native-memory-write" && mode !== "post-write-audit") {
+    console.error(`dent8 hook: unknown DENT8_HOOK_MODE=${mode}`);
+    return 2;
+  }
+
+  const payload = readPayload();
+  if (payload === undefined) {
+    // Unreadable/malformed payload: we cannot tell what is being written.
+    if (mode === "post-write-audit") {
+      return runVerify("unreadable post-write hook payload");
+    }
+    if (hookEnforced()) {
+      console.error(
+        "dent8 hook: unreadable payload under DENT8_HOOK_ENFORCE — blocking (fail closed).",
+      );
+      return 2;
+    }
+    return 0;
   }
 
   const touched = Array.from(nativeMemoryPaths(payload)).sort();
@@ -63,11 +122,7 @@ function main(): number {
     return 0;
   }
 
-  if (mode !== "guard-native-memory-write") {
-    console.error(`dent8 hook: unknown DENT8_HOOK_MODE=${mode}`);
-    return 2;
-  }
-
+  // guard-native-memory-write
   if (touched.length === 0) {
     return 0;
   }
@@ -79,17 +134,20 @@ function main(): number {
       "Set DENT8_ALLOW_NATIVE_MEMORY_WRITE=1 to bypass this local guard.",
   );
 
-  if (process.env.DENT8_ALLOW_NATIVE_MEMORY_WRITE === "1") {
+  if (hookAllowBypass()) {
     return 0;
   }
-  if (process.env.DENT8_HOOK_ENFORCE === "1") {
-    return 2;
-  }
-  return 0;
+  return hookEnforced() ? 2 : 0;
 }
 
 function readPayload(): unknown {
-  const raw = fs.readFileSync(0, "utf8");
+  let raw: string;
+  try {
+    raw = fs.readFileSync(0, "utf8");
+  } catch (error: unknown) {
+    console.error(`dent8 hook: could not read hook JSON: ${flagError(error)}`);
+    return undefined;
+  }
   if (raw.trim() === "") {
     return {};
   }
@@ -100,7 +158,7 @@ function readPayload(): unknown {
     const message =
       error instanceof Error ? error.message : "unknown JSON parse error";
     console.error(`dent8 hook: could not parse hook JSON: ${message}`);
-    return {};
+    return undefined;
   }
 }
 

@@ -53,12 +53,59 @@ PATH_KEYS = {
 }
 
 
+def parse_flag(name: str, value: str) -> bool:
+    """Parse a dent8 boolean env flag (1/true/yes/on vs 0/false/no/off)."""
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("", "0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be a boolean flag: use 1/true/yes/on or 0/false/no/off")
+
+
+def hook_enforced() -> bool:
+    """DENT8_HOOK_ENFORCE; a malformed value fails closed (treated as enforcing)."""
+    try:
+        return parse_flag("DENT8_HOOK_ENFORCE", os.environ.get("DENT8_HOOK_ENFORCE", ""))
+    except ValueError as exc:
+        print(f"dent8 hook: {exc}", file=sys.stderr)
+        return True
+
+
+def hook_allow_bypass() -> bool:
+    """DENT8_ALLOW_NATIVE_MEMORY_WRITE; a malformed value never bypasses."""
+    try:
+        return parse_flag(
+            "DENT8_ALLOW_NATIVE_MEMORY_WRITE",
+            os.environ.get("DENT8_ALLOW_NATIVE_MEMORY_WRITE", ""),
+        )
+    except ValueError as exc:
+        print(f"dent8 hook: {exc}", file=sys.stderr)
+        return False
+
+
 def main() -> int:
-    payload = read_payload()
     mode = os.environ.get("DENT8_HOOK_MODE", "guard-native-memory-write")
 
     if mode == "session-start":
         return run_verify("session start")
+
+    if mode not in ("guard-native-memory-write", "post-write-audit"):
+        print(f"dent8 hook: unknown DENT8_HOOK_MODE={mode}", file=sys.stderr)
+        return 2
+
+    payload = read_payload()
+    if payload is None:
+        # Unreadable/malformed payload: we cannot tell what is being written.
+        if mode == "post-write-audit":
+            return run_verify("unreadable post-write hook payload")
+        if hook_enforced():
+            print(
+                "dent8 hook: unreadable payload under DENT8_HOOK_ENFORCE — blocking (fail closed).",
+                file=sys.stderr,
+            )
+            return 2
+        return 0
 
     touched = sorted(native_memory_paths(payload))
     if mode == "post-write-audit":
@@ -66,10 +113,7 @@ def main() -> int:
             return run_verify(f"native memory/rules changed: {', '.join(touched)}")
         return 0
 
-    if mode != "guard-native-memory-write":
-        print(f"dent8 hook: unknown DENT8_HOOK_MODE={mode}", file=sys.stderr)
-        return 2
-
+    # guard-native-memory-write
     if not touched:
         return 0
 
@@ -81,14 +125,13 @@ def main() -> int:
     )
     print(message, file=sys.stderr)
 
-    if os.environ.get("DENT8_ALLOW_NATIVE_MEMORY_WRITE") == "1":
+    if hook_allow_bypass():
         return 0
-    if os.environ.get("DENT8_HOOK_ENFORCE") == "1":
-        return 2
-    return 0
+    return 2 if hook_enforced() else 0
 
 
 def read_payload() -> Any:
+    """Parsed JSON, ``{}`` for an empty payload, or ``None`` if stdin did not parse."""
     raw = sys.stdin.read()
     if not raw.strip():
         return {}
@@ -96,7 +139,7 @@ def read_payload() -> Any:
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         print(f"dent8 hook: could not parse hook JSON: {exc}", file=sys.stderr)
-        return {}
+        return None
 
 
 def native_memory_paths(payload: Any) -> set[str]:
