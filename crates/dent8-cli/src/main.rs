@@ -1128,9 +1128,66 @@ fn native_memory_paths(payload: &serde_json::Value) -> Vec<String> {
         let normalized = candidate.replace('\\', "/");
         if is_native_memory_path(&normalized) {
             paths.insert(normalized);
+            continue;
+        }
+        // The candidate may be a shell command or an `apply_patch` body that *writes* a native
+        // memory file with the path embedded (not as the whole string) — e.g. `echo x >> AGENTS.md`
+        // or an `*** Update File: AGENTS.md` header. Pull out the write targets and check those.
+        for target in embedded_write_targets(&normalized) {
+            if is_native_memory_path(&target) {
+                paths.insert(target);
+            }
         }
     }
     paths.into_iter().collect()
+}
+
+/// Best-effort extraction of the file paths a shell command or `apply_patch` body **writes**:
+/// `apply_patch` `*** Update/Add/Delete File:` / `*** Move to:` headers, and `>` / `>>` / `tee`
+/// redirect targets. Deliberately conservative — it flags *write* targets, not mere mentions (so
+/// `cat AGENTS.md` is not flagged), and does not model every shell write mechanism (`sed -i`,
+/// `cp`, `mv`, an interpreter writing a file): the MCP/CLI firewall, not this hook, is the
+/// integrity boundary. See `examples/agent-hooks/README.md`.
+fn embedded_write_targets(text: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        for prefix in [
+            "*** Update File: ",
+            "*** Add File: ",
+            "*** Delete File: ",
+            "*** Move to: ",
+        ] {
+            if let Some(rest) = line.strip_prefix(prefix) {
+                targets.push(unquote(rest.trim()));
+            }
+        }
+    }
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    for (idx, token) in tokens.iter().enumerate() {
+        if *token == ">" || *token == ">>" {
+            // Spaced redirection: the next token is the destination file.
+            if let Some(next) = tokens.get(idx + 1) {
+                targets.push(unquote(next));
+            }
+        } else if let Some(rest) = token.strip_prefix(">>").or_else(|| token.strip_prefix('>')) {
+            // Attached redirection: `>file` / `>>file`.
+            if !rest.is_empty() {
+                targets.push(unquote(rest));
+            }
+        } else if *token == "tee" {
+            // `tee [-a] FILE`: the first non-flag argument is a write target.
+            if let Some(arg) = tokens[idx + 1..].iter().find(|arg| !arg.starts_with('-')) {
+                targets.push(unquote(arg));
+            }
+        }
+    }
+    targets
+}
+
+/// Strip surrounding shell quotes and normalize backslashes for path matching.
+fn unquote(token: &str) -> String {
+    token.trim_matches(['"', '\'']).replace('\\', "/")
 }
 
 fn hook_candidate_strings(value: &serde_json::Value) -> Vec<&str> {

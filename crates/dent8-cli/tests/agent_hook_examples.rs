@@ -106,6 +106,51 @@ fn builtin_guard_fails_closed_on_malformed_enforce_flag() {
     assert_eq!(denied.status.code(), Some(2));
 }
 
+#[test]
+fn builtin_guard_blocks_apply_patch_writes_to_native_memory() {
+    // apply_patch carries the path in a `*** Update File:` header, not a path field.
+    let denied = run_builtin_guard(
+        r#"{"tool_name":"apply_patch","tool_input":{"input":"*** Begin Patch\n*** Update File: AGENTS.md\n@@\n+poisoned\n*** End Patch\n"}}"#,
+        true,
+    );
+    assert_eq!(denied.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("bypass the claim-event firewall"));
+}
+
+#[test]
+fn builtin_guard_blocks_shell_redirects_to_native_memory() {
+    // A shell command that *writes* a native memory file via redirection / tee.
+    for command in [
+        "echo hi >> AGENTS.md",
+        "echo hi > CLAUDE.md",
+        "printf x | tee -a AGENTS.md",
+    ] {
+        let payload = format!(
+            r#"{{"tool_name":"Bash","tool_input":{{"command":{}}}}}"#,
+            serde_json::to_string(command).expect("encode command"),
+        );
+        let denied = run_builtin_guard(&payload, true);
+        assert_eq!(denied.status.code(), Some(2), "should block: {command}");
+    }
+}
+
+#[test]
+fn builtin_guard_allows_shell_reads_and_unrelated_writes() {
+    // Reads and writes to *other* files must not be flagged (no over-blocking).
+    for command in [
+        "cat AGENTS.md",
+        "grep todo AGENTS.md",
+        r#"echo "see AGENTS.md" >> notes.txt"#,
+    ] {
+        let payload = format!(
+            r#"{{"tool_name":"Bash","tool_input":{{"command":{}}}}}"#,
+            serde_json::to_string(command).expect("encode command"),
+        );
+        let allowed = run_builtin_guard(&payload, true);
+        assert!(allowed.status.success(), "should allow: {command}");
+    }
+}
+
 fn dent8_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_dent8"))
 }

@@ -18,9 +18,7 @@ binary needs none of them (it uses a local file log).
 | `DATABASE_URL` | the adapter's integration tests only | *(unset → tests skip)* | A throwaway `postgres://…` for `cargo test -p dent8-store-postgres --features adapter`. **Not** read by the CLI/MCP — that is `DENT8_STORE_URL`. |
 
 The optional hook helper `dent8 hook native-memory-guard` has its own variables:
-`DENT8_HOOK_MODE`, `DENT8_HOOK_ENFORCE`, and `DENT8_ALLOW_NATIVE_MEMORY_WRITE`. Script
-fallbacks in [`examples/agent-hooks/`](../examples/agent-hooks/) also support `DENT8_BIN`
-and `DENT8_NATIVE_MEMORY_PATTERNS`.
+`DENT8_HOOK_MODE`, `DENT8_HOOK_ENFORCE`, and `DENT8_ALLOW_NATIVE_MEMORY_WRITE`.
 
 The bundled [`compose.yml`](../compose.yml) brings up a throwaway `postgres:16`; the matching
 URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhost:5432/dent8`).

@@ -39,6 +39,21 @@ It reads hook JSON on stdin, recognizes common provider payload shapes, and exit
 `2` when an enforced native memory/rules write should be blocked (`DENT8_HOOK_ENFORCE` accepts
 `1`/`true`/`yes`/`on`; an unreadable payload under enforcement fails **closed**).
 
+### What the guard inspects (and what it can't)
+
+The guard is **best-effort** and matches a write target against the native memory/rules patterns
+above. It covers:
+
+- structured file-write tools — a path field like `file_path` / `path` (e.g. `Write`, `Edit`);
+- `apply_patch` bodies — the `*** Update File:` / `*** Add File:` / `*** Delete File:` /
+  `*** Move to:` headers;
+- common shell redirections — `> FILE`, `>> FILE`, and `tee [-a] FILE`.
+
+It does **not** parse every shell write mechanism — `sed -i`, `cp`/`mv`, an interpreter writing a
+file (`python -c …`), or an embedded heredoc can still reach a native memory file undetected. A
+mere *read* (`cat AGENTS.md`) is intentionally not flagged. This is why the guard is a seatbelt,
+not the boundary — see below.
+
 ## Why hooks are not enough
 
 Hooks are provider-specific and can be disabled, misconfigured, or bypassed by a different
