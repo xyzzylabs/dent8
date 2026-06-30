@@ -3,8 +3,8 @@
 -- These tables are **derived caches** of the event log (migration 002), maintained inside
 -- the same append transaction so a reader can fetch the believed state without re-folding
 -- the log. The log remains the single source of truth: `projection == fold(log)` is the
--- invariant, checkable with `PostgresEventStore::verify_projection`. They populate the
--- inspection/materialization role migration 001 sketched, but aligned with the actual
+-- invariant, checkable with `PostgresEventStore::verify_projection`. They are the
+-- inspection/materialization layer, aligned with the actual
 -- `dent8_core` types: timestamps are `BIGINT` Unix milliseconds (matching `TimestampMillis`,
 -- never DB-generated, so a deterministic replay rebuilds identical rows), and the exact
 -- folded state is kept as `state_json` for lossless reconstruction.

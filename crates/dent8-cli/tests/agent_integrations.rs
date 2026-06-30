@@ -114,7 +114,6 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
     let authority = Command::new(dent8_bin())
         .args(["authority", "add", "source:codex", "high"])
         .env("DENT8_AUTHORITY", &authority_path)
-        .env_remove("DENT8_DATABASE_URL")
         .env_remove("DENT8_STORE_URL")
         .output()
         .expect("run dent8 authority add");
@@ -221,10 +220,7 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
 /// Run a `dent8` subcommand with a controlled environment (per-process, so no env races).
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
     let mut command = Command::new(dent8_bin());
-    command
-        .args(args)
-        .env_remove("DENT8_DATABASE_URL")
-        .env_remove("DENT8_STORE_URL");
+    command.args(args).env_remove("DENT8_STORE_URL");
     for (key, value) in envs {
         command.env(key, value);
     }
@@ -355,7 +351,6 @@ fn run_mcp_server(input: &str, envs: &[(&str, String)]) -> String {
     let mut command = Command::new(dent8_bin());
     command
         .args(["mcp", "serve"])
-        .env_remove("DENT8_DATABASE_URL")
         .env_remove("DENT8_STORE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -75,7 +75,7 @@ un-arbitrated write path. The in-memory backend runs steps 1–6 end-to-end (it 
 transactionally** — advisory-lock-serialized, in-transaction projection load + arbitration,
 atomic append, and materialized projection/edges (steps 1, 2, 5, 6) — and is **DB-verified**.
 So end-to-end firewall behavior *is* runnable — and the CLI/MCP run on `PostgresEventStore`
-when `DENT8_DATABASE_URL` is set (a `--features postgres` build), with each multi-event
+when `DENT8_STORE_URL` is set (a `--features postgres` build), with each multi-event
 operation committed in one transaction. The remaining gap is *productization*, not
 enforcement: an opt-in **authority ceiling** caps what each source may assert (`dent8
 authority`), but *which* source is calling is still asserted, not cryptographically proven

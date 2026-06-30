@@ -14,7 +14,7 @@ adversarial corpus** (firewall vs recency-only baseline), an **external HMAC anc
 tamper-resistance, and an **asymmetric (publicly-verifiable) signed-tree-head anchor**
 (Ed25519, feature-gated). The CLI/MCP run on the **operational Postgres adapter** (the
 adapter — incl. the materialized projection/edge graph — is DB-verified against `postgres:16`,
-and with `DENT8_DATABASE_URL` the runnable surface uses it, each multi-event operation
+and with `DENT8_STORE_URL` the runnable surface uses it, each multi-event operation
 committed transactionally; the stock binary keeps the file dev store). Still gated on
 implementation: **cryptographic caller identity** (authn — the source→authority *ceiling*
 authz is built, `dent8 authority`), the official **`rmcp`

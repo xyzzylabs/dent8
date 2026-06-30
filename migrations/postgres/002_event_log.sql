@@ -4,9 +4,9 @@
 -- *canonical event* as a single JSONB document (`event_json`) — the same bytes the hash
 -- chain commits to — plus the scalar columns needed to index and arbitrate appends. The
 -- believed projection is derived by folding the log on read (the `projection == fold(log)`
--- invariant), exactly as the in-memory backend does; the richer per-column event table and
--- the materialized projection/edge tables in migration 001 are the inspection /
--- materialization target a later adapter version populates, not a separate source of truth.
+-- invariant), exactly as the in-memory backend does; the materialized projection/edge tables
+-- (003) are the inspection / materialization layer, not a separate source of truth, and a
+-- richer per-column event table remains a possible later design.
 --
 -- Appends are serialized by a transaction-scoped advisory lock so the global hash chain
 -- (each event_hash links to the previous event across the whole log, by global_sequence)

@@ -259,7 +259,7 @@ full lifecycle — `assert`, `supersede`, `retract`, `contradict`, `explain`, `r
 composing across process invocations and re-validating log integrity on load. We are
 explicit (§10) that the stock binary uses a single-writer **dev** store; the operational,
 transactional Postgres backend (`PostgresEventStore`) is built, **DB-verified**, and **driven
-by the CLI/MCP** when `DENT8_DATABASE_URL` is set (a `--features postgres` build), each
+by the CLI/MCP** when `DENT8_STORE_URL` is set (a `--features postgres` build), each
 multi-event operation committed transactionally. The remaining productization step is
 cryptographic caller identity (authn; the source→authority ceiling authz is built —
 `dent8 authority`) and an *operated* witness service (the signed-tree-head witness primitive

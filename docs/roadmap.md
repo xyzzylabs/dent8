@@ -33,7 +33,7 @@ What remains to make it a *product*, not a demo:
   firewall via the shared `arbitrate_events`, JSONB event log + materialized projection/edge
   graph) — the `DATABASE_URL`-gated tests pass against a live `postgres:16`. Sharing the pure
   `arbitrate_events` means the firewall decision is the same tested code on both backends.
-  The CLI/MCP **run on it** (`DENT8_DATABASE_URL`, a `--features postgres` build), each
+  The CLI/MCP **run on it** (`DENT8_STORE_URL`, a `--features postgres` build), each
   multi-event operation committed transactionally (`append_many`). What remains for a
   multi-user product is cryptographic caller identity (an authority *ceiling* per source is
   built — `dent8 authority`) and an *operated* witness service (the signed-tree-head witness
@@ -121,7 +121,7 @@ by construction and on deserialize.)
 
 ## 2. dent8-store-postgres: sqlx adapter with transactional append + projection
 
-**Why.** The crate is today only `INITIAL_SCHEMA_SQL`, `Migration`, and
+**Why.** The crate began as just the schema constants, `Migration`, and
 `validate_identifier` — no async, no adapter. This is where dent8 becomes a store of
 record.
 

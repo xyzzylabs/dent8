@@ -14,7 +14,7 @@ threat model's T2/T8 tier and a core differentiator
 
 Until now dent8 had no way to record that claim *C* was derived using claims
 *A*, *B* as evidence. `Evidence` modelled only *descriptive* provenance (a locator,
-a digest, a summary); migration 001 sketched a `uses_as_evidence` edge table that was
+a digest, a summary); an early schema sketch had a `uses_as_evidence` edge table that was
 never wired. Two questions had to be decided: **how to represent the edge**, and
 **what happens to a derivative when its evidence is retracted**.
 

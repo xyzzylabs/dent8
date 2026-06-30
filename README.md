@@ -103,8 +103,8 @@ source of truth for what is built.** In short:
   as tools, plus `resources/list`/`resources/read` and JSON-RPC batches, over stdio JSON-RPC,
   through the shared firewall path.
 - **Design-only:** the official MCP `rmcp` SDK / richer transports (the v0 server already does
-  the nine tools above, resources, and JSON-RPC batches) and the richer per-column Postgres
-  event table of migration 001 (the JSONB log, projection, and edge graph are built, above;
+  the nine tools above, resources, and JSON-RPC batches) and a richer per-column Postgres
+  event table (a possible later design; the JSONB log, projection, and edge graph are built, above;
   evidence-dependency edges ship as `EvidenceKind::DerivedFrom` + retraction taint, ADR 0010).
 
 The runnable surface persists either way: a local file dev log by default, or — with

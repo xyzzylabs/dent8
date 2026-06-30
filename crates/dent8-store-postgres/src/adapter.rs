@@ -7,8 +7,8 @@
 //! self-serialize and retry the initial connection, so no special flags are needed). It also
 //! reuses the *same* pure firewall decision as the in-memory backend
 //! ([`dent8_store::arbitrate_events`], exhaustively tested) and stores the canonical event
-//! as one JSONB document. Still v0: a single-table event log + derived caches, not the
-//! per-column materialization of migration 001.
+//! as one JSONB document. Still v0: a single-table JSONB event log + derived caches, not a
+//! per-column materialization (a possible later design).
 //!
 //! Design choices (see [`storage.md`](../../../docs/storage.md)):
 //! - **Async boundary:** the adapter exposes inherent `async fn`s (it cannot implement the

@@ -39,7 +39,7 @@ fn run(args: impl IntoIterator<Item = String>) -> i32 {
         [command, backend] if command == "schema" && backend == "postgres" => {
             // Print exactly the schema `migrate()` deploys (the event-log table + the
             // materialized projection/edges), so an operator who pre-creates it gets the tables
-            // the runtime actually uses — not migration 001's per-column design sketch.
+            // the runtime actually uses (a richer per-column layout is a possible later design).
             print!("{EVENT_LOG_SCHEMA_SQL}{MATERIALIZATION_SCHEMA_SQL}");
             0
         }
@@ -245,9 +245,8 @@ Usage:
   dent8 mcp serve         expose the full belief surface to agents over MCP (stdio JSON-RPC)
 
 Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or an
-async backend selected by a store URL — DENT8_STORE_URL (or the legacy DENT8_DATABASE_URL
-alias), dispatched by scheme (postgres:// needs --features postgres). authority is one of:
-low | medium | high | canonical.
+async backend selected by DENT8_STORE_URL, dispatched by scheme (postgres:// needs
+--features postgres). authority is one of: low | medium | high | canonical.
 Authority ceiling: a source may assert at most its registered max. Enforced once a registry
 exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
 source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
@@ -758,9 +757,8 @@ fn parse_authority(value: &str) -> Option<AuthorityLevel> {
 /// rejected loudly rather than silently masked by `explain`.
 fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
     // Backend selection lives here (and in `append_events`) so every `op_*` is backend-aware
-    // with no changes of its own. With a store URL set (`DENT8_STORE_URL`, or the legacy
-    // `DENT8_DATABASE_URL`) and a matching backend feature, reads/writes go to that operational
-    // store; otherwise to the file dev store.
+    // with no changes of its own. With `DENT8_STORE_URL` set and a matching backend feature,
+    // reads/writes go to that operational store; otherwise to the file dev store.
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
         return backend_load(&url);
@@ -768,8 +766,8 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
     #[cfg(not(feature = "async-store"))]
     if store_url().is_some() {
         return Err(
-            "a store URL is set (DENT8_STORE_URL / DENT8_DATABASE_URL) but this build has no \
-             async backend — rebuild with `--features postgres` (or another backend)"
+            "DENT8_STORE_URL is set but this build has no async backend — \
+             rebuild with `--features postgres` (or another backend)"
                 .to_string(),
         );
     }
@@ -809,8 +807,8 @@ fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
     #[cfg(not(feature = "async-store"))]
     if store_url().is_some() {
         return Err(
-            "a store URL is set (DENT8_STORE_URL / DENT8_DATABASE_URL) but this build has no \
-             async backend — rebuild with `--features postgres` (or another backend)"
+            "DENT8_STORE_URL is set but this build has no async backend — \
+             rebuild with `--features postgres` (or another backend)"
                 .to_string(),
         );
     }
@@ -859,8 +857,8 @@ fn verify_log(path: &str) -> Result<String, String> {
     #[cfg(not(feature = "async-store"))]
     if store_url().is_some() {
         return Err(
-            "a store URL is set (DENT8_STORE_URL / DENT8_DATABASE_URL) but this build has no \
-             async backend — rebuild with `--features postgres` (or another backend)"
+            "DENT8_STORE_URL is set but this build has no async backend — \
+             rebuild with `--features postgres` (or another backend)"
                 .to_string(),
         );
     }
@@ -1196,21 +1194,17 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
         .map_err(|error| WriteError::Other(format!("cannot write {path}: {error}")))
 }
 
-/// The async-backend URL: `DENT8_STORE_URL`, or the legacy `DENT8_DATABASE_URL` alias (kept
-/// for back-compat). `None` selects the file dev store. Always available (just env reads), so
-/// the file-only build can still detect "a store URL is set but no backend is compiled in."
+/// The async-backend URL from `DENT8_STORE_URL` (dispatched by scheme). `None` selects the
+/// file dev store. Always available (just env reads), so the file-only build can still detect
+/// "a store URL is set but no backend is compiled in."
 ///
-/// A set-but-empty (or whitespace-only) value counts as **unset**: `DENT8_STORE_URL=` neither
-/// shadows a real `DENT8_DATABASE_URL` nor silently disables the file store. The value is
-/// trimmed so a quoted/padded `.env` entry still dispatches.
+/// A set-but-empty (or whitespace-only) value counts as **unset** (`DENT8_STORE_URL=` does not
+/// disable the file store); the value is trimmed so a quoted/padded `.env` entry still dispatches.
 fn store_url() -> Option<String> {
-    fn non_empty(name: &str) -> Option<String> {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    }
-    non_empty("DENT8_STORE_URL").or_else(|| non_empty("DENT8_DATABASE_URL"))
+    std::env::var("DENT8_STORE_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// A throwaway current-thread runtime to bridge the sync CLI to an async backend. One per

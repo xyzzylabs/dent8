@@ -1,5 +1,3 @@
-pub const INITIAL_SCHEMA_SQL: &str = include_str!("../../../migrations/postgres/001_initial.sql");
-
 /// The v0 append-only event-log table the [`adapter`] writes/reads (migration 002).
 pub const EVENT_LOG_SCHEMA_SQL: &str =
     include_str!("../../../migrations/postgres/002_event_log.sql");
@@ -21,12 +19,9 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
+// Migration 001 (a per-column `dent8_claim_events` design sketch) was never applied and has
+// been dropped; the live schema is the JSONB event log (002) + its materialized caches (003).
 pub const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        name: "initial_claim_event_log",
-        sql: INITIAL_SCHEMA_SQL,
-    },
     Migration {
         version: 2,
         name: "event_log",
@@ -66,12 +61,14 @@ pub fn validate_identifier(identifier: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{INITIAL_SCHEMA_SQL, validate_identifier};
+    use super::{EVENT_LOG_SCHEMA_SQL, validate_identifier};
 
     #[test]
-    fn schema_names_claim_events_table() {
-        assert!(INITIAL_SCHEMA_SQL.contains("dent8_claim_events"));
-        assert!(INITIAL_SCHEMA_SQL.contains("claim.asserted"));
+    fn live_schema_names_the_event_log_table() {
+        assert!(EVENT_LOG_SCHEMA_SQL.contains("dent8_event_log"));
+        // The hash-chain columns the adapter writes/verifies.
+        assert!(EVENT_LOG_SCHEMA_SQL.contains("event_hash"));
+        assert!(EVENT_LOG_SCHEMA_SQL.contains("global_sequence"));
     }
 
     #[test]

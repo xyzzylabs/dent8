@@ -266,8 +266,7 @@ subject+predicate.
 - **Postgres remaining gaps — not the adapter itself.** The v0
   `PostgresEventStore` + its materialization (migration 003) are **DB-verified** (the gated
   integration tests pass against a live `postgres:16`, via [`compose.yml`](../compose.yml) or
-  the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_STORE_URL` (or the
-  legacy `DENT8_DATABASE_URL` alias) set
+  the CI `postgres` job), **and the runnable surface uses it**: with `DENT8_STORE_URL` set
   and a `--features postgres` build, `dent8` and `mcp serve` read/write Postgres, with each
   multi-event operation (supersede/retract/contradict) committed as one transaction
   (`append_many`). Both the *adapter* **and the CLI-over-Postgres path** are **CI-verified**
@@ -279,8 +278,8 @@ subject+predicate.
   async backend is a localized addition, not a CLI rewrite.
   What remains *design-only*: **cryptographic caller identity**
   (the source→authority ceiling is built — see `dent8 authority` above — but *which* source
-  is calling is still asserted, not proven by a signed token), the richer per-column event
-  table + `uses_as_evidence` edges (migration 001), and operational tuning.
+  is calling is still asserted, not proven by a signed token), a richer per-column event
+  table + `uses_as_evidence` edges (a possible later design), and operational tuning.
 - **Persistent CLI/MCP remaining gaps — productization, not persistence.** The full surface — `assert` /
   `supersede` / `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` /
   `replay` / `verify` / `conflicts` / `eval` — across invocations is **Runnable** (above) over
