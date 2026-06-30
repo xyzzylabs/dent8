@@ -34,9 +34,9 @@ backend stores bytes; the *meaning* lives in `dent8-core`.
 > `SqliteEventStore` both implement `AsyncEventStore`, and the CLI holds a
 > `Box<dyn AsyncEventStore>` chosen by URL scheme — so adding a backend is one `connect_backend`
 > arm. **`dent8-store-sqlite`** is that second backend (embedded, `sqlite://…`), built precisely
-> to prove the boundary holds: it has *different* primitives (no advisory lock — SQLite
-> serializes writers itself; TEXT not JSONB) yet the same firewall + hash chain. See the
-> Postgres-adapter section below.
+> to prove the boundary holds: it has *different* primitives (no advisory lock — `BEGIN
+> IMMEDIATE` + `busy_timeout` serialize writers instead, with WAL for reader concurrency; TEXT
+> not JSONB) yet the same firewall + hash chain. See the Postgres-adapter section below.
 
 ## What the log must guarantee
 

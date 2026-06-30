@@ -6,8 +6,10 @@
 //! the same canonical [`event_hash`]/[`hash_chain`]. Where it differs from the Postgres adapter
 //! is only the **primitives**, exactly as a second backend should:
 //! - storage is **embedded** (a file or `:memory:`, no server, bundled libsqlite3);
-//! - there is **no advisory lock** — `SQLite` serializes write transactions itself (one writer at
-//!   a time via the database lock), so the global chain head is read-modify-written safely;
+//! - writers **serialize via `BEGIN IMMEDIATE` + `busy_timeout`** (the write lock is taken up
+//!   front, before the chain-head read), with WAL for reader concurrency — so concurrent writers
+//!   *wait* rather than fail, and a residual busy past the timeout is surfaced as a retryable
+//!   `Conflict` (the analogue of Postgres' advisory lock + optimistic-id retry);
 //! - the canonical event is stored as **TEXT** (`event_json`), since `SQLite` has no `JSONB`.
 //!
 //! v0 is lean: the event log only. The believed projection is folded from the log on read (the
@@ -20,8 +22,8 @@ use std::str::FromStr;
 
 use dent8_core::{ClaimEvent, ClaimEventKind, ClaimId, event_hash, hash_chain};
 use dent8_store::{AppendReceipt, AsyncEventStore, EventFilter, StoreError, arbitrate_events};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use sqlx::{Sqlite, SqliteConnection, Transaction};
+use sqlx::SqliteConnection;
+use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
 /// The v0 append-only event-log schema. Mirrors the Postgres `dent8_event_log` (migration 002)
 /// minus the materialized caches: `event_json` is TEXT (no `JSONB`), `global_sequence` is the
@@ -44,21 +46,27 @@ CREATE INDEX IF NOT EXISTS dent8_event_log_subject_idx
     ON dent8_event_log (subject_type, subject_key, predicate, global_sequence);
 ";
 
-/// A v0 `SQLite`-backed event store. The pool is capped at one connection: `SQLite` is a
-/// single-writer database, and one connection keeps a single-process CLI off `SQLITE_BUSY`
-/// while preserving an in-`:memory:` database for the pool's lifetime.
+/// A v0 `SQLite`-backed event store. The pool is capped at **one connection**: that serializes
+/// writers *within* a process (cross-process serialization is `BEGIN IMMEDIATE` + `busy_timeout`
+/// in [`Self::append_many`]), and keeps an in-`:memory:` database alive for the pool's lifetime.
 #[derive(Clone, Debug)]
 pub struct SqliteEventStore {
     pool: SqlitePool,
 }
 
 impl SqliteEventStore {
-    /// Connect at `url` (e.g. `sqlite://path/to/memory.db` or `sqlite::memory:`), creating the
-    /// database file if it does not exist.
+    /// Connect at `url`, creating the database file if it does not exist. Examples:
+    /// `sqlite://dent8.db` (a *file* in the cwd), `sqlite:///abs/path/dent8.db` (an absolute
+    /// path), or `sqlite::memory:` (a transient in-memory DB that lives only for this store's
+    /// pool — fine for tests, but each CLI invocation opens a fresh pool, so use a file path for
+    /// persistence).
     pub async fn connect(url: &str) -> Result<Self, StoreError> {
         let options = SqliteConnectOptions::from_str(url)
             .map_err(|error| StoreError::Unavailable(error.to_string()))?
             .create_if_missing(true)
+            // WAL lets readers run concurrently with the single writer; `busy_timeout` makes a
+            // contending `BEGIN IMMEDIATE` *wait* for the write lock rather than fail at once.
+            .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(std::time::Duration::from_secs(5));
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -68,7 +76,9 @@ impl SqliteEventStore {
         Ok(Self { pool })
     }
 
-    /// Wrap an existing pool.
+    /// Wrap an existing pool. For the in-process write serialization in [`Self::append_many`] to
+    /// hold, the pool should be **single-connection** (as [`Self::connect`] configures); the
+    /// cross-process serialization (`BEGIN IMMEDIATE` + `busy_timeout`) holds regardless.
     #[must_use]
     pub fn from_pool(pool: SqlitePool) -> Self {
         Self { pool }
@@ -90,18 +100,36 @@ impl SqliteEventStore {
     }
 
     /// Append a whole operation as **one transaction** — every event arbitrates, chains, and
-    /// inserts, or none do. `SQLite` serializes write transactions, so the chain head is
-    /// read-modify-written without a race (no advisory lock needed).
+    /// inserts, or none do. Uses `BEGIN IMMEDIATE` so the write lock is taken **before** the
+    /// chain-head read: a concurrent writer then *waits* on `busy_timeout` and serializes (like
+    /// the Postgres advisory lock), instead of failing a deferred read→write upgrade with an
+    /// immediate `SQLITE_BUSY`. A residual busy (lock held past the timeout) surfaces as a
+    /// retryable [`StoreError::Conflict`] so the CLI's write-retry loop re-runs it.
     pub async fn append_many(
         &self,
         events: Vec<ClaimEvent>,
     ) -> Result<Vec<AppendReceipt>, StoreError> {
-        let mut tx = self.pool.begin().await.map_err(unavailable)?;
+        let mut conn = self.pool.acquire().await.map_err(map_busy)?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_busy)?;
         let mut receipts = Vec::with_capacity(events.len());
         for event in &events {
-            receipts.push(append_event_in_tx(&mut tx, event).await?);
+            match append_event_in_tx(&mut conn, event).await {
+                Ok(receipt) => receipts.push(receipt),
+                Err(error) => {
+                    // Roll back the partial operation; ignore a rollback error (the connection is
+                    // discarded/reset on return to the pool anyway).
+                    let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                    return Err(error);
+                }
+            }
         }
-        tx.commit().await.map_err(unavailable)?;
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_busy)?;
         Ok(receipts)
     }
 
@@ -177,12 +205,14 @@ impl SqliteEventStore {
 /// algorithm as the Postgres adapter (arbitrate FIRST so an inadmissible-and-duplicate event
 /// fails with the firewall's error, not `Conflict`), with `SQLite`-native primitives.
 async fn append_event_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    conn: &mut SqliteConnection,
     event: &ClaimEvent,
 ) -> Result<AppendReceipt, StoreError> {
-    let existing = load_claim_in_tx(tx, event.claim_id.as_str()).await?;
+    let existing = load_claim_in_tx(&mut *conn, event.claim_id.as_str()).await?;
     let replacing = match &event.kind {
-        ClaimEventKind::Superseded { by, .. } => Some(load_claim_in_tx(tx, by.as_str()).await?),
+        ClaimEventKind::Superseded { by, .. } => {
+            Some(load_claim_in_tx(&mut *conn, by.as_str()).await?)
+        }
         _ => None,
     };
     arbitrate_events(event, &existing, replacing.as_deref())?;
@@ -190,9 +220,9 @@ async fn append_event_in_tx(
     let duplicate: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM dent8_event_log WHERE event_id = ?1")
             .bind(event.event_id.as_str())
-            .fetch_optional(&mut **tx)
+            .fetch_optional(&mut *conn)
             .await
-            .map_err(unavailable)?;
+            .map_err(map_busy)?;
     if duplicate.is_some() {
         return Err(StoreError::Conflict(format!(
             "duplicate event_id {}",
@@ -201,13 +231,14 @@ async fn append_event_in_tx(
     }
 
     // Chain to the current global head (NULL for the first event, or the previous event of this
-    // same transaction, since its INSERT is visible here).
+    // same transaction, since its INSERT is visible here). The `BEGIN IMMEDIATE` write lock is
+    // already held, so no other writer can move the head between this read and the INSERT.
     let previous: Option<String> = sqlx::query_scalar(
         "SELECT event_hash FROM dent8_event_log ORDER BY global_sequence DESC LIMIT 1",
     )
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *conn)
     .await
-    .map_err(unavailable)?;
+    .map_err(map_busy)?;
     let hash = event_hash(event, previous.as_deref())
         .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
     let event_json = serde_json::to_string(event)
@@ -226,9 +257,9 @@ async fn append_event_in_tx(
     .bind(previous.as_deref())
     .bind(hash.as_str())
     .bind(event_json)
-    .fetch_one(&mut **tx)
+    .fetch_one(&mut *conn)
     .await
-    .map_err(unavailable)?;
+    .map_err(map_busy)?;
 
     let global_sequence = u64::try_from(global_sequence).map_err(|_| {
         StoreError::CorruptEvent(format!("non-positive global_sequence {global_sequence}"))
@@ -241,17 +272,16 @@ async fn append_event_in_tx(
 }
 
 async fn load_claim_in_tx(
-    tx: &mut Transaction<'_, Sqlite>,
+    conn: &mut SqliteConnection,
     claim_id: &str,
 ) -> Result<Vec<ClaimEvent>, StoreError> {
-    let conn: &mut SqliteConnection = tx;
     let rows: Vec<String> = sqlx::query_scalar(
         "SELECT event_json FROM dent8_event_log WHERE claim_id = ?1 ORDER BY global_sequence",
     )
     .bind(claim_id)
     .fetch_all(&mut *conn)
     .await
-    .map_err(unavailable)?;
+    .map_err(map_busy)?;
     rows.iter().map(|json| event_from_json(json)).collect()
 }
 
@@ -262,6 +292,24 @@ fn event_from_json(value: &str) -> Result<ClaimEvent, StoreError> {
 // By value so it composes with `.map_err(unavailable)`; only borrowed in the body.
 #[allow(clippy::needless_pass_by_value)]
 fn unavailable(error: sqlx::Error) -> StoreError {
+    StoreError::Unavailable(error.to_string())
+}
+
+/// Like [`unavailable`], but classifies `SQLite`'s `SQLITE_BUSY` ("database is locked") as a
+/// **retryable** [`StoreError::Conflict`] — so the CLI's `with_write_retry` re-runs a write that
+/// lost the write lock past `busy_timeout` (the `SQLite` analogue of the Postgres optimistic-id
+/// race), instead of failing it as a terminal `Unavailable`. Used on the write path.
+#[allow(clippy::needless_pass_by_value)]
+fn map_busy(error: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &error {
+        let code = db.code();
+        // SQLITE_BUSY = 5; SQLITE_BUSY_SNAPSHOT = 517. Fall back to the message for safety.
+        if matches!(code.as_deref(), Some("5" | "517"))
+            || db.message().contains("database is locked")
+        {
+            return StoreError::Conflict(format!("sqlite write contention (retryable): {error}"));
+        }
+    }
     StoreError::Unavailable(error.to_string())
 }
 

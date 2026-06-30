@@ -1291,10 +1291,11 @@ fn backend_load(url: &str) -> Result<InMemoryEventStore, String> {
 /// supersede/retract/contradict commits atomically and is re-arbitrated by the durable
 /// firewall. Backend-agnostic.
 ///
-/// v0 concurrency: commits are serialized by the backend (e.g. Postgres' advisory lock) and a
-/// racing write is safely rejected (the in-transaction re-arbitration + id-uniqueness), so
-/// there is no corruption — but event/claim ids are minted optimistically from a snapshot, so
-/// two writers racing the same backend can collide and one gets a **retryable** write conflict.
+/// v0 concurrency: commits are serialized by the backend (Postgres' advisory lock; `SQLite`'s
+/// `BEGIN IMMEDIATE` + `busy_timeout`), so concurrent writers wait rather than corrupt — but
+/// event/claim ids are minted optimistically from a snapshot, so two writers racing the same
+/// backend can collide. The loser gets a **retryable** conflict (a duplicate id, or — on
+/// `SQLite` — a lock still held past the timeout), which [`with_write_retry`] re-runs.
 #[cfg(feature = "async-store")]
 fn backend_append(url: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
     use dent8_store::StoreError;
