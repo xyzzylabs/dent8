@@ -16,7 +16,7 @@ binary needs none of them (it uses a local file log).
 | `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
 | `DENT8_WITNESS_PUBKEY` | `dent8 witness verify` | `<DENT8_WITNESS_KEY>.pub` | Override the public key used for verification (e.g. when verifying a published head without the signing key). |
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
-| `DATABASE_URL` | the adapter's integration tests only | *(unset → tests skip)* | A throwaway `postgres://…` for `cargo test -p dent8-store-postgres --features adapter`. **Not** read by the CLI/MCP — that is `DENT8_DATABASE_URL`. |
+| `DATABASE_URL` | the adapter's integration tests only | *(unset → tests skip)* | A throwaway `postgres://…` for `cargo test -p dent8-store-postgres --features adapter`. **Not** read by the CLI/MCP — that is `DENT8_STORE_URL` (or its `DENT8_DATABASE_URL` alias). |
 
 The bundled [`compose.yml`](../compose.yml) brings up a throwaway `postgres:16`; the matching
 URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhost:5432/dent8`).
@@ -26,7 +26,7 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 | Feature | Adds | Default? |
 |---|---|---|
 | *(none)* | the full firewall + lifecycle over the **file dev store**, plus `eval`, `verify`, `conflicts`, `authority`, MCP | yes |
-| `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by `DENT8_DATABASE_URL` | no |
+| `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by a `postgres://` `DENT8_STORE_URL` | no |
 | `witness` | the `dent8 witness` Ed25519 signed-tree-head commands | no |
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 

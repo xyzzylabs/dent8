@@ -1199,10 +1199,18 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
 /// The async-backend URL: `DENT8_STORE_URL`, or the legacy `DENT8_DATABASE_URL` alias (kept
 /// for back-compat). `None` selects the file dev store. Always available (just env reads), so
 /// the file-only build can still detect "a store URL is set but no backend is compiled in."
+///
+/// A set-but-empty (or whitespace-only) value counts as **unset**: `DENT8_STORE_URL=` neither
+/// shadows a real `DENT8_DATABASE_URL` nor silently disables the file store. The value is
+/// trimmed so a quoted/padded `.env` entry still dispatches.
 fn store_url() -> Option<String> {
-    std::env::var("DENT8_STORE_URL")
-        .or_else(|_| std::env::var("DENT8_DATABASE_URL"))
-        .ok()
+    fn non_empty(name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+    non_empty("DENT8_STORE_URL").or_else(|| non_empty("DENT8_DATABASE_URL"))
 }
 
 /// A throwaway current-thread runtime to bridge the sync CLI to an async backend. One per
@@ -1219,23 +1227,37 @@ fn store_runtime() -> Result<tokio::runtime::Runtime, String> {
 /// Connect to the async backend selected by the URL **scheme** and self-migrate. The single
 /// place that maps a scheme to a concrete backend — adding a backend is one arm here, not a
 /// change at every call site.
+///
+/// `async-store` is an umbrella feature enabled *by* a backend (e.g. `postgres`); enabling it
+/// alone yields a build with no backend arms, where every store URL gets the "no matching
+/// backend" error below — hence `unused_async` is allowed (the awaits live in the cfg'd arms).
 #[cfg(feature = "async-store")]
+#[allow(clippy::unused_async)]
 async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventStore>, String> {
-    #[cfg(feature = "postgres")]
-    if url.starts_with("postgres://") || url.starts_with("postgresql://") {
-        use dent8_store_postgres::PostgresEventStore;
-        let store = PostgresEventStore::connect(url)
-            .await
-            .map_err(|error| error.to_string())?;
-        dent8_store::AsyncEventStore::migrate(&store)
-            .await
-            .map_err(|error| error.to_string())?;
-        return Ok(Box::new(store));
+    // The scheme is everything before the first `:` (RFC 3986) and is case-insensitive, so
+    // match on the lowercased scheme — but pass the *original* url to the driver (case is
+    // significant in credentials/host/path).
+    let scheme = url
+        .split_once(':')
+        .map_or("", |(scheme, _)| scheme)
+        .to_ascii_lowercase();
+    match scheme.as_str() {
+        #[cfg(feature = "postgres")]
+        "postgres" | "postgresql" => {
+            use dent8_store_postgres::PostgresEventStore;
+            let store = PostgresEventStore::connect(url)
+                .await
+                .map_err(|error| error.to_string())?;
+            dent8_store::AsyncEventStore::migrate(&store)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(Box::new(store))
+        }
+        _ => Err(format!(
+            "unsupported store URL `{url}`: no matching backend in this build \
+             (a postgres:// URL needs a `--features postgres` build)"
+        )),
     }
-    Err(format!(
-        "unsupported store URL `{url}`: no matching backend in this build \
-         (a postgres:// URL needs a `--features postgres` build)"
-    ))
 }
 
 /// Load the whole backend log into an in-memory working store (the decide snapshot the `op_*`

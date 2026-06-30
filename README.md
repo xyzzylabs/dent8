@@ -38,8 +38,8 @@ cargo run -p dent8-cli -- demo
 ```
 
 The stock `dent8` binary uses a local file log and needs no services. Opt-in builds add the
-operational **Postgres** backend (`--features postgres`, with `DENT8_DATABASE_URL`) and the
-Ed25519 **witness** (`--features witness`).
+operational **Postgres** backend (`--features postgres`, selected by a `postgres://`
+`DENT8_STORE_URL`) and the Ed25519 **witness** (`--features witness`).
 
 ## Quickstart
 
@@ -108,7 +108,7 @@ source of truth for what is built.** In short:
   evidence-dependency edges ship as `EvidenceKind::DerivedFrom` + retraction taint, ADR 0010).
 
 The runnable surface persists either way: a local file dev log by default, or — with
-`DENT8_DATABASE_URL` set and a `--features postgres` build — the **DB-verified transactional
+`DENT8_STORE_URL` set and a `--features postgres` build — the **DB-verified transactional
 Postgres backend** (each multi-event operation committed as one transaction). An opt-in
 **authority ceiling** (`dent8 authority`) caps what each source may assert, rejecting a
 write above its registered ceiling. The witness is runnable as a *primitive* — **`dent8

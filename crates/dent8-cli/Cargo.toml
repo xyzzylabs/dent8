@@ -20,8 +20,9 @@ dent8-store-postgres = { path = "../dent8-store-postgres" }
 dent8-evals = { path = "../dent8-evals" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# Opt-in: lets the CLI/MCP run against Postgres (DENT8_DATABASE_URL). Off by default so the
-# stock `dent8` binary stays free of the async sqlx stack and uses the file dev store.
+# Opt-in (via the `postgres` backend / the `async-store` umbrella): the tokio bridge that
+# lets the CLI/MCP run against an async backend selected by DENT8_STORE_URL. Off by default so
+# the stock `dent8` binary stays free of the async sqlx stack and uses the file dev store.
 tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
 # Opt-in: the `dent8 witness` Ed25519 signed-tree-head commands. Off by default so the stock
 # binary keeps the symmetric anchor and pulls no signature stack.
