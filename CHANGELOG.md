@@ -93,3 +93,9 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   tests, property-based + robustness proptests, golden replay fixtures, `#[cfg(kani)]` proof
   harnesses (run manually), structured MCP schema tests, CI coverage for Postgres/SQLite and
   feature combinations, and the adversarial corpus.
+
+### Fixed
+
+- `dent8 doctor --agent` and MCP smoke/write checks now scrub `DENT8_ACTIVE_GRANTS` from the
+  parent environment before applying the generated agent bundle, preventing stale active-grant
+  registries from leaking into subprocess diagnostics.

@@ -2571,6 +2571,7 @@ fn apply_dent8_env(command: &mut Command, env: &std::collections::BTreeMap<Strin
         "DENT8_AUTHORITY",
         "DENT8_REQUIRE_AUTHORITY",
         "DENT8_TRUST",
+        "DENT8_ACTIVE_GRANTS",
         "DENT8_GRANT",
         "DENT8_IDENTITY_KEY",
         "DENT8_REQUIRE_IDENTITY",
@@ -4952,6 +4953,37 @@ mod tests {
         assert!(parse_flag("DENT8_REQUIRE_AUTHORITY", "1").expect("1"));
         assert!(!parse_flag("DENT8_REQUIRE_AUTHORITY", "off").expect("off"));
         assert!(parse_flag("DENT8_REQUIRE_AUTHORITY", "maybe").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_dent8_env_scrubs_active_grants_unless_explicitly_installed() {
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", "printf '%s' \"${DENT8_ACTIVE_GRANTS-unset}\""])
+            .env("DENT8_ACTIVE_GRANTS", "leaked-from-parent");
+        apply_dent8_env(&mut command, &std::collections::BTreeMap::new());
+
+        let output = command.output().expect("run shell");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", "printf '%s' \"$DENT8_ACTIVE_GRANTS\""])
+            .env("DENT8_ACTIVE_GRANTS", "leaked-from-parent");
+        let env = std::collections::BTreeMap::from([(
+            "DENT8_ACTIVE_GRANTS".to_string(),
+            "installed-active-grants.json".to_string(),
+        )]);
+        apply_dent8_env(&mut command, &env);
+
+        let output = command.output().expect("run shell");
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "installed-active-grants.json"
+        );
     }
 
     #[test]
