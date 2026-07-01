@@ -218,6 +218,153 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
 }
 
 #[test]
+fn init_witness_adds_verification_config_without_signing_key() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+
+    let init = run_dent8(&["init", "--dir", &dir, "--witness"], &[]);
+    assert_success(&init, "init --witness");
+    let stdout = stdout(&init);
+    assert!(stdout.contains("witness:"));
+    assert!(stdout.contains("verification config only"));
+
+    let env = fs::read_to_string(temp.file(".dent8/env")).expect("env file");
+    assert!(env.contains("DENT8_WITNESS_LOG="));
+    assert!(env.contains("DENT8_WITNESS_PUBKEY="));
+    assert!(
+        !env.contains("DENT8_WITNESS_KEY="),
+        "writer env must not receive the witness signing key"
+    );
+    assert!(
+        temp.file(".dent8/witness.jsonl").exists(),
+        "init should create the local witness-head log"
+    );
+}
+
+#[cfg(not(feature = "witness"))]
+#[test]
+fn doctor_without_witness_feature_fails_closed_when_signed_heads_exist() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    fs::write(&witness_log, "{}\n").expect("witness log");
+
+    let doctor = run_dent8(
+        &["doctor"],
+        &[
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_WITNESS_LOG", witness_log.as_str()),
+        ],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    assert!(
+        stdout(&doctor).contains("signed heads are configured"),
+        "{}",
+        stdout(&doctor)
+    );
+}
+
+#[cfg(feature = "witness")]
+#[test]
+fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let key = temp.file("witness.key").to_string_lossy().into_owned();
+    let pubkey = format!("{key}.pub");
+    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
+        "witness keygen",
+    );
+
+    let write_env = [("DENT8_LOG", log.as_str())];
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &write_env,
+        ),
+        "assert alice drink",
+    );
+
+    assert_success(
+        &run_dent8(
+            &["witness", "sign"],
+            &[
+                ("DENT8_LOG", log.as_str()),
+                ("DENT8_WITNESS_KEY", key.as_str()),
+                ("DENT8_WITNESS_LOG", witness_log.as_str()),
+            ],
+        ),
+        "witness sign",
+    );
+
+    let verify_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_WITNESS_LOG", witness_log.as_str()),
+        ("DENT8_WITNESS_PUBKEY", pubkey.as_str()),
+    ];
+    let doctor = run_dent8(&["doctor"], &verify_env);
+    assert_success(&doctor, "doctor with witnessed log");
+    let doctor_stdout = stdout(&doctor);
+    assert!(
+        doctor_stdout.contains(
+            "witness verify: 1 signed tree head(s) verify; latest witnessed count 1, current log 1"
+        ),
+        "{doctor_stdout}"
+    );
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_snack",
+                "apple",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &write_env,
+        ),
+        "assert unwitnessed tail",
+    );
+    let doctor = run_dent8(&["doctor"], &verify_env);
+    assert_success(&doctor, "doctor with unwitnessed tail");
+    let doctor_stdout = stdout(&doctor);
+    assert!(
+        doctor_stdout.contains("trails current log 2 by 1 unwitnessed event(s)"),
+        "{doctor_stdout}"
+    );
+
+    let contents = fs::read_to_string(&log).expect("event log");
+    assert!(contents.contains("tea"));
+    fs::write(&log, contents.replacen("tea", "chai", 1)).expect("tamper event log");
+
+    let verify = run_dent8(&["witness", "verify"], &verify_env);
+    assert_eq!(verify.status.code(), Some(1));
+    assert!(stderr(&verify).contains("TAMPER"), "{}", stderr(&verify));
+
+    let doctor = run_dent8(&["doctor"], &verify_env);
+    assert_eq!(doctor.status.code(), Some(1));
+    let doctor_stdout = stdout(&doctor);
+    assert!(
+        doctor_stdout.contains("FAIL  witness verify: TAMPER"),
+        "{doctor_stdout}"
+    );
+}
+
+#[test]
 fn init_refuses_to_rewrite_env_without_force() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -1739,7 +1886,10 @@ fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         .env_remove("DENT8_GRANT")
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
-        .env_remove("DENT8_REQUIRE_IDENTITY");
+        .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_WITNESS_KEY")
+        .env_remove("DENT8_WITNESS_PUBKEY")
+        .env_remove("DENT8_WITNESS_LOG");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

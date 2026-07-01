@@ -160,10 +160,12 @@ issuer-signed grant and verifies source-key possession on every CLI/MCP write wh
 root is configured.
 The witness is runnable as a *primitive* — **`dent8 witness`** (`--features witness`) emits
 Ed25519 signed tree heads and detects a history rewrite or rollback that an internal chain
-re-verify cannot. The remaining gap to a hardened multi-user product is operating those
-controls well: key distribution/rotation, stronger secret storage, and an **operated witness
-service** that signs on a cadence from separate infrastructure. The [Roadmap](docs/roadmap.md) and
-[docs/STATUS.md](docs/STATUS.md) track exactly that.
+re-verify cannot. `dent8 init --witness` configures verifier-side paths and `dent8 doctor`
+reports signed-head coverage. The remaining gap to a hardened multi-user product is operating
+those controls well: key distribution/rotation, stronger secret storage, and an **operated
+witness service** that signs on a cadence from separate infrastructure. See
+[docs/witness.md](docs/witness.md), the [Roadmap](docs/roadmap.md), and
+[docs/STATUS.md](docs/STATUS.md).
 
 ## Initial Shape
 
@@ -183,10 +185,11 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 
 - `dent8 demo`: run the firewall + registry + replay/explain loop end to end (in-memory).
 - `dent8 init`: create a local `.dent8/` setup: env file, authority registry, and selected
-  file/SQLite/Postgres store profile.
+  file/SQLite/Postgres store profile; optional `--witness` adds verifier-side signed-head
+  paths without exposing the witness signing key to the writer env.
 - `dent8 doctor [--agent <profile>] [--write-check]`: inspect binary, store, authority,
-  verify, MCP availability; with `--agent`, validate the generated bundle/config and smoke
-  `mcp serve` with `initialize` + `tools/list`;
+  witness coverage when configured, verify, MCP availability; with `--agent`, validate the
+  generated bundle/config and smoke `mcp serve` with `initialize` + `tools/list`;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow (through
   the installed MCP server for agent profiles).
 - `dent8 identity bootstrap`: create a local signed source identity bundle (operator issuer

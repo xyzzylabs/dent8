@@ -18,6 +18,8 @@ dent8 doctor --write-check
 `dent8 init --store sqlite` writes a `sqlite://…` `DENT8_STORE_URL` profile (requires a
 `--features sqlite` build). `dent8 init --store postgres --store-url postgres://…` writes a
 Postgres profile (requires a `--features postgres` build).
+`dent8 init --witness` adds witness verification paths to `.dent8/env`; it does **not** put a
+witness signing key in the writer environment.
 
 For the secure agent path, use `dent8 init --identity --source <source>` or an agent shortcut:
 
@@ -135,6 +137,33 @@ Use `dent8 doctor --agent <profile> --write-check` as the post-install green lig
 the generated bundle directly, parses the selected agent's installed MCP config, smokes that
 exact command/args/cwd/env, and runs the trusted-fact / low-authority-rejection probe through
 that installed MCP server with the agent source id.
+
+## Witness flow
+
+`dent8 init --witness` writes verification config into `.dent8/env`:
+
+```sh
+dent8 init --witness
+set -a
+. .dent8/env
+set +a
+```
+
+The default paths are `.dent8/witness.jsonl` for signed heads and
+`.dent8/witness.key.pub` for the public verifying key. The signing key is intentionally not
+written into `.dent8/env`. For local development, generate and use it explicitly:
+
+```sh
+DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness keygen
+DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness sign
+dent8 doctor
+dent8 witness verify
+```
+
+For production-shaped use, run `dent8 witness serve` with `DENT8_WITNESS_KEY` on a separate
+host/process and share only `DENT8_WITNESS_LOG` plus `DENT8_WITNESS_PUBKEY` with the writer.
+`dent8 doctor` reports signed-head coverage and fails on tamper/rollback. See
+[witness.md](witness.md) for the runbook and residual risks.
 
 See [STATUS.md](STATUS.md) for what each surface does, and [storage.md](storage.md) for the
 backend design.

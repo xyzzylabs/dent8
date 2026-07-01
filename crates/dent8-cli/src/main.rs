@@ -355,6 +355,15 @@ struct InitArgs {
     /// Optional signed identity expiration as Unix milliseconds.
     #[arg(long, value_name = "MILLIS")]
     identity_expires_at_ms: Option<i64>,
+    /// Add witness verification paths to the generated env file.
+    #[arg(long)]
+    witness: bool,
+    /// Witness signed-head log path. Implies --witness.
+    #[arg(long, value_name = "PATH")]
+    witness_log: Option<String>,
+    /// Witness public verifying key path. Implies --witness.
+    #[arg(long, value_name = "PATH")]
+    witness_pubkey: Option<String>,
     #[command(flatten)]
     mcp: InitMcpArgs,
     /// Overwrite the generated env file if it already exists.
@@ -1582,6 +1591,7 @@ fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
     save_authority_registry_at(&authority_path_str, &registry)?;
 
     let identity = init_identity(args, &dir, &source, bootstrap_identity)?;
+    let witness = init_witness(args, &dir)?;
     let agent_summary = args.agent.map_or(String::new(), |agent| {
         format!("\n  agent profile: {}", agent.example_path())
     });
@@ -1594,20 +1604,23 @@ fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
          # Load with: set -a; . {}; set +a\n\
          DENT8_AUTHORITY={}\n\
          DENT8_REQUIRE_AUTHORITY=1\n\
-         {store_line}\n",
+         {store_line}\n\
+         {witness_lines}",
         shell_quote(&env_path.to_string_lossy()),
         shell_quote(&authority_path.to_string_lossy()),
+        witness_lines = witness.env_lines,
     );
     write_atomic(&env_path.to_string_lossy(), &env_contents)?;
 
     let mut message = format!(
-        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
+        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}{}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
         dir.display(),
         authority_path.display(),
         source,
         args.authority.level(),
         env_path.display(),
         identity.summary,
+        witness.summary,
         agent_summary,
         shell_quote(&env_path.to_string_lossy()),
         identity.env_load,
@@ -1769,6 +1782,69 @@ fn init_identity(
     }
 }
 
+struct InitWitnessOutput {
+    summary: String,
+    env_lines: String,
+}
+
+fn init_witness(args: &InitArgs, dir: &std::path::Path) -> Result<InitWitnessOutput, String> {
+    let enabled = args.witness || args.witness_log.is_some() || args.witness_pubkey.is_some();
+    if !enabled {
+        return Ok(InitWitnessOutput {
+            summary: String::new(),
+            env_lines: String::new(),
+        });
+    }
+
+    let log_path = init_optional_path(
+        args.witness_log.as_deref(),
+        dir.join("witness.jsonl"),
+        "witness log",
+    )?;
+    let pubkey_path = init_optional_path(
+        args.witness_pubkey.as_deref(),
+        dir.join("witness.key.pub"),
+        "witness public key",
+    )?;
+
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(|error| format!("cannot create {}: {error}", log_path.display()))?;
+    if let Some(parent) = pubkey_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+
+    Ok(InitWitnessOutput {
+        summary: format!(
+            "\n  witness: {} (public key: {}; verification config only)",
+            log_path.display(),
+            pubkey_path.display()
+        ),
+        env_lines: format!(
+            "DENT8_WITNESS_LOG={}\nDENT8_WITNESS_PUBKEY={}\n",
+            shell_quote(&log_path.to_string_lossy()),
+            shell_quote(&pubkey_path.to_string_lossy())
+        ),
+    })
+}
+
+fn init_optional_path(
+    value: Option<&str>,
+    default: std::path::PathBuf,
+    label: &str,
+) -> Result<std::path::PathBuf, String> {
+    value.map_or(Ok(default), |path| {
+        absolute_path(std::path::Path::new(path)).map_err(|error| format!("{label}: {error}"))
+    })
+}
+
 fn init_source(args: &InitArgs) -> String {
     args.source
         .clone()
@@ -1874,6 +1950,9 @@ fn doctor_report(args: &DoctorArgs) -> DoctorReport {
         doctor_line(&mut output, "FAIL", &error);
     }
     if !doctor_identity(&mut output, source) {
+        ok = false;
+    }
+    if !doctor_witness(&mut output) {
         ok = false;
     }
     match verify_log(&log_path()) {
@@ -2435,6 +2514,9 @@ fn apply_dent8_env(command: &mut Command, env: &std::collections::BTreeMap<Strin
         "DENT8_GRANT",
         "DENT8_IDENTITY_KEY",
         "DENT8_REQUIRE_IDENTITY",
+        "DENT8_WITNESS_KEY",
+        "DENT8_WITNESS_PUBKEY",
+        "DENT8_WITNESS_LOG",
     ] {
         command.env_remove(key);
     }
@@ -2556,7 +2638,74 @@ fn doctor_identity(output: &mut String, _source: &str) -> bool {
     }
 }
 
-#[cfg(not(feature = "identity"))]
+#[cfg(feature = "witness")]
+fn doctor_witness(output: &mut String) -> bool {
+    let mut ok = true;
+    for line in witness::doctor_status() {
+        if !line.ok {
+            ok = false;
+        }
+        doctor_line(output, line.level, &line.message);
+    }
+    ok
+}
+
+#[cfg(not(feature = "witness"))]
+fn doctor_witness(output: &mut String) -> bool {
+    let configured = env_present("DENT8_WITNESS_LOG")
+        || env_present("DENT8_WITNESS_PUBKEY")
+        || env_present("DENT8_WITNESS_KEY")
+        || std::path::Path::new("dent8-witness.jsonl").exists();
+    if !configured {
+        doctor_line(
+            output,
+            "WARN",
+            "witness: not configured (optional; build with `--features witness` for signed tree heads)",
+        );
+        return true;
+    }
+
+    let log =
+        std::env::var("DENT8_WITNESS_LOG").unwrap_or_else(|_| "dent8-witness.jsonl".to_string());
+    match std::fs::read_to_string(&log) {
+        Ok(contents) if contents.lines().any(|line| !line.trim().is_empty()) => {
+            doctor_line(
+                output,
+                "FAIL",
+                "witness: signed heads are configured, but this binary was built without `--features witness`",
+            );
+            false
+        }
+        Ok(_) => {
+            doctor_line(
+                output,
+                "WARN",
+                "witness: configured but no signed heads verified by this non-witness build",
+            );
+            true
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            doctor_line(
+                output,
+                "WARN",
+                "witness: configured but no signed heads verified by this non-witness build",
+            );
+            true
+        }
+        Err(error) => {
+            doctor_line(
+                output,
+                "FAIL",
+                &format!(
+                    "witness: cannot read configured witness log {log}: {error}; rebuild with `--features witness` to verify signed heads"
+                ),
+            );
+            false
+        }
+    }
+}
+
+#[cfg(any(not(feature = "identity"), not(feature = "witness")))]
 fn env_present(name: &str) -> bool {
     std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
 }

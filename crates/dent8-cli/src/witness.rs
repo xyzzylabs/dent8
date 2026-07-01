@@ -45,6 +45,10 @@ fn witness_log_path() -> String {
     std::env::var("DENT8_WITNESS_LOG").unwrap_or_else(|_| DEFAULT_LOG.to_string())
 }
 
+fn verifying_key_path() -> String {
+    std::env::var("DENT8_WITNESS_PUBKEY").unwrap_or_else(|_| public_key_path(&key_path()))
+}
+
 fn public_key_path(key: &str) -> String {
     format!("{key}.pub")
 }
@@ -328,6 +332,128 @@ pub fn verify() -> i32 {
     }
 }
 
+pub(crate) struct DoctorLine {
+    pub(crate) level: &'static str,
+    pub(crate) message: String,
+    pub(crate) ok: bool,
+}
+
+impl DoctorLine {
+    fn ok(message: impl Into<String>) -> Self {
+        Self {
+            level: "OK",
+            message: message.into(),
+            ok: true,
+        }
+    }
+
+    fn warn(message: impl Into<String>) -> Self {
+        Self {
+            level: "WARN",
+            message: message.into(),
+            ok: true,
+        }
+    }
+
+    fn fail(message: impl Into<String>) -> Self {
+        Self {
+            level: "FAIL",
+            message: message.into(),
+            ok: false,
+        }
+    }
+}
+
+pub(crate) fn doctor_status() -> Vec<DoctorLine> {
+    if !witness_configured() {
+        return vec![DoctorLine::warn(
+            "witness: not configured (optional; set DENT8_WITNESS_LOG + DENT8_WITNESS_PUBKEY for signed tree heads)",
+        )];
+    }
+
+    let log_path = witness_log_path();
+    let pubkey_path = verifying_key_path();
+    let mut lines = vec![DoctorLine::ok(format!(
+        "witness: log {log_path}; public key {pubkey_path}"
+    ))];
+
+    if std::env::var("DENT8_WITNESS_KEY").is_ok_and(|value| !value.trim().is_empty()) {
+        lines.push(DoctorLine::warn(
+            "witness: DENT8_WITNESS_KEY is present in this process; fine for dev, but an operated witness keeps the signing key off the writer",
+        ));
+    }
+
+    let events = match load_events() {
+        Ok(events) => events,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!(
+                "witness: cannot load event log: {error}"
+            )));
+            return lines;
+        }
+    };
+    let heads = match load_witness_log() {
+        Ok(heads) => heads,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("witness: {error}")));
+            return lines;
+        }
+    };
+    if heads.is_empty() {
+        let pubkey_note = if std::path::Path::new(&pubkey_path).exists() {
+            format!("public key {pubkey_path} is present")
+        } else {
+            format!("public key {pubkey_path} is missing")
+        };
+        lines.push(DoctorLine::warn(format!(
+            "witness verify: no signed tree heads in {log_path}; {pubkey_note}; run `dent8 witness sign` or `serve`"
+        )));
+        return lines;
+    }
+
+    let verifying = match load_verifying_key() {
+        Ok(key) => key,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("witness: {error}")));
+            return lines;
+        }
+    };
+    match verify_heads(&events, &heads, &verifying) {
+        Ok(()) => {
+            let latest = heads.last().map_or(0, |head| head.event_count);
+            let current = events.len() as u64;
+            if latest == current {
+                lines.push(DoctorLine::ok(format!(
+                    "witness verify: {} signed tree head(s) verify; latest witnessed count {latest}, current log {current}",
+                    heads.len()
+                )));
+            } else {
+                let unwitnessed = current.saturating_sub(latest);
+                lines.push(DoctorLine::warn(format!(
+                    "witness verify: {} signed tree head(s) verify, but latest witnessed count {latest} trails current log {current} by {unwitnessed} unwitnessed event(s)",
+                    heads.len()
+                )));
+            }
+        }
+        Err(WitnessFault::CannotVerify(message)) => {
+            lines.push(DoctorLine::fail(format!(
+                "witness verify: could not verify signed heads: {message}"
+            )));
+        }
+        Err(WitnessFault::Detected(message)) => {
+            lines.push(DoctorLine::fail(format!("witness verify: {message}")));
+        }
+    }
+    lines
+}
+
+fn witness_configured() -> bool {
+    std::env::var("DENT8_WITNESS_LOG").is_ok_and(|value| !value.trim().is_empty())
+        || std::env::var("DENT8_WITNESS_PUBKEY").is_ok_and(|value| !value.trim().is_empty())
+        || std::env::var("DENT8_WITNESS_KEY").is_ok_and(|value| !value.trim().is_empty())
+        || std::path::Path::new(&witness_log_path()).exists()
+}
+
 /// A witness-verification outcome other than success: a detected inconsistency (the log was
 /// rewritten/rolled back, or the key is wrong) versus an inability to even perform the check.
 enum WitnessFault {
@@ -400,8 +526,7 @@ fn load_signing_key() -> Result<SigningKey, String> {
 }
 
 fn load_verifying_key() -> Result<VerifyingKey, String> {
-    let path =
-        std::env::var("DENT8_WITNESS_PUBKEY").unwrap_or_else(|_| public_key_path(&key_path()));
+    let path = verifying_key_path();
     let raw = std::fs::read_to_string(&path)
         .map_err(|error| format!("cannot read witness public key {path}: {error}"))?;
     let bytes = decode_key_bytes(raw.trim(), &path)?;

@@ -20,6 +20,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   contradiction, replay position, `event_hash`, chain-verified).
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
   [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
+  [--witness] [--witness-log PATH] [--witness-pubkey PATH]
   [--install-mcp] [--mcp-config PATH] [--mcp-command COMMAND] [--mcp-dry-run|--mcp-check]`** —
   bootstraps an adoptable local setup: creates the dent8 config directory, writes an
   authority registry granting a chosen source (default `source:local` / High), creates a
@@ -28,6 +29,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   store (`--agent` profiles use the matching per-agent log name shown in `examples/`). With
   `--identity`, it also creates a signed source identity bundle and `.dent8/identity.env`;
   `--agent` selects the source id for a known agent and implies `--identity`. With
+  `--witness`, it adds witness verification paths (`DENT8_WITNESS_LOG` and
+  `DENT8_WITNESS_PUBKEY`) to the env file and creates the local signed-head log, but
+  deliberately does **not** put `DENT8_WITNESS_KEY` in the writer env. With
   `--install-mcp`, it also patches the selected agent's MCP config and prints the resulting
   file; the MCP install step can be rendered (`--mcp-dry-run`) or checked without writing
   (`--mcp-check`). If the MCP patch fails after init (for example invalid TOML/JSON), init
@@ -37,7 +41,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
-  `verify`, and MCP availability. With `--agent`, it loads the generated `.dent8/env` +
+  witness verification status when configured, `verify`, and MCP availability. With
+  `--features witness`, configured witness status includes the witness log/public key paths,
+  signed-head count, latest witnessed event count, current event count, unwitnessed-tail
+  warnings, and `FAIL` on tamper/rollback/corrupt heads. A non-witness build warns when no
+  heads exist and fails if signed heads are configured but cannot be verified. With `--agent`,
+  it loads the generated `.dent8/env` +
   `.dent8/identity.env` bundle without requiring the shell to source it, parses the selected
   agent's installed MCP config, checks that it is up to date, then smokes the exact installed
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` and a bounded timeout.
@@ -209,9 +218,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   (a re-hashed-forward edit an internal `verify_chain` cannot, threat-model T6) as `TAMPER`
   and a truncation/reorder as `ROLLBACK`. **`serve [interval] [max-heads]`** is the **cadence
   signer** — it signs the head whenever the log grows, the loop a separate operator runs; and
-  **`head`** prints the latest signed head as JSON to **publish**. What is *built* is the
-  mechanism (cadence signing + publishable heads); what remains *operational* is running it on
-  a host separate from the writer, with key rotation and external head publication/monitoring.
+  **`head`** prints the latest signed head as JSON to **publish**. `dent8 init --witness`
+  configures verifier-side paths and `dent8 doctor` reports witness coverage. What is *built*
+  is the mechanism (cadence signing + publishable heads + setup/doctor visibility); what
+  remains *operational* is running it on a host separate from the writer, with key rotation and
+  external head publication/monitoring. See [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
   `completion` and `autocomplete` are accepted.
@@ -406,10 +417,11 @@ subject+predicate.
 - **A published anchor cadence / *operated* witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now
-  runnable end-to-end as **`dent8 witness keygen | sign | verify`** (Runnable, above), which
-  emits heads and detects rewrite/rollback. What is still design-only is the *operated* piece:
-  a witness running on **separate infrastructure** that signs on a cadence and **publishes**
-  the head (so the key is provably off the writer), plus key rotation.
+  runnable end-to-end as **`dent8 witness keygen | sign | verify`** (Runnable, above), with
+  `init --witness` and `doctor` support for verifier-side configuration and coverage checks.
+  What is still design-only is the *operated* piece: a witness running on **separate
+  infrastructure** that signs on a cadence and **publishes** the head (so the key is provably
+  off the writer), plus key rotation.
 
 ## How to keep this honest
 
