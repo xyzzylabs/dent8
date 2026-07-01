@@ -30,11 +30,14 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
 - When dogfood state is present, consult dent8 for durable project facts before relying on
   remembered setup or preferences. Prefer MCP tools (`list_facts`, `explain`, `verify`) when
   available; otherwise use the local CLI after loading `.dent8/env` and `.dent8/identity.env`.
-- To validate the local Codex dogfood path, build with SQLite and run:
+- The local Codex MCP config should point at `.dent8/bin/dent8`, an ignored wrapper that runs
+  a SQLite-enabled build from `.dent8/target-sqlite`. This avoids normal `target/debug`
+  rebuilds replacing the MCP binary with one that lacks SQLite support.
+- To validate the local Codex dogfood path, build the isolated SQLite target and run:
 
 ```sh
-cargo build -p dent8-cli --features sqlite
-target/debug/dent8 doctor --agent codex --dir .dent8 --write-check
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite
+.dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 ```
 
 - Durable project facts should be asserted or superseded through dent8, not silently copied
