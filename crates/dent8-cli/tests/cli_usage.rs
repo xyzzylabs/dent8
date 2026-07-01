@@ -476,15 +476,16 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
 #[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
-    for (agent, source) in [
-        ("claude-code", "source:claude-code"),
-        ("cursor", "source:cursor"),
-        ("grok-build", "source:grok-build"),
-        ("gemini", "source:gemini"),
-        ("cascade", "source:cascade"),
+    for (agent, source, config_path) in [
+        ("claude-code", "source:claude-code", ".mcp.json"),
+        ("cursor", "source:cursor", ".cursor/mcp.json"),
+        ("grok-build", "source:grok-build", ".mcp.json"),
+        ("gemini", "source:gemini", ".gemini/settings.json"),
+        ("cascade", "source:cascade", ".windsurf/mcp_config.json"),
     ] {
         let temp = TempDir::new();
         let dir = temp.file(".dent8").to_string_lossy().into_owned();
+        let expected_config = temp.file(config_path);
         let issuer_key = temp
             .file(&format!("{agent}-owner.key"))
             .to_string_lossy()
@@ -508,12 +509,24 @@ fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
             ),
             &format!("init --agent {agent} --install-mcp"),
         );
+        assert!(
+            expected_config.exists(),
+            "{agent} should install MCP config at {}",
+            expected_config.display()
+        );
 
         let doctor = run_dent8(
             &["doctor", "--agent", agent, "--dir", &dir, "--write-check"],
             &[],
         );
         assert_installed_agent_doctor_ok(&doctor, agent, source, &mcp_command);
+        let doctor_stdout = stdout(&doctor);
+        assert!(
+            doctor_stdout.contains(&expected_config.display().to_string()),
+            "doctor should read {} for {agent}; stdout:\n{}",
+            expected_config.display(),
+            doctor_stdout
+        );
     }
 }
 
