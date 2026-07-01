@@ -34,9 +34,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   reports the partial success and prints the follow-up `dent8 mcp install ...` command instead
   of hiding the created `.dent8` bundle. It refuses to rewrite the env file unless `--force` is passed and refuses to overwrite
   existing identity key/grant material.
-- **`dent8 doctor [--write-check]`** — diagnoses the current setup: binary path, selected
-  store, authority registry/grant, signed identity configuration when present, `verify`, and
-  MCP availability. By default it is read-only; with `--write-check`, it runs an explicit
+- **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
+  [--mcp-command COMMAND] [--write-check]`** — diagnoses the current setup: binary path,
+  selected store, authority registry/grant, signed identity configuration when present,
+  `verify`, and MCP availability. With `--agent`, it loads the generated `.dent8/env` +
+  `.dent8/identity.env` bundle without requiring the shell to source it, checks that the
+  selected agent's MCP config is up to date, then smokes `dent8 mcp serve` with
+  `initialize` + `tools/list`. By default it is read-only; with `--write-check`, it runs an explicit
   Alice-style acceptance probe against the configured store: high-authority
   `favorite_drink=tea` is accepted, a low-authority supersession to `coffee` from the same
   configured source is rejected, `explain` still returns `tea`, and `verify` passes.

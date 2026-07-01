@@ -23,11 +23,7 @@ For the secure agent path, use `dent8 init --identity --source <source>` or an a
 
 ```sh
 dent8 init --agent codex --install-mcp
-set -a
-. .dent8/env
-. .dent8/identity.env
-set +a
-dent8 doctor --source source:codex --write-check
+dent8 doctor --agent codex --write-check
 ```
 
 ## Environment variables
@@ -89,11 +85,7 @@ server: the operator holds an issuer key and issues grants to agent/source keys.
 
 ```sh
 dent8 init --agent codex --install-mcp
-set -a
-. .dent8/env
-. .dent8/identity.env
-set +a
-dent8 doctor --source source:codex --write-check
+dent8 doctor --agent codex --write-check
 ```
 
 `dent8 init --identity` and `dent8 init --agent <profile>` create or reuse an operator issuer
@@ -135,6 +127,10 @@ belief base by pointing at the same `DENT8_STORE_URL` and authority/trust regist
 MCP process can only prove the single identity whose private key it holds; a future HTTP or
 daemon transport needs per-request source authentication rather than one process-wide env. See
 [ADR 0012](decisions/0012-signed-source-identity.md) for the security model and limits.
+
+Use `dent8 doctor --agent <profile> --write-check` as the post-install green light. It reads
+the generated bundle directly, checks the selected agent's MCP config, smokes the MCP server,
+and runs the trusted-fact / low-authority-rejection probe with the agent source id.
 
 See [STATUS.md](STATUS.md) for what each surface does, and [storage.md](storage.md) for the
 backend design.

@@ -429,6 +429,101 @@ fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp",
+    );
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--mcp-command",
+            &mcp_command,
+            "--write-check",
+        ],
+        &[],
+    );
+    assert_success(&doctor, "doctor --agent codex --write-check");
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("agent: codex (source:codex)"));
+    assert!(stdout.contains(".dent8 env: agent bundle is complete"));
+    assert!(stdout.contains("agent mcp config: up to date"));
+    assert!(stdout.contains("source:codex max=High"));
+    assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
+    assert!(stdout.contains("write-check: accepted trusted person:alice-doctor-"));
+    assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn doctor_agent_smokes_the_configured_mcp_command() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let missing_command = temp.file("missing-dent8").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &missing_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp with missing command",
+    );
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--mcp-command",
+            &missing_command,
+        ],
+        &[],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("agent mcp config: up to date"));
+    assert!(stdout.contains("mcp smoke: could not start"));
+    assert!(stdout.contains(&missing_command));
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn mcp_install_patches_json_config_and_preserves_other_servers() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();

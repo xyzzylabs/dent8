@@ -1,5 +1,6 @@
 use std::{
-    io::IsTerminal,
+    io::{IsTerminal, Write},
+    process::{Command, Stdio},
     str::FromStr,
     sync::atomic::{AtomicU8, Ordering},
 };
@@ -464,8 +465,20 @@ struct DoctorArgs {
     #[arg(long)]
     write_check: bool,
     /// High-authority source to use for --write-check.
-    #[arg(long, default_value = "source:local", value_parser = parse_source)]
-    source: String,
+    #[arg(long, value_parser = parse_source)]
+    source: Option<String>,
+    /// Agent profile to diagnose from its generated .dent8 bundle and MCP config.
+    #[arg(long, value_enum, conflicts_with = "source")]
+    agent: Option<InitAgent>,
+    /// Directory for dent8's local project config when --agent is set.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// MCP config file to check when --agent is set.
+    #[arg(long, value_name = "PATH", requires = "agent")]
+    mcp_config: Option<String>,
+    /// Command expected in the installed MCP config when --agent is set.
+    #[arg(long, value_name = "COMMAND", requires = "agent")]
+    mcp_command: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -1829,8 +1842,13 @@ struct DoctorReport {
 }
 
 fn doctor_report(args: &DoctorArgs) -> DoctorReport {
+    if let Some(agent) = args.agent {
+        return doctor_agent_report(args, agent);
+    }
+
     let mut output = String::from("dent8 doctor\n");
     let mut ok = true;
+    let source = args.source.as_deref().unwrap_or("source:local");
 
     doctor_line(
         &mut output,
@@ -1848,11 +1866,11 @@ fn doctor_report(args: &DoctorArgs) -> DoctorReport {
         ok = false;
         doctor_line(&mut output, "FAIL", &error);
     }
-    if let Err(error) = doctor_authority(&mut output, &args.source) {
+    if let Err(error) = doctor_authority(&mut output, source) {
         ok = false;
         doctor_line(&mut output, "FAIL", &error);
     }
-    if !doctor_identity(&mut output, &args.source) {
+    if !doctor_identity(&mut output, source) {
         ok = false;
     }
     match verify_log(&log_path()) {
@@ -1874,7 +1892,7 @@ fn doctor_report(args: &DoctorArgs) -> DoctorReport {
     );
 
     if args.write_check {
-        match doctor_write_check(&args.source) {
+        match doctor_write_check(source) {
             Ok(message) => doctor_line(&mut output, "OK", &message),
             Err(error) => {
                 ok = false;
@@ -1890,6 +1908,231 @@ fn doctor_report(args: &DoctorArgs) -> DoctorReport {
     }
 
     DoctorReport { output, ok }
+}
+
+fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
+    let mut output = String::from("dent8 doctor\n");
+    let mut ok = true;
+    let dir = std::path::PathBuf::from(&args.dir);
+    let dir = match absolute_path(&dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            doctor_line(&mut output, "FAIL", &error);
+            return DoctorReport { output, ok: false };
+        }
+    };
+    let source = agent.source();
+    doctor_line(
+        &mut output,
+        "OK",
+        &format!(
+            "agent: {} ({source}); dir: {}",
+            agent.cli_name(),
+            dir.display()
+        ),
+    );
+
+    let env = match mcp_config::load_agent_env(&dir, agent) {
+        Ok(env) => {
+            doctor_line(
+                &mut output,
+                "OK",
+                ".dent8 env: agent bundle is complete and source-bound",
+            );
+            env
+        }
+        Err(error) => {
+            doctor_line(&mut output, "FAIL", &format!("agent env: {error}"));
+            return DoctorReport { output, ok: false };
+        }
+    };
+
+    let mcp_command = args.mcp_command.as_deref().unwrap_or("dent8");
+    match install_mcp_config(
+        agent,
+        &dir,
+        args.mcp_config.as_deref(),
+        mcp_command,
+        mcp_config::InstallMode::Check,
+    ) {
+        Ok(result) if result.exit_code == 0 => {
+            doctor_line(&mut output, "OK", "agent mcp config: up to date");
+        }
+        Ok(result) => {
+            ok = false;
+            doctor_line(
+                &mut output,
+                "FAIL",
+                &format!("agent mcp config: {}", first_line(&result.message)),
+            );
+        }
+        Err(error) => {
+            ok = false;
+            doctor_line(&mut output, "FAIL", &format!("agent mcp config: {error}"));
+        }
+    }
+
+    match run_doctor_with_env(source, args.write_check, &env) {
+        Ok(child) => {
+            output.push_str(&child);
+        }
+        Err(error) => {
+            ok = false;
+            doctor_line(&mut output, "FAIL", &error);
+        }
+    }
+
+    match mcp_smoke_with_env(mcp_command, &env) {
+        Ok(message) => doctor_line(&mut output, "OK", &message),
+        Err(error) => {
+            ok = false;
+            doctor_line(&mut output, "FAIL", &format!("mcp smoke: {error}"));
+        }
+    }
+
+    DoctorReport { output, ok }
+}
+
+fn run_doctor_with_env(
+    source: &str,
+    write_check: bool,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<String, String> {
+    let mut command = Command::new(
+        std::env::current_exe().map_err(|error| format!("doctor: current exe: {error}"))?,
+    );
+    command.args(["doctor", "--source", source]);
+    if write_check {
+        command.arg("--write-check");
+    }
+    apply_dent8_env(&mut command, env);
+    let output = command
+        .output()
+        .map_err(|error| format!("doctor subprocess failed to start: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "doctor subprocess failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut forwarded = String::new();
+    for line in stdout
+        .lines()
+        .skip_while(|line| line.trim() == "dent8 doctor")
+    {
+        forwarded.push_str(line);
+        forwarded.push('\n');
+    }
+    Ok(forwarded)
+}
+
+fn mcp_smoke_with_env(
+    mcp_command: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<String, String> {
+    let mut command = Command::new(mcp_command);
+    command
+        .args(["mcp", "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    apply_dent8_env(&mut command, env);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start `{mcp_command} mcp serve`: {error}"))?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "could not open mcp stdin".to_string())?;
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "dent8-doctor",
+                    "version": env!("CARGO_PKG_VERSION"),
+                },
+            },
+        });
+        let initialized = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+        });
+        let tools_list = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+        });
+        let requests = format!("{initialize}\n{initialized}\n{tools_list}\n");
+        stdin
+            .write_all(requests.as_bytes())
+            .map_err(|error| format!("could not write mcp smoke request: {error}"))?;
+    }
+    drop(child.stdin.take());
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("could not wait for mcp smoke: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "`{mcp_command} mcp serve` exited {}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let responses = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("invalid JSON-RPC response: {error}"))?;
+    if responses.len() != 2 {
+        return Err(format!(
+            "expected 2 JSON-RPC responses, got {}",
+            responses.len()
+        ));
+    }
+    if responses[0]["result"]["serverInfo"]["name"] != "dent8" {
+        return Err("initialize did not return dent8 serverInfo".to_string());
+    }
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| "tools/list did not return a tools array".to_string())?;
+    for expected in ["assert", "explain", "verify"] {
+        if !tools
+            .iter()
+            .any(|tool| tool["name"].as_str() == Some(expected))
+        {
+            return Err(format!("tools/list is missing {expected}"));
+        }
+    }
+    Ok(format!(
+        "mcp smoke: initialize + tools/list OK ({} tool(s))",
+        tools.len()
+    ))
+}
+
+fn apply_dent8_env(command: &mut Command, env: &std::collections::BTreeMap<String, String>) {
+    for key in [
+        "DENT8_STORE_URL",
+        "DENT8_LOG",
+        "DENT8_AUTHORITY",
+        "DENT8_REQUIRE_AUTHORITY",
+        "DENT8_TRUST",
+        "DENT8_GRANT",
+        "DENT8_IDENTITY_KEY",
+        "DENT8_REQUIRE_IDENTITY",
+    ] {
+        command.env_remove(key);
+    }
+    for (key, value) in env {
+        command.env(key, value);
+    }
 }
 
 fn doctor_store(output: &mut String) -> Result<(), String> {

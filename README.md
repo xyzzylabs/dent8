@@ -63,13 +63,13 @@ identity bundle together:
 
 ```sh
 dent8 init --agent codex --install-mcp    # source:codex + signed identity + Codex config
-set -a; . .dent8/env; . .dent8/identity.env; set +a
-dent8 doctor --source source:codex --write-check
+dent8 doctor --agent codex --write-check  # config + MCP smoke + firewall write-check
 ```
 
 Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP config later
 (`--dry-run` renders without writing; `--check` exits non-zero if the config would change).
-Use `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
+Source `.dent8/env` + `.dent8/identity.env` when you want to run CLI commands from the same
+shell. Use `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
 available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and
 `hecate`. The installer writes `command = "dent8"` by default, so Codex, Claude Code, Cursor,
 Gemini, Grok Build, Cascade, and Hecate can all use one globally installed binary; pass
@@ -182,7 +182,9 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 demo`: run the firewall + registry + replay/explain loop end to end (in-memory).
 - `dent8 init`: create a local `.dent8/` setup: env file, authority registry, and selected
   file/SQLite/Postgres store profile.
-- `dent8 doctor [--write-check]`: inspect binary, store, authority, verify, MCP availability;
+- `dent8 doctor [--agent <profile>] [--write-check]`: inspect binary, store, authority,
+  verify, MCP availability; with `--agent`, validate the generated bundle/config and smoke
+  `mcp serve` with `initialize` + `tools/list`;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow.
 - `dent8 identity bootstrap`: create a local signed source identity bundle (operator issuer
   key outside the bundle, source key, trust registry, grant, and `.dent8/identity.env`).

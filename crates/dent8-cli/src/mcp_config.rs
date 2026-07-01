@@ -154,7 +154,10 @@ pub(crate) fn install(options: &InstallOptions) -> Result<InstallResult, String>
     })
 }
 
-fn load_agent_env(dir: &Path, agent: InitAgent) -> Result<BTreeMap<String, String>, String> {
+pub(crate) fn load_agent_env(
+    dir: &Path,
+    agent: InitAgent,
+) -> Result<BTreeMap<String, String>, String> {
     let env_path = dir.join("env");
     let identity_env_path = dir.join("identity.env");
     let mut env = read_env_file(&env_path).map_err(|error| {

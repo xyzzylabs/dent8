@@ -12,6 +12,7 @@ For a known agent, initialize a protected local profile and let dent8 patch the 
 
 ```sh
 dent8 init --agent codex --install-mcp
+dent8 doctor --agent codex --write-check
 ```
 
 Use `dent8 mcp install --agent <profile>` to regenerate the config later. Add `--dry-run` to
