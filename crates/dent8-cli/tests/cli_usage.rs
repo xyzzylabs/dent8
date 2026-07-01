@@ -475,6 +475,122 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
+    for (agent, source) in [
+        ("claude-code", "source:claude-code"),
+        ("cursor", "source:cursor"),
+        ("grok-build", "source:grok-build"),
+        ("gemini", "source:gemini"),
+        ("cascade", "source:cascade"),
+    ] {
+        let temp = TempDir::new();
+        let dir = temp.file(".dent8").to_string_lossy().into_owned();
+        let issuer_key = temp
+            .file(&format!("{agent}-owner.key"))
+            .to_string_lossy()
+            .into_owned();
+        let mcp_command = dent8_bin().to_string_lossy().into_owned();
+        assert_success(
+            &run_dent8(
+                &[
+                    "init",
+                    "--dir",
+                    &dir,
+                    "--agent",
+                    agent,
+                    "--issuer-key",
+                    &issuer_key,
+                    "--install-mcp",
+                    "--mcp-command",
+                    &mcp_command,
+                ],
+                &[],
+            ),
+            &format!("init --agent {agent} --install-mcp"),
+        );
+
+        let doctor = run_dent8(
+            &["doctor", "--agent", agent, "--dir", &dir, "--write-check"],
+            &[],
+        );
+        assert_installed_agent_doctor_ok(&doctor, agent, source, &mcp_command);
+    }
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn doctor_agent_mcp_write_check_works_for_hecate_task_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("hecate-owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    let config_path = temp.file("hecate-task.json");
+    let config = config_path.to_string_lossy().into_owned();
+    fs::write(
+        &config_path,
+        serde_json::json!({
+            "working_directory": temp.path.to_string_lossy(),
+            "mcp_servers": [
+                { "name": "other", "command": "other-agent", "args": [] }
+            ],
+        })
+        .to_string(),
+    )
+    .expect("seed hecate task config");
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "hecate",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent hecate",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "mcp",
+                "install",
+                "--agent",
+                "hecate",
+                "--dir",
+                &dir,
+                "--config",
+                &config,
+                "--command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "mcp install --agent hecate --config",
+    );
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "hecate",
+            "--dir",
+            &dir,
+            "--mcp-config",
+            &config,
+            "--write-check",
+        ],
+        &[],
+    );
+    assert_installed_agent_doctor_ok(&doctor, "hecate", "source:hecate", &mcp_command);
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains(&format!("cwd={}", temp.path.display())));
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn doctor_agent_smokes_the_configured_mcp_command() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -1635,6 +1751,35 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[cfg(feature = "identity")]
+fn assert_installed_agent_doctor_ok(output: &Output, agent: &str, source: &str, mcp_command: &str) {
+    assert_success(output, &format!("doctor --agent {agent} --write-check"));
+    let stdout = stdout(output);
+    assert!(
+        stdout.contains(&format!("agent: {agent} ({source})")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("command={mcp_command}")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("agent mcp config: up to date"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "identity source: grant source matches doctor source {source}"
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("mcp smoke: initialize + tools/list OK"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"),
+        "{stdout}"
+    );
 }
 
 #[cfg(feature = "identity")]
