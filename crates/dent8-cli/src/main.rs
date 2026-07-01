@@ -962,13 +962,14 @@ fn run_witness(args: &[String]) -> i32 {
         [sub] if sub == "verify" => witness::verify(),
         [sub, rest @ ..] if sub == "verify-published" => witness::verify_published(rest),
         [sub] if sub == "head" => witness::head(),
+        [sub, rest @ ..] if sub == "publish" => witness::publish(rest),
         [sub, rest @ ..] if sub == "serve" => witness::serve(rest),
         [sub, rest @ ..] if sub == "doctor" => witness::doctor(rest),
         _ => {
             eprintln!(
                 "usage: dent8 witness <keygen | sign | verify | verify-published \
-                 <published-heads.jsonl> | head | serve [interval-seconds] [max-heads] | \
-                 doctor <writer|signer|both>>"
+                 <published-heads.jsonl> | head | publish <published-heads.jsonl> | serve \
+                 [interval-seconds] [max-heads] | doctor <writer|signer|both>>"
             );
             2
         }

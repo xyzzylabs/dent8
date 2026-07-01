@@ -28,7 +28,7 @@ DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness sign
 
 dent8 doctor
 dent8 witness verify
-dent8 witness head >> /tmp/dent8-published-heads.jsonl
+dent8 witness publish /tmp/dent8-published-heads.jsonl
 dent8 witness verify-published /tmp/dent8-published-heads.jsonl
 ```
 
@@ -94,8 +94,13 @@ second host.
 After `dent8 witness sign` or while `dent8 witness serve` is running:
 
 ```sh
-dent8 witness head >> /external/dent8-published-heads.jsonl
+dent8 witness publish /external/dent8-published-heads.jsonl
 ```
+
+`publish` appends the latest local signed head idempotently: if the same count is already in
+the published file it exits successfully without adding a duplicate, and if the published file
+is ahead of the local witness log it fails rather than rewriting history. `dent8 witness head`
+still prints the latest head as one JSON line for custom publication channels.
 
 From a verifier/monitor process that has the current event log and the witness public key:
 

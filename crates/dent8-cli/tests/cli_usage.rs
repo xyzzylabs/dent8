@@ -286,7 +286,7 @@ fn assert_alice_fact(log: &str, predicate: &str, value: &str, context: &str) {
 
 #[cfg(feature = "witness")]
 #[test]
-fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewound() {
+fn witness_publish_is_idempotent_and_rejects_local_witness_rollback() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let key = temp.file("witness.key").to_string_lossy().into_owned();
@@ -301,18 +301,98 @@ fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewoun
         &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
         "witness keygen",
     );
-    assert_alice_fact(&log, "favorite_drink", "tea", "assert alice drink");
-    assert_success(
-        &run_dent8(
-            &["witness", "sign"],
-            &[
-                ("DENT8_LOG", log.as_str()),
-                ("DENT8_WITNESS_KEY", key.as_str()),
-                ("DENT8_WITNESS_LOG", witness_log.as_str()),
-            ],
-        ),
-        "witness sign",
+    let sign_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_WITNESS_KEY", key.as_str()),
+        ("DENT8_WITNESS_LOG", witness_log.as_str()),
+    ];
+    let publish_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_WITNESS_LOG", witness_log.as_str()),
+        ("DENT8_WITNESS_PUBKEY", pubkey.as_str()),
+    ];
+
+    assert_alice_fact(&log, "favorite_drink", "tea", "assert first fact");
+    assert_success(&run_dent8(&["witness", "sign"], &sign_env), "first sign");
+    let published_first = run_dent8(&["witness", "publish", &published], &publish_env);
+    assert_success(&published_first, "publish first head");
+    assert_eq!(line_count(&published), 1);
+
+    let duplicate = run_dent8(&["witness", "publish", &published], &publish_env);
+    assert_success(&duplicate, "publish duplicate head");
+    assert!(stdout(&duplicate).contains("already published"));
+    assert_eq!(line_count(&published), 1);
+
+    let first_published_line = fs::read_to_string(&published)
+        .expect("published heads")
+        .lines()
+        .next()
+        .expect("first published head")
+        .to_string();
+    assert_alice_fact(&log, "favorite_snack", "apple", "assert second fact");
+    assert_success(&run_dent8(&["witness", "sign"], &sign_env), "second sign");
+    let published_second = run_dent8(&["witness", "publish", &published], &publish_env);
+    assert_success(&published_second, "publish second head");
+    assert_eq!(line_count(&published), 2);
+    let local_witness_lines = fs::read_to_string(&witness_log)
+        .expect("local witness log")
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(local_witness_lines.len(), 2);
+
+    let broken_published = temp
+        .file("broken-published-heads.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    fs::write(
+        &witness_log,
+        format!("{}\n{}\n", local_witness_lines[1], local_witness_lines[0]),
+    )
+    .expect("reorder witness log");
+    let broken_local = run_dent8(&["witness", "publish", &broken_published], &publish_env);
+    assert_eq!(broken_local.status.code(), Some(1));
+    assert!(
+        stderr(&broken_local).contains("ROLLBACK"),
+        "{}",
+        stderr(&broken_local)
     );
+    assert!(!std::path::Path::new(&broken_published).exists());
+
+    fs::write(&witness_log, format!("{first_published_line}\n")).expect("rewind witness log");
+    let rollback = run_dent8(&["witness", "publish", &published], &publish_env);
+    assert_eq!(rollback.status.code(), Some(1));
+    assert!(
+        stderr(&rollback).contains("ahead of the local witness log"),
+        "{}",
+        stderr(&rollback)
+    );
+}
+
+#[cfg(feature = "witness")]
+#[test]
+fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewound() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let key = temp.file("witness.key").to_string_lossy().into_owned();
+    let pubkey = format!("{key}.pub");
+    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    let published = temp
+        .file("published-heads.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    let sign_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_WITNESS_KEY", key.as_str()),
+        ("DENT8_WITNESS_LOG", witness_log.as_str()),
+    ];
+
+    assert_success(
+        &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
+        "witness keygen",
+    );
+    assert_alice_fact(&log, "favorite_drink", "tea", "assert alice drink");
+    assert_success(&run_dent8(&["witness", "sign"], &sign_env), "witness sign");
     let head = run_dent8(
         &["witness", "head"],
         &[("DENT8_WITNESS_LOG", witness_log.as_str())],
@@ -340,12 +420,31 @@ fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewoun
         "verify published head after local witness rollback",
     );
 
-    assert_alice_fact(&log, "favorite_snack", "apple", "assert unwitnessed tail");
+    assert_alice_fact(
+        &log,
+        "favorite_snack",
+        "apple",
+        "assert second witnessed fact",
+    );
+    assert_success(
+        &run_dent8(&["witness", "sign"], &sign_env),
+        "second witness sign",
+    );
+    let second_head = run_dent8(
+        &["witness", "head"],
+        &[("DENT8_WITNESS_LOG", witness_log.as_str())],
+    );
+    assert_success(&second_head, "second witness head");
+    let mut published_contents = fs::read_to_string(&published).expect("published heads");
+    published_contents.push_str(&stdout(&second_head));
+    fs::write(&published, published_contents).expect("append second published head");
+
+    assert_alice_fact(&log, "favorite_color", "green", "assert unwitnessed tail");
     let trailing = run_dent8(&["witness", "verify-published", &published], &verify_env);
     assert_success(&trailing, "verify published head with unwitnessed tail");
     assert!(
-        stdout(&trailing).contains("WARN:")
-            && stdout(&trailing).contains("trails current log 2 by 1 unwitnessed event(s)"),
+        stdout(&trailing).contains("WARN: 2 published signed tree head(s)")
+            && stdout(&trailing).contains("trails current log 3 by 1 unwitnessed event(s)"),
         "{}",
         stdout(&trailing)
     );
@@ -2449,6 +2548,15 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[cfg(feature = "witness")]
+fn line_count(path: &str) -> usize {
+    fs::read_to_string(path)
+        .expect("read file")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
 }
 
 #[cfg(feature = "identity")]

@@ -15,9 +15,11 @@
 //! **This is the mechanism, not a deployment.** Tamper-*resistance* (not just evidence) holds
 //! only if the signing key lives **off** the log-writer's machine — a writer who also holds
 //! the key can re-sign a rewrite. `keygen` prints that warning. `serve` is the **cadence
-//! signer** (sign on growth) and `head` publishes the latest head; what remains *operational*
-//! is running `serve` on a host separate from the writer, rotating its key, and publishing the
-//! heads to an external monitor. See the threat model's T6 residuals.
+//! signer** (sign on growth), `publish` idempotently appends the latest head to an external
+//! JSONL sequence, and `head` still prints a JSON line for custom publication channels. What
+//! remains *operational* is running `serve` on a host separate from the writer, rotating its
+//! key, and publishing/monitoring heads outside the writer's control. See the threat model's
+//! T6 residuals.
 //!
 //! Residual — the witness log itself is plain appended JSONL. Every head is independently
 //! signature-verified (none can be *forged* without the key), but an attacker with write
@@ -280,6 +282,118 @@ pub fn head() -> i32 {
     }
 }
 
+/// Publish the latest local witness head to an external JSONL sequence.
+///
+/// This is a safer wrapper around `dent8 witness head >> published-heads.jsonl`: it refuses to
+/// append a local head behind the already-published sequence, treats an identical latest head
+/// as idempotent, and verifies the resulting published sequence against the current log before
+/// writing.
+pub fn publish(args: &[String]) -> i32 {
+    let [path] = args else {
+        eprintln!("usage: dent8 witness publish <published-heads.jsonl>");
+        return 2;
+    };
+    let events = match load_events() {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let verifying = match load_verifying_key() {
+        Ok(key) => key,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let local_heads = match load_witness_log() {
+        Ok(heads) => heads,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let Some(latest) = local_heads.last() else {
+        eprintln!(
+            "no signed tree heads in {} yet (run `dent8 witness sign` or `serve`)",
+            witness_log_path()
+        );
+        return 1;
+    };
+    match verify_heads(&events, &local_heads, &verifying) {
+        Ok(()) => {}
+        Err(WitnessFault::CannotVerify(message)) => {
+            eprintln!("local witness log verification could not be performed: {message}");
+            return 2;
+        }
+        Err(WitnessFault::Detected(message)) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    }
+    let mut published = match load_signed_heads(path, "published heads", true) {
+        Ok(heads) => heads,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+
+    let already_published = match published.last() {
+        Some(previous) if previous.event_count > latest.event_count => {
+            eprintln!(
+                "ROLLBACK: published heads in {path} are already at count {}, ahead of the \
+                 local witness log's latest count {}",
+                previous.event_count, latest.event_count
+            );
+            return 1;
+        }
+        Some(previous) if previous.event_count == latest.event_count && previous != latest => {
+            eprintln!(
+                "CONFLICT: published head at count {} does not match the local witness head",
+                latest.event_count
+            );
+            return 1;
+        }
+        Some(previous) if previous.event_count == latest.event_count => true,
+        Some(_) | None => false,
+    };
+
+    if !already_published {
+        published.push(latest.clone());
+    }
+    match verify_heads(&events, &published, &verifying) {
+        Ok(()) => {}
+        Err(WitnessFault::CannotVerify(message)) => {
+            eprintln!("published-head verification could not be performed: {message}");
+            return 2;
+        }
+        Err(WitnessFault::Detected(message)) => {
+            eprintln!("{message}");
+            return 1;
+        }
+    }
+
+    if already_published {
+        println!(
+            "OK: latest witness head at count {} is already published in {path}",
+            latest.event_count
+        );
+    } else if let Err(error) = append_head(path, latest) {
+        eprintln!("{error}");
+        return 1;
+    } else {
+        println!(
+            "published witness head: count={} head={} -> appended to {path}",
+            latest.event_count,
+            latest.head.as_deref().unwrap_or("(empty log)")
+        );
+    }
+    warn_if_published_head_trails(latest.event_count, events.len() as u64);
+    0
+}
+
 /// Verify the witness log against the current event log and public key.
 pub fn verify() -> i32 {
     let events = match load_events() {
@@ -382,12 +496,12 @@ pub fn verify_published(args: &[String]) -> i32 {
                     heads.len()
                 );
             } else {
+                let published_heads = heads.len();
                 let unwitnessed = current.saturating_sub(head_count);
                 println!(
-                    "WARN: {} published signed tree head(s) verify from {path}, but latest \
+                    "WARN: {published_heads} published signed tree head(s) verify from {path}, but latest \
                      published count {head_count} trails current log {current} by {unwitnessed} \
-                     unwitnessed event(s)",
-                    heads.len()
+                     unwitnessed event(s)"
                 );
             }
             0
@@ -400,6 +514,16 @@ pub fn verify_published(args: &[String]) -> i32 {
             eprintln!("{message}");
             1
         }
+    }
+}
+
+fn warn_if_published_head_trails(published_count: u64, current_count: u64) {
+    if published_count < current_count {
+        println!(
+            "WARN: published count {published_count} trails current log {current_count} by {} \
+             unwitnessed event(s)",
+            current_count - published_count
+        );
     }
 }
 

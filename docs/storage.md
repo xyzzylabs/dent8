@@ -117,8 +117,9 @@ whose head no longer matches (the writer cannot forge the MAC). The symmetric an
 the verifier to hold the secret; the **asymmetric** upgrade (`sign_head`/`verify_signed_head`,
 behind the `signed-anchor` feature) signs the same message with **Ed25519**, so a published
 head is verifiable by **anyone with the public key** while the witness keeps the private key
-(RFC 6962-style signed tree head). Both are built and tested; what remains is the
-*operational* witness that signs and publishes the head on a cadence.
+(RFC 6962-style signed tree head). Both are built and tested, and `dent8 witness publish`
+can idempotently append the latest head to an external JSONL sequence; what remains is the
+managed *operational* witness service, publication channel, monitoring, and key rotation.
 
 **Done:** the Postgres append path (migration 002) computes the chained `event_hash`, stores
 it alongside `previous_event_hash`, and `verify_chain` recomputes the global chain to
