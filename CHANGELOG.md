@@ -34,9 +34,12 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   operator issuer key outside the project bundle, then creates a local source key, trust
   registry, grant, and `.dent8/identity.env`; `init --agent` selects a known agent source id
   (`codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, `hecate`) and implies
-  identity. The lower-level commands still expose Ed25519 issuer/source key generation,
-  trusted-issuer registry management, signed source grants, grant verification, and
-  write-boundary source-key possession checks for CLI/MCP writes. Identity fails closed when
+  identity. `dent8 identity status` checks bundle/trust/grant/key/expiry health, and
+  `dent8 identity rotate-source` replaces the active source key and grant at stable paths with
+  timestamped backups so MCP configs keep working. The lower-level commands still expose
+  Ed25519 issuer/source key generation, trusted-issuer registry management, signed source
+  grants, grant verification, and write-boundary source-key possession checks for CLI/MCP
+  writes. Identity fails closed when
   configured in a `--no-default-features` build, when identity material points at a missing
   trust registry, when the grant source/key/scope does not match the write, or when the write
   exceeds the grant's authority ceiling ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).

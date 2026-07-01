@@ -79,8 +79,10 @@ installed MCP server. Stdio MCP clients normally launch their own
 dent8 subprocess, but those processes can share the same operational belief base by using the
 same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while keeping
 distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP daemon over
-HTTP is future transport work, not part of v0. `identity bootstrap` remains
-available for manual rotation/custom layouts and keeps the issuer key outside `.dent8` by default
+HTTP is future transport work, not part of v0. `dent8 identity status` checks a local
+identity bundle, and `dent8 identity rotate-source` replaces the active source key/grant while
+keeping the stable `.dent8/identity.env` paths that MCP configs use. `identity bootstrap`
+remains available for custom layouts and keeps the issuer key outside `.dent8` by default
 (`$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key`; override with
 `--issuer-key`). The project bundle contains only the trust registry, per-source key, grant,
 and env snippet an agent needs. The default issuer key is shared across projects for the same
@@ -192,8 +194,9 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   generated bundle/config and smoke `mcp serve` with `initialize` + `tools/list`;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow (through
   the installed MCP server for agent profiles).
-- `dent8 identity bootstrap`: create a local signed source identity bundle (operator issuer
-  key outside the bundle, source key, trust registry, grant, and `.dent8/identity.env`).
+- `dent8 identity bootstrap/status/rotate-source`: create, inspect, and rotate a local signed
+  source identity bundle (operator issuer key outside the bundle, source key, trust registry,
+  grant, and `.dent8/identity.env`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the

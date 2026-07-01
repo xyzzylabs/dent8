@@ -19,6 +19,7 @@ use crate::{CliAuthority, WriteAuth, env_flag, now_millis, parse_source, write_a
 const DEFAULT_TRUST: &str = "dent8-trust.json";
 const GRANT_DOMAIN: &[u8] = b"dent8.source-grant.v1\0";
 const WRITE_DOMAIN: &[u8] = b"dent8.source-write.v1\0";
+const DAY_MILLIS: i64 = 86_400_000;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct TrustedIssuers {
@@ -128,6 +129,15 @@ impl BootstrapPlan {
             self.env_file.as_path(),
         ]
     }
+}
+
+#[derive(Clone, Debug)]
+struct IdentityBundlePaths {
+    dir: PathBuf,
+    trust_file: PathBuf,
+    grant_file: PathBuf,
+    source_key_path: PathBuf,
+    env_file: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -326,6 +336,555 @@ pub(crate) fn trust_list() -> i32 {
             2
         }
     }
+}
+
+pub(crate) fn status(
+    dir: &str,
+    source: Option<&str>,
+    issuer_key: Option<&str>,
+    expires_warning_days: u64,
+) -> i32 {
+    match identity_status(dir, source, issuer_key, expires_warning_days) {
+        Ok(lines) => {
+            println!("identity status");
+            let ok = print_status_lines(&lines);
+            i32::from(!ok)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn rotate_source(
+    dir: &str,
+    source: &str,
+    issuer_key: Option<&str>,
+    max_authority: Option<CliAuthority>,
+    scope: Option<&str>,
+    expires_at_ms: Option<i64>,
+) -> i32 {
+    match rotate_source_bundle(dir, source, issuer_key, max_authority, scope, expires_at_ms) {
+        Ok(output) => {
+            println!("{output}");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+fn print_status_lines(lines: &[DoctorLine]) -> bool {
+    let mut ok = true;
+    for line in lines {
+        if !line.ok {
+            ok = false;
+        }
+        println!("  {}  {}", line.level, line.message);
+    }
+    ok
+}
+
+fn identity_status(
+    dir: &str,
+    expected_source: Option<&str>,
+    issuer_key: Option<&str>,
+    expires_warning_days: u64,
+) -> Result<Vec<DoctorLine>, String> {
+    let paths = identity_bundle_paths(dir, expected_source)?;
+    let mut lines = vec![DoctorLine::ok(format!("bundle: {}", paths.dir.display()))];
+
+    let trust = match doctor_trust(&path_string(&paths.trust_file)) {
+        Ok(trust) => {
+            lines.push(DoctorLine::ok(format!(
+                "trust: {} ({} issuer(s))",
+                paths.trust_file.display(),
+                trust.issuers.len()
+            )));
+            trust
+        }
+        Err(line) => {
+            lines.push(line);
+            return Ok(lines);
+        }
+    };
+
+    let grant = match load_grant(&path_string(&paths.grant_file)) {
+        Ok(grant) => grant,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("grant: {error}")));
+            return Ok(lines);
+        }
+    };
+    if let Some(source) = expected_source
+        && grant.grant.source != source
+    {
+        lines.push(DoctorLine::fail(format!(
+            "source: active grant is {}, expected {source}",
+            grant.grant.source
+        )));
+    }
+
+    match verify_grant(&grant, &trust, now_millis()) {
+        Ok(()) => lines.push(DoctorLine::ok(format!(
+            "grant: {} (source={} max={:?} issuer={} scope={} expires_at_ms={})",
+            paths.grant_file.display(),
+            grant.grant.source,
+            grant.grant.max_authority,
+            grant.grant.issuer,
+            grant.grant.scope.as_deref().unwrap_or("*"),
+            grant
+                .grant
+                .expires_at_ms
+                .map_or_else(|| "never".to_string(), |expires| expires.to_string())
+        ))),
+        Err(error) => lines.push(DoctorLine::fail(format!("grant: {error}"))),
+    }
+    lines.extend(expiration_lines(&grant.grant, expires_warning_days));
+    lines.extend(identity_key_status(&paths.source_key_path, &grant));
+    lines.extend(issuer_key_status(
+        issuer_key,
+        &paths.dir,
+        &grant.grant.issuer,
+        &trust,
+    ));
+    Ok(lines)
+}
+
+fn expiration_lines(grant: &SourceGrantPayload, warning_days: u64) -> Vec<DoctorLine> {
+    let Some(expires_at) = grant.expires_at_ms else {
+        return vec![DoctorLine::ok("grant expiry: never")];
+    };
+    let now = now_millis().as_unix_millis();
+    if now > expires_at {
+        return vec![DoctorLine::fail(format!(
+            "grant expiry: expired at {expires_at}"
+        ))];
+    }
+    let remaining = expires_at.saturating_sub(now);
+    let warning_ms = i64::try_from(warning_days)
+        .unwrap_or(i64::MAX / DAY_MILLIS)
+        .saturating_mul(DAY_MILLIS);
+    let message = format!(
+        "grant expiry: expires at {expires_at} (in {} day(s))",
+        remaining / DAY_MILLIS
+    );
+    if remaining <= warning_ms {
+        vec![DoctorLine::warn(message)]
+    } else {
+        vec![DoctorLine::ok(message)]
+    }
+}
+
+fn identity_key_status(key_path: &Path, grant: &SignedSourceGrant) -> Vec<DoctorLine> {
+    let mut lines = Vec::new();
+    let key_file = path_string(key_path);
+    let signing = match load_signing_key(&key_file) {
+        Ok(signing) => signing,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("source key: {error}")));
+            return lines;
+        }
+    };
+    let grant_key = match verifying_key_from_hex(&grant.grant.public_key) {
+        Ok(key) => key,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("grant public key: {error}")));
+            return lines;
+        }
+    };
+    if signing.verifying_key().to_bytes() == grant_key.to_bytes() {
+        lines.push(DoctorLine::ok(format!(
+            "source key: {} (matches grant public key)",
+            key_path.display()
+        )));
+    } else {
+        lines.push(DoctorLine::fail(format!(
+            "source key: {} does not match grant public key",
+            key_path.display()
+        )));
+    }
+    lines
+}
+
+fn issuer_key_status(
+    raw_issuer_key: Option<&str>,
+    bundle_dir: &Path,
+    issuer_name: &str,
+    trust: &TrustedIssuers,
+) -> Vec<DoctorLine> {
+    let mut lines = Vec::new();
+    let issuer_key_path = match raw_issuer_key {
+        Some(path) => match bootstrap_issuer_key_path(Some(path), bundle_dir) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                lines.push(DoctorLine::fail(format!("issuer key: {error}")));
+                return lines;
+            }
+        },
+        None => default_issuer_key_path().ok(),
+    };
+    let Some(path) = issuer_key_path else {
+        lines.push(DoctorLine::warn(
+            "issuer key: not checked (pass --issuer-key to check the operator signing key)",
+        ));
+        return lines;
+    };
+    if path.starts_with(bundle_dir) {
+        lines.push(DoctorLine::fail(format!(
+            "issuer key: {} is inside {}; keep issuer keys outside the agent/project bundle",
+            path.display(),
+            bundle_dir.display()
+        )));
+        return lines;
+    }
+    if !path.exists() {
+        lines.push(DoctorLine::warn(format!(
+            "issuer key: {} not present on this machine",
+            path.display()
+        )));
+        return lines;
+    }
+    match load_issuer_key_matching_trust(&path, issuer_name, trust) {
+        Ok(()) => lines.push(DoctorLine::ok(format!(
+            "issuer key: {} (matches trusted issuer {issuer_name})",
+            path.display()
+        ))),
+        Err(error) => lines.push(DoctorLine::fail(format!("issuer key: {error}"))),
+    }
+    lines
+}
+
+fn rotate_source_bundle(
+    dir: &str,
+    source: &str,
+    raw_issuer_key: Option<&str>,
+    max_authority: Option<CliAuthority>,
+    scope: Option<&str>,
+    expires_at_ms: Option<i64>,
+) -> Result<String, String> {
+    parse_source(source)?;
+    let paths = identity_bundle_paths(dir, Some(source))?;
+    let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {
+        format!(
+            "identity trust registry required at {}",
+            paths.trust_file.display()
+        )
+    })?;
+    let old_grant = load_grant(&path_string(&paths.grant_file))?;
+    verify_grant_signature(&old_grant, &trust)?;
+    if old_grant.grant.source != source {
+        return Err(format!(
+            "active grant is for {}, not {source}",
+            old_grant.grant.source
+        ));
+    }
+
+    let issuer_key_path = bootstrap_issuer_key_path(raw_issuer_key, &paths.dir)?;
+    if !issuer_key_path.exists() {
+        return Err(format!(
+            "identity issuer key {} does not exist; pass --issuer-key for the trusted issuer",
+            issuer_key_path.display()
+        ));
+    }
+    let issuer_key =
+        load_issuer_signing_key_matching_trust(&issuer_key_path, &old_grant.grant.issuer, &trust)?;
+
+    let replacement_scope = match scope {
+        Some(scope) if scope.trim().is_empty() => {
+            return Err(
+                "identity grant scope must not be empty; use `*` for all subjects".to_string(),
+            );
+        }
+        Some(scope) => Some(scope.to_string()),
+        None => old_grant.grant.scope.clone(),
+    };
+    let replacement = generate_signing_key()?;
+    let grant = SourceGrantPayload {
+        version: 1,
+        source: source.to_string(),
+        public_key: hex::encode(replacement.verifying_key().to_bytes()),
+        max_authority: max_authority.map_or(old_grant.grant.max_authority, CliAuthority::level),
+        issuer: old_grant.grant.issuer.clone(),
+        scope: replacement_scope,
+        expires_at_ms: expires_at_ms.or(old_grant.grant.expires_at_ms),
+    };
+    let signed = SignedSourceGrant {
+        signature: hex::encode(issuer_key.sign(&framed(GRANT_DOMAIN, &grant)?).to_bytes()),
+        grant,
+    };
+
+    let stamp = now_millis().as_unix_millis();
+    let mut rollback = RotationRollback::default();
+    let key_backup = rollback.backup_required(&paths.source_key_path, stamp)?;
+    let public_key_path = public_key_path(&paths.source_key_path);
+    let public_backup = rollback.backup_optional(&public_key_path, stamp)?;
+    let grant_backup = rollback.backup_required(&paths.grant_file, stamp)?;
+    let env_backup = rollback.backup_required(&paths.env_file, stamp)?;
+
+    write_key_pair(&paths.source_key_path, &replacement)?;
+    rollback.record_key_pair(&paths.source_key_path);
+    write_json_path(&paths.grant_file, &signed)?;
+    rollback.record_file(&paths.grant_file);
+    write_identity_env(&paths)?;
+    rollback.record_file(&paths.env_file);
+    rollback.commit();
+
+    let mut lines = vec![
+        format!(
+            "rotated source identity for {source} in {}",
+            paths.dir.display()
+        ),
+        format!("  source key: {}", paths.source_key_path.display()),
+        format!("  grant: {}", paths.grant_file.display()),
+        format!("  env: {}", paths.env_file.display()),
+        format!("  old source key backup: {}", key_backup.display()),
+        format!("  old grant backup: {}", grant_backup.display()),
+        format!("  old env backup: {}", env_backup.display()),
+    ];
+    if let Some(public_backup) = public_backup {
+        lines.push(format!(
+            "  old public key backup: {}",
+            public_backup.display()
+        ));
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Next:\n  dent8 identity status --dir {} --source {source}\n  dent8 doctor --source {source} --write-check",
+        shell_quote(&path_string(&paths.dir))
+    ));
+    Ok(lines.join("\n"))
+}
+
+fn identity_bundle_paths(
+    dir: &str,
+    expected_source: Option<&str>,
+) -> Result<IdentityBundlePaths, String> {
+    let dir = absolute_existing_dir(&PathBuf::from(dir))?;
+    let trust_file = dir.join("trust.json");
+    let env_file = dir.join("identity.env");
+    if let Some(source) = expected_source {
+        parse_source(source)?;
+        let slug = source_slug(source);
+        return Ok(IdentityBundlePaths {
+            trust_file,
+            grant_file: dir.join("grants").join(format!("{slug}.grant.json")),
+            source_key_path: dir.join("identities").join(format!("{slug}.key")),
+            env_file,
+            dir,
+        });
+    }
+
+    let env = read_identity_env_file(&env_file)?;
+    let grant_file = env
+        .get("DENT8_GRANT")
+        .ok_or_else(|| format!("{} is missing DENT8_GRANT", env_file.display()))
+        .map(|path| env_path_value(path, &dir))?;
+    let source_key_path = env
+        .get("DENT8_IDENTITY_KEY")
+        .ok_or_else(|| format!("{} is missing DENT8_IDENTITY_KEY", env_file.display()))
+        .map(|path| env_path_value(path, &dir))?;
+    let trust_file = env
+        .get("DENT8_TRUST")
+        .map_or(trust_file, |path| env_path_value(path, &dir));
+    Ok(IdentityBundlePaths {
+        dir,
+        trust_file,
+        grant_file,
+        source_key_path,
+        env_file,
+    })
+}
+
+fn env_path_value(raw: &str, bundle_dir: &Path) -> PathBuf {
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        bundle_dir.join(path)
+    }
+}
+
+fn read_identity_env_file(path: &Path) -> Result<BTreeMap<String, String>, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let mut env = BTreeMap::new();
+    for (line_no, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(format!(
+                "{}:{} is not a KEY=VALUE line",
+                path.display(),
+                line_no + 1
+            ));
+        };
+        env.insert(key.trim().to_string(), shell_unquote(value.trim()));
+    }
+    Ok(env)
+}
+
+fn shell_unquote(value: &str) -> String {
+    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
+        value[1..value.len() - 1].replace("'\\''", "'")
+    } else {
+        value.to_string()
+    }
+}
+
+fn write_identity_env(paths: &IdentityBundlePaths) -> Result<(), String> {
+    let env_contents = format!(
+        "# dent8 signed source identity environment\n\
+         # Load with: set -a; . {}; set +a\n\
+         DENT8_TRUST={}\n\
+         DENT8_REQUIRE_IDENTITY=1\n\
+         DENT8_GRANT={}\n\
+         DENT8_IDENTITY_KEY={}\n",
+        shell_quote(&path_string(&paths.env_file)),
+        shell_quote(&path_string(&paths.trust_file)),
+        shell_quote(&path_string(&paths.grant_file)),
+        shell_quote(&path_string(&paths.source_key_path)),
+    );
+    write_text_path(&paths.env_file, &env_contents)
+}
+
+fn verify_grant_signature(grant: &SignedSourceGrant, trust: &TrustedIssuers) -> Result<(), String> {
+    if grant.grant.version != 1 {
+        return Err(format!("unsupported grant version {}", grant.grant.version));
+    }
+    if let Err(error) = parse_source(&grant.grant.source) {
+        return Err(format!("grant source is invalid: {error}"));
+    }
+    verifying_key_from_hex(&grant.grant.public_key)?;
+    let issuer = trust
+        .issuers
+        .get(&grant.grant.issuer)
+        .ok_or_else(|| format!("untrusted grant issuer {}", grant.grant.issuer))?;
+    let issuer_key = verifying_key_from_hex(&issuer.public_key)?;
+    let signature = signature_from_hex(&grant.signature)?;
+    issuer_key
+        .verify(&framed(GRANT_DOMAIN, &grant.grant)?, &signature)
+        .map_err(|error| format!("grant signature does not verify: {error}"))
+}
+
+fn load_issuer_key_matching_trust(
+    path: &Path,
+    issuer_name: &str,
+    trust: &TrustedIssuers,
+) -> Result<(), String> {
+    load_issuer_signing_key_matching_trust(path, issuer_name, trust).map(|_| ())
+}
+
+fn load_issuer_signing_key_matching_trust(
+    path: &Path,
+    issuer_name: &str,
+    trust: &TrustedIssuers,
+) -> Result<SigningKey, String> {
+    let signing = load_signing_key(&path_string(path))?;
+    let trusted = trust
+        .issuers
+        .get(issuer_name)
+        .ok_or_else(|| format!("untrusted grant issuer {issuer_name}"))?;
+    let trusted_key = verifying_key_from_hex(&trusted.public_key)?;
+    if signing.verifying_key().to_bytes() != trusted_key.to_bytes() {
+        return Err(format!(
+            "{} does not match trusted issuer {issuer_name}",
+            path.display()
+        ));
+    }
+    Ok(signing)
+}
+
+#[derive(Default)]
+struct RotationRollback {
+    backups: Vec<(PathBuf, PathBuf)>,
+    created_files: Vec<PathBuf>,
+    committed: bool,
+}
+
+impl RotationRollback {
+    fn backup_required(&mut self, path: &Path, stamp: i64) -> Result<PathBuf, String> {
+        if !path.exists() {
+            return Err(format!(
+                "{} does not exist; cannot rotate it",
+                path.display()
+            ));
+        }
+        self.backup_existing(path, stamp)
+    }
+
+    fn backup_optional(&mut self, path: &Path, stamp: i64) -> Result<Option<PathBuf>, String> {
+        if path.exists() {
+            self.backup_existing(path, stamp).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn backup_existing(&mut self, path: &Path, stamp: i64) -> Result<PathBuf, String> {
+        let backup = available_backup_path(path, stamp);
+        std::fs::rename(path, &backup).map_err(|error| {
+            format!(
+                "cannot move {} to backup {}: {error}",
+                path.display(),
+                backup.display()
+            )
+        })?;
+        self.backups.push((path.to_path_buf(), backup.clone()));
+        Ok(backup)
+    }
+
+    fn record_file(&mut self, path: &Path) {
+        self.created_files.push(path.to_path_buf());
+    }
+
+    fn record_key_pair(&mut self, private_path: &Path) {
+        self.record_file(private_path);
+        self.record_file(&public_key_path(private_path));
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for RotationRollback {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        for path in self.created_files.iter().rev() {
+            let _ = std::fs::remove_file(path);
+        }
+        for (original, backup) in self.backups.iter().rev() {
+            let _ = std::fs::rename(backup, original);
+        }
+    }
+}
+
+fn available_backup_path(path: &Path, stamp: i64) -> PathBuf {
+    for attempt in 0u32.. {
+        let candidate = backup_path(path, stamp, attempt);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded backup path search should always return");
+}
+
+fn backup_path(path: &Path, stamp: i64, attempt: u32) -> PathBuf {
+    let suffix = if attempt == 0 {
+        format!(".old.{stamp}")
+    } else {
+        format!(".old.{stamp}.{attempt}")
+    };
+    PathBuf::from(format!("{}{suffix}", path.to_string_lossy()))
 }
 
 pub(crate) fn doctor_status(source: &str, now: TimestampMillis) -> Vec<DoctorLine> {
@@ -825,6 +1384,20 @@ fn absolute_dir_for_new(path: &Path) -> Result<PathBuf, String> {
             .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()));
     }
     canonicalize_parent_for_new(&candidate)
+}
+
+fn absolute_existing_dir(path: &Path) -> Result<PathBuf, String> {
+    let candidate = absolute_candidate(path)?;
+    let resolved = candidate
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve {}: {error}", candidate.display()))?;
+    if !resolved.is_dir() {
+        return Err(format!(
+            "{} is not an identity bundle directory",
+            resolved.display()
+        ));
+    }
+    Ok(resolved)
 }
 
 fn absolute_path_for_new(path: &Path) -> Result<PathBuf, String> {

@@ -535,6 +535,10 @@ struct IdentityArgs {
 enum IdentityCommand {
     /// Bootstrap a local signed-identity bundle.
     Bootstrap(IdentityBootstrapArgs),
+    /// Inspect the active signed-identity bundle.
+    Status(IdentityStatusArgs),
+    /// Rotate a source key and issue a replacement grant.
+    RotateSource(IdentityRotateSourceArgs),
     /// Generate an issuer/admin signing key.
     IssuerKeygen(IdentityKeygenArgs),
     /// Generate a source/agent signing key.
@@ -570,6 +574,44 @@ struct IdentityBootstrapArgs {
     #[arg(long, default_value = "*", value_name = "SCOPE")]
     scope: String,
     /// Optional expiration as Unix milliseconds.
+    #[arg(long, value_name = "MILLIS")]
+    expires_at_ms: Option<i64>,
+}
+
+#[derive(Args, Debug)]
+struct IdentityStatusArgs {
+    /// Directory for the identity bundle.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Expected source id for the active grant.
+    #[arg(long, value_parser = parse_source)]
+    source: Option<String>,
+    /// Operator issuer signing-key path to sanity-check.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
+    /// Warn when the grant expires within this many days.
+    #[arg(long, default_value_t = 14)]
+    expires_warning_days: u64,
+}
+
+#[derive(Args, Debug)]
+struct IdentityRotateSourceArgs {
+    /// Directory for the identity bundle.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Source id whose key/grant should be rotated.
+    #[arg(long, value_parser = parse_source)]
+    source: String,
+    /// Operator issuer signing-key path. Defaults outside the project bundle.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
+    /// Replacement grant authority ceiling. Defaults to the current grant's ceiling.
+    #[arg(long, value_enum)]
+    max: Option<CliAuthority>,
+    /// Replacement grant subject scope. Defaults to the current grant's scope.
+    #[arg(long, value_name = "SCOPE")]
+    scope: Option<String>,
+    /// Replacement grant expiration as Unix milliseconds. Defaults to the current grant's expiration.
     #[arg(long, value_name = "MILLIS")]
     expires_at_ms: Option<i64>,
 }
@@ -870,6 +912,20 @@ fn run_identity(command: &IdentityCommand) -> i32 {
             args.issuer_key.as_deref(),
             args.max,
             &args.scope,
+            args.expires_at_ms,
+        ),
+        IdentityCommand::Status(args) => identity::status(
+            &args.dir,
+            args.source.as_deref(),
+            args.issuer_key.as_deref(),
+            args.expires_warning_days,
+        ),
+        IdentityCommand::RotateSource(args) => identity::rotate_source(
+            &args.dir,
+            &args.source,
+            args.issuer_key.as_deref(),
+            args.max,
+            args.scope.as_deref(),
             args.expires_at_ms,
         ),
         IdentityCommand::IssuerKeygen(args) => identity::issuer_keygen(&args.out),

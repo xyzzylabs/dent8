@@ -191,13 +191,16 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
   boundary. The ceiling caps *what a source may claim*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary.
-- **`dent8 identity bootstrap | issuer-keygen | agent-keygen | trust-add | trust-list |
-  grant-issue | grant-verify`** — the **signed source identity layer (authn)**, included in
-  the default CLI build. `init --identity` / `init --agent <profile>` are the happy path;
-  `bootstrap` remains the manual path: it creates or reuses an operator issuer key outside the
-  project/agent bundle, then creates a source key, trust registry, grant, and shell-loadable
-  `.dent8/identity.env` for one source. The lower level commands remain available for custom
-  paths, rotation, expiration, and exact subject scopes. This is the non-bearer-token form: an
+- **`dent8 identity bootstrap | status | rotate-source | issuer-keygen | agent-keygen |
+  trust-add | trust-list | grant-issue | grant-verify`** — the **signed source identity layer
+  (authn)**, included in the default CLI build. `init --identity` / `init --agent <profile>`
+  are the happy path; `bootstrap` remains the manual creation path: it creates or reuses an
+  operator issuer key outside the project/agent bundle, then creates a source key, trust
+  registry, grant, and shell-loadable `.dent8/identity.env` for one source. `status` checks the
+  bundle/trust/grant/source key/issuer key and reports expiry, while `rotate-source` replaces
+  the active source key and grant at the same stable paths, backing up the old files. The lower
+  level commands remain available for custom paths, expiration, and exact subject scopes. This
+  is the non-bearer-token form: an
   operator-held issuer key signs a grant that
   binds `source` -> source public key + max authority + optional subject scope/expiration, and
   each write verifies the grant plus source-key possession before the candidate event reaches

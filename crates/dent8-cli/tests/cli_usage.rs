@@ -1446,6 +1446,332 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn identity_status_reports_bundle_and_expiry() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &dir_str,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+                "--expires-at-ms",
+                "4102444800000",
+            ],
+            &[],
+        ),
+        "identity bootstrap with expiry",
+    );
+
+    let status = run_dent8(
+        &[
+            "identity",
+            "status",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&status, "identity status");
+    let status_stdout = stdout(&status);
+    assert!(status_stdout.contains("identity status"), "{status_stdout}");
+    assert!(status_stdout.contains("bundle:"), "{status_stdout}");
+    assert!(status_stdout.contains("trust:"), "{status_stdout}");
+    assert!(status_stdout.contains("grant:"), "{status_stdout}");
+    assert!(
+        status_stdout.contains("source=source:codex"),
+        "{status_stdout}"
+    );
+    assert!(status_stdout.contains("max=High"), "{status_stdout}");
+    assert!(
+        status_stdout.contains("grant expiry: expires at 4102444800000"),
+        "{status_stdout}"
+    );
+    assert!(status_stdout.contains("source key:"), "{status_stdout}");
+    assert!(status_stdout.contains("issuer key:"), "{status_stdout}");
+
+    let inferred_status = run_dent8(
+        &[
+            "identity",
+            "status",
+            "--dir",
+            &dir_str,
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&inferred_status, "identity status infers active env");
+    assert!(stdout(&inferred_status).contains("source=source:codex"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &dir_str,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "identity bootstrap before rotation",
+    );
+
+    let trust = dir.join("trust.json").to_string_lossy().into_owned();
+    let grant = dir
+        .join("grants/source_codex.grant.json")
+        .to_string_lossy()
+        .into_owned();
+    let key_path = dir.join("identities/source_codex.key");
+    let key = key_path.to_string_lossy().into_owned();
+    let old_key = read_file(&key_path);
+
+    let rotated = run_dent8(
+        &[
+            "identity",
+            "rotate-source",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&rotated, "identity rotate-source");
+    let rotate_stdout = stdout(&rotated);
+    assert!(
+        rotate_stdout.contains("rotated source identity for source:codex"),
+        "{rotate_stdout}"
+    );
+    assert_ne!(
+        read_file(&key_path),
+        old_key,
+        "rotation should replace the active source private key"
+    );
+
+    let old_key_backup = find_backup(&dir.join("identities"), "source_codex.key.old.");
+    assert!(
+        dir.join("identity.env").exists(),
+        "rotation should rewrite identity.env at the stable path"
+    );
+    assert!(
+        fs::read_to_string(dir.join("identity.env"))
+            .expect("rotated identity env")
+            .contains("DENT8_IDENTITY_KEY="),
+        "rotated env should still point at the active key path"
+    );
+
+    let active_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &active_env,
+        ),
+        "signed write with rotated key",
+    );
+
+    let old_key_backup = old_key_backup.to_string_lossy().into_owned();
+    let old_key_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", old_key_backup.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    let rejected = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_color",
+            "blue",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &old_key_env,
+    );
+    assert_eq!(rejected.status.code(), Some(2));
+    assert!(stderr(&rejected).contains("identity key does not match"));
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "status",
+                "--dir",
+                &dir_str,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "identity status after rotation",
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn identity_rotate_source_can_replace_an_expired_grant() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &dir_str,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+                "--expires-at-ms",
+                "1",
+            ],
+            &[],
+        ),
+        "identity bootstrap expired grant",
+    );
+
+    let trust = dir.join("trust.json").to_string_lossy().into_owned();
+    let grant = dir
+        .join("grants/source_codex.grant.json")
+        .to_string_lossy()
+        .into_owned();
+    let key = dir
+        .join("identities/source_codex.key")
+        .to_string_lossy()
+        .into_owned();
+    let identity_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+
+    let expired_write = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_drink",
+            "tea",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &identity_env,
+    );
+    assert_eq!(expired_write.status.code(), Some(2));
+    assert!(stderr(&expired_write).contains("expired at 1"));
+
+    let expired_status = run_dent8(
+        &[
+            "identity",
+            "status",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_eq!(expired_status.status.code(), Some(1));
+    assert!(stdout(&expired_status).contains("grant expiry: expired at 1"));
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "rotate-source",
+                "--dir",
+                &dir_str,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+                "--expires-at-ms",
+                "4102444800000",
+            ],
+            &[],
+        ),
+        "identity rotate-source expired grant",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &identity_env,
+        ),
+        "signed write after expired grant rotation",
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
 #[allow(clippy::similar_names)]
 fn identity_bootstrap_can_share_one_explicit_issuer_across_projects() {
     let temp = TempDir::new();
@@ -1948,6 +2274,20 @@ fn assert_installed_agent_doctor_ok(output: &Output, agent: &str, source: &str, 
 #[cfg(feature = "identity")]
 fn read_file(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+#[cfg(feature = "identity")]
+fn find_backup(dir: &Path, prefix: &str) -> PathBuf {
+    fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        })
+        .unwrap_or_else(|| panic!("missing backup with prefix {prefix} in {}", dir.display()))
 }
 
 #[cfg(all(feature = "identity", unix))]

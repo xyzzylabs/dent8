@@ -104,14 +104,17 @@ example `/usr/local/bin/dent8` when dent8 is installed globally but not on the a
 `PATH`. If you use a bundle directory not named `.dent8`, pass `--mcp-config` / `--config`
 because dent8 cannot infer the project-local MCP config path safely. `dent8 doctor --agent
 <profile>` reads the installed MCP config back, so custom commands do not need to be repeated
-for the normal post-install check. `dent8 identity bootstrap` remains available
-for manual rotation/custom layouts. It creates or reuses an operator issuer key outside the
-project bundle
+for the normal post-install check. `dent8 identity status --dir .dent8 --source <source>`
+checks the bundle, grant, source key, issuer key when supplied, and expiry. `dent8 identity
+rotate-source --dir .dent8 --source <source> --issuer-key <path>` generates a replacement
+source key, issues a replacement grant, rewrites `.dent8/identity.env` at the same stable path,
+and backs up the previous key/grant/env files. `dent8 identity bootstrap` remains available for
+custom layouts. It creates or reuses an operator issuer key outside the project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
 `$HOME/.config/dent8/issuer.key`). Bootstrap refuses to write the issuer key inside the bundle
 and refuses to overwrite existing project identity material. The manual subcommands
 (`issuer-keygen`, `agent-keygen`, `trust-add`, `grant-issue`, `grant-verify`) remain available
-when you need custom paths, rotation, expiration, or exact subject scopes.
+when you need custom paths, expiration, or exact subject scopes.
 
 By default, the issuer key is shared across all projects bootstrapped by the same OS user. That
 is convenient for a single operator: one owner/admin key can issue grants for many project
