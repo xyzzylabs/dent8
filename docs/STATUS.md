@@ -228,8 +228,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   signer** — it signs the head whenever the log grows, the loop a separate operator runs; and
   **`head`** prints the latest signed head as JSON to **publish**.
   **`verify-published <heads.jsonl>`** verifies externally saved JSONL heads against the current
-  log and public key without reading `DENT8_WITNESS_LOG`, so a local witness-log rollback can
-  be detected by a monitor that retained a later head. `dent8 init --witness` configures
+  log and public key without reading `DENT8_WITNESS_LOG`, so a local witness-log rollback
+  cannot erase a later head retained by a monitor. It exits successfully but warns if the
+  latest published count trails the current log. `dent8 init --witness` configures
   verifier-side paths, `dent8 doctor` reports witness coverage, and
   **`doctor <writer|signer|both>`** validates the operator split (writer/verifier env must have
   the log + public key and must not have the private key; signer env must have the private key

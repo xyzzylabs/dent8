@@ -168,10 +168,10 @@ re-verify cannot. `dent8 init --witness` configures verifier-side paths and `den
 reports signed-head coverage; `dent8 witness doctor <writer|signer|both>` checks the
 operator split so writer/agent/MCP processes do not inherit the private witness key; and
 `dent8 witness verify-published <heads.jsonl>` checks externally saved heads so a local
-witness-log rollback is not silent. The remaining gap to a hardened multi-user product is
-operating those controls well: key distribution/rotation, stronger secret storage, managed
-head publication, and an **operated witness service** that signs on a cadence from separate
-infrastructure. See
+witness-log rollback cannot erase retained evidence. The remaining gap to a hardened
+multi-user product is operating those controls well: key distribution/rotation, stronger
+secret storage, managed head publication, and an **operated witness service** that signs on a
+cadence from separate infrastructure. See
 [docs/witness.md](docs/witness.md), the [Roadmap](docs/roadmap.md), and
 [docs/STATUS.md](docs/STATUS.md).
 

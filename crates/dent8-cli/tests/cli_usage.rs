@@ -265,6 +265,26 @@ fn doctor_without_witness_feature_fails_closed_when_signed_heads_exist() {
 }
 
 #[cfg(feature = "witness")]
+fn assert_alice_fact(log: &str, predicate: &str, value: &str, context: &str) {
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                predicate,
+                value,
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &[("DENT8_LOG", log)],
+        ),
+        context,
+    );
+}
+
+#[cfg(feature = "witness")]
 #[test]
 fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewound() {
     let temp = TempDir::new();
@@ -281,22 +301,7 @@ fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewoun
         &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
         "witness keygen",
     );
-    assert_success(
-        &run_dent8(
-            &[
-                "assert",
-                "person:alice",
-                "favorite_drink",
-                "tea",
-                "--authority",
-                "high",
-                "--source",
-                "user:alice",
-            ],
-            &[("DENT8_LOG", log.as_str())],
-        ),
-        "assert alice drink",
-    );
+    assert_alice_fact(&log, "favorite_drink", "tea", "assert alice drink");
     assert_success(
         &run_dent8(
             &["witness", "sign"],
@@ -333,6 +338,16 @@ fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewoun
     assert_success(
         &verified_after_local_rollback,
         "verify published head after local witness rollback",
+    );
+
+    assert_alice_fact(&log, "favorite_snack", "apple", "assert unwitnessed tail");
+    let trailing = run_dent8(&["witness", "verify-published", &published], &verify_env);
+    assert_success(&trailing, "verify published head with unwitnessed tail");
+    assert!(
+        stdout(&trailing).contains("WARN:")
+            && stdout(&trailing).contains("trails current log 2 by 1 unwitnessed event(s)"),
+        "{}",
+        stdout(&trailing)
     );
 
     fs::write(&log, "").expect("rollback event log below published head");

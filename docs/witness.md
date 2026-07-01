@@ -86,9 +86,10 @@ the current log prefix and reports:
 
 ## Published Heads
 
-The local witness log is useful evidence, but it is still local state. To catch deletion or
-rollback of that log, publish signed heads somewhere the writer cannot rewrite: a CI artifact,
-Git history, object storage with retention, or a second host.
+The local witness log is useful evidence, but it is still local state. To keep that evidence
+available after deletion or rollback of the local witness log, publish signed heads somewhere
+the writer cannot rewrite: a CI artifact, Git history, object storage with retention, or a
+second host.
 
 After `dent8 witness sign` or while `dent8 witness serve` is running:
 
@@ -108,7 +109,8 @@ dent8 witness verify-published /external/dent8-published-heads.jsonl
 `verify-published` does not read `DENT8_WITNESS_LOG`; it checks the externally saved heads
 against the current event log prefix and public key. It fails if the published file is empty,
 if the current log is shorter than a published count (`ROLLBACK`), or if a published prefix was
-rewritten (`TAMPER`).
+rewritten (`TAMPER`). It exits successfully but warns if the published sequence is valid while
+the current log has unwitnessed tail events beyond the latest published count.
 
 ## Doctor Checks
 
@@ -143,8 +145,9 @@ The guarantee is only as strong as the witness deployment:
 - Same-machine dev witness: catches accidental rewrites and demonstrates the path.
 - Separate witness with off-writer signing key: catches a writer that rewrites and recomputes
   the local hash chain.
-- Published heads plus `verify-published`: catch deletion or rollback of the witness log
-  itself, assuming the published-heads file lives outside the writer's control.
+- Published heads plus `verify-published`: make deletion or rollback of the witness log
+  insufficient to erase retained evidence, assuming the published-heads file lives outside the
+  writer's control.
 
 Remaining product work: key rotation, managed head publication/monitoring, and a hosted or
 team-operated witness service.

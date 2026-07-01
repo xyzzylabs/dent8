@@ -99,10 +99,10 @@ See [STATUS.md](STATUS.md).
   - **Rollback / stale anchor.** `verify_anchor` checks *one supplied* anchor with no
     "latest committed" notion, so a writer can present an old anchor for a pre-tamper
     state. Mitigation: a **monotonic, append-only, published anchor sequence**
-    (non-decreasing `event_count`) on a cadence, so a missing or rewound anchor is itself
-    detectable. `dent8 witness verify-published <heads.jsonl>` verifies such an externally
-    retained JSONL sequence; the remaining product work is operating the publication channel
-    and monitor outside the writer's control.
+    (non-decreasing `event_count`) on a cadence, so a retained later anchor can still be checked
+    even if local anchor state is missing or rewound. `dent8 witness verify-published
+    <heads.jsonl>` verifies such an externally retained JSONL sequence; the remaining product
+    work is operating the publication channel and monitor outside the writer's control.
   - The symmetric HMAC anchor needs the verifier to hold the witness key; the
     **asymmetric** anchor (`sign_head`/`verify_signed_head`, `signed-anchor` feature) signs
     the same head with Ed25519, so a published head is **publicly verifiable** (RFC 6962-style

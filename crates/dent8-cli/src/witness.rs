@@ -340,12 +340,9 @@ pub fn verify() -> i32 {
 /// artifact, Git history, object storage, another host) and contain JSON lines printed by
 /// `dent8 witness head`.
 pub fn verify_published(args: &[String]) -> i32 {
-    let path = match args {
-        [path] => path,
-        _ => {
-            eprintln!("usage: dent8 witness verify-published <published-heads.jsonl>");
-            return 2;
-        }
+    let [path] = args else {
+        eprintln!("usage: dent8 witness verify-published <published-heads.jsonl>");
+        return 2;
     };
     let events = match load_events() {
         Ok(events) => events,
@@ -377,12 +374,22 @@ pub fn verify_published(args: &[String]) -> i32 {
     match verify_heads(&events, &heads, &verifying) {
         Ok(()) => {
             let head_count = heads.last().map_or(0, |sth| sth.event_count);
-            println!(
-                "OK: {} published signed tree head(s) verify from {path} — latest published \
-                 count {head_count}, current log {} events",
-                heads.len(),
-                events.len()
-            );
+            let current = events.len() as u64;
+            if head_count == current {
+                println!(
+                    "OK: {} published signed tree head(s) verify from {path} — latest published \
+                     count {head_count}, current log {current} events",
+                    heads.len()
+                );
+            } else {
+                let unwitnessed = current.saturating_sub(head_count);
+                println!(
+                    "WARN: {} published signed tree head(s) verify from {path}, but latest \
+                     published count {head_count} trails current log {current} by {unwitnessed} \
+                     unwitnessed event(s)",
+                    heads.len()
+                );
+            }
             0
         }
         Err(WitnessFault::CannotVerify(message)) => {
@@ -413,7 +420,7 @@ pub fn doctor(args: &[String]) -> i32 {
     for line in lines {
         println!("{}  {}", line.level, line.message);
     }
-    if ok { 0 } else { 1 }
+    i32::from(!ok)
 }
 
 pub(crate) struct DoctorLine {
@@ -574,7 +581,7 @@ fn witness_log_line(prefix: &str, path: &str) -> DoctorLine {
             let parent_ready = path_ref
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
-                .map_or(true, |parent| parent.exists());
+                .is_none_or(std::path::Path::exists);
             if parent_ready {
                 DoctorLine::warn(format!(
                     "{prefix}: witness log {path} does not exist yet; it will be created on first signature"
@@ -598,7 +605,8 @@ fn secret_permissions_line(prefix: &str, path: &str) -> DoctorLine {
         match std::fs::metadata(path) {
             Ok(metadata) => {
                 let mode = metadata.permissions().mode() & 0o777;
-                if mode & 0o077 == 0 {
+                let group_or_other = mode & 0o077;
+                if group_or_other == 0 {
                     DoctorLine::ok(format!("{prefix}: signing key permissions are owner-only"))
                 } else {
                     DoctorLine::fail(format!(
@@ -793,7 +801,7 @@ fn load_verifying_key() -> Result<VerifyingKey, String> {
 fn load_verifying_key_from(path: &str) -> Result<VerifyingKey, String> {
     let raw = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read witness public key {path}: {error}"))?;
-    let bytes = decode_key_bytes(raw.trim(), &path)?;
+    let bytes = decode_key_bytes(raw.trim(), path)?;
     VerifyingKey::from_bytes(&bytes).map_err(|error| format!("{path}: invalid public key: {error}"))
 }
 
