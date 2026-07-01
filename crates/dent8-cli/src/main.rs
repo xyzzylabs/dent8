@@ -1,8 +1,9 @@
 use std::{
-    io::{IsTerminal, Write},
-    process::{Command, Stdio},
+    io::{self, IsTerminal, Read, Write},
+    process::{Child, Command, ExitStatus, Stdio},
     str::FromStr,
     sync::atomic::{AtomicU8, Ordering},
+    time::{Duration, Instant},
 };
 
 use clap::builder::styling::{AnsiColor, Styles};
@@ -27,6 +28,8 @@ mod mcp;
 mod mcp_config;
 #[cfg(feature = "witness")]
 mod witness;
+
+const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -1932,7 +1935,7 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         ),
     );
 
-    let env = match mcp_config::load_agent_env(&dir, agent) {
+    let bundle_env = match mcp_config::load_agent_env(&dir, agent) {
         Ok(env) => {
             doctor_line(
                 &mut output,
@@ -1947,32 +1950,44 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         }
     };
 
-    let mcp_command = args.mcp_command.as_deref().unwrap_or("dent8");
-    match install_mcp_config(
+    let installed = match mcp_config::load_installed_server(
         agent,
         &dir,
-        args.mcp_config.as_deref(),
-        mcp_command,
-        mcp_config::InstallMode::Check,
+        args.mcp_config.as_deref().map(std::path::Path::new),
     ) {
-        Ok(result) if result.exit_code == 0 => {
-            doctor_line(&mut output, "OK", "agent mcp config: up to date");
-        }
-        Ok(result) => {
-            ok = false;
+        Ok(installed) => {
             doctor_line(
                 &mut output,
-                "FAIL",
-                &format!("agent mcp config: {}", first_line(&result.message)),
+                "OK",
+                &format!(
+                    "agent mcp config: {} command={} args={:?}{}",
+                    installed.path.display(),
+                    installed.command,
+                    installed.args,
+                    installed
+                        .cwd
+                        .as_ref()
+                        .map(|cwd| format!(" cwd={}", cwd.display()))
+                        .unwrap_or_default()
+                ),
             );
+            installed
         }
+        Err(error) => {
+            doctor_line(&mut output, "FAIL", &format!("agent mcp config: {error}"));
+            return DoctorReport { output, ok: false };
+        }
+    };
+
+    match validate_installed_agent_config(&bundle_env, &installed, args.mcp_command.as_deref()) {
+        Ok(message) => doctor_line(&mut output, "OK", &message),
         Err(error) => {
             ok = false;
             doctor_line(&mut output, "FAIL", &format!("agent mcp config: {error}"));
         }
     }
 
-    match run_doctor_with_env(source, args.write_check, &env) {
+    match run_doctor_with_env(source, args.write_check, &installed.env) {
         Ok(child) => {
             output.push_str(&child);
         }
@@ -1982,7 +1997,7 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         }
     }
 
-    match mcp_smoke_with_env(mcp_command, &env) {
+    match mcp_smoke_with_server(&installed) {
         Ok(message) => doctor_line(&mut output, "OK", &message),
         Err(error) => {
             ok = false;
@@ -1991,6 +2006,44 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
     }
 
     DoctorReport { output, ok }
+}
+
+fn validate_installed_agent_config(
+    bundle_env: &std::collections::BTreeMap<String, String>,
+    installed: &mcp_config::InstalledServer,
+    expected_command: Option<&str>,
+) -> Result<String, String> {
+    if let Some(expected) = expected_command
+        && installed.command != expected
+    {
+        return Err(format!(
+            "installed command is {}, expected {expected}",
+            installed.command
+        ));
+    }
+
+    let mismatches = bundle_env
+        .iter()
+        .filter_map(|(key, expected)| match installed.env.get(key) {
+            Some(actual) if actual == expected => None,
+            Some(actual) => Some(format!("{key}={actual} (expected {expected})")),
+            None => Some(format!("{key} is missing")),
+        })
+        .collect::<Vec<_>>();
+    if !mismatches.is_empty() {
+        return Err(format!(
+            "installed env does not match generated bundle: {}",
+            mismatches.join("; ")
+        ));
+    }
+
+    let mut message =
+        "agent mcp config: up to date (installed env matches generated bundle)".to_string();
+    if let Some(expected) = expected_command {
+        message.push_str("; command matches ");
+        message.push_str(expected);
+    }
+    Ok(message)
 }
 
 fn run_doctor_with_env(
@@ -2028,20 +2081,20 @@ fn run_doctor_with_env(
     Ok(forwarded)
 }
 
-fn mcp_smoke_with_env(
-    mcp_command: &str,
-    env: &std::collections::BTreeMap<String, String>,
-) -> Result<String, String> {
-    let mut command = Command::new(mcp_command);
+fn mcp_smoke_with_server(server: &mcp_config::InstalledServer) -> Result<String, String> {
+    let mut command = Command::new(&server.command);
     command
-        .args(["mcp", "serve"])
+        .args(&server.args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    apply_dent8_env(&mut command, env);
+    if let Some(cwd) = &server.cwd {
+        command.current_dir(cwd);
+    }
+    apply_dent8_env(&mut command, &server.env);
     let mut child = command
         .spawn()
-        .map_err(|error| format!("could not start `{mcp_command} mcp serve`: {error}"))?;
+        .map_err(|error| format!("could not start `{}`: {error}", server.display_command()))?;
     {
         let stdin = child
             .stdin
@@ -2075,12 +2128,21 @@ fn mcp_smoke_with_env(
             .map_err(|error| format!("could not write mcp smoke request: {error}"))?;
     }
     drop(child.stdin.take());
-    let output = child
-        .wait_with_output()
+    let timeout = mcp_smoke_timeout();
+    let output = wait_with_output_timeout(child, timeout)
         .map_err(|error| format!("could not wait for mcp smoke: {error}"))?;
+    if output.timed_out {
+        return Err(format!(
+            "`{}` timed out after {} during mcp smoke\nstderr:\n{}",
+            server.display_command(),
+            format_duration(timeout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
     if !output.status.success() {
         return Err(format!(
-            "`{mcp_command} mcp serve` exited {}\nstderr:\n{}",
+            "`{}` exited {}\nstderr:\n{}",
+            server.display_command(),
             output.status,
             String::from_utf8_lossy(&output.stderr)
         ));
@@ -2115,6 +2177,83 @@ fn mcp_smoke_with_env(
         "mcp smoke: initialize + tools/list OK ({} tool(s))",
         tools.len()
     ))
+}
+
+struct TimedCommandOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+}
+
+fn mcp_smoke_timeout() -> Duration {
+    std::env::var("DENT8_MCP_SMOKE_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .filter(|timeout| !timeout.is_zero())
+        .unwrap_or(DEFAULT_MCP_SMOKE_TIMEOUT)
+}
+
+fn wait_with_output_timeout(mut child: Child, timeout: Duration) -> io::Result<TimedCommandOutput> {
+    let stdout = child.stdout.take().map(read_pipe_in_thread);
+    let stderr = child.stderr.take().map(read_pipe_in_thread);
+    let deadline = Instant::now() + timeout;
+    let mut timed_out = false;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            timed_out = true;
+            match child.kill() {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
+                Err(error) => return Err(error),
+            }
+            break child.wait()?;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        std::thread::sleep(remaining.min(Duration::from_millis(25)));
+    };
+    Ok(TimedCommandOutput {
+        status,
+        stdout: join_reader(stdout, "stdout")?,
+        stderr: join_reader(stderr, "stderr")?,
+        timed_out,
+    })
+}
+
+fn read_pipe_in_thread<R>(mut reader: R) -> std::thread::JoinHandle<io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output)?;
+        Ok(output)
+    })
+}
+
+fn join_reader(
+    handle: Option<std::thread::JoinHandle<io::Result<Vec<u8>>>>,
+    pipe_name: &'static str,
+) -> io::Result<Vec<u8>> {
+    match handle {
+        Some(handle) => handle
+            .join()
+            .map_err(|_| io::Error::other(format!("mcp smoke {pipe_name} reader panicked")))?,
+        None => Ok(Vec::new()),
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_millis().is_multiple_of(1_000) {
+        format!("{}s", duration.as_secs())
+    } else {
+        format!("{}ms", duration.as_millis())
+    }
 }
 
 fn apply_dent8_env(command: &mut Command, env: &std::collections::BTreeMap<String, String>) {

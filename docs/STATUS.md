@@ -38,9 +38,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   [--mcp-command COMMAND] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
   `verify`, and MCP availability. With `--agent`, it loads the generated `.dent8/env` +
-  `.dent8/identity.env` bundle without requiring the shell to source it, checks that the
-  selected agent's MCP config is up to date, then smokes `dent8 mcp serve` with
-  `initialize` + `tools/list`. By default it is read-only; with `--write-check`, it runs an explicit
+  `.dent8/identity.env` bundle without requiring the shell to source it, parses the selected
+  agent's installed MCP config, checks that it is up to date, then smokes the exact installed
+  `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` and a bounded timeout.
+  If `--mcp-command` is omitted,
+  the expected command is read from the installed config; pass it only to assert a specific
+  expected command. By default it is read-only; with `--write-check`, it runs an explicit
   Alice-style acceptance probe against the configured store: high-authority
   `favorite_drink=tea` is accepted, a low-authority supersession to `coffee` from the same
   configured source is rejected, `explain` still returns `tea`, and `verify` passes.

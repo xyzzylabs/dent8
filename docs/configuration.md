@@ -39,6 +39,7 @@ dent8 doctor --agent codex --write-check
 | `DENT8_GRANT` | every write | *(unset)* | Signed source grant JSON binding the configured source id to a source public key and maximum authority. |
 | `DENT8_IDENTITY_KEY` | every write | *(unset)* | Source private signing key. On Unix, dent8 requires owner-only permissions (`0600`). |
 | `DENT8_ISSUER_KEY` | `dent8 init --identity` / `dent8 identity bootstrap` | `$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key` | Optional operator issuer signing-key path for bootstrap. This key should stay outside the project/agent workspace. |
+| `DENT8_MCP_SMOKE_TIMEOUT_MS` | `dent8 doctor --agent` | `10000` | Maximum time to wait for the installed MCP server smoke check before killing it and reporting a timeout. |
 | `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
 | `DENT8_WITNESS_PUBKEY` | `dent8 witness verify` | `<DENT8_WITNESS_KEY>.pub` | Override the public key used for verification (e.g. when verifying a published head without the signing key). |
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
@@ -99,7 +100,9 @@ without writing and `--check` to fail CI or setup scripts when the file is stale
 on `init` and `--command` on `mcp install` override the command written into the config, for
 example `/usr/local/bin/dent8` when dent8 is installed globally but not on the agent host's
 `PATH`. If you use a bundle directory not named `.dent8`, pass `--mcp-config` / `--config`
-because dent8 cannot infer the project-local MCP config path safely. `dent8 identity bootstrap` remains available
+because dent8 cannot infer the project-local MCP config path safely. `dent8 doctor --agent
+<profile>` reads the installed MCP config back, so custom commands do not need to be repeated
+for the normal post-install check. `dent8 identity bootstrap` remains available
 for manual rotation/custom layouts. It creates or reuses an operator issuer key outside the
 project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
@@ -129,8 +132,9 @@ daemon transport needs per-request source authentication rather than one process
 [ADR 0012](decisions/0012-signed-source-identity.md) for the security model and limits.
 
 Use `dent8 doctor --agent <profile> --write-check` as the post-install green light. It reads
-the generated bundle directly, checks the selected agent's MCP config, smokes the MCP server,
-and runs the trusted-fact / low-authority-rejection probe with the agent source id.
+the generated bundle directly, parses the selected agent's installed MCP config, smokes that
+exact command/args/cwd/env, and runs the trusted-fact / low-authority-rejection probe with the
+agent source id.
 
 See [STATUS.md](STATUS.md) for what each surface does, and [storage.md](storage.md) for the
 backend design.

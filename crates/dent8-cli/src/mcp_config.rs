@@ -28,6 +28,23 @@ pub(crate) struct InstallResult {
     contents: String,
 }
 
+pub(crate) struct InstalledServer {
+    pub(crate) path: PathBuf,
+    pub(crate) command: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) cwd: Option<PathBuf>,
+}
+
+impl InstalledServer {
+    pub(crate) fn display_command(&self) -> String {
+        std::iter::once(self.command.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 impl InstallResult {
     pub(crate) fn message(&self) -> String {
         let header = match self.mode {
@@ -99,6 +116,13 @@ enum ConfigFormat {
     HecateTaskJson,
 }
 
+type ServerFields = (
+    String,
+    Vec<String>,
+    BTreeMap<String, String>,
+    Option<PathBuf>,
+);
+
 pub(crate) fn install(options: &InstallOptions) -> Result<InstallResult, String> {
     if options.command.trim().is_empty() {
         return Err("MCP command must not be empty".to_string());
@@ -151,6 +175,36 @@ pub(crate) fn install(options: &InstallOptions) -> Result<InstallResult, String>
         mode: options.mode,
         path: target,
         contents: rendered,
+    })
+}
+
+pub(crate) fn load_installed_server(
+    agent: InitAgent,
+    dent8_dir: &Path,
+    config_path: Option<&Path>,
+) -> Result<InstalledServer, String> {
+    let dent8_dir = absolute_path(dent8_dir)?;
+    let target = target_config_path(agent, config_path, &dent8_dir)?;
+    let contents = std::fs::read_to_string(&target)
+        .map_err(|error| format!("cannot read {}: {error}", target.display()))?;
+    let format = config_format(agent);
+    let (command, args, env, cwd) = match format {
+        ConfigFormat::CodexToml => read_codex_toml_server(&contents, &target)?,
+        ConfigFormat::McpServersJson => read_mcp_servers_json_server(&contents, &target)?,
+        ConfigFormat::HecateTaskJson => read_hecate_task_json_server(&contents, &target)?,
+    };
+    if command.trim().is_empty() {
+        return Err(format!(
+            "{} has an empty dent8 MCP command",
+            target.display()
+        ));
+    }
+    Ok(InstalledServer {
+        path: target,
+        command,
+        args,
+        env,
+        cwd,
     })
 }
 
@@ -341,6 +395,26 @@ fn patch_codex_toml(
     Ok(ensure_trailing_newline(doc.to_string()))
 }
 
+fn read_codex_toml_server(contents: &str, path: &Path) -> Result<ServerFields, String> {
+    let doc = contents
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("cannot parse TOML MCP config: {error}"))?;
+    let servers = doc
+        .as_table()
+        .get("mcp_servers")
+        .and_then(Item::as_table)
+        .ok_or_else(|| format!("{} is missing [mcp_servers]", path.display()))?;
+    let server = servers
+        .get("dent8")
+        .and_then(Item::as_table)
+        .ok_or_else(|| format!("{} is missing [mcp_servers.dent8]", path.display()))?;
+    let command = toml_string(server, "command", path)?;
+    let args = toml_string_array(server, "args", path)?;
+    let env = toml_env(server, path)?;
+    let cwd = toml_optional_path(server, "cwd", path)?;
+    Ok((command, args, env, cwd))
+}
+
 fn ensure_table<'a>(table: &'a mut Table, key: &str) -> &'a mut Table {
     if !table.contains_key(key) || !table[key].is_table() {
         table[key] = Item::Table(Table::new());
@@ -403,6 +477,173 @@ fn parse_json_object(existing: &str, label: &str) -> Result<Value, String> {
         return Err(format!("{label} JSON root must be an object"));
     }
     Ok(value)
+}
+
+fn read_mcp_servers_json_server(contents: &str, path: &Path) -> Result<ServerFields, String> {
+    let root = parse_json_object(contents, "MCP config")?;
+    let servers = root
+        .get("mcpServers")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{} is missing mcpServers", path.display()))?;
+    let server = servers
+        .get("dent8")
+        .ok_or_else(|| format!("{} is missing mcpServers.dent8", path.display()))?;
+    json_server_fields(server, path)
+}
+
+fn read_hecate_task_json_server(contents: &str, path: &Path) -> Result<ServerFields, String> {
+    let root = parse_json_object(contents, "Hecate config")?;
+    let servers = root
+        .get("mcp_servers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{} is missing mcp_servers", path.display()))?;
+    let server = servers
+        .iter()
+        .find(|server| server.get("name").and_then(Value::as_str) == Some("dent8"))
+        .ok_or_else(|| {
+            format!(
+                "{} is missing mcp_servers entry named dent8",
+                path.display()
+            )
+        })?;
+    let fallback_cwd = root
+        .get("working_directory")
+        .and_then(Value::as_str)
+        .map(PathBuf::from);
+    json_server_fields_with_cwd(server, path, fallback_cwd)
+}
+
+fn json_server_fields(server: &Value, path: &Path) -> Result<ServerFields, String> {
+    json_server_fields_with_cwd(server, path, None)
+}
+
+fn json_server_fields_with_cwd(
+    server: &Value,
+    path: &Path,
+    fallback_cwd: Option<PathBuf>,
+) -> Result<ServerFields, String> {
+    let command = server
+        .get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            format!(
+                "{} dent8 MCP server command must be a string",
+                path.display()
+            )
+        })?
+        .to_string();
+    let args = server
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{} dent8 MCP server args must be an array", path.display()))?
+        .iter()
+        .map(|arg| {
+            arg.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| format!("{} dent8 MCP server args must be strings", path.display()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let env = server
+        .get("env")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{} dent8 MCP server env must be an object", path.display()))?
+        .iter()
+        .map(|(key, value)| {
+            value
+                .as_str()
+                .map(|value| (key.clone(), value.to_string()))
+                .ok_or_else(|| {
+                    format!(
+                        "{} dent8 MCP server env value {key} must be a string",
+                        path.display()
+                    )
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let cwd =
+        match server.get("cwd") {
+            Some(value) => Some(value.as_str().map(PathBuf::from).ok_or_else(|| {
+                format!("{} dent8 MCP server cwd must be a string", path.display())
+            })?),
+            None => fallback_cwd,
+        };
+    Ok((command, args, env, cwd))
+}
+
+fn toml_string(table: &Table, key: &str, path: &Path) -> Result<String, String> {
+    table
+        .get(key)
+        .and_then(Item::as_value)
+        .and_then(toml_edit::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            format!(
+                "{} [mcp_servers.dent8].{key} must be a string",
+                path.display()
+            )
+        })
+}
+
+fn toml_string_array(table: &Table, key: &str, path: &Path) -> Result<Vec<String>, String> {
+    let array = table
+        .get(key)
+        .and_then(Item::as_value)
+        .and_then(toml_edit::Value::as_array)
+        .ok_or_else(|| {
+            format!(
+                "{} [mcp_servers.dent8].{key} must be an array",
+                path.display()
+            )
+        })?;
+    array
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_string).ok_or_else(|| {
+                format!(
+                    "{} [mcp_servers.dent8].{key} values must be strings",
+                    path.display()
+                )
+            })
+        })
+        .collect()
+}
+
+fn toml_env(table: &Table, path: &Path) -> Result<BTreeMap<String, String>, String> {
+    let env = table
+        .get("env")
+        .and_then(Item::as_table)
+        .ok_or_else(|| format!("{} is missing [mcp_servers.dent8.env]", path.display()))?;
+    env.iter()
+        .map(|(key, value)| {
+            value
+                .as_value()
+                .and_then(toml_edit::Value::as_str)
+                .map(|value| (key.to_string(), value.to_string()))
+                .ok_or_else(|| {
+                    format!(
+                        "{} [mcp_servers.dent8.env].{key} must be a string",
+                        path.display()
+                    )
+                })
+        })
+        .collect()
+}
+
+fn toml_optional_path(table: &Table, key: &str, path: &Path) -> Result<Option<PathBuf>, String> {
+    table
+        .get(key)
+        .map(|item| {
+            item.as_value()
+                .and_then(toml_edit::Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    format!(
+                        "{} [mcp_servers.dent8].{key} must be a string",
+                        path.display()
+                    )
+                })
+        })
+        .transpose()
 }
 
 fn object_entry<'a>(

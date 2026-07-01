@@ -454,22 +454,14 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     );
 
     let doctor = run_dent8(
-        &[
-            "doctor",
-            "--agent",
-            "codex",
-            "--dir",
-            &dir,
-            "--mcp-command",
-            &mcp_command,
-            "--write-check",
-        ],
+        &["doctor", "--agent", "codex", "--dir", &dir, "--write-check"],
         &[],
     );
     assert_success(&doctor, "doctor --agent codex --write-check");
     let stdout = stdout(&doctor);
     assert!(stdout.contains("agent: codex (source:codex)"));
     assert!(stdout.contains(".dent8 env: agent bundle is complete"));
+    assert!(stdout.contains(&format!("command={mcp_command}")));
     assert!(stdout.contains("agent mcp config: up to date"));
     assert!(stdout.contains("source:codex max=High"));
     assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
@@ -503,23 +495,118 @@ fn doctor_agent_smokes_the_configured_mcp_command() {
         "init --agent codex --install-mcp with missing command",
     );
 
-    let doctor = run_dent8(
-        &[
-            "doctor",
-            "--agent",
-            "codex",
-            "--dir",
-            &dir,
-            "--mcp-command",
-            &missing_command,
-        ],
-        &[],
-    );
+    let doctor = run_dent8(&["doctor", "--agent", "codex", "--dir", &dir], &[]);
     assert_eq!(doctor.status.code(), Some(1));
     let stdout = stdout(&doctor);
     assert!(stdout.contains("agent mcp config: up to date"));
     assert!(stdout.contains("mcp smoke: could not start"));
     assert!(stdout.contains(&missing_command));
+}
+
+#[cfg(all(feature = "identity", unix))]
+#[test]
+fn doctor_agent_smokes_installed_cwd_and_custom_env() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let wrapper = temp.file("dent8-wrapper.sh");
+    fs::write(
+        &wrapper,
+        "#!/bin/sh\nset -eu\ntest -f cwd-marker\nexec \"$DENT8_REAL\" \"$@\"\n",
+    )
+    .expect("write wrapper");
+    let mut permissions = fs::metadata(&wrapper)
+        .expect("wrapper metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&wrapper, permissions).expect("chmod wrapper");
+    fs::write(temp.file("cwd-marker"), "here\n").expect("write cwd marker");
+
+    let wrapper_command = wrapper.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &wrapper_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp with wrapper",
+    );
+
+    let config_path = temp.file(".codex/config.toml");
+    let config = fs::read_to_string(&config_path).expect("codex config");
+    let cwd_line = format!(
+        "args = [\"mcp\", \"serve\"]\ncwd = \"{}\"",
+        toml_basic_string(&temp.path.to_string_lossy())
+    );
+    let real_bin = format!(
+        "\nDENT8_REAL = \"{}\"\n",
+        toml_basic_string(&dent8_bin().to_string_lossy())
+    );
+    let config = config.replace("args = [\"mcp\", \"serve\"]", &cwd_line) + &real_bin;
+    fs::write(&config_path, config).expect("rewrite codex config with cwd");
+
+    let doctor = run_dent8(&["doctor", "--agent", "codex", "--dir", &dir], &[]);
+    assert_success(&doctor, "doctor --agent codex with configured cwd");
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains(&format!("command={wrapper_command}")));
+    assert!(stdout.contains(&format!("cwd={}", temp.path.display())));
+    assert!(stdout.contains("agent mcp config: up to date"));
+    assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+}
+
+#[cfg(all(feature = "identity", unix))]
+#[test]
+fn doctor_agent_mcp_smoke_times_out_hanging_command() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                "/bin/sh",
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp with hanging command",
+    );
+
+    let config_path = temp.file(".codex/config.toml");
+    let config = fs::read_to_string(&config_path).expect("codex config");
+    let config = config.replace(
+        "args = [\"mcp\", \"serve\"]",
+        "args = [\"-c\", \"exec sleep 60\"]",
+    );
+    fs::write(&config_path, config).expect("rewrite codex config with hanging command");
+
+    let doctor = run_dent8(
+        &["doctor", "--agent", "codex", "--dir", &dir],
+        &[("DENT8_MCP_SMOKE_TIMEOUT_MS", "150")],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("agent mcp config: up to date"));
+    assert!(stdout.contains("mcp smoke: `/bin/sh -c exec sleep 60` timed out after 150ms"));
 }
 
 #[cfg(feature = "identity")]
@@ -1549,6 +1636,11 @@ fn stderr(output: &Output) -> String {
 #[cfg(feature = "identity")]
 fn read_file(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+#[cfg(all(feature = "identity", unix))]
+fn toml_basic_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn dent8_bin() -> PathBuf {

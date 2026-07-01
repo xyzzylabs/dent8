@@ -56,7 +56,8 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   <profile> --install-mcp` and `dent8 mcp install --agent <profile>` patch/show known agent
   MCP configs from the generated `.dent8` env files, preserving unrelated config; dry-run/check
   modes make setup scripts reviewable and idempotent. `dent8 doctor --agent <profile>` validates
-  the generated bundle/config and smokes MCP `initialize` + `tools/list`. The CLI now uses `clap`
+  the generated bundle/config and smokes the installed MCP command/args/cwd/env with
+  `initialize` + `tools/list`, with a bounded timeout. The CLI now uses `clap`
   with named write arguments, targeted usage errors, global
   `--color auto|always|never`, `--version`, and
   `dent8 completions <bash|elvish|fish|powershell|zsh>`.

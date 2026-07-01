@@ -63,7 +63,7 @@ identity bundle together:
 
 ```sh
 dent8 init --agent codex --install-mcp    # source:codex + signed identity + Codex config
-dent8 doctor --agent codex --write-check  # config + MCP smoke + firewall write-check
+dent8 doctor --agent codex --write-check  # installed MCP smoke + firewall write-check
 ```
 
 Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP config later
@@ -73,11 +73,12 @@ shell. Use `dent8 init --identity --source <source>` for a custom source id. Age
 available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and
 `hecate`. The installer writes `command = "dent8"` by default, so Codex, Claude Code, Cursor,
 Gemini, Grok Build, Cascade, and Hecate can all use one globally installed binary; pass
-`--mcp-command` / `--command` if the binary lives elsewhere. Stdio MCP clients normally launch
-their own dent8 subprocess, but those processes can share the same operational belief base by
-using the same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while
-keeping distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP
-daemon over HTTP is future transport work, not part of v0. `identity bootstrap` remains
+`--mcp-command` / `--command` if the binary lives elsewhere; `doctor --agent` reads the installed
+config back and smokes that exact command/args/cwd/env. Stdio MCP clients normally launch their own
+dent8 subprocess, but those processes can share the same operational belief base by using the
+same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while keeping
+distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP daemon over
+HTTP is future transport work, not part of v0. `identity bootstrap` remains
 available for manual rotation/custom layouts and keeps the issuer key outside `.dent8` by default
 (`$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key`; override with
 `--issuer-key`). The project bundle contains only the trust registry, per-source key, grant,
