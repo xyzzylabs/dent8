@@ -31,13 +31,19 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
   remembered setup or preferences. Prefer MCP tools (`list_facts`, `explain`, `verify`) when
   available; otherwise use the local CLI after loading `.dent8/env` and `.dent8/identity.env`.
 - The local Codex MCP config should point at `.dent8/bin/dent8`, an ignored wrapper that runs
-  a SQLite-enabled build from `.dent8/target-sqlite`. This avoids normal `target/debug`
-  rebuilds replacing the MCP binary with one that lacks SQLite support.
-- To validate the local Codex dogfood path, build the isolated SQLite target and run:
+  a SQLite + witness-enabled build from `.dent8/target-sqlite`. This avoids normal
+  `target/debug` rebuilds replacing the MCP binary with one that lacks SQLite or witness
+  support.
+- The local dogfood store may be witness-backed with `.dent8/witness.jsonl` and
+  `.dent8/witness.key.pub`. The private `.dent8/witness.key` stays out of `.dent8/env` and
+  should only be passed explicitly when signing a head.
+- To validate the local Codex dogfood path, build the isolated SQLite+witness target and run:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
+DENT8_WITNESS_KEY=.dent8/witness.key .dent8/bin/dent8 witness sign
+.dent8/bin/dent8 doctor --agent codex --dir .dent8
 ```
 
 - Durable project facts should be asserted or superseded through dent8, not silently copied
