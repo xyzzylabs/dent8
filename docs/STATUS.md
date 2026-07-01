@@ -191,18 +191,21 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
   boundary. The ceiling caps *what a source may claim*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary.
-- **`dent8 identity bootstrap | status | rotate-source | issuer-keygen | agent-keygen |
-  trust-add | trust-list | grant-issue | grant-verify`** — the **signed source identity layer
+- **`dent8 identity bootstrap | status | repair-env | rotate-source | issuer-keygen |
+  agent-keygen | trust-add | trust-list | grant-issue | grant-verify`** — the **signed source identity layer
   (authn)**, included in the default CLI build. `init --identity` / `init --agent <profile>`
   are the happy path; `bootstrap` remains the manual creation path: it creates or reuses an
   operator issuer key outside the project/agent bundle, then creates a source key, trust
   registry, active-grant registry, grant, and shell-loadable `.dent8/identity.env` for one
   source. `status` checks the bundle/trust/active-grant/grant/source key/issuer key and reports
-  expiry, while `rotate-source` replaces the active source key and grant at the same stable
-  paths, updates `.dent8/active-grants.json`, and removes the old private source-key backup
-  after a successful rotation. The old grant/env/public-key backups remain for audit, but the
-  old grant+key pair is rejected at the write boundary once a bundle has an active-grant
-  registry. The lower level commands remain available for custom paths, expiration, and exact
+  expiry. `repair-env` rewrites generated `.dent8/identity.env` and, when missing, restores the
+  active-grant entry from the current signed grant after verifying trust, grant, and source key
+  consistency; it refuses to overwrite a different active grant. `rotate-source` replaces the
+  active source key and grant at the same stable paths, updates `.dent8/active-grants.json`, and
+  removes the old private source-key backup after a successful rotation. The old
+  grant/env/public-key backups remain for audit, but the old grant+key pair is rejected at the
+  write boundary once a bundle has an active-grant registry. The lower level commands remain
+  available for custom paths, expiration, and exact
   subject scopes. This is the non-bearer-token form: an
   operator-held issuer key signs a grant that
   binds `source` -> source public key + max authority + optional subject scope/expiration, and

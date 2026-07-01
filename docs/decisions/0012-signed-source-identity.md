@@ -59,6 +59,7 @@ Manual commands remain available:
 ```sh
 dent8 identity bootstrap --source source:codex
 dent8 identity status --dir .dent8 --source source:codex
+dent8 identity repair-env --dir .dent8 --source source:codex
 dent8 identity rotate-source --dir .dent8 --source source:codex --issuer-key "$DENT8_ISSUER_KEY"
 dent8 identity grant-verify .dent8/grants/source_codex.grant.json
 ```
@@ -68,11 +69,14 @@ dent8 identity grant-verify .dent8/grants/source_codex.grant.json
 `$HOME/.config/dent8/issuer.key`), then writes the project-local trust registry, active-grant
 registry, source key, grant, and `.dent8/identity.env`. It refuses to place the issuer private
 key inside the project bundle. `status` reports bundle/trust/active-grant/grant/key/expiry
-health. `rotate-source` generates a replacement source key and grant at the same active paths,
-updates `.dent8/active-grants.json`, and removes the previous private source-key backup after a
-successful rotation, so existing MCP config can keep pointing at `.dent8/identity.env` while
-old grant+key pairs are rejected at the write boundary. The lower-level `issuer-keygen`,
-`agent-keygen`, `trust-add`, and `grant-issue` commands remain available for custom layouts.
+health. `repair-env` rewrites generated `.dent8/identity.env` and restores a missing
+active-grant entry from the current signed grant after verifying trust, grant, and source key
+consistency; it does not rotate keys or issue a new grant. `rotate-source` generates a
+replacement source key and grant at the same active paths, updates `.dent8/active-grants.json`,
+and removes the previous private source-key backup after a successful rotation, so existing MCP
+config can keep pointing at `.dent8/identity.env` while old grant+key pairs are rejected at the
+write boundary. The lower-level `issuer-keygen`, `agent-keygen`, `trust-add`, and
+`grant-issue` commands remain available for custom layouts.
 
 The default issuer key is scoped to the OS user, not the project: bootstrapping several
 projects with the default path reuses one owner/admin key. That is acceptable for the v0 local

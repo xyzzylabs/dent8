@@ -537,6 +537,8 @@ enum IdentityCommand {
     Bootstrap(IdentityBootstrapArgs),
     /// Inspect the active signed-identity bundle.
     Status(IdentityStatusArgs),
+    /// Repair generated identity env/active-grant files from the current signed grant.
+    RepairEnv(IdentityRepairEnvArgs),
     /// Rotate a source key and issue a replacement grant.
     RotateSource(IdentityRotateSourceArgs),
     /// Generate an issuer/admin signing key.
@@ -592,6 +594,16 @@ struct IdentityStatusArgs {
     /// Warn when the grant expires within this many days.
     #[arg(long, default_value_t = 14)]
     expires_warning_days: u64,
+}
+
+#[derive(Args, Debug)]
+struct IdentityRepairEnvArgs {
+    /// Directory for the identity bundle.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Source id whose generated identity env should be repaired.
+    #[arg(long, value_parser = parse_source)]
+    source: String,
 }
 
 #[derive(Args, Debug)]
@@ -920,6 +932,7 @@ fn run_identity(command: &IdentityCommand) -> i32 {
             args.issuer_key.as_deref(),
             args.expires_warning_days,
         ),
+        IdentityCommand::RepairEnv(args) => identity::repair_env(&args.dir, &args.source),
         IdentityCommand::RotateSource(args) => identity::rotate_source(
             &args.dir,
             &args.source,
@@ -2084,7 +2097,8 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
             env
         }
         Err(error) => {
-            doctor_line(&mut output, "FAIL", &format!("agent env: {error}"));
+            let hint = agent_env_error_with_repair_hint(&error, agent, &dir);
+            doctor_line(&mut output, "FAIL", &format!("agent env: {hint}"));
             return DoctorReport { output, ok: false };
         }
     };
@@ -2155,6 +2169,26 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
     }
 
     DoctorReport { output, ok }
+}
+
+fn agent_env_error_with_repair_hint(
+    error: &str,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> String {
+    if error.contains("generated dent8 env is missing DENT8_ACTIVE_GRANTS") {
+        format!(
+            "{error}; repair the generated identity env with `dent8 identity repair-env --dir {} \
+             --source {}`; then rerun `dent8 mcp install --agent {} --dir {}` if the installed \
+             MCP config is stale",
+            shell_quote(&dir.to_string_lossy()),
+            agent.source(),
+            agent.cli_name(),
+            shell_quote(&dir.to_string_lossy())
+        )
+    } else {
+        error.to_string()
+    }
 }
 
 fn validate_installed_agent_config(

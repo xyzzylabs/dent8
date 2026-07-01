@@ -34,8 +34,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   operator issuer key outside the project bundle, then creates a local source key, trust
   registry, grant, and `.dent8/identity.env`; `init --agent` selects a known agent source id
   (`codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, `hecate`) and implies
-  identity. `dent8 identity status` checks bundle/trust/active-grant/grant/key/expiry health,
-  and `dent8 identity rotate-source` replaces the active source key and grant at stable paths,
+  identity. `dent8 identity status` checks bundle/trust/active-grant/grant/key/expiry health;
+  `dent8 identity repair-env` repairs legacy generated `.dent8/identity.env` /
+  `.dent8/active-grants.json` files from the current signed grant without rotating keys; and
+  `dent8 identity rotate-source` replaces the active source key and grant at stable paths,
   updates `.dent8/active-grants.json` so old grant+key pairs are rejected, and removes the old
   private source-key backup after a successful rotation. The lower-level commands still expose
   Ed25519 issuer/source key generation, trusted-issuer registry management, signed source

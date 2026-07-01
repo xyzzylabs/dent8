@@ -107,12 +107,16 @@ because dent8 cannot infer the project-local MCP config path safely. `dent8 doct
 <profile>` reads the installed MCP config back, so custom commands do not need to be repeated
 for the normal post-install check. `dent8 identity status --dir .dent8 --source <source>`
 checks the bundle, active-grant registry, grant, source key, issuer key when supplied, and
-expiry. `dent8 identity rotate-source --dir .dent8 --source <source> --issuer-key <path>`
-generates a replacement source key, issues a replacement grant, updates
-`.dent8/active-grants.json`, rewrites `.dent8/identity.env` at the same stable path, rejects
-the previous grant at the write boundary, and removes the previous private source-key backup
-after a successful rotation. It keeps non-secret audit backups such as the old grant/env/public
-key. `dent8 identity bootstrap` remains available for custom layouts. It creates or reuses an
+expiry. `dent8 identity repair-env --dir .dent8 --source <source>` rewrites generated
+`.dent8/identity.env` from the current signed grant and restores a missing active-grant entry
+without rotating keys; it refuses to overwrite a different active grant. Use it when a legacy
+bundle predates `DENT8_ACTIVE_GRANTS` or doctor reports a repair hint. `dent8 identity
+rotate-source --dir .dent8 --source <source> --issuer-key <path>` generates a replacement
+source key, issues a replacement grant, updates `.dent8/active-grants.json`, rewrites
+`.dent8/identity.env` at the same stable path, rejects the previous grant at the write
+boundary, and removes the previous private source-key backup after a successful rotation. It
+keeps non-secret audit backups such as the old grant/env/public key. `dent8 identity bootstrap`
+remains available for custom layouts. It creates or reuses an
 operator issuer key outside the project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
 `$HOME/.config/dent8/issuer.key`). Bootstrap refuses to write the issuer key inside the bundle

@@ -890,6 +890,138 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn identity_repair_env_recovers_legacy_agent_bundle_active_grants() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp",
+    );
+
+    let identity_env_path = temp.file(".dent8/identity.env");
+    let active_grants_path = temp.file(".dent8/active-grants.json");
+    let legacy_env = fs::read_to_string(&identity_env_path)
+        .expect("identity env")
+        .lines()
+        .filter(|line| !line.starts_with("DENT8_ACTIVE_GRANTS="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&identity_env_path, format!("{legacy_env}\n")).expect("legacy identity env");
+    fs::remove_file(&active_grants_path).expect("remove active grants");
+
+    let doctor = run_dent8(
+        &["doctor", "--agent", "codex", "--dir", &dir, "--write-check"],
+        &[],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    let doctor_stdout = stdout(&doctor);
+    assert!(
+        doctor_stdout.contains("generated dent8 env is missing DENT8_ACTIVE_GRANTS")
+            && doctor_stdout.contains("dent8 identity repair-env --dir")
+            && doctor_stdout.contains("--source source:codex"),
+        "{doctor_stdout}"
+    );
+
+    let repair = run_dent8(
+        &[
+            "identity",
+            "repair-env",
+            "--dir",
+            &dir,
+            "--source",
+            "source:codex",
+        ],
+        &[],
+    );
+    assert_success(&repair, "identity repair-env");
+    let repair_stdout = stdout(&repair);
+    assert!(
+        repair_stdout.contains("repaired signed identity env for source:codex")
+            && repair_stdout.contains("restored current grant entry from signed grant"),
+        "{repair_stdout}"
+    );
+    let repaired_env = fs::read_to_string(&identity_env_path).expect("repaired identity env");
+    assert!(repaired_env.contains("DENT8_ACTIVE_GRANTS="));
+    assert!(active_grants_path.exists());
+
+    let doctor = run_dent8(
+        &["doctor", "--agent", "codex", "--dir", &dir, "--write-check"],
+        &[],
+    );
+    assert_success(&doctor, "doctor after identity repair-env");
+    assert!(
+        stdout(&doctor).contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"),
+        "{}",
+        stdout(&doctor)
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn identity_repair_env_refuses_to_replace_a_different_active_grant() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--source",
+                "source:codex",
+                "--identity",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --identity",
+    );
+
+    fs::write(
+        temp.file(".dent8/active-grants.json"),
+        r#"{"sources":{"source:codex":{"grant_signature":"00","public_key":"00"}}}"#,
+    )
+    .expect("poison active grant registry");
+
+    let repair = run_dent8(
+        &[
+            "identity",
+            "repair-env",
+            "--dir",
+            &dir,
+            "--source",
+            "source:codex",
+        ],
+        &[],
+    );
+    assert_eq!(repair.status.code(), Some(1));
+    assert!(
+        stderr(&repair).contains("already has a different current grant"),
+        "{}",
+        stderr(&repair)
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
     for (agent, source, config_path) in [
         ("claude-code", "source:claude-code", ".mcp.json"),

@@ -80,12 +80,14 @@ dent8 subprocess, but those processes can share the same operational belief base
 same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while keeping
 distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP daemon over
 HTTP is future transport work, not part of v0. `dent8 identity status` checks a local
-identity bundle, and `dent8 identity rotate-source` replaces the active source key/grant while
-keeping the stable `.dent8/identity.env` paths that MCP configs use. Rotation updates
-`.dent8/active-grants.json`, so the old grant/key pair is rejected even if someone manually
-points env vars at backed-up grant material. `identity bootstrap` remains available for custom
-layouts and keeps the issuer key outside `.dent8` by default (`$XDG_CONFIG_HOME/dent8/issuer.key`
-or `$HOME/.config/dent8/issuer.key`; override with `--issuer-key`). The project bundle contains
+identity bundle; `dent8 identity repair-env` repairs legacy generated identity env /
+active-grants files from the current signed grant without rotating keys; and
+`dent8 identity rotate-source` replaces the active source key/grant while keeping the stable
+`.dent8/identity.env` paths that MCP configs use. Rotation updates `.dent8/active-grants.json`,
+so the old grant/key pair is rejected even if someone manually points env vars at backed-up
+grant material. `identity bootstrap` remains available for custom layouts and keeps the issuer
+key outside `.dent8` by default (`$XDG_CONFIG_HOME/dent8/issuer.key` or
+`$HOME/.config/dent8/issuer.key`; override with `--issuer-key`). The project bundle contains
 only the trust registry, active-grant registry, per-source key, grant, and env snippet an agent
 needs. The default issuer key is shared across projects for the same
 OS user; use a project-specific `--issuer-key` when you want grant-signing isolation between
@@ -200,9 +202,9 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   generated bundle/config and smoke `mcp serve` with `initialize` + `tools/list`;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow (through
   the installed MCP server for agent profiles).
-- `dent8 identity bootstrap/status/rotate-source`: create, inspect, and rotate a local signed
-  source identity bundle (operator issuer key outside the bundle, source key, trust registry,
-  active-grant registry, grant, and `.dent8/identity.env`).
+- `dent8 identity bootstrap/status/repair-env/rotate-source`: create, inspect, repair generated
+  env files for, and rotate a local signed source identity bundle (operator issuer key outside
+  the bundle, source key, trust registry, active-grant registry, grant, and `.dent8/identity.env`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the

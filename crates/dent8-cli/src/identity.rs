@@ -386,6 +386,19 @@ pub(crate) fn status(
     }
 }
 
+pub(crate) fn repair_env(dir: &str, source: &str) -> i32 {
+    match repair_env_bundle(dir, source) {
+        Ok(message) => {
+            println!("{message}");
+            0
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn rotate_source(
     dir: &str,
@@ -555,6 +568,13 @@ fn verify_active_grant(
     Ok(())
 }
 
+fn active_entry_matches_grant(entry: &ActiveSourceGrant, grant: &SignedSourceGrant) -> bool {
+    entry.grant_signature.eq_ignore_ascii_case(&grant.signature)
+        && entry
+            .public_key
+            .eq_ignore_ascii_case(&grant.grant.public_key)
+}
+
 fn active_source_grant_for(grant: &SignedSourceGrant) -> ActiveSourceGrant {
     ActiveSourceGrant {
         grant_signature: grant.signature.clone(),
@@ -589,33 +609,30 @@ fn expiration_lines(grant: &SourceGrantPayload, warning_days: u64) -> Vec<Doctor
 
 fn identity_key_status(key_path: &Path, grant: &SignedSourceGrant) -> Vec<DoctorLine> {
     let mut lines = Vec::new();
-    let key_file = path_string(key_path);
-    let signing = match load_signing_key(&key_file) {
-        Ok(signing) => signing,
-        Err(error) => {
-            lines.push(DoctorLine::fail(format!("source key: {error}")));
-            return lines;
-        }
-    };
-    let grant_key = match verifying_key_from_hex(&grant.grant.public_key) {
-        Ok(key) => key,
-        Err(error) => {
-            lines.push(DoctorLine::fail(format!("grant public key: {error}")));
-            return lines;
-        }
-    };
-    if signing.verifying_key().to_bytes() == grant_key.to_bytes() {
-        lines.push(DoctorLine::ok(format!(
+    match verify_source_key_matches_grant(key_path, grant) {
+        Ok(()) => lines.push(DoctorLine::ok(format!(
             "source key: {} (matches grant public key)",
             key_path.display()
-        )));
-    } else {
-        lines.push(DoctorLine::fail(format!(
-            "source key: {} does not match grant public key",
-            key_path.display()
-        )));
+        ))),
+        Err(error) => lines.push(DoctorLine::fail(format!("source key: {error}"))),
     }
     lines
+}
+
+fn verify_source_key_matches_grant(
+    key_path: &Path,
+    grant: &SignedSourceGrant,
+) -> Result<(), String> {
+    let signing = load_signing_key(&path_string(key_path))?;
+    let grant_key = verifying_key_from_hex(&grant.grant.public_key)
+        .map_err(|error| format!("grant public key: {error}"))?;
+    if signing.verifying_key().to_bytes() != grant_key.to_bytes() {
+        return Err(format!(
+            "{} does not match grant public key",
+            key_path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn issuer_key_status(
@@ -664,6 +681,61 @@ fn issuer_key_status(
         Err(error) => lines.push(DoctorLine::fail(format!("issuer key: {error}"))),
     }
     lines
+}
+
+fn repair_env_bundle(dir: &str, source: &str) -> Result<String, String> {
+    parse_source(source)?;
+    let paths = identity_bundle_paths(dir, Some(source))?;
+    let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {
+        format!(
+            "identity trust registry required at {}",
+            paths.trust_file.display()
+        )
+    })?;
+    let grant = load_grant(&path_string(&paths.grant_file))?;
+    verify_grant(&grant, &trust, now_millis())?;
+    if grant.grant.source != source {
+        return Err(format!(
+            "grant source is {}, expected {source}",
+            grant.grant.source
+        ));
+    }
+    verify_source_key_matches_grant(&paths.source_key_path, &grant)?;
+
+    let mut active = load_active_grants_at(&paths.active_grants_file, false)?.unwrap_or_default();
+    let repaired_active = match active.sources.get(source) {
+        Some(entry) if active_entry_matches_grant(entry, &grant) => false,
+        Some(_) => {
+            return Err(format!(
+                "active grant registry {} already has a different current grant for {source}; \
+                 refusing to overwrite it",
+                paths.active_grants_file.display()
+            ));
+        }
+        None => {
+            active
+                .sources
+                .insert(source.to_string(), active_source_grant_for(&grant));
+            write_active_grants_path(&paths.active_grants_file, &active)?;
+            true
+        }
+    };
+    write_identity_env(&paths)?;
+
+    let mut lines = vec![
+        format!("repaired signed identity env for {source}"),
+        format!("  env: {}", paths.env_file.display()),
+        format!("  active grants: {}", paths.active_grants_file.display()),
+    ];
+    if repaired_active {
+        lines.push("  active grants: restored current grant entry from signed grant".to_string());
+    }
+    lines.push(String::new());
+    lines.push(format!(
+        "Next:\n  dent8 identity status --dir {} --source {source}\n  dent8 doctor --source {source} --write-check",
+        shell_quote(&path_string(&paths.dir))
+    ));
+    Ok(lines.join("\n"))
 }
 
 #[allow(clippy::too_many_lines)]
