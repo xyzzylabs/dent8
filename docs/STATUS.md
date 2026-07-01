@@ -217,7 +217,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   sandbox against malware or another process running as the same OS user; direct DB/adapter
   writes still bypass the CLI/MCP boundary. See
   [ADR 0012](decisions/0012-signed-source-identity.md).
-- **`dent8 witness keygen | sign | verify | head | serve`** — the **witness** (behind
+- **`dent8 witness keygen | sign | verify | head | serve | doctor`** — the **witness** (behind
   `--features witness`), built on the Ed25519 signed tree head. `keygen` writes a keypair
   (private key `0600`, with the warning to keep it off the log-writer's machine); `sign` emits
   a signed tree head over the current log and appends it to a witness log
@@ -227,10 +227,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   and a truncation/reorder as `ROLLBACK`. **`serve [interval] [max-heads]`** is the **cadence
   signer** — it signs the head whenever the log grows, the loop a separate operator runs; and
   **`head`** prints the latest signed head as JSON to **publish**. `dent8 init --witness`
-  configures verifier-side paths and `dent8 doctor` reports witness coverage. What is *built*
-  is the mechanism (cadence signing + publishable heads + setup/doctor visibility); what
-  remains *operational* is running it on a host separate from the writer, with key rotation and
-  external head publication/monitoring. See [witness.md](witness.md).
+  configures verifier-side paths, `dent8 doctor` reports witness coverage, and
+  **`doctor <writer|signer|both>`** validates the operator split (writer/verifier env must have
+  the log + public key and must not have the private key; signer env must have the private key
+  and a matching public key). What is *built* is the mechanism (cadence signing + publishable
+  heads + setup/doctor visibility + role readiness checks); what remains *operational* is
+  running it on a host separate from the writer, with key rotation and external head
+  publication/monitoring. See [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
   `completion` and `autocomplete` are accepted.
@@ -425,11 +428,11 @@ subject+predicate.
 - **A published anchor cadence / *operated* witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now
-  runnable end-to-end as **`dent8 witness keygen | sign | verify`** (Runnable, above), with
-  `init --witness` and `doctor` support for verifier-side configuration and coverage checks.
-  What is still design-only is the *operated* piece: a witness running on **separate
-  infrastructure** that signs on a cadence and **publishes** the head (so the key is provably
-  off the writer), plus key rotation.
+  runnable end-to-end as **`dent8 witness keygen | sign | verify | serve | doctor`** (Runnable,
+  above), with `init --witness`, coverage checks, and writer/signer role readiness checks. What
+  is still design-only is the *operated* piece: packaging/running the witness on **separate
+  infrastructure** and **publishing** the head to an external monitor (so the key is provably
+  off the writer and the witness log itself cannot be silently rolled back), plus key rotation.
 
 ## How to keep this honest
 

@@ -266,6 +266,63 @@ fn doctor_without_witness_feature_fails_closed_when_signed_heads_exist() {
 
 #[cfg(feature = "witness")]
 #[test]
+fn witness_doctor_checks_writer_signer_separation() {
+    let temp = TempDir::new();
+    let key = temp.file("witness.key").to_string_lossy().into_owned();
+    let pubkey = format!("{key}.pub");
+    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    fs::write(&witness_log, "").expect("witness log");
+
+    assert_success(
+        &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
+        "witness keygen",
+    );
+
+    let writer_env = [
+        ("DENT8_WITNESS_LOG", witness_log.as_str()),
+        ("DENT8_WITNESS_PUBKEY", pubkey.as_str()),
+    ];
+    let writer = run_dent8(&["witness", "doctor", "writer"], &writer_env);
+    assert_success(&writer, "witness doctor writer");
+    let writer_stdout = stdout(&writer);
+    assert!(
+        writer_stdout.contains("witness writer env: DENT8_WITNESS_KEY is not set"),
+        "{writer_stdout}"
+    );
+
+    let contaminated_writer = run_dent8(
+        &["witness", "doctor", "writer"],
+        &[
+            ("DENT8_WITNESS_LOG", witness_log.as_str()),
+            ("DENT8_WITNESS_PUBKEY", pubkey.as_str()),
+            ("DENT8_WITNESS_KEY", key.as_str()),
+        ],
+    );
+    assert_eq!(contaminated_writer.status.code(), Some(1));
+    let contaminated_stdout = stdout(&contaminated_writer);
+    assert!(
+        contaminated_stdout.contains("FAIL  witness writer env: DENT8_WITNESS_KEY is set"),
+        "{contaminated_stdout}"
+    );
+
+    let signer = run_dent8(
+        &["witness", "doctor", "signer"],
+        &[
+            ("DENT8_WITNESS_LOG", witness_log.as_str()),
+            ("DENT8_WITNESS_KEY", key.as_str()),
+        ],
+    );
+    assert_success(&signer, "witness doctor signer");
+    let signer_stdout = stdout(&signer);
+    assert!(
+        signer_stdout.contains("witness signer env: public key")
+            && signer_stdout.contains("matches the signing key"),
+        "{signer_stdout}"
+    );
+}
+
+#[cfg(feature = "witness")]
+#[test]
 fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

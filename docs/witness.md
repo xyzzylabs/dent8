@@ -59,7 +59,20 @@ export DENT8_WITNESS_KEY=/secure/witness.key
 
 dent8 witness keygen
 cp /secure/witness.key.pub /shared/dent8/witness.key.pub
+dent8 witness doctor signer
 dent8 witness serve 5
+```
+
+After the witness host copies the public key, load the generated verifier env in the
+writer/agent process and check that it does not include the private signing key:
+
+```sh
+set -a
+. .dent8/env
+set +a
+
+dent8 witness doctor writer
+dent8 doctor
 ```
 
 The witness signs on growth. A later `dent8 witness verify` checks every signed head against
@@ -82,6 +95,15 @@ the current log prefix and reports:
 If the latest witnessed count trails the current event count, `doctor` warns instead of
 failing. That means the verified prefix is intact, but recent events have not yet been signed
 by the witness cadence.
+
+`dent8 witness doctor <writer|signer|both>` checks the operational split directly:
+
+- `writer` requires `DENT8_WITNESS_LOG` and `DENT8_WITNESS_PUBKEY`, verifies that the public
+  key decodes, and fails if `DENT8_WITNESS_KEY` is present in the writer/agent/MCP process.
+- `signer` requires `DENT8_WITNESS_LOG` and `DENT8_WITNESS_KEY`, checks the private key
+  decodes, checks owner-only permissions on Unix, and verifies that the public key matches.
+- `both` is for local demos only; it runs both sets of checks and warns that the roles are
+  colocated.
 
 ## Security Boundaries
 

@@ -962,10 +962,11 @@ fn run_witness(args: &[String]) -> i32 {
         [sub] if sub == "verify" => witness::verify(),
         [sub] if sub == "head" => witness::head(),
         [sub, rest @ ..] if sub == "serve" => witness::serve(rest),
+        [sub, rest @ ..] if sub == "doctor" => witness::doctor(rest),
         _ => {
             eprintln!(
-                "usage: dent8 witness <keygen | sign | verify | head | \
-                 serve [interval-seconds] [max-heads]>"
+                "usage: dent8 witness <keygen | sign | verify | head | serve \
+                 [interval-seconds] [max-heads] | doctor <writer|signer|both>>"
             );
             2
         }

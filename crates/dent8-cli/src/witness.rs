@@ -332,6 +332,26 @@ pub fn verify() -> i32 {
     }
 }
 
+/// Check witness operator readiness for one side of the deployment boundary.
+pub fn doctor(args: &[String]) -> i32 {
+    let role = match args {
+        [role] if role == "writer" || role == "verifier" => WitnessDoctorRole::Writer,
+        [role] if role == "signer" => WitnessDoctorRole::Signer,
+        [role] if role == "both" || role == "local" => WitnessDoctorRole::Both,
+        _ => {
+            eprintln!("usage: dent8 witness doctor <writer|signer|both>");
+            return 2;
+        }
+    };
+
+    let lines = role.doctor_lines();
+    let ok = lines.iter().all(|line| line.ok);
+    for line in lines {
+        println!("{}  {}", line.level, line.message);
+    }
+    if ok { 0 } else { 1 }
+}
+
 pub(crate) struct DoctorLine {
     pub(crate) level: &'static str,
     pub(crate) message: String,
@@ -361,6 +381,178 @@ impl DoctorLine {
             message: message.into(),
             ok: false,
         }
+    }
+}
+
+enum WitnessDoctorRole {
+    Writer,
+    Signer,
+    Both,
+}
+
+impl WitnessDoctorRole {
+    fn doctor_lines(&self) -> Vec<DoctorLine> {
+        match self {
+            Self::Writer => writer_doctor_lines(false),
+            Self::Signer => signer_doctor_lines(),
+            Self::Both => {
+                let mut lines = vec![DoctorLine::warn(
+                    "witness local mode: writer and signer checks are running in one process; use this only for local demos",
+                )];
+                lines.extend(writer_doctor_lines(true));
+                lines.extend(signer_doctor_lines());
+                lines
+            }
+        }
+    }
+}
+
+fn writer_doctor_lines(allow_signing_key: bool) -> Vec<DoctorLine> {
+    let mut lines = vec![DoctorLine::ok(
+        "witness writer env: checking verifier-side configuration",
+    )];
+    match env_value("DENT8_WITNESS_LOG") {
+        Some(path) => lines.push(witness_log_line("witness writer env", &path)),
+        None => lines.push(DoctorLine::fail(
+            "witness writer env: set DENT8_WITNESS_LOG to the signed-head log path",
+        )),
+    }
+    match env_value("DENT8_WITNESS_PUBKEY") {
+        Some(path) => match load_verifying_key_from(&path) {
+            Ok(_) => lines.push(DoctorLine::ok(format!(
+                "witness writer env: public key {path} decodes"
+            ))),
+            Err(error) => lines.push(DoctorLine::fail(format!("witness writer env: {error}"))),
+        },
+        None => lines.push(DoctorLine::fail(
+            "witness writer env: set DENT8_WITNESS_PUBKEY to the witness public key",
+        )),
+    }
+    match env_value("DENT8_WITNESS_KEY") {
+        Some(_) if allow_signing_key => lines.push(DoctorLine::warn(
+            "witness writer env: DENT8_WITNESS_KEY is set; acceptable only for local demos",
+        )),
+        Some(_) => lines.push(DoctorLine::fail(
+            "witness writer env: DENT8_WITNESS_KEY is set; remove the private signing key from writer/agent/MCP environment",
+        )),
+        None => lines.push(DoctorLine::ok(
+            "witness writer env: DENT8_WITNESS_KEY is not set",
+        )),
+    }
+    lines
+}
+
+fn signer_doctor_lines() -> Vec<DoctorLine> {
+    let mut lines = vec![DoctorLine::ok(
+        "witness signer env: checking signing-side configuration",
+    )];
+    match env_value("DENT8_WITNESS_LOG") {
+        Some(path) => lines.push(witness_log_line("witness signer env", &path)),
+        None => lines.push(DoctorLine::fail(
+            "witness signer env: set DENT8_WITNESS_LOG to the signed-head log path",
+        )),
+    }
+    let Some(key_path) = env_value("DENT8_WITNESS_KEY") else {
+        lines.push(DoctorLine::fail(
+            "witness signer env: set DENT8_WITNESS_KEY to the private witness signing key",
+        ));
+        return lines;
+    };
+
+    let signing = match load_signing_key_from(&key_path) {
+        Ok(signing) => {
+            lines.push(DoctorLine::ok(format!(
+                "witness signer env: signing key {key_path} decodes"
+            )));
+            Some(signing)
+        }
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("witness signer env: {error}")));
+            None
+        }
+    };
+    lines.push(secret_permissions_line("witness signer env", &key_path));
+
+    let pubkey_path =
+        env_value("DENT8_WITNESS_PUBKEY").unwrap_or_else(|| public_key_path(&key_path));
+    match (signing.as_ref(), load_verifying_key_from(&pubkey_path)) {
+        (Some(signing), Ok(verifying))
+            if verifying.to_bytes() == signing.verifying_key().to_bytes() =>
+        {
+            lines.push(DoctorLine::ok(format!(
+                "witness signer env: public key {pubkey_path} matches the signing key"
+            )));
+        }
+        (Some(_), Ok(_)) => lines.push(DoctorLine::fail(format!(
+            "witness signer env: public key {pubkey_path} does not match the signing key"
+        ))),
+        (None, Ok(_)) => {}
+        (_, Err(error)) => lines.push(DoctorLine::fail(format!("witness signer env: {error}"))),
+    }
+    lines
+}
+
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn witness_log_line(prefix: &str, path: &str) -> DoctorLine {
+    let path_ref = std::path::Path::new(path);
+    match std::fs::metadata(path_ref) {
+        Ok(metadata) if metadata.is_file() => {
+            DoctorLine::ok(format!("{prefix}: witness log {path} exists"))
+        }
+        Ok(_) => DoctorLine::fail(format!("{prefix}: witness log {path} is not a file")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent_ready = path_ref
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .map_or(true, |parent| parent.exists());
+            if parent_ready {
+                DoctorLine::warn(format!(
+                    "{prefix}: witness log {path} does not exist yet; it will be created on first signature"
+                ))
+            } else {
+                DoctorLine::fail(format!(
+                    "{prefix}: parent directory for witness log {path} does not exist"
+                ))
+            }
+        }
+        Err(error) => {
+            DoctorLine::fail(format!("{prefix}: cannot stat witness log {path}: {error}"))
+        }
+    }
+}
+
+fn secret_permissions_line(prefix: &str, path: &str) -> DoctorLine {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::metadata(path) {
+            Ok(metadata) => {
+                let mode = metadata.permissions().mode() & 0o777;
+                if mode & 0o077 == 0 {
+                    DoctorLine::ok(format!("{prefix}: signing key permissions are owner-only"))
+                } else {
+                    DoctorLine::fail(format!(
+                        "{prefix}: signing key {path} has permissions {mode:o}; expected 600 or stricter"
+                    ))
+                }
+            }
+            Err(error) => {
+                DoctorLine::fail(format!("{prefix}: cannot stat signing key {path}: {error}"))
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        DoctorLine::warn(format!(
+            "{prefix}: signing key permissions were not checked on this platform"
+        ))
     }
 }
 
@@ -518,16 +710,24 @@ fn verify_heads(
 
 fn load_signing_key() -> Result<SigningKey, String> {
     let path = key_path();
-    let raw = std::fs::read_to_string(&path).map_err(|error| {
+    load_signing_key_from(&path)
+}
+
+fn load_signing_key_from(path: &str) -> Result<SigningKey, String> {
+    let raw = std::fs::read_to_string(path).map_err(|error| {
         format!("cannot read witness key {path}: {error} (run `dent8 witness keygen`)")
     })?;
-    let bytes = decode_key_bytes(raw.trim(), &path)?;
+    let bytes = decode_key_bytes(raw.trim(), path)?;
     Ok(SigningKey::from_bytes(&bytes))
 }
 
 fn load_verifying_key() -> Result<VerifyingKey, String> {
     let path = verifying_key_path();
-    let raw = std::fs::read_to_string(&path)
+    load_verifying_key_from(&path)
+}
+
+fn load_verifying_key_from(path: &str) -> Result<VerifyingKey, String> {
+    let raw = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read witness public key {path}: {error}"))?;
     let bytes = decode_key_bytes(raw.trim(), &path)?;
     VerifyingKey::from_bytes(&bytes).map_err(|error| format!("{path}: invalid public key: {error}"))
