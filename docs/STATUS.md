@@ -44,7 +44,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   If `--mcp-command` is omitted,
   the expected command is read from the installed config; pass it only to assert a specific
   expected command. By default it is read-only; with `--write-check`, it runs an explicit
-  Alice-style acceptance probe against the configured store: high-authority
+  Alice-style acceptance probe through the installed MCP server against the configured store:
+  high-authority
   `favorite_drink=tea` is accepted, a low-authority supersession to `coffee` from the same
   configured source is rejected, `explain` still returns `tea`, and `verify` passes.
 - **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a

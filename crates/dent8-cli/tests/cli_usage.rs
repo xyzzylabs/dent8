@@ -465,8 +465,12 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     assert!(stdout.contains("agent mcp config: up to date"));
     assert!(stdout.contains("source:codex max=High"));
     assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
-    assert!(stdout.contains("write-check: accepted trusted person:alice-doctor-"));
     assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+    assert!(stdout.contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"));
+    assert!(
+        !stdout.contains("  OK  write-check: accepted trusted person:alice-doctor-"),
+        "{stdout}"
+    );
 }
 
 #[cfg(feature = "identity")]

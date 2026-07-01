@@ -63,7 +63,7 @@ identity bundle together:
 
 ```sh
 dent8 init --agent codex --install-mcp    # source:codex + signed identity + Codex config
-dent8 doctor --agent codex --write-check  # installed MCP smoke + firewall write-check
+dent8 doctor --agent codex --write-check  # installed MCP smoke + MCP firewall write-check
 ```
 
 Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP config later
@@ -74,7 +74,8 @@ available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade
 `hecate`. The installer writes `command = "dent8"` by default, so Codex, Claude Code, Cursor,
 Gemini, Grok Build, Cascade, and Hecate can all use one globally installed binary; pass
 `--mcp-command` / `--command` if the binary lives elsewhere; `doctor --agent` reads the installed
-config back and smokes that exact command/args/cwd/env. Stdio MCP clients normally launch their own
+config back, smokes that exact command/args/cwd/env, and can run the write-check through that
+installed MCP server. Stdio MCP clients normally launch their own
 dent8 subprocess, but those processes can share the same operational belief base by using the
 same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while keeping
 distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP daemon over
@@ -186,7 +187,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 doctor [--agent <profile>] [--write-check]`: inspect binary, store, authority,
   verify, MCP availability; with `--agent`, validate the generated bundle/config and smoke
   `mcp serve` with `initialize` + `tools/list`;
-  with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow.
+  with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow (through
+  the installed MCP server for agent profiles).
 - `dent8 identity bootstrap`: create a local signed source identity bundle (operator issuer
   key outside the bundle, source key, trust registry, grant, and `.dent8/identity.env`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact

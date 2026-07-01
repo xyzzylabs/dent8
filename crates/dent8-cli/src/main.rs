@@ -1987,7 +1987,7 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         }
     }
 
-    match run_doctor_with_env(source, args.write_check, &installed.env) {
+    match run_doctor_with_env(source, false, &installed.env, !args.write_check) {
         Ok(child) => {
             output.push_str(&child);
         }
@@ -2002,6 +2002,16 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         Err(error) => {
             ok = false;
             doctor_line(&mut output, "FAIL", &format!("mcp smoke: {error}"));
+        }
+    }
+
+    if args.write_check {
+        match mcp_write_check_with_server(&installed, source) {
+            Ok(message) => doctor_line(&mut output, "OK", &message),
+            Err(error) => {
+                ok = false;
+                doctor_line(&mut output, "FAIL", &format!("mcp write-check: {error}"));
+            }
         }
     }
 
@@ -2050,6 +2060,7 @@ fn run_doctor_with_env(
     source: &str,
     write_check: bool,
     env: &std::collections::BTreeMap<String, String>,
+    include_write_check_skip: bool,
 ) -> Result<String, String> {
     let mut command = Command::new(
         std::env::current_exe().map_err(|error| format!("doctor: current exe: {error}"))?,
@@ -2075,6 +2086,9 @@ fn run_doctor_with_env(
         .lines()
         .skip_while(|line| line.trim() == "dent8 doctor")
     {
+        if !include_write_check_skip && line.contains("write-check: skipped") {
+            continue;
+        }
         forwarded.push_str(line);
         forwarded.push('\n');
     }
@@ -2082,77 +2096,19 @@ fn run_doctor_with_env(
 }
 
 fn mcp_smoke_with_server(server: &mcp_config::InstalledServer) -> Result<String, String> {
-    let mut command = Command::new(&server.command);
-    command
-        .args(&server.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(cwd) = &server.cwd {
-        command.current_dir(cwd);
-    }
-    apply_dent8_env(&mut command, &server.env);
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not start `{}`: {error}", server.display_command()))?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| "could not open mcp stdin".to_string())?;
-        let initialize = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2025-11-25",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "dent8-doctor",
-                    "version": env!("CARGO_PKG_VERSION"),
-                },
-            },
-        });
-        let initialized = serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-        });
-        let tools_list = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-        });
-        let requests = format!("{initialize}\n{initialized}\n{tools_list}\n");
-        stdin
-            .write_all(requests.as_bytes())
-            .map_err(|error| format!("could not write mcp smoke request: {error}"))?;
-    }
-    drop(child.stdin.take());
-    let timeout = mcp_smoke_timeout();
-    let output = wait_with_output_timeout(child, timeout)
-        .map_err(|error| format!("could not wait for mcp smoke: {error}"))?;
-    if output.timed_out {
-        return Err(format!(
-            "`{}` timed out after {} during mcp smoke\nstderr:\n{}",
-            server.display_command(),
-            format_duration(timeout),
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    if !output.status.success() {
-        return Err(format!(
-            "`{}` exited {}\nstderr:\n{}",
-            server.display_command(),
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let responses = stdout
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("invalid JSON-RPC response: {error}"))?;
+    let responses = mcp_exchange_with_server(
+        server,
+        &[
+            mcp_initialize_request(1),
+            mcp_initialized_notification(),
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+            }),
+        ],
+        "mcp smoke",
+    )?;
     if responses.len() != 2 {
         return Err(format!(
             "expected 2 JSON-RPC responses, got {}",
@@ -2177,6 +2133,219 @@ fn mcp_smoke_with_server(server: &mcp_config::InstalledServer) -> Result<String,
         "mcp smoke: initialize + tools/list OK ({} tool(s))",
         tools.len()
     ))
+}
+
+fn mcp_write_check_with_server(
+    server: &mcp_config::InstalledServer,
+    source: &str,
+) -> Result<String, String> {
+    let subject_key = format!(
+        "alice-doctor-mcp-{}-{}",
+        std::process::id(),
+        now_millis().as_unix_millis()
+    );
+    let responses = mcp_exchange_with_server(
+        server,
+        &[
+            mcp_initialize_request(1),
+            mcp_initialized_notification(),
+            mcp_tool_call(
+                2,
+                "assert",
+                &mcp_value_fact_args(&subject_key, "tea", "high", source),
+            ),
+            mcp_tool_call(
+                3,
+                "supersede",
+                &mcp_value_fact_args(&subject_key, "coffee", "low", source),
+            ),
+            mcp_tool_call(4, "explain", &mcp_read_fact_args(&subject_key)),
+            mcp_tool_call(5, "verify", &serde_json::json!({})),
+        ],
+        "mcp write-check",
+    )?;
+    if responses.len() != 5 {
+        return Err(format!(
+            "expected 5 JSON-RPC responses, got {}",
+            responses.len()
+        ));
+    }
+    if responses[0]["result"]["serverInfo"]["name"] != "dent8" {
+        return Err("initialize did not return dent8 serverInfo".to_string());
+    }
+
+    let asserted = mcp_tool_result(&responses[1], "assert")?;
+    if asserted["isError"].as_bool() != Some(false)
+        || asserted["structuredContent"]["status"] != "accepted"
+    {
+        return Err(format!("trusted assert was not accepted: {asserted}"));
+    }
+
+    let superseded = mcp_tool_result(&responses[2], "supersede")?;
+    if superseded["isError"].as_bool() != Some(true)
+        || superseded["structuredContent"]["status"] != "rejected"
+    {
+        return Err(format!(
+            "low-authority supersede was not rejected: {superseded}"
+        ));
+    }
+
+    let explained = mcp_tool_result(&responses[3], "explain")?;
+    if explained["isError"].as_bool() != Some(false) {
+        return Err(format!("explain failed: {explained}"));
+    }
+    if explained["structuredContent"]["current_value"]["text"] != "tea" {
+        return Err(format!(
+            "expected trusted value tea to remain; got {}",
+            explained["structuredContent"]["current_value"]
+        ));
+    }
+
+    let verified = mcp_tool_result(&responses[4], "verify")?;
+    if verified["isError"].as_bool() != Some(false)
+        || verified["structuredContent"]["integrity_verified"] != true
+    {
+        return Err(format!("verify failed or reported findings: {verified}"));
+    }
+
+    Ok(format!(
+        "mcp write-check: accepted trusted person:{subject_key} favorite_drink=tea, rejected low-authority coffee, explain+verify OK"
+    ))
+}
+
+fn mcp_exchange_with_server(
+    server: &mcp_config::InstalledServer,
+    requests: &[serde_json::Value],
+    operation: &str,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut command = Command::new(&server.command);
+    command
+        .args(&server.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(cwd) = &server.cwd {
+        command.current_dir(cwd);
+    }
+    apply_dent8_env(&mut command, &server.env);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start `{}`: {error}", server.display_command()))?;
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "could not open mcp stdin".to_string())?;
+        let requests = format!(
+            "{}\n",
+            requests
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        stdin
+            .write_all(requests.as_bytes())
+            .map_err(|error| format!("could not write {operation} request: {error}"))?;
+    }
+    drop(child.stdin.take());
+    let timeout = mcp_smoke_timeout();
+    let output = wait_with_output_timeout(child, timeout)
+        .map_err(|error| format!("could not wait for {operation}: {error}"))?;
+    if output.timed_out {
+        return Err(format!(
+            "`{}` timed out after {} during {operation}\nstderr:\n{}",
+            server.display_command(),
+            format_duration(timeout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    if !output.status.success() {
+        return Err(format!(
+            "`{}` exited {}\nstderr:\n{}",
+            server.display_command(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let responses = stdout
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("invalid JSON-RPC response: {error}"))?;
+    Ok(responses)
+}
+
+fn mcp_initialize_request(id: u64) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "dent8-doctor",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+        },
+    })
+}
+
+fn mcp_initialized_notification() -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    })
+}
+
+fn mcp_tool_call(id: u64, name: &str, arguments: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": name,
+            "arguments": arguments,
+        },
+    })
+}
+
+fn mcp_value_fact_args(
+    subject_key: &str,
+    value: &str,
+    authority: &str,
+    source: &str,
+) -> serde_json::Value {
+    let mut args = mcp_read_fact_args(subject_key);
+    let object = args
+        .as_object_mut()
+        .expect("mcp_read_fact_args returns object");
+    object.insert("value".to_string(), serde_json::json!(value));
+    object.insert("authority".to_string(), serde_json::json!(authority));
+    object.insert("source".to_string(), serde_json::json!(source));
+    args
+}
+
+fn mcp_read_fact_args(subject_key: &str) -> serde_json::Value {
+    serde_json::json!({
+        "subject_kind": "person",
+        "subject_key": subject_key,
+        "predicate": "favorite_drink",
+    })
+}
+
+fn mcp_tool_result<'a>(
+    response: &'a serde_json::Value,
+    tool_name: &str,
+) -> Result<&'a serde_json::Value, String> {
+    if let Some(error) = response.get("error") {
+        return Err(format!("{tool_name} returned protocol error: {error}"));
+    }
+    response
+        .get("result")
+        .ok_or_else(|| format!("{tool_name} response is missing result: {response}"))
 }
 
 struct TimedCommandOutput {

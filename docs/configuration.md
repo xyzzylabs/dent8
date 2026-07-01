@@ -133,8 +133,8 @@ daemon transport needs per-request source authentication rather than one process
 
 Use `dent8 doctor --agent <profile> --write-check` as the post-install green light. It reads
 the generated bundle directly, parses the selected agent's installed MCP config, smokes that
-exact command/args/cwd/env, and runs the trusted-fact / low-authority-rejection probe with the
-agent source id.
+exact command/args/cwd/env, and runs the trusted-fact / low-authority-rejection probe through
+that installed MCP server with the agent source id.
 
 See [STATUS.md](STATUS.md) for what each surface does, and [storage.md](storage.md) for the
 backend design.
