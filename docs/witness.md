@@ -28,6 +28,8 @@ DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness sign
 
 dent8 doctor
 dent8 witness verify
+dent8 witness head >> /tmp/dent8-published-heads.jsonl
+dent8 witness verify-published /tmp/dent8-published-heads.jsonl
 ```
 
 `dent8 init --witness` writes verification config only:
@@ -82,6 +84,32 @@ the current log prefix and reports:
 - `TAMPER` when a previously witnessed prefix was rewritten.
 - `ROLLBACK` when the log or witness log moved backwards.
 
+## Published Heads
+
+The local witness log is useful evidence, but it is still local state. To catch deletion or
+rollback of that log, publish signed heads somewhere the writer cannot rewrite: a CI artifact,
+Git history, object storage with retention, or a second host.
+
+After `dent8 witness sign` or while `dent8 witness serve` is running:
+
+```sh
+dent8 witness head >> /external/dent8-published-heads.jsonl
+```
+
+From a verifier/monitor process that has the current event log and the witness public key:
+
+```sh
+export DENT8_LOG=/shared/dent8/memory.jsonl
+export DENT8_WITNESS_PUBKEY=/shared/dent8/witness.key.pub
+
+dent8 witness verify-published /external/dent8-published-heads.jsonl
+```
+
+`verify-published` does not read `DENT8_WITNESS_LOG`; it checks the externally saved heads
+against the current event log prefix and public key. It fails if the published file is empty,
+if the current log is shorter than a published count (`ROLLBACK`), or if a published prefix was
+rewritten (`TAMPER`).
+
 ## Doctor Checks
 
 `dent8 doctor` now reports witness status when witness paths are configured:
@@ -115,7 +143,8 @@ The guarantee is only as strong as the witness deployment:
 - Same-machine dev witness: catches accidental rewrites and demonstrates the path.
 - Separate witness with off-writer signing key: catches a writer that rewrites and recomputes
   the local hash chain.
-- Published heads: catch deletion or rollback of the witness log itself.
+- Published heads plus `verify-published`: catch deletion or rollback of the witness log
+  itself, assuming the published-heads file lives outside the writer's control.
 
-Remaining product work: key rotation, head publication/monitoring, and a hosted or
+Remaining product work: key rotation, managed head publication/monitoring, and a hosted or
 team-operated witness service.

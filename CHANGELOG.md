@@ -45,10 +45,11 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   trust registry, when the grant source/key/scope does not match the write, or when the write
   exceeds the grant's authority ceiling ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).
 - **Witness** (`dent8 witness`, `--features witness`): Ed25519 signed tree heads with
-  `keygen` / `sign` / `verify` / `head` / `serve` (cadence signer) to detect a history
-  rewrite or rollback, plus `doctor <writer|signer|both>` role checks so operated setups can
-  verify that writer/agent/MCP envs have only verifier material while the signer holds the
-  private key.
+  `keygen` / `sign` / `verify` / `verify-published` / `head` / `serve` (cadence signer) to
+  detect a history rewrite, event-log rollback, or local witness-log rollback when a monitor
+  retains externally published heads. `doctor <writer|signer|both>` role checks help operated
+  setups verify that writer/agent/MCP envs have only verifier material while the signer holds
+  the private key.
 - **Evidence-dependency edges + retraction taint** (ADR 0010): `dent8 derive` records a
   claim→claim derivation; `dent8 verify` flags a believed claim deriving from a
   retracted/expired source ("poison does not survive in derivatives").

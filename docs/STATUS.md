@@ -217,23 +217,26 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   sandbox against malware or another process running as the same OS user; direct DB/adapter
   writes still bypass the CLI/MCP boundary. See
   [ADR 0012](decisions/0012-signed-source-identity.md).
-- **`dent8 witness keygen | sign | verify | head | serve | doctor`** — the **witness** (behind
-  `--features witness`), built on the Ed25519 signed tree head. `keygen` writes a keypair
-  (private key `0600`, with the warning to keep it off the log-writer's machine); `sign` emits
-  a signed tree head over the current log and appends it to a witness log
-  (`DENT8_WITNESS_LOG`); `verify` re-checks every witnessed head against the current log's
+- **`dent8 witness keygen | sign | verify | verify-published | head | serve | doctor`** — the
+  **witness** (behind `--features witness`), built on the Ed25519 signed tree head. `keygen`
+  writes a keypair (private key `0600`, with the warning to keep it off the log-writer's
+  machine); `sign` emits a signed tree head over the current log and appends it to a witness
+  log (`DENT8_WITNESS_LOG`); `verify` re-checks every witnessed head against the current log's
   matching **prefix** and that the counts never decrease — catching a history **rewrite**
   (a re-hashed-forward edit an internal `verify_chain` cannot, threat-model T6) as `TAMPER`
   and a truncation/reorder as `ROLLBACK`. **`serve [interval] [max-heads]`** is the **cadence
   signer** — it signs the head whenever the log grows, the loop a separate operator runs; and
-  **`head`** prints the latest signed head as JSON to **publish**. `dent8 init --witness`
-  configures verifier-side paths, `dent8 doctor` reports witness coverage, and
+  **`head`** prints the latest signed head as JSON to **publish**.
+  **`verify-published <heads.jsonl>`** verifies externally saved JSONL heads against the current
+  log and public key without reading `DENT8_WITNESS_LOG`, so a local witness-log rollback can
+  be detected by a monitor that retained a later head. `dent8 init --witness` configures
+  verifier-side paths, `dent8 doctor` reports witness coverage, and
   **`doctor <writer|signer|both>`** validates the operator split (writer/verifier env must have
   the log + public key and must not have the private key; signer env must have the private key
   and a matching public key). What is *built* is the mechanism (cadence signing + publishable
-  heads + setup/doctor visibility + role readiness checks); what remains *operational* is
-  running it on a host separate from the writer, with key rotation and external head
-  publication/monitoring. See [witness.md](witness.md).
+  heads + verification of externally saved heads + setup/doctor visibility + role readiness
+  checks); what remains *operational* is packaging/running it separately, key rotation, and
+  managed head publication/monitoring. See [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
   `completion` and `autocomplete` are accepted.
@@ -428,11 +431,11 @@ subject+predicate.
 - **A published anchor cadence / *operated* witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now
-  runnable end-to-end as **`dent8 witness keygen | sign | verify | serve | doctor`** (Runnable,
-  above), with `init --witness`, coverage checks, and writer/signer role readiness checks. What
-  is still design-only is the *operated* piece: packaging/running the witness on **separate
-  infrastructure** and **publishing** the head to an external monitor (so the key is provably
-  off the writer and the witness log itself cannot be silently rolled back), plus key rotation.
+  runnable end-to-end as **`dent8 witness keygen | sign | verify | verify-published | serve |
+  doctor`** (Runnable, above), with `init --witness`, coverage checks, writer/signer role
+  readiness checks, and verification of externally saved heads. What is still design-only is
+  the *operated* piece: packaging/running the witness on **separate infrastructure**, managed
+  publication/monitoring of heads, and key rotation.
 
 ## How to keep this honest
 

@@ -38,9 +38,10 @@ What remains to make it a hardened multi-user product:
   the CLI/MCP boundary. Product hardening remains: key distribution/rotation, hardware or
   secret-store-backed keys, and team policy workflows.
 - **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
-  role doctor checks now validate writer/signer separation. The remaining product work is
-  packaging/running it on separate infrastructure, publishing heads, monitoring
-  rollback/rewrite alarms, and rotating keys.
+  role doctor checks validate writer/signer separation, and `verify-published` verifies
+  externally saved heads so local witness-log rollback is visible. The remaining product work
+  is packaging/running it on separate infrastructure, managed head publication/monitoring, and
+  rotating keys.
 - **Production ergonomics and heavy-concurrency polish.** The Postgres adapter serializes
   appends and the CLI retries id collisions, but DB-assigned ids remain the end-state for
   heavy write fan-out.

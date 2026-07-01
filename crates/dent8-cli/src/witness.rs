@@ -332,6 +332,70 @@ pub fn verify() -> i32 {
     }
 }
 
+/// Verify externally published signed heads against the current event log and public key.
+///
+/// This is the monitor-side check for the residual that local `witness verify` cannot close:
+/// the witness log itself can be rolled back by someone who controls the writer's storage. A
+/// published-heads file is expected to live somewhere outside that control boundary (CI
+/// artifact, Git history, object storage, another host) and contain JSON lines printed by
+/// `dent8 witness head`.
+pub fn verify_published(args: &[String]) -> i32 {
+    let path = match args {
+        [path] => path,
+        _ => {
+            eprintln!("usage: dent8 witness verify-published <published-heads.jsonl>");
+            return 2;
+        }
+    };
+    let events = match load_events() {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let verifying = match load_verifying_key() {
+        Ok(key) => key,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let heads = match load_signed_heads(path, "published heads", false) {
+        Ok(heads) => heads,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    if heads.is_empty() {
+        eprintln!(
+            "no published signed tree heads in {path} — cannot prove external witness coverage"
+        );
+        return 1;
+    }
+    match verify_heads(&events, &heads, &verifying) {
+        Ok(()) => {
+            let head_count = heads.last().map_or(0, |sth| sth.event_count);
+            println!(
+                "OK: {} published signed tree head(s) verify from {path} — latest published \
+                 count {head_count}, current log {} events",
+                heads.len(),
+                events.len()
+            );
+            0
+        }
+        Err(WitnessFault::CannotVerify(message)) => {
+            eprintln!("published-head verification could not be performed: {message}");
+            2
+        }
+        Err(WitnessFault::Detected(message)) => {
+            eprintln!("{message}");
+            1
+        }
+    }
+}
+
 /// Check witness operator readiness for one side of the deployment boundary.
 pub fn doctor(args: &[String]) -> i32 {
     let role = match args {
@@ -742,10 +806,20 @@ fn decode_key_bytes(raw: &str, path: &str) -> Result<[u8; 32], String> {
 
 fn load_witness_log() -> Result<Vec<SignedTreeHead>, String> {
     let path = witness_log_path();
-    let contents = match std::fs::read_to_string(&path) {
+    load_signed_heads(&path, "witness log", true)
+}
+
+fn load_signed_heads(
+    path: &str,
+    label: &str,
+    missing_is_empty: bool,
+) -> Result<Vec<SignedTreeHead>, String> {
+    let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(format!("cannot read witness log {path}: {error}")),
+        Err(error) if missing_is_empty && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(format!("cannot read {label} {path}: {error}")),
     };
     contents
         .lines()

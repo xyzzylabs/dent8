@@ -47,9 +47,11 @@ Verification:
 
 ```sh
 dent8 witness verify
-dent8 witness head
+dent8 witness head >> /external/dent8-published-heads.jsonl
+dent8 witness verify-published /external/dent8-published-heads.jsonl
 ```
 
-Publish the output of `dent8 witness head` somewhere the writer cannot rewrite. Without that
-external publication, a local witness log can still be rolled back by someone who controls the
-same storage.
+Publish the output of `dent8 witness head` somewhere the writer cannot rewrite, then verify
+that external file from a monitor/CI process with `DENT8_LOG` and `DENT8_WITNESS_PUBKEY`.
+Without that external publication, a local witness log can still be rolled back by someone who
+controls the same storage.

@@ -266,6 +266,100 @@ fn doctor_without_witness_feature_fails_closed_when_signed_heads_exist() {
 
 #[cfg(feature = "witness")]
 #[test]
+fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewound() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let key = temp.file("witness.key").to_string_lossy().into_owned();
+    let pubkey = format!("{key}.pub");
+    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    let published = temp
+        .file("published-heads.jsonl")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
+        "witness keygen",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &[("DENT8_LOG", log.as_str())],
+        ),
+        "assert alice drink",
+    );
+    assert_success(
+        &run_dent8(
+            &["witness", "sign"],
+            &[
+                ("DENT8_LOG", log.as_str()),
+                ("DENT8_WITNESS_KEY", key.as_str()),
+                ("DENT8_WITNESS_LOG", witness_log.as_str()),
+            ],
+        ),
+        "witness sign",
+    );
+    let head = run_dent8(
+        &["witness", "head"],
+        &[("DENT8_WITNESS_LOG", witness_log.as_str())],
+    );
+    assert_success(&head, "witness head");
+    fs::write(&published, stdout(&head)).expect("published heads");
+
+    let verify_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_WITNESS_PUBKEY", pubkey.as_str()),
+    ];
+    let verified = run_dent8(&["witness", "verify-published", &published], &verify_env);
+    assert_success(&verified, "verify published head");
+    assert!(
+        stdout(&verified).contains("published signed tree head(s) verify"),
+        "{}",
+        stdout(&verified)
+    );
+
+    fs::write(&witness_log, "").expect("rewind local witness log");
+    let verified_after_local_rollback =
+        run_dent8(&["witness", "verify-published", &published], &verify_env);
+    assert_success(
+        &verified_after_local_rollback,
+        "verify published head after local witness rollback",
+    );
+
+    fs::write(&log, "").expect("rollback event log below published head");
+    let rejected = run_dent8(&["witness", "verify-published", &published], &verify_env);
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(
+        stderr(&rejected).contains("ROLLBACK"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    let empty = temp
+        .file("empty-published.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    fs::write(&empty, "").expect("empty published heads");
+    let empty_rejected = run_dent8(&["witness", "verify-published", &empty], &verify_env);
+    assert_eq!(empty_rejected.status.code(), Some(1));
+    assert!(
+        stderr(&empty_rejected).contains("cannot prove external witness coverage"),
+        "{}",
+        stderr(&empty_rejected)
+    );
+}
+
+#[cfg(feature = "witness")]
+#[test]
 fn witness_doctor_checks_writer_signer_separation() {
     let temp = TempDir::new();
     let key = temp.file("witness.key").to_string_lossy().into_owned();
