@@ -23,6 +23,23 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
 - `docs/threat-model.md` — the firewall's adversary model.
 - `docs/roadmap.md` — dependency-ordered plan; `docs/decisions/` — ADRs.
 
+## Dogfood
+
+- This repo may have ignored local dogfood state in `.dent8/` and `.codex/config.toml`.
+  Do not commit those files.
+- When dogfood state is present, consult dent8 for durable project facts before relying on
+  remembered setup or preferences. Prefer MCP tools (`list_facts`, `explain`, `verify`) when
+  available; otherwise use the local CLI after loading `.dent8/env` and `.dent8/identity.env`.
+- To validate the local Codex dogfood path, build with SQLite and run:
+
+```sh
+cargo build -p dent8-cli --features sqlite
+target/debug/dent8 doctor --agent codex --dir .dent8 --write-check
+```
+
+- Durable project facts should be asserted or superseded through dent8, not silently copied
+  into provider-native memory/rules files.
+
 ## Commands
 
 Run before handing off Rust changes:
