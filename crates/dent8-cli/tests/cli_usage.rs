@@ -454,6 +454,7 @@ fn init_identity_bootstraps_a_usable_secure_local_setup() {
     let identity_env = fs::read_to_string(&identity_env_path).expect("identity env");
     assert!(identity_env.contains("DENT8_REQUIRE_IDENTITY=1"));
     assert!(identity_env.contains("DENT8_TRUST="));
+    assert!(identity_env.contains("DENT8_ACTIVE_GRANTS="));
     assert!(identity_env.contains("DENT8_GRANT="));
     assert!(identity_env.contains("DENT8_IDENTITY_KEY="));
 
@@ -564,6 +565,8 @@ fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
         "DENT8_LOG = \"{}\"",
         temp.file(".dent8/codex-memory.jsonl").display()
     )));
+    assert!(config.contains("DENT8_ACTIVE_GRANTS = "));
+    assert!(config.contains("active-grants.json"));
     assert!(config.contains("DENT8_GRANT = "));
     assert!(config.contains("source_codex.grant.json"));
     assert!(config.contains("DENT8_IDENTITY_KEY = "));
@@ -955,6 +958,12 @@ fn mcp_install_patches_json_config_and_preserves_other_servers() {
             .as_str()
             .expect("DENT8_GRANT")
             .ends_with(".dent8/grants/source_gemini.grant.json")
+    );
+    assert!(
+        dent8["env"]["DENT8_ACTIVE_GRANTS"]
+            .as_str()
+            .expect("DENT8_ACTIVE_GRANTS")
+            .ends_with(".dent8/active-grants.json")
     );
     assert!(
         stdout.contains(&first),
@@ -1376,6 +1385,7 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
     assert!(stdout(&bootstrapped).contains("bootstrapped signed identity"));
 
     let trust = dir.join("trust.json").to_string_lossy().into_owned();
+    let active_grants = dir.join("active-grants.json");
     let grant = dir
         .join("grants/source_codex.grant.json")
         .to_string_lossy()
@@ -1397,6 +1407,10 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
     assert!(
         std::path::Path::new(&grant).exists(),
         "bootstrap should write grant"
+    );
+    assert!(
+        active_grants.exists(),
+        "bootstrap should write active grant registry"
     );
     assert!(
         std::path::Path::new(&key).exists(),
@@ -1552,6 +1566,9 @@ fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
     let key_path = dir.join("identities/source_codex.key");
     let key = key_path.to_string_lossy().into_owned();
     let old_key = read_file(&key_path);
+    let copied_old_key = temp.file("copied-old-source.key");
+    fs::copy(&key_path, &copied_old_key).expect("copy old key before rotation");
+    make_owner_only(&copied_old_key);
 
     let rotated = run_dent8(
         &[
@@ -1578,7 +1595,8 @@ fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
         "rotation should replace the active source private key"
     );
 
-    let old_key_backup = find_backup(&dir.join("identities"), "source_codex.key.old.");
+    assert_no_backup(&dir.join("identities"), "source_codex.key.old.");
+    let old_grant_backup = find_backup(&dir.join("grants"), "source_codex.grant.json.old.");
     assert!(
         dir.join("identity.env").exists(),
         "rotation should rewrite identity.env at the stable path"
@@ -1614,12 +1632,12 @@ fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
         "signed write with rotated key",
     );
 
-    let old_key_backup = old_key_backup.to_string_lossy().into_owned();
+    let copied_old_key = copied_old_key.to_string_lossy().into_owned();
     let old_key_env = [
         ("DENT8_LOG", log.as_str()),
         ("DENT8_TRUST", trust.as_str()),
         ("DENT8_GRANT", grant.as_str()),
-        ("DENT8_IDENTITY_KEY", old_key_backup.as_str()),
+        ("DENT8_IDENTITY_KEY", copied_old_key.as_str()),
         ("DENT8_REQUIRE_IDENTITY", "1"),
     ];
     let rejected = run_dent8(
@@ -1637,6 +1655,30 @@ fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
     );
     assert_eq!(rejected.status.code(), Some(2));
     assert!(stderr(&rejected).contains("identity key does not match"));
+
+    let old_grant_backup = old_grant_backup.to_string_lossy().into_owned();
+    let old_pair_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", old_grant_backup.as_str()),
+        ("DENT8_IDENTITY_KEY", copied_old_key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    let stale_pair = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_city",
+            "paris",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &old_pair_env,
+    );
+    assert_eq!(stale_pair.status.code(), Some(2));
+    assert!(stderr(&stale_pair).contains("not active"));
 
     assert_success(
         &run_dent8(
@@ -2209,6 +2251,7 @@ fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         .env_remove("DENT8_REQUIRE_AUTHORITY");
     command
         .env_remove("DENT8_TRUST")
+        .env_remove("DENT8_ACTIVE_GRANTS")
         .env_remove("DENT8_GRANT")
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
@@ -2288,6 +2331,39 @@ fn find_backup(dir: &Path, prefix: &str) -> PathBuf {
                 .is_some_and(|name| name.starts_with(prefix))
         })
         .unwrap_or_else(|| panic!("missing backup with prefix {prefix} in {}", dir.display()))
+}
+
+#[cfg(feature = "identity")]
+fn assert_no_backup(dir: &Path, prefix: &str) {
+    let found = fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(prefix))
+        });
+    assert!(
+        found.is_none(),
+        "unexpected backup with prefix {prefix} in {}: {:?}",
+        dir.display(),
+        found
+    );
+}
+
+#[cfg(feature = "identity")]
+fn make_owner_only(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            .unwrap_or_else(|error| panic!("chmod 0600 {}: {error}", path.display()));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 #[cfg(all(feature = "identity", unix))]

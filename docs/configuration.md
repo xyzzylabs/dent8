@@ -37,6 +37,7 @@ dent8 doctor --agent codex --write-check
 | `DENT8_AUTHORITY` | `dent8 init`, `dent8 authority` + every write | `./dent8-authority.json` | Path to the source→authority **ceiling** registry. Enforcement is **opt-in**: it activates only once this file exists (created by `dent8 init` or `dent8 authority add`); then it is deny-by-default. |
 | `DENT8_REQUIRE_AUTHORITY` | every write | *(unset / false)* | Fail-closed deployment guard. When true (`1`, `true`, `yes`, or `on`), a missing authority registry is an error instead of permissive dev mode. |
 | `DENT8_TRUST` | signed identity | `./dent8-trust.json` | Path to trusted issuer public keys. If this file exists, signed source identity is active for every write. |
+| `DENT8_ACTIVE_GRANTS` | signed identity | sibling `active-grants.json` next to `DENT8_TRUST`, when present | Path to the active source-grant registry. Bootstrap writes `.dent8/active-grants.json`; writes presenting an older grant for the same source are rejected once this registry exists. |
 | `DENT8_REQUIRE_IDENTITY` | every write | *(unset / false)* | Fail-closed identity guard. When true, a missing trust registry, grant, or source key rejects writes. In a `--no-default-features` build, setting this or configuring identity produces a build-hint error. |
 | `DENT8_GRANT` | every write | *(unset)* | Signed source grant JSON binding the configured source id to a source public key and maximum authority. |
 | `DENT8_IDENTITY_KEY` | every write | *(unset)* | Source private signing key. On Unix, dent8 requires owner-only permissions (`0600`). |
@@ -105,11 +106,14 @@ example `/usr/local/bin/dent8` when dent8 is installed globally but not on the a
 because dent8 cannot infer the project-local MCP config path safely. `dent8 doctor --agent
 <profile>` reads the installed MCP config back, so custom commands do not need to be repeated
 for the normal post-install check. `dent8 identity status --dir .dent8 --source <source>`
-checks the bundle, grant, source key, issuer key when supplied, and expiry. `dent8 identity
-rotate-source --dir .dent8 --source <source> --issuer-key <path>` generates a replacement
-source key, issues a replacement grant, rewrites `.dent8/identity.env` at the same stable path,
-and backs up the previous key/grant/env files. `dent8 identity bootstrap` remains available for
-custom layouts. It creates or reuses an operator issuer key outside the project bundle
+checks the bundle, active-grant registry, grant, source key, issuer key when supplied, and
+expiry. `dent8 identity rotate-source --dir .dent8 --source <source> --issuer-key <path>`
+generates a replacement source key, issues a replacement grant, updates
+`.dent8/active-grants.json`, rewrites `.dent8/identity.env` at the same stable path, rejects
+the previous grant at the write boundary, and removes the previous private source-key backup
+after a successful rotation. It keeps non-secret audit backups such as the old grant/env/public
+key. `dent8 identity bootstrap` remains available for custom layouts. It creates or reuses an
+operator issuer key outside the project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
 `$HOME/.config/dent8/issuer.key`). Bootstrap refuses to write the issuer key inside the bundle
 and refuses to overwrite existing project identity material. The manual subcommands

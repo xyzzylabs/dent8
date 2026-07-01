@@ -196,19 +196,24 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   (authn)**, included in the default CLI build. `init --identity` / `init --agent <profile>`
   are the happy path; `bootstrap` remains the manual creation path: it creates or reuses an
   operator issuer key outside the project/agent bundle, then creates a source key, trust
-  registry, grant, and shell-loadable `.dent8/identity.env` for one source. `status` checks the
-  bundle/trust/grant/source key/issuer key and reports expiry, while `rotate-source` replaces
-  the active source key and grant at the same stable paths, backing up the old files. The lower
-  level commands remain available for custom paths, expiration, and exact subject scopes. This
-  is the non-bearer-token form: an
+  registry, active-grant registry, grant, and shell-loadable `.dent8/identity.env` for one
+  source. `status` checks the bundle/trust/active-grant/grant/source key/issuer key and reports
+  expiry, while `rotate-source` replaces the active source key and grant at the same stable
+  paths, updates `.dent8/active-grants.json`, and removes the old private source-key backup
+  after a successful rotation. The old grant/env/public-key backups remain for audit, but the
+  old grant+key pair is rejected at the write boundary once a bundle has an active-grant
+  registry. The lower level commands remain available for custom paths, expiration, and exact
+  subject scopes. This is the non-bearer-token form: an
   operator-held issuer key signs a grant that
   binds `source` -> source public key + max authority + optional subject scope/expiration, and
   each write verifies the grant plus source-key possession before the candidate event reaches
   the firewall. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
-  `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`;
-  otherwise local dev mode stays permissive. A `--no-default-features` binary fails closed with
-  a build hint if identity is configured. Limits: source keys are local files (`0600` required
-  on Unix), so this distinguishes honestly configured agents on one machine but is not a
+  `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`; when
+  `DENT8_ACTIVE_GRANTS` or the sibling active-grant registry exists, the presented grant must
+  also be the current grant for that source. Otherwise local dev mode stays permissive. A
+  `--no-default-features` binary fails closed with a build hint if identity is configured.
+  Limits: source keys are local files (`0600` required on Unix), so this distinguishes honestly
+  configured agents on one machine but is not a
   sandbox against malware or another process running as the same OS user; direct DB/adapter
   writes still bypass the CLI/MCP boundary. See
   [ADR 0012](decisions/0012-signed-source-identity.md).

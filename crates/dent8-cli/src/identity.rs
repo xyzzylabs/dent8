@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::{CliAuthority, WriteAuth, env_flag, now_millis, parse_source, write_atomic};
 
 const DEFAULT_TRUST: &str = "dent8-trust.json";
+const ACTIVE_GRANTS_FILE: &str = "active-grants.json";
 const GRANT_DOMAIN: &[u8] = b"dent8.source-grant.v1\0";
 const WRITE_DOMAIN: &[u8] = b"dent8.source-write.v1\0";
 const DAY_MILLIS: i64 = 86_400_000;
@@ -35,6 +36,17 @@ struct TrustedIssuer {
 struct SignedSourceGrant {
     grant: SourceGrantPayload,
     signature: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct ActiveSourceGrants {
+    sources: BTreeMap<String, ActiveSourceGrant>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ActiveSourceGrant {
+    grant_signature: String,
+    public_key: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -80,6 +92,7 @@ pub(crate) struct BootstrapOutput {
     pub(crate) scope: String,
     pub(crate) issuer_key_path: PathBuf,
     pub(crate) trust_file: PathBuf,
+    pub(crate) active_grants_file: PathBuf,
     pub(crate) grant_file: PathBuf,
     pub(crate) source_key_path: PathBuf,
     pub(crate) env_file: PathBuf,
@@ -89,7 +102,7 @@ pub(crate) struct BootstrapOutput {
 impl BootstrapOutput {
     pub(crate) fn message(&self) -> String {
         format!(
-            "bootstrapped signed identity in {}\n  issuer: {} ({})\n  source: {} max={:?} scope={}\n  trust: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
+            "bootstrapped signed identity in {}\n  issuer: {} ({})\n  source: {} max={:?} scope={}\n  trust: {}\n  active grants: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
             self.bundle_dir.display(),
             self.issuer,
             self.issuer_key_path.display(),
@@ -97,6 +110,7 @@ impl BootstrapOutput {
             self.max_authority,
             self.scope,
             self.trust_file.display(),
+            self.active_grants_file.display(),
             self.grant_file.display(),
             self.source_key_path.display(),
             self.env_file.display(),
@@ -115,16 +129,18 @@ struct BootstrapPlan {
     source_key_path: PathBuf,
     source_public_path: PathBuf,
     trust_file: PathBuf,
+    active_grants_file: PathBuf,
     grant_file: PathBuf,
     env_file: PathBuf,
 }
 
 impl BootstrapPlan {
-    fn identity_outputs(&self) -> [&Path; 5] {
+    fn identity_outputs(&self) -> [&Path; 6] {
         [
             self.source_key_path.as_path(),
             self.source_public_path.as_path(),
             self.trust_file.as_path(),
+            self.active_grants_file.as_path(),
             self.grant_file.as_path(),
             self.env_file.as_path(),
         ]
@@ -135,6 +151,7 @@ impl BootstrapPlan {
 struct IdentityBundlePaths {
     dir: PathBuf,
     trust_file: PathBuf,
+    active_grants_file: PathBuf,
     grant_file: PathBuf,
     source_key_path: PathBuf,
     env_file: PathBuf,
@@ -189,6 +206,17 @@ fn identity_key_path() -> Result<String, String> {
     env_string("DENT8_IDENTITY_KEY")
 }
 
+fn active_grants_path(trust_path: &str) -> Option<PathBuf> {
+    if let Some(path) = nonempty_env("DENT8_ACTIVE_GRANTS") {
+        return Some(PathBuf::from(path));
+    }
+    let candidate = Path::new(trust_path).parent().map_or_else(
+        || PathBuf::from(ACTIVE_GRANTS_FILE),
+        |parent| parent.join(ACTIVE_GRANTS_FILE),
+    );
+    candidate.exists().then_some(candidate)
+}
+
 fn env_string(name: &str) -> Result<String, String> {
     std::env::var(name)
         .map(|value| value.trim().to_string())
@@ -215,6 +243,7 @@ pub(crate) fn enforce_write(auth: &WriteAuth<'_>, now: TimestampMillis) -> Resul
     let grant = load_grant(&grant_path()?)?;
     verify_grant(&grant, &trust, now)?;
     verify_grant_matches_write(&grant.grant, auth, now)?;
+    verify_active_grant_if_configured(&grant, &path)?;
 
     let signing = load_signing_key(&identity_key_path()?)?;
     let source_key = signing.verifying_key();
@@ -444,6 +473,7 @@ fn identity_status(
         ))),
         Err(error) => lines.push(DoctorLine::fail(format!("grant: {error}"))),
     }
+    lines.extend(active_grant_status(&paths.active_grants_file, &grant));
     lines.extend(expiration_lines(&grant.grant, expires_warning_days));
     lines.extend(identity_key_status(&paths.source_key_path, &grant));
     lines.extend(issuer_key_status(
@@ -453,6 +483,83 @@ fn identity_status(
         &trust,
     ));
     Ok(lines)
+}
+
+fn active_grant_status(path: &Path, grant: &SignedSourceGrant) -> Vec<DoctorLine> {
+    let mut lines = Vec::new();
+    let active = match load_active_grants_at(path, true) {
+        Ok(Some(active)) => active,
+        Ok(None) => {
+            lines.push(DoctorLine::fail(format!(
+                "active grant: {} is missing",
+                path.display()
+            )));
+            return lines;
+        }
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("active grant: {error}")));
+            return lines;
+        }
+    };
+    match verify_active_grant(grant, &active) {
+        Ok(()) => lines.push(DoctorLine::ok(format!(
+            "active grant: {} (current for {})",
+            path.display(),
+            grant.grant.source
+        ))),
+        Err(error) => lines.push(DoctorLine::fail(format!("active grant: {error}"))),
+    }
+    lines
+}
+
+fn verify_active_grant_if_configured(
+    grant: &SignedSourceGrant,
+    trust_path: &str,
+) -> Result<(), String> {
+    let Some(path) = active_grants_path(trust_path) else {
+        return Ok(());
+    };
+    let Some(active) = load_active_grants_at(&path, true)? else {
+        return Ok(());
+    };
+    verify_active_grant(grant, &active)
+}
+
+fn verify_active_grant(
+    grant: &SignedSourceGrant,
+    active: &ActiveSourceGrants,
+) -> Result<(), String> {
+    let entry = active
+        .sources
+        .get(&grant.grant.source)
+        .ok_or_else(|| format!("no active grant is registered for {}", grant.grant.source))?;
+    signature_from_hex(&entry.grant_signature)
+        .map_err(|error| format!("active grant signature is invalid: {error}"))?;
+    verifying_key_from_hex(&entry.public_key)
+        .map_err(|error| format!("active grant public key is invalid: {error}"))?;
+    if !entry.grant_signature.eq_ignore_ascii_case(&grant.signature) {
+        return Err(format!(
+            "grant for {} is not active; use the current grant from the identity bundle",
+            grant.grant.source
+        ));
+    }
+    if !entry
+        .public_key
+        .eq_ignore_ascii_case(&grant.grant.public_key)
+    {
+        return Err(format!(
+            "grant for {} has an active signature but a different public key",
+            grant.grant.source
+        ));
+    }
+    Ok(())
+}
+
+fn active_source_grant_for(grant: &SignedSourceGrant) -> ActiveSourceGrant {
+    ActiveSourceGrant {
+        grant_signature: grant.signature.clone(),
+        public_key: grant.grant.public_key.clone(),
+    }
 }
 
 fn expiration_lines(grant: &SourceGrantPayload, warning_days: u64) -> Vec<DoctorLine> {
@@ -559,6 +666,7 @@ fn issuer_key_status(
     lines
 }
 
+#[allow(clippy::too_many_lines)]
 fn rotate_source_bundle(
     dir: &str,
     source: &str,
@@ -617,6 +725,10 @@ fn rotate_source_bundle(
         signature: hex::encode(issuer_key.sign(&framed(GRANT_DOMAIN, &grant)?).to_bytes()),
         grant,
     };
+    let mut active = load_active_grants_at(&paths.active_grants_file, false)?.unwrap_or_default();
+    if active.sources.contains_key(source) {
+        verify_active_grant(&old_grant, &active)?;
+    }
 
     let stamp = now_millis().as_unix_millis();
     let mut rollback = RotationRollback::default();
@@ -624,14 +736,21 @@ fn rotate_source_bundle(
     let public_key_path = public_key_path(&paths.source_key_path);
     let public_backup = rollback.backup_optional(&public_key_path, stamp)?;
     let grant_backup = rollback.backup_required(&paths.grant_file, stamp)?;
+    let active_backup = rollback.backup_optional(&paths.active_grants_file, stamp)?;
     let env_backup = rollback.backup_required(&paths.env_file, stamp)?;
 
     write_key_pair(&paths.source_key_path, &replacement)?;
     rollback.record_key_pair(&paths.source_key_path);
     write_json_path(&paths.grant_file, &signed)?;
     rollback.record_file(&paths.grant_file);
+    active
+        .sources
+        .insert(source.to_string(), active_source_grant_for(&signed));
+    write_active_grants_path(&paths.active_grants_file, &active)?;
+    rollback.record_file(&paths.active_grants_file);
     write_identity_env(&paths)?;
     rollback.record_file(&paths.env_file);
+    remove_rotated_private_key_backup(&key_backup)?;
     rollback.commit();
 
     let mut lines = vec![
@@ -641,11 +760,18 @@ fn rotate_source_bundle(
         ),
         format!("  source key: {}", paths.source_key_path.display()),
         format!("  grant: {}", paths.grant_file.display()),
+        format!("  active grants: {}", paths.active_grants_file.display()),
         format!("  env: {}", paths.env_file.display()),
-        format!("  old source key backup: {}", key_backup.display()),
+        "  old source key backup: removed after successful rotation".to_string(),
         format!("  old grant backup: {}", grant_backup.display()),
         format!("  old env backup: {}", env_backup.display()),
     ];
+    if let Some(active_backup) = active_backup {
+        lines.push(format!(
+            "  old active grant backup: {}",
+            active_backup.display()
+        ));
+    }
     if let Some(public_backup) = public_backup {
         lines.push(format!(
             "  old public key backup: {}",
@@ -666,12 +792,14 @@ fn identity_bundle_paths(
 ) -> Result<IdentityBundlePaths, String> {
     let dir = absolute_existing_dir(&PathBuf::from(dir))?;
     let trust_file = dir.join("trust.json");
+    let active_grants_file = dir.join(ACTIVE_GRANTS_FILE);
     let env_file = dir.join("identity.env");
     if let Some(source) = expected_source {
         parse_source(source)?;
         let slug = source_slug(source);
         return Ok(IdentityBundlePaths {
             trust_file,
+            active_grants_file,
             grant_file: dir.join("grants").join(format!("{slug}.grant.json")),
             source_key_path: dir.join("identities").join(format!("{slug}.key")),
             env_file,
@@ -691,9 +819,13 @@ fn identity_bundle_paths(
     let trust_file = env
         .get("DENT8_TRUST")
         .map_or(trust_file, |path| env_path_value(path, &dir));
+    let active_grants_file = env
+        .get("DENT8_ACTIVE_GRANTS")
+        .map_or(active_grants_file, |path| env_path_value(path, &dir));
     Ok(IdentityBundlePaths {
         dir,
         trust_file,
+        active_grants_file,
         grant_file,
         source_key_path,
         env_file,
@@ -743,11 +875,13 @@ fn write_identity_env(paths: &IdentityBundlePaths) -> Result<(), String> {
         "# dent8 signed source identity environment\n\
          # Load with: set -a; . {}; set +a\n\
          DENT8_TRUST={}\n\
+         DENT8_ACTIVE_GRANTS={}\n\
          DENT8_REQUIRE_IDENTITY=1\n\
          DENT8_GRANT={}\n\
          DENT8_IDENTITY_KEY={}\n",
         shell_quote(&path_string(&paths.env_file)),
         shell_quote(&path_string(&paths.trust_file)),
+        shell_quote(&path_string(&paths.active_grants_file)),
         shell_quote(&path_string(&paths.grant_file)),
         shell_quote(&path_string(&paths.source_key_path)),
     );
@@ -887,6 +1021,15 @@ fn backup_path(path: &Path, stamp: i64, attempt: u32) -> PathBuf {
     PathBuf::from(format!("{}{suffix}", path.to_string_lossy()))
 }
 
+fn remove_rotated_private_key_backup(path: &Path) -> Result<(), String> {
+    std::fs::remove_file(path).map_err(|error| {
+        format!(
+            "cannot remove old source private-key backup {}: {error}",
+            path.display()
+        )
+    })
+}
+
 pub(crate) fn doctor_status(source: &str, now: TimestampMillis) -> Vec<DoctorLine> {
     let required = match identity_required() {
         Ok(required) => required,
@@ -912,6 +1055,7 @@ pub(crate) fn doctor_status(source: &str, now: TimestampMillis) -> Vec<DoctorLin
     let Some(grant) = doctor_grant(&mut lines, &trust, now) else {
         return lines;
     };
+    doctor_active_grant(&mut lines, &grant, &path);
     doctor_source(&mut lines, source, &grant);
     doctor_key(&mut lines, &grant);
     lines
@@ -989,6 +1133,28 @@ fn doctor_source(lines: &mut Vec<DoctorLine>, source: &str, grant: &SignedSource
             "identity source: grant source {} does not match doctor source {}; pass `--source {}` or use the matching grant",
             grant.grant.source, source, grant.grant.source
         )));
+    }
+}
+
+fn doctor_active_grant(lines: &mut Vec<DoctorLine>, grant: &SignedSourceGrant, trust_path: &str) {
+    let Some(path) = active_grants_path(trust_path) else {
+        return;
+    };
+    let active = match load_active_grants_at(&path, true) {
+        Ok(Some(active)) => active,
+        Ok(None) => return,
+        Err(error) => {
+            lines.push(DoctorLine::fail(format!("identity active grant: {error}")));
+            return;
+        }
+    };
+    match verify_active_grant(grant, &active) {
+        Ok(()) => lines.push(DoctorLine::ok(format!(
+            "identity active grant: {} (current for {})",
+            path.display(),
+            grant.grant.source
+        ))),
+        Err(error) => lines.push(DoctorLine::fail(format!("identity active grant: {error}"))),
     }
 }
 
@@ -1162,18 +1328,28 @@ pub(crate) fn bootstrap_bundle(
         expires_at_ms,
     };
     let signature = hex::encode(issuer_key.sign(&framed(GRANT_DOMAIN, &grant)?).to_bytes());
-    write_json_path(&plan.grant_file, &SignedSourceGrant { grant, signature })?;
+    let signed_grant = SignedSourceGrant { grant, signature };
+    write_json_path(&plan.grant_file, &signed_grant)?;
     rollback.record_file(&plan.grant_file);
+
+    let mut active = ActiveSourceGrants::default();
+    active
+        .sources
+        .insert(source.to_string(), active_source_grant_for(&signed_grant));
+    write_active_grants_path(&plan.active_grants_file, &active)?;
+    rollback.record_file(&plan.active_grants_file);
 
     let env_contents = format!(
         "# dent8 signed source identity environment\n\
          # Load with: set -a; . {}; set +a\n\
          DENT8_TRUST={}\n\
+         DENT8_ACTIVE_GRANTS={}\n\
          DENT8_REQUIRE_IDENTITY=1\n\
          DENT8_GRANT={}\n\
          DENT8_IDENTITY_KEY={}\n",
         shell_quote(&path_string(&plan.env_file)),
         shell_quote(&path_string(&plan.trust_file)),
+        shell_quote(&path_string(&plan.active_grants_file)),
         shell_quote(&path_string(&plan.grant_file)),
         shell_quote(&path_string(&plan.source_key_path)),
     );
@@ -1188,6 +1364,7 @@ pub(crate) fn bootstrap_bundle(
         scope: scope.to_string(),
         issuer_key_path: plan.issuer_key_path,
         trust_file: plan.trust_file,
+        active_grants_file: plan.active_grants_file,
         grant_file: plan.grant_file,
         source_key_path: plan.source_key_path,
         env_file: plan.env_file,
@@ -1230,6 +1407,7 @@ fn bootstrap_plan(
     let source_key_path = identities_dir.join(format!("{slug}.key"));
     let source_public_path = public_key_path(&source_key_path);
     let trust_file = dir.join("trust.json");
+    let active_grants_file = dir.join(ACTIVE_GRANTS_FILE);
     let grant_file = grants_dir.join(format!("{slug}.grant.json"));
     let env_file = dir.join("identity.env");
 
@@ -1241,6 +1419,7 @@ fn bootstrap_plan(
         source_key_path,
         source_public_path,
         trust_file,
+        active_grants_file,
         grant_file,
         env_file,
     })
@@ -1659,6 +1838,27 @@ fn load_grant(path: &str) -> Result<SignedSourceGrant, String> {
         std::fs::read_to_string(path).map_err(|error| format!("cannot read {path}: {error}"))?;
     serde_json::from_str(&contents)
         .map_err(|error| format!("{path}: corrupt source grant: {error}"))
+}
+
+fn load_active_grants_at(
+    path: &Path,
+    required: bool,
+) -> Result<Option<ActiveSourceGrants>, String> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents)
+            .map(Some)
+            .map_err(|error| format!("{}: corrupt active grant registry: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && required => Err(format!(
+            "active grant registry is required, but {} does not exist",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
+}
+
+fn write_active_grants_path(path: &Path, active: &ActiveSourceGrants) -> Result<(), String> {
+    write_json_path(path, active)
 }
 
 fn verify_grant(

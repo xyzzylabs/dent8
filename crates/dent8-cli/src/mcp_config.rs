@@ -232,6 +232,7 @@ pub(crate) fn load_agent_env(
         "DENT8_AUTHORITY",
         "DENT8_REQUIRE_AUTHORITY",
         "DENT8_TRUST",
+        "DENT8_ACTIVE_GRANTS",
         "DENT8_REQUIRE_IDENTITY",
         "DENT8_GRANT",
         "DENT8_IDENTITY_KEY",

@@ -65,13 +65,14 @@ dent8 identity grant-verify .dent8/grants/source_codex.grant.json
 
 `bootstrap` creates or reuses an operator issuer key outside the project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
-`$HOME/.config/dent8/issuer.key`), then writes the project-local trust registry, source key,
-grant, and `.dent8/identity.env`. It refuses to place the issuer private key inside the
-project bundle. `status` reports bundle/trust/grant/key/expiry health. `rotate-source`
-generates a replacement source key and grant at the same active paths, with timestamped backups
-for the previous key/grant/env files, so existing MCP config can keep pointing at
-`.dent8/identity.env`. The lower-level `issuer-keygen`, `agent-keygen`, `trust-add`, and
-`grant-issue` commands remain available for custom layouts.
+`$HOME/.config/dent8/issuer.key`), then writes the project-local trust registry, active-grant
+registry, source key, grant, and `.dent8/identity.env`. It refuses to place the issuer private
+key inside the project bundle. `status` reports bundle/trust/active-grant/grant/key/expiry
+health. `rotate-source` generates a replacement source key and grant at the same active paths,
+updates `.dent8/active-grants.json`, and removes the previous private source-key backup after a
+successful rotation, so existing MCP config can keep pointing at `.dent8/identity.env` while
+old grant+key pairs are rejected at the write boundary. The lower-level `issuer-keygen`,
+`agent-keygen`, `trust-add`, and `grant-issue` commands remain available for custom layouts.
 
 The default issuer key is scoped to the OS user, not the project: bootstrapping several
 projects with the default path reuses one owner/admin key. That is acceptable for the v0 local
@@ -83,6 +84,7 @@ Agent runtime configuration:
 
 ```sh
 DENT8_TRUST=.dent8/trust.json
+DENT8_ACTIVE_GRANTS=.dent8/active-grants.json
 DENT8_REQUIRE_IDENTITY=1
 DENT8_GRANT=.dent8/grants/source_codex.grant.json
 DENT8_IDENTITY_KEY=.dent8/identities/source_codex.key
