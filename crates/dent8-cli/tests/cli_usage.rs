@@ -5,7 +5,6 @@ use std::{
     sync::atomic::{AtomicU32, Ordering},
 };
 
-#[cfg(feature = "identity")]
 use serde_json::Value;
 
 #[test]
@@ -134,6 +133,194 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
     assert!(diagnostics_stdout.contains("1 dent8 fact stream(s)"));
     assert!(diagnostics_stdout.contains("dent8://diagnostic/doctor-test/dent8.write_check"));
     assert!(!diagnostics_stdout.contains("hidden"));
+}
+
+#[test]
+fn read_audit_commands_emit_machine_readable_json() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert alice fact",
+    );
+
+    let facts = run_dent8(&["--output", "json", "facts", "list"], &envs);
+    assert_success(&facts, "facts list --output json");
+    let facts = stdout_json(&facts);
+    assert_eq!(facts["status"], "ok");
+    assert_eq!(facts["tool"], "facts list");
+    assert_eq!(facts["count"], 1);
+    assert_eq!(
+        facts["facts"][0]["uri"],
+        "dent8://person/alice/favorite_drink"
+    );
+    assert_eq!(facts["facts"][0]["subject"]["kind"], "person");
+    assert_eq!(facts["hidden_diagnostics_count"], 0);
+
+    let explain = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_success(&explain, "explain --output json");
+    let explain = stdout_json(&explain);
+    assert_eq!(explain["status"], "ok");
+    assert_eq!(explain["tool"], "explain");
+    assert_eq!(explain["subject"]["key"], "alice");
+    assert_eq!(explain["predicate"], "favorite_drink");
+    assert_eq!(explain["value"]["kind"], "text");
+    assert_eq!(explain["value"]["text"], "tea");
+    assert_eq!(explain["authority"], "High");
+    assert!(
+        explain["event_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    );
+
+    let verify = run_dent8(&["--output", "json", "verify"], &envs);
+    assert_success(&verify, "verify --output json");
+    let verify = stdout_json(&verify);
+    assert_eq!(verify["status"], "ok");
+    assert_eq!(verify["tool"], "verify");
+    assert_eq!(verify["ok"], true);
+    assert_eq!(verify["findings"].as_array().expect("findings").len(), 0);
+
+    let doctor = run_dent8(&["--output", "json", "doctor"], &envs);
+    assert_success(&doctor, "doctor --output json");
+    let doctor = stdout_json(&doctor);
+    assert_eq!(doctor["status"], "ok");
+    assert_eq!(doctor["tool"], "doctor");
+    assert_eq!(doctor["ok"], true);
+    assert!(
+        doctor["checks"]
+            .as_array()
+            .expect("checks")
+            .iter()
+            .any(|check| check["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("verify: OK"))),
+        "{doctor}"
+    );
+}
+
+#[test]
+fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert source fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "derive",
+                "person:alice",
+                "shopping_item",
+                "tea",
+                "--from",
+                "person:alice",
+                "favorite_drink",
+                "--authority",
+                "medium",
+                "--source",
+                "assistant:local",
+            ],
+            &envs,
+        ),
+        "derive dependent fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "retract",
+                "person:alice",
+                "favorite_drink",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "retract source fact",
+    );
+
+    let verify = run_dent8(&["--output", "json", "verify"], &envs);
+    assert_eq!(verify.status.code(), Some(1));
+    assert!(stderr(&verify).is_empty(), "{}", stderr(&verify));
+    let verify = stdout_json(&verify);
+    assert_eq!(verify["status"], "failed");
+    assert_eq!(verify["ok"], false);
+    assert!(
+        verify["findings"]
+            .as_array()
+            .expect("findings")
+            .iter()
+            .any(|finding| finding
+                .as_str()
+                .is_some_and(|text| text.contains("TAINTED"))),
+        "{verify}"
+    );
+}
+
+#[test]
+fn json_output_fails_closed_for_unsupported_commands() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let output = run_dent8(
+        &[
+            "--output",
+            "json",
+            "assert",
+            "person:alice",
+            "favorite_drink",
+            "tea",
+            "--authority",
+            "high",
+            "--source",
+            "user:alice",
+        ],
+        &envs,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).is_empty());
+    assert!(stderr(&output).contains("does not support `--output json` yet"));
 }
 
 #[test]
@@ -3520,6 +3707,16 @@ fn assert_success(output: &Output, context: &str) {
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stdout_json(output: &Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout is not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
+            stdout(output),
+            stderr(output)
+        )
+    })
 }
 
 fn stderr(output: &Output) -> String {

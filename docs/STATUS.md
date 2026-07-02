@@ -115,7 +115,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
   receipt carries `fresh` + the `expires_at` instant. Composes with
   `assert`/`supersede`/`retract` across processes (and the same receipt backs the MCP
-  `explain` tool and `resources/read`).
+  `explain` tool and `resources/read`). Supports `--output json` for the current-state
+  receipt.
 - **`dent8 replay <subject> <predicate>`** — prints the full ordered event history
   (every assertion, supersession, retraction, contradiction, with authority + source) and
   the current state — *why* the fact is what it is.
@@ -123,13 +124,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   [--include-diagnostics]`** — lists distinct fact streams known to dent8 as
   `dent8://{kind}/{key}/{predicate}` resources for human browsing. It hides internal
   doctor/write-check diagnostic streams by default, matching MCP `list_facts`; pass
-  `--include-diagnostics` when auditing setup noise.
+  `--include-diagnostics` when auditing setup noise. Supports `--output json`.
 - **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
   global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
   that content-edit tamper-detection there is `dent8 witness verify`'s job. On **both** it also
   reports **retraction taint** — a still-believed claim deriving from a retracted/expired source
-  (`TAINTED: X derives from Y`).
+  (`TAINTED: X derives from Y`). Supports `--output json`; integrity findings still return a
+  nonzero exit code, with the structured report on stdout.
 - **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
   contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
   the self-demonstrating "why dent8" benchmark.
@@ -281,7 +283,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - `dent8 schema postgres` — prints the Postgres schema.
 - `dent8 --version`, `dent8 --help`, and the global presentation flag
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
-  data stays plain).
+  data stays plain). The global `--output text|json` flag currently supports `facts list`,
+  `explain`, `verify`, and `doctor`; unsupported commands fail closed with a targeted usage
+  error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload

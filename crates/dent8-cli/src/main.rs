@@ -59,8 +59,24 @@ fn run(raw_args: impl IntoIterator<Item = String>) -> i32 {
 
 fn run_cli(cli: Cli) -> i32 {
     set_color(cli.color);
+    if let Some(command) = cli.command.as_ref()
+        && cli.output == CliOutput::Json
+        && !command.supports_json_output()
+    {
+        eprintln!(
+            "`dent8 {}` does not support `--output json` yet (supported: explain, facts list, verify, doctor)",
+            command.cli_name()
+        );
+        return 2;
+    }
     match cli.command {
         None => {
+            if cli.output == CliOutput::Json {
+                eprintln!(
+                    "`dent8 --output json` requires a command (supported: explain, facts list, verify, doctor)"
+                );
+                return 2;
+            }
             let mut command = Cli::command()
                 .color(cli.color.clap_choice())
                 .styles(cli_styles());
@@ -72,14 +88,14 @@ fn run_cli(cli: Cli) -> i32 {
             demo();
             0
         }
-        Some(CliCommand::Verify) => cmd_verify(),
+        Some(CliCommand::Verify) => cmd_verify(cli.output),
         Some(CliCommand::Conflicts) => cmd_conflicts(),
         Some(CliCommand::Eval) => cmd_eval(),
         Some(CliCommand::Init(args)) => cmd_init(&args),
         Some(CliCommand::Agent(args)) => match args.command {
             AgentCommand::Add(args) => cmd_agent_add(&args),
         },
-        Some(CliCommand::Doctor(args)) => cmd_doctor(&args),
+        Some(CliCommand::Doctor(args)) => cmd_doctor(&args, cli.output),
         Some(CliCommand::Completions(args)) => cmd_completions(args.shell),
         Some(CliCommand::Export(args)) => {
             #[cfg(feature = "export")]
@@ -102,10 +118,10 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Reinforce(args)) => cmd_reinforce(&args),
         Some(CliCommand::Expire(args)) => cmd_expire(&args),
         Some(CliCommand::Contradict(args)) => cmd_contradict(&args),
-        Some(CliCommand::Explain(args)) => cmd_explain(&args),
+        Some(CliCommand::Explain(args)) => cmd_explain(&args, cli.output),
         Some(CliCommand::Replay(args)) => cmd_replay(&args),
         Some(CliCommand::Facts(args)) => match args.command {
-            FactsCommand::List(args) => cmd_facts_list(&args),
+            FactsCommand::List(args) => cmd_facts_list(&args, cli.output),
         },
         Some(CliCommand::Authority(args)) => match args.command {
             AuthorityCommand::List => cmd_authority_list(),
@@ -175,6 +191,9 @@ struct Cli {
     /// When to use terminal colors.
     #[arg(long, global = true, value_enum, default_value_t = CliColor::Auto)]
     color: CliColor,
+    /// Output format for supported read/audit commands.
+    #[arg(long, global = true, value_enum, default_value_t = CliOutput::Text)]
+    output: CliOutput,
     #[command(subcommand)]
     command: Option<CliCommand>,
 }
@@ -253,6 +272,45 @@ enum CliCommand {
     Schema(SchemaArgs),
     /// Serve dent8 over MCP.
     Mcp(McpArgs),
+}
+
+impl CliCommand {
+    fn supports_json_output(&self) -> bool {
+        matches!(
+            self,
+            Self::Explain(_) | Self::Facts(_) | Self::Verify | Self::Doctor(_)
+        )
+    }
+
+    fn cli_name(&self) -> &'static str {
+        match self {
+            Self::Demo => "demo",
+            Self::Assert(_) => "assert",
+            Self::Supersede(_) => "supersede",
+            Self::Retract(_) => "retract",
+            Self::Contradict(_) => "contradict",
+            Self::Derive(_) => "derive",
+            Self::Reinforce(_) => "reinforce",
+            Self::Expire(_) => "expire",
+            Self::Explain(_) => "explain",
+            Self::Replay(_) => "replay",
+            Self::Facts(_) => "facts",
+            Self::Verify => "verify",
+            Self::Conflicts => "conflicts",
+            Self::Eval => "eval",
+            Self::Init(_) => "init",
+            Self::Agent(_) => "agent",
+            Self::Doctor(_) => "doctor",
+            Self::Completions(_) => "completions",
+            Self::Export(_) => "export",
+            Self::Authority(_) => "authority",
+            Self::Identity(_) => "identity",
+            Self::Hook(_) => "hook",
+            Self::Witness(_) => "witness",
+            Self::Schema(_) => "schema",
+            Self::Mcp(_) => "mcp",
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -877,6 +935,12 @@ enum CliColor {
     Never,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum CliOutput {
+    Text,
+    Json,
+}
+
 impl CliColor {
     fn clap_choice(self) -> clap::ColorChoice {
         match self {
@@ -1313,6 +1377,54 @@ fn format_receipt(r: &IntegrityReceipt) -> String {
         short(&r.event_hash),
         r.chain_verified,
     )
+}
+
+fn claim_value_json(value: &ClaimValue) -> serde_json::Value {
+    match value {
+        ClaimValue::Text(text) => serde_json::json!({
+            "kind": "text",
+            "text": text,
+            "display": display_value(value),
+        }),
+        ClaimValue::Json(json) => serde_json::json!({
+            "kind": "json",
+            "json": json.as_str(),
+            "display": display_value(value),
+        }),
+        ClaimValue::Redacted => serde_json::json!({
+            "kind": "redacted",
+            "display": display_value(value),
+        }),
+    }
+}
+
+fn receipt_json(tool: &str, receipt: &IntegrityReceipt) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": tool,
+        "subject": {
+            "kind": receipt.subject.kind(),
+            "key": receipt.subject.key(),
+        },
+        "predicate": receipt.predicate.as_str(),
+        "claim_id": receipt.claim_id.as_str(),
+        "value": claim_value_json(&receipt.value),
+        "lifecycle": format!("{:?}", receipt.lifecycle),
+        "authority": receipt.authority.name(),
+        "fresh": receipt.fresh,
+        "expires_at": receipt.expires_at.map(TimestampMillis::as_unix_millis),
+        "evidence_count": receipt.evidence_count,
+        "corroboration": receipt.corroboration,
+        "superseded_by": receipt.superseded_by.as_ref().map(ClaimId::as_str),
+        "contradicted_by": receipt
+            .contradicted_by
+            .iter()
+            .map(ClaimId::as_str)
+            .collect::<Vec<_>>(),
+        "replay_position": receipt.replay_position,
+        "event_hash": receipt.event_hash,
+        "chain_verified": receipt.chain_verified,
+    })
 }
 
 fn short(hash: &str) -> String {
@@ -2560,15 +2672,43 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn cmd_doctor(args: &DoctorArgs) -> i32 {
+fn cmd_doctor(args: &DoctorArgs, output: CliOutput) -> i32 {
     let report = doctor_report(args);
-    print!("{}", report.output);
+    match output {
+        CliOutput::Text => print!("{}", report.output),
+        CliOutput::Json => {
+            print_json_stdout(&doctor_report_json(&report));
+        }
+    }
     i32::from(!report.ok)
 }
 
 struct DoctorReport {
     output: String,
     ok: bool,
+}
+
+fn doctor_report_json(report: &DoctorReport) -> serde_json::Value {
+    let checks = report
+        .output
+        .lines()
+        .filter_map(parse_doctor_report_line)
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": if report.ok { "ok" } else { "failed" },
+        "tool": "doctor",
+        "ok": report.ok,
+        "checks": checks,
+    })
+}
+
+fn parse_doctor_report_line(line: &str) -> Option<serde_json::Value> {
+    let line = line.strip_prefix("  ")?;
+    let (level, message) = line.split_once("  ")?;
+    Some(serde_json::json!({
+        "level": level,
+        "message": message,
+    }))
 }
 
 fn doctor_report(args: &DoctorArgs) -> DoctorReport {
@@ -4143,14 +4283,41 @@ fn backend_verify(url: &str) -> Result<String, String> {
     })
 }
 
-fn cmd_verify() -> i32 {
-    match verify_log(&log_path()) {
-        Ok(report) => {
+fn verify_json(ok: bool, report: &str) -> serde_json::Value {
+    let findings = if ok {
+        Vec::new()
+    } else {
+        report
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    serde_json::json!({
+        "status": if ok { "ok" } else { "failed" },
+        "tool": "verify",
+        "ok": ok,
+        "summary": first_line(report),
+        "report": report,
+        "findings": findings,
+    })
+}
+
+fn cmd_verify(output: CliOutput) -> i32 {
+    match (verify_log(&log_path()), output) {
+        (Ok(report), CliOutput::Text) => {
             println!("{}", paint_status(&report, CliStream::Stdout));
             0
         }
-        Err(message) => {
+        (Ok(report), CliOutput::Json) => print_json_stdout(&verify_json(true, &report)),
+        (Err(message), CliOutput::Text) => {
             eprintln!("{}", paint_status(&message, CliStream::Stderr));
+            1
+        }
+        (Err(message), CliOutput::Json) => {
+            print_json_stdout(&verify_json(false, &message));
             1
         }
     }
@@ -5094,6 +5261,35 @@ fn present(outcome: Result<String, OpError>) -> i32 {
     }
 }
 
+fn print_json_stdout(value: &serde_json::Value) -> i32 {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("CLI JSON output should serialize")
+    );
+    0
+}
+
+fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("CLI JSON error output should serialize")
+    );
+    code
+}
+
+fn op_error_json(error: &OpError) -> serde_json::Value {
+    match error {
+        OpError::Invalid(message) => serde_json::json!({
+            "status": "invalid",
+            "message": message,
+        }),
+        OpError::Rejected(message) | OpError::Conflict(message) => serde_json::json!({
+            "status": "rejected",
+            "message": message,
+        }),
+    }
+}
+
 /// Build the events for a revision: one fresh replacement assertion (`event:{seq}`,
 /// appended first so the supersessions can resolve it) followed by **one supersession per
 /// believed incumbent** (`event:{seq+1+i}`), each pointing `by` at the replacement.
@@ -5800,13 +5996,30 @@ fn op_explain_receipt(
     }
 }
 
-fn cmd_explain(args: &ReadFactArgs) -> i32 {
-    present(op_explain(
-        &log_path(),
-        &args.subject.kind,
-        &args.subject.key,
-        &args.predicate,
-    ))
+fn cmd_explain(args: &ReadFactArgs, output: CliOutput) -> i32 {
+    match output {
+        CliOutput::Text => present(op_explain(
+            &log_path(),
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+        )),
+        CliOutput::Json => match op_explain_receipt(
+            &log_path(),
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+        ) {
+            Ok(receipt) => print_json_stdout(&receipt_json("explain", &receipt)),
+            Err(error) => {
+                let code = match error {
+                    OpError::Invalid(_) => 2,
+                    OpError::Rejected(_) | OpError::Conflict(_) => 1,
+                };
+                print_json_stderr(&op_error_json(&error), code)
+            }
+        },
+    }
 }
 
 /// The distinct `(kind, key, predicate)` fact streams in the log, in append order — the
@@ -5850,9 +6063,19 @@ fn filters_are_empty(filters: &FactsListArgs) -> bool {
     filters.kind.is_none() && filters.key.is_none() && filters.predicate.is_none()
 }
 
+struct FactsListOutcome {
+    facts: Vec<(String, String, String)>,
+    include_diagnostics: bool,
+    hidden_diagnostics_count: usize,
+    filters_applied: bool,
+    kind_filter: Option<String>,
+    key_filter: Option<String>,
+    predicate_filter: Option<String>,
+}
+
 /// List distinct fact streams in the durable store. This is the human CLI counterpart to
 /// MCP `list_facts`, with the same default hiding of internal doctor/write-check diagnostics.
-fn op_facts_list(path: &str, filters: &FactsListArgs) -> Result<String, OpError> {
+fn facts_list_outcome(path: &str, filters: &FactsListArgs) -> Result<FactsListOutcome, OpError> {
     let all_subjects = op_list_subjects(path, true)?;
     let mut visible = Vec::new();
     let mut hidden_diagnostics_count = 0usize;
@@ -5867,24 +6090,38 @@ fn op_facts_list(path: &str, filters: &FactsListArgs) -> Result<String, OpError>
         visible.push((kind, key, predicate));
     }
 
-    let hidden_note = if hidden_diagnostics_count == 0 {
+    Ok(FactsListOutcome {
+        facts: visible,
+        include_diagnostics: filters.include_diagnostics,
+        hidden_diagnostics_count,
+        filters_applied: !filters_are_empty(filters),
+        kind_filter: filters.kind.clone(),
+        key_filter: filters.key.clone(),
+        predicate_filter: filters.predicate.clone(),
+    })
+}
+
+fn format_facts_list(outcome: &FactsListOutcome) -> String {
+    let hidden_note = if outcome.hidden_diagnostics_count == 0 {
         String::new()
     } else {
         format!(
-            " ({hidden_diagnostics_count} diagnostic stream(s) hidden; pass --include-diagnostics to show)"
+            " ({} diagnostic stream(s) hidden; pass --include-diagnostics to show)",
+            outcome.hidden_diagnostics_count
         )
     };
 
-    if visible.is_empty() {
-        let empty = if filters_are_empty(filters) {
-            "no dent8 facts recorded yet"
-        } else {
+    if outcome.facts.is_empty() {
+        let empty = if outcome.filters_applied {
             "no dent8 facts matched filters"
+        } else {
+            "no dent8 facts recorded yet"
         };
-        return Ok(format!("{empty}{hidden_note}"));
+        return format!("{empty}{hidden_note}");
     }
 
-    let lines = visible
+    let lines = outcome
+        .facts
         .iter()
         .map(|(kind, key, predicate)| {
             format!(
@@ -5896,16 +6133,64 @@ fn op_facts_list(path: &str, filters: &FactsListArgs) -> Result<String, OpError>
             )
         })
         .collect::<Vec<_>>();
-    Ok(format!(
+    format!(
         "{} dent8 fact stream(s){}:\n{}",
-        visible.len(),
+        outcome.facts.len(),
         hidden_note,
         lines.join("\n")
-    ))
+    )
 }
 
-fn cmd_facts_list(args: &FactsListArgs) -> i32 {
-    present(op_facts_list(&log_path(), args))
+fn facts_list_json(outcome: &FactsListOutcome) -> serde_json::Value {
+    let facts = outcome
+        .facts
+        .iter()
+        .map(|(kind, key, predicate)| {
+            serde_json::json!({
+                "uri": mcp::resource_uri(kind, key, predicate),
+                "subject": {
+                    "kind": kind,
+                    "key": key,
+                },
+                "predicate": predicate,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": "ok",
+        "tool": "facts list",
+        "count": facts.len(),
+        "facts": facts,
+        "filters": {
+            "kind": outcome.kind_filter,
+            "key": outcome.key_filter,
+            "predicate": outcome.predicate_filter,
+        },
+        "include_diagnostics": outcome.include_diagnostics,
+        "hidden_diagnostics_count": outcome.hidden_diagnostics_count,
+    })
+}
+
+fn cmd_facts_list(args: &FactsListArgs, output: CliOutput) -> i32 {
+    match facts_list_outcome(&log_path(), args) {
+        Ok(outcome) => match output {
+            CliOutput::Text => {
+                println!("{}", format_facts_list(&outcome));
+                0
+            }
+            CliOutput::Json => print_json_stdout(&facts_list_json(&outcome)),
+        },
+        Err(error) => match output {
+            CliOutput::Text => present(Err(error)),
+            CliOutput::Json => {
+                let code = match error {
+                    OpError::Invalid(_) => 2,
+                    OpError::Rejected(_) | OpError::Conflict(_) => 1,
+                };
+                print_json_stderr(&op_error_json(&error), code)
+            }
+        },
+    }
 }
 
 /// List every contested fact (a fact in dispute — `Contested` lifecycle) across all

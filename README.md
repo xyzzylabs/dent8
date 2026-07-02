@@ -51,6 +51,7 @@ dent8 doctor --source user:alice --write-check            # verify setup + prove
 dent8 eval                                                 # why: 5/5 attacks blocked vs a recency baseline
 dent8 assert person:alice favorite_drink tea --authority high --source user:alice
 dent8 facts list                                           # browse known fact streams
+dent8 --output json facts list                             # stable JSON for scripts/agents
 dent8 supersede person:alice favorite_drink coffee --authority low --source user:alice  # REJECTED
 dent8 explain person:alice favorite_drink                  # still "tea", with an integrity receipt
 dent8 derive person:alice shopping_item tea --from person:alice favorite_drink --authority medium --source user:alice
@@ -118,7 +119,9 @@ Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `de
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
 `derive`/`explain`/`replay`/`facts`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
 `init`/`doctor`/`completions`/`mcp serve`/`mcp install`). Use the global `--color auto|always|never` flag to control
-colored help, errors, and verdict words in human-facing output.
+colored help, errors, and verdict words in human-facing output. Use
+`--output json` for stable machine-readable output on `facts list`, `explain`, `verify`,
+and `doctor`; unsupported commands fail closed instead of silently returning prose.
 
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
@@ -253,6 +256,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   is what it is.
 - `dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-diagnostics]`:
   list known fact streams, hiding internal doctor/write-check diagnostics by default.
+- `dent8 --output json facts list|explain|verify|doctor`: emit stable JSON for scripting
+  and agent-side checks while preserving existing text output by default.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`: print a shell completion script.
