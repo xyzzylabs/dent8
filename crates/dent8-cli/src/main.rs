@@ -32,8 +32,9 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, init, agent add, authority, identity status, doctor, \
-                                      mcp install";
+                                      eval, init, agent add, authority, identity bootstrap, \
+                                      identity status, identity repair-env, identity \
+                                      rotate-source, doctor, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -302,7 +303,10 @@ impl CliCommand {
                 })
                 | Self::Authority(_)
                 | Self::Identity(IdentityArgs {
-                    command: IdentityCommand::Status(_),
+                    command: IdentityCommand::Bootstrap(_)
+                        | IdentityCommand::Status(_)
+                        | IdentityCommand::RepairEnv(_)
+                        | IdentityCommand::RotateSource(_),
                 })
                 | Self::Doctor(_)
                 | Self::Mcp(McpArgs {
@@ -1143,8 +1147,16 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             }
             CliOutput::Json => {
                 let tool = match command {
+                    IdentityCommand::Bootstrap(_) => "identity bootstrap",
                     IdentityCommand::Status(_) => "identity status",
-                    _ => "identity",
+                    IdentityCommand::RepairEnv(_) => "identity repair-env",
+                    IdentityCommand::RotateSource(_) => "identity rotate-source",
+                    IdentityCommand::IssuerKeygen(_)
+                    | IdentityCommand::AgentKeygen(_)
+                    | IdentityCommand::TrustAdd(_)
+                    | IdentityCommand::TrustList
+                    | IdentityCommand::GrantIssue(_)
+                    | IdentityCommand::GrantVerify(_) => "identity",
                 };
                 print_json_stderr(
                     &serde_json::json!({
@@ -1167,6 +1179,7 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             args.max,
             &args.scope,
             args.expires_at_ms,
+            output,
         ),
         IdentityCommand::Status(args) => identity::status(
             &args.dir,
@@ -1175,7 +1188,7 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             args.expires_warning_days,
             output,
         ),
-        IdentityCommand::RepairEnv(args) => identity::repair_env(&args.dir, &args.source),
+        IdentityCommand::RepairEnv(args) => identity::repair_env(&args.dir, &args.source, output),
         IdentityCommand::RotateSource(args) => identity::rotate_source(
             &args.dir,
             &args.source,
@@ -1183,6 +1196,7 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             args.max,
             args.scope.as_deref(),
             args.expires_at_ms,
+            output,
         ),
         IdentityCommand::IssuerKeygen(args) => identity::issuer_keygen(&args.out),
         IdentityCommand::AgentKeygen(args) => identity::agent_keygen(&args.source, &args.out),

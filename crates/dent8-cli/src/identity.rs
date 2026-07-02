@@ -134,6 +134,91 @@ pub(crate) struct SourceIdentityOutput {
 }
 
 #[derive(Clone, Debug)]
+struct RepairEnvOutput {
+    source: String,
+    dir: PathBuf,
+    active_grants_file: PathBuf,
+    env_file: PathBuf,
+    repaired_active: bool,
+}
+
+impl RepairEnvOutput {
+    fn message(&self) -> String {
+        let mut lines = vec![
+            format!("repaired signed identity env for {}", self.source),
+            format!("  env: {}", self.env_file.display()),
+            format!("  active grants: {}", self.active_grants_file.display()),
+        ];
+        if self.repaired_active {
+            lines.push(
+                "  active grants: restored current grant entry from signed grant".to_string(),
+            );
+        }
+        lines.push(String::new());
+        lines.push(format!(
+            "Next:\n  dent8 identity status --dir {} --source {}\n  dent8 doctor --source {} --write-check",
+            shell_quote(&path_string(&self.dir)),
+            self.source,
+            self.source
+        ));
+        lines.join("\n")
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RotateSourceOutput {
+    source: String,
+    dir: PathBuf,
+    source_key_path: PathBuf,
+    grant_file: PathBuf,
+    active_grants_file: PathBuf,
+    env_file: PathBuf,
+    old_grant_backup: PathBuf,
+    old_env_backup: PathBuf,
+    old_active_grant_backup: Option<PathBuf>,
+    old_public_key_backup: Option<PathBuf>,
+}
+
+impl RotateSourceOutput {
+    fn message(&self) -> String {
+        let mut lines = vec![
+            format!(
+                "rotated source identity for {} in {}",
+                self.source,
+                self.dir.display()
+            ),
+            format!("  source key: {}", self.source_key_path.display()),
+            format!("  grant: {}", self.grant_file.display()),
+            format!("  active grants: {}", self.active_grants_file.display()),
+            format!("  env: {}", self.env_file.display()),
+            "  old source key backup: removed after successful rotation".to_string(),
+            format!("  old grant backup: {}", self.old_grant_backup.display()),
+            format!("  old env backup: {}", self.old_env_backup.display()),
+        ];
+        if let Some(active_backup) = &self.old_active_grant_backup {
+            lines.push(format!(
+                "  old active grant backup: {}",
+                active_backup.display()
+            ));
+        }
+        if let Some(public_backup) = &self.old_public_key_backup {
+            lines.push(format!(
+                "  old public key backup: {}",
+                public_backup.display()
+            ));
+        }
+        lines.push(String::new());
+        lines.push(format!(
+            "Next:\n  dent8 identity status --dir {} --source {}\n  dent8 doctor --source {} --write-check",
+            shell_quote(&path_string(&self.dir)),
+            self.source,
+            self.source,
+        ));
+        lines.join("\n")
+    }
+}
+
+#[derive(Clone, Debug)]
 struct BootstrapPlan {
     dir: PathBuf,
     identities_dir: PathBuf,
@@ -289,6 +374,7 @@ pub(crate) fn bootstrap(
     max_authority: CliAuthority,
     scope: &str,
     expires_at_ms: Option<i64>,
+    output: CliOutput,
 ) -> i32 {
     match bootstrap_bundle(
         dir,
@@ -299,15 +385,109 @@ pub(crate) fn bootstrap(
         scope,
         expires_at_ms,
     ) {
-        Ok(output) => {
-            println!("{}", output.message());
-            0
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Ok(result) => match output {
+            CliOutput::Text => {
+                println!("{}", result.message());
+                0
+            }
+            CliOutput::Json => print_json_stdout(&identity_bootstrap_json(
+                dir,
+                source,
+                issuer,
+                issuer_key,
+                max_authority,
+                scope,
+                expires_at_ms,
+                &result,
+            )),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &identity_bootstrap_error_json(
+                    dir,
+                    source,
+                    issuer,
+                    issuer_key,
+                    max_authority,
+                    scope,
+                    expires_at_ms,
+                    &error,
+                ),
+                1,
+            ),
+        },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn identity_bootstrap_json(
+    dir: &str,
+    source: &str,
+    issuer: &str,
+    issuer_key: Option<&str>,
+    max_authority: CliAuthority,
+    scope: &str,
+    expires_at_ms: Option<i64>,
+    output: &BootstrapOutput,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity bootstrap",
+        "dir": path_string(&output.bundle_dir),
+        "source": output.source.as_str(),
+        "issuer": output.issuer.as_str(),
+        "max_authority": output.max_authority.name(),
+        "scope": output.scope.as_str(),
+        "issuer_key_path": path_string(&output.issuer_key_path),
+        "trust_file": path_string(&output.trust_file),
+        "active_grants_file": path_string(&output.active_grants_file),
+        "grant_file": path_string(&output.grant_file),
+        "source_key_path": path_string(&output.source_key_path),
+        "env_file": path_string(&output.env_file),
+        "next": {
+            "load_command": format!("set -a; . {}; set +a", shell_quote(&path_string(&output.env_file))),
+            "doctor_command": format!("dent8 doctor --source {} --write-check", output.source),
+        },
+        "message": output.message(),
+        "requested": {
+            "dir": dir,
+            "source": source,
+            "issuer": issuer,
+            "issuer_key": issuer_key,
+            "max_authority": max_authority.level().name(),
+            "scope": scope,
+            "expires_at_ms": expires_at_ms,
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn identity_bootstrap_error_json(
+    dir: &str,
+    source: &str,
+    issuer: &str,
+    issuer_key: Option<&str>,
+    max_authority: CliAuthority,
+    scope: &str,
+    expires_at_ms: Option<i64>,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity bootstrap",
+        "dir": dir,
+        "source": source,
+        "issuer": issuer,
+        "issuer_key": issuer_key,
+        "max_authority": max_authority.level().name(),
+        "scope": scope,
+        "expires_at_ms": expires_at_ms,
+        "message": message,
+    })
 }
 
 pub(crate) fn issuer_keygen(out: &str) -> i32 {
@@ -396,17 +576,13 @@ pub(crate) fn status(
             }
             CliOutput::Json => {
                 let ok = status_lines_ok(&lines);
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&identity_status_json(
-                        dir,
-                        source,
-                        issuer_key,
-                        expires_warning_days,
-                        &lines,
-                    ))
-                    .expect("identity status JSON should serialize")
-                );
+                print_json_stdout(&identity_status_json(
+                    dir,
+                    source,
+                    issuer_key,
+                    expires_warning_days,
+                    &lines,
+                ));
                 i32::from(!ok)
             }
         },
@@ -415,37 +591,80 @@ pub(crate) fn status(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => {
-                eprintln!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "status": "failed",
-                        "tool": "identity status",
-                        "dir": dir,
-                        "source": source,
-                        "issuer_key": issuer_key,
-                        "expires_warning_days": expires_warning_days,
-                        "message": error,
-                    }))
-                    .expect("identity status error JSON should serialize")
-                );
+            CliOutput::Json => print_json_stderr(
+                &serde_json::json!({
+                    "status": "failed",
+                    "tool": "identity status",
+                    "dir": dir,
+                    "source": source,
+                    "issuer_key": issuer_key,
+                    "expires_warning_days": expires_warning_days,
+                    "message": error,
+                }),
+                1,
+            ),
+        },
+    }
+}
+
+pub(crate) fn repair_env(dir: &str, source: &str, output: CliOutput) -> i32 {
+    match repair_env_bundle_outcome(dir, source) {
+        Ok(result) => match output {
+            CliOutput::Text => {
+                println!("{}", result.message());
+                0
+            }
+            CliOutput::Json => print_json_stdout(&identity_repair_env_json(dir, source, &result)),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
                 1
+            }
+            CliOutput::Json => {
+                print_json_stderr(&identity_repair_env_error_json(dir, source, &error), 1)
             }
         },
     }
 }
 
-pub(crate) fn repair_env(dir: &str, source: &str) -> i32 {
-    match repair_env_bundle(dir, source) {
-        Ok(message) => {
-            println!("{message}");
-            0
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
-    }
+fn identity_repair_env_json(
+    dir: &str,
+    source: &str,
+    output: &RepairEnvOutput,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity repair-env",
+        "dir": path_string(&output.dir),
+        "source": output.source.as_str(),
+        "active_grants_file": path_string(&output.active_grants_file),
+        "env_file": path_string(&output.env_file),
+        "repaired_active_grant": output.repaired_active,
+        "next": {
+            "status_command": format!(
+                "dent8 identity status --dir {} --source {}",
+                shell_quote(&path_string(&output.dir)),
+                output.source
+            ),
+            "doctor_command": format!("dent8 doctor --source {} --write-check", output.source),
+        },
+        "message": output.message(),
+        "requested": {
+            "dir": dir,
+            "source": source,
+        },
+    })
+}
+
+fn identity_repair_env_error_json(dir: &str, source: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity repair-env",
+        "dir": dir,
+        "source": source,
+        "message": message,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -456,17 +675,117 @@ pub(crate) fn rotate_source(
     max_authority: Option<CliAuthority>,
     scope: Option<&str>,
     expires_at_ms: Option<i64>,
+    output: CliOutput,
 ) -> i32 {
     match rotate_source_bundle(dir, source, issuer_key, max_authority, scope, expires_at_ms) {
-        Ok(output) => {
-            println!("{output}");
-            0
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Ok(result) => match output {
+            CliOutput::Text => {
+                println!("{}", result.message());
+                0
+            }
+            CliOutput::Json => print_json_stdout(&identity_rotate_source_json(
+                dir,
+                source,
+                issuer_key,
+                max_authority,
+                scope,
+                expires_at_ms,
+                &result,
+            )),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &identity_rotate_source_error_json(
+                    dir,
+                    source,
+                    issuer_key,
+                    max_authority,
+                    scope,
+                    expires_at_ms,
+                    &error,
+                ),
+                1,
+            ),
+        },
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn identity_rotate_source_json(
+    dir: &str,
+    source: &str,
+    issuer_key: Option<&str>,
+    max_authority: Option<CliAuthority>,
+    scope: Option<&str>,
+    expires_at_ms: Option<i64>,
+    output: &RotateSourceOutput,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity rotate-source",
+        "dir": path_string(&output.dir),
+        "source": output.source.as_str(),
+        "source_key_path": path_string(&output.source_key_path),
+        "grant_file": path_string(&output.grant_file),
+        "active_grants_file": path_string(&output.active_grants_file),
+        "env_file": path_string(&output.env_file),
+        "old_source_key_backup_removed": true,
+        "old_grant_backup": path_string(&output.old_grant_backup),
+        "old_env_backup": path_string(&output.old_env_backup),
+        "old_active_grant_backup": output
+            .old_active_grant_backup
+            .as_ref()
+            .map(|path| path_string(path)),
+        "old_public_key_backup": output
+            .old_public_key_backup
+            .as_ref()
+            .map(|path| path_string(path)),
+        "next": {
+            "load_command": format!("set -a; . {}; set +a", shell_quote(&path_string(&output.env_file))),
+            "status_command": format!(
+                "dent8 identity status --dir {} --source {}",
+                shell_quote(&path_string(&output.dir)),
+                output.source
+            ),
+            "doctor_command": format!("dent8 doctor --source {} --write-check", output.source),
+        },
+        "message": output.message(),
+        "requested": {
+            "dir": dir,
+            "source": source,
+            "issuer_key": issuer_key,
+            "max_authority": max_authority.map(|authority| authority.level().name()),
+            "scope": scope,
+            "expires_at_ms": expires_at_ms,
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn identity_rotate_source_error_json(
+    dir: &str,
+    source: &str,
+    issuer_key: Option<&str>,
+    max_authority: Option<CliAuthority>,
+    scope: Option<&str>,
+    expires_at_ms: Option<i64>,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity rotate-source",
+        "dir": dir,
+        "source": source,
+        "issuer_key": issuer_key,
+        "max_authority": max_authority.map(|authority| authority.level().name()),
+        "scope": scope,
+        "expires_at_ms": expires_at_ms,
+        "message": message,
+    })
 }
 
 fn print_status_lines(lines: &[DoctorLine]) -> bool {
@@ -763,6 +1082,10 @@ fn issuer_key_status(
 }
 
 pub(crate) fn repair_env_bundle(dir: &str, source: &str) -> Result<String, String> {
+    repair_env_bundle_outcome(dir, source).map(|outcome| outcome.message())
+}
+
+fn repair_env_bundle_outcome(dir: &str, source: &str) -> Result<RepairEnvOutput, String> {
     parse_source(source)?;
     let paths = identity_bundle_paths(dir, Some(source))?;
     let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {
@@ -801,20 +1124,13 @@ pub(crate) fn repair_env_bundle(dir: &str, source: &str) -> Result<String, Strin
     };
     write_identity_env(&paths)?;
 
-    let mut lines = vec![
-        format!("repaired signed identity env for {source}"),
-        format!("  env: {}", paths.env_file.display()),
-        format!("  active grants: {}", paths.active_grants_file.display()),
-    ];
-    if repaired_active {
-        lines.push("  active grants: restored current grant entry from signed grant".to_string());
-    }
-    lines.push(String::new());
-    lines.push(format!(
-        "Next:\n  dent8 identity status --dir {} --source {source}\n  dent8 doctor --source {source} --write-check",
-        shell_quote(&path_string(&paths.dir))
-    ));
-    Ok(lines.join("\n"))
+    Ok(RepairEnvOutput {
+        source: source.to_string(),
+        dir: paths.dir,
+        active_grants_file: paths.active_grants_file,
+        env_file: paths.env_file,
+        repaired_active,
+    })
 }
 
 pub(crate) fn add_source_to_bundle(
@@ -1008,7 +1324,7 @@ fn rotate_source_bundle(
     max_authority: Option<CliAuthority>,
     scope: Option<&str>,
     expires_at_ms: Option<i64>,
-) -> Result<String, String> {
+) -> Result<RotateSourceOutput, String> {
     parse_source(source)?;
     let paths = identity_bundle_paths(dir, Some(source))?;
     let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {
@@ -1087,37 +1403,18 @@ fn rotate_source_bundle(
     remove_rotated_private_key_backup(&key_backup)?;
     rollback.commit();
 
-    let mut lines = vec![
-        format!(
-            "rotated source identity for {source} in {}",
-            paths.dir.display()
-        ),
-        format!("  source key: {}", paths.source_key_path.display()),
-        format!("  grant: {}", paths.grant_file.display()),
-        format!("  active grants: {}", paths.active_grants_file.display()),
-        format!("  env: {}", paths.env_file.display()),
-        "  old source key backup: removed after successful rotation".to_string(),
-        format!("  old grant backup: {}", grant_backup.display()),
-        format!("  old env backup: {}", env_backup.display()),
-    ];
-    if let Some(active_backup) = active_backup {
-        lines.push(format!(
-            "  old active grant backup: {}",
-            active_backup.display()
-        ));
-    }
-    if let Some(public_backup) = public_backup {
-        lines.push(format!(
-            "  old public key backup: {}",
-            public_backup.display()
-        ));
-    }
-    lines.push(String::new());
-    lines.push(format!(
-        "Next:\n  dent8 identity status --dir {} --source {source}\n  dent8 doctor --source {source} --write-check",
-        shell_quote(&path_string(&paths.dir))
-    ));
-    Ok(lines.join("\n"))
+    Ok(RotateSourceOutput {
+        source: source.to_string(),
+        dir: paths.dir,
+        source_key_path: paths.source_key_path,
+        grant_file: paths.grant_file,
+        active_grants_file: paths.active_grants_file,
+        env_file: paths.env_file,
+        old_grant_backup: grant_backup,
+        old_env_backup: env_backup,
+        old_active_grant_backup: active_backup,
+        old_public_key_backup: public_backup,
+    })
 }
 
 pub(crate) fn identity_env_path_for_source(dir: &Path, source: &str) -> Result<PathBuf, String> {
@@ -2163,6 +2460,22 @@ fn write_text_path(path: &Path, contents: &str) -> Result<(), String> {
 
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn print_json_stdout(value: &serde_json::Value) -> i32 {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("identity JSON output should serialize")
+    );
+    0
+}
+
+fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(value).expect("identity JSON error output should serialize")
+    );
+    code
 }
 
 fn nonempty_env(name: &str) -> Option<String> {

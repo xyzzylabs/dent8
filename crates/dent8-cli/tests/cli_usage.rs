@@ -3576,6 +3576,117 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
 
 #[cfg(feature = "identity")]
 #[test]
+#[allow(clippy::too_many_lines)]
+fn identity_lifecycle_commands_emit_machine_readable_json() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    let bootstrapped = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "bootstrap",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&bootstrapped, "identity bootstrap --output json");
+    assert!(
+        stderr(&bootstrapped).is_empty(),
+        "{}",
+        stderr(&bootstrapped)
+    );
+    let bootstrapped = stdout_json(&bootstrapped);
+    let canonical_dir = fs::canonicalize(&dir)
+        .expect("identity bundle dir")
+        .to_string_lossy()
+        .to_string();
+    assert_eq!(bootstrapped["status"], "ok");
+    assert_eq!(bootstrapped["tool"], "identity bootstrap");
+    assert_eq!(bootstrapped["dir"], canonical_dir);
+    assert_eq!(bootstrapped["source"], "source:codex");
+    assert_eq!(bootstrapped["issuer"], "owner");
+    assert_eq!(bootstrapped["max_authority"], "High");
+    assert_eq!(
+        bootstrapped["env_file"],
+        fs::canonicalize(dir.join("identity-codex.env"))
+            .expect("identity env")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert!(dir.join("identity-codex.env").exists());
+
+    fs::remove_file(dir.join("active-grants.json")).expect("remove active grants");
+    let repaired = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "repair-env",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+        ],
+        &[],
+    );
+    assert_success(&repaired, "identity repair-env --output json");
+    assert!(stderr(&repaired).is_empty(), "{}", stderr(&repaired));
+    let repaired = stdout_json(&repaired);
+    assert_eq!(repaired["status"], "ok");
+    assert_eq!(repaired["tool"], "identity repair-env");
+    assert_eq!(repaired["source"], "source:codex");
+    assert_eq!(repaired["repaired_active_grant"], true);
+    assert!(dir.join("active-grants.json").exists());
+
+    let rotated = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "rotate-source",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&rotated, "identity rotate-source --output json");
+    assert!(stderr(&rotated).is_empty(), "{}", stderr(&rotated));
+    let rotated = stdout_json(&rotated);
+    assert_eq!(rotated["status"], "ok");
+    assert_eq!(rotated["tool"], "identity rotate-source");
+    assert_eq!(rotated["source"], "source:codex");
+    assert_eq!(rotated["old_source_key_backup_removed"], true);
+    let old_grant_backup = rotated["old_grant_backup"]
+        .as_str()
+        .expect("old grant backup");
+    assert!(
+        Path::new(old_grant_backup).exists(),
+        "rotation should keep the old grant backup"
+    );
+    assert_eq!(
+        rotated["env_file"],
+        fs::canonicalize(dir.join("identity-codex.env"))
+            .expect("rotated identity env")
+            .to_string_lossy()
+            .to_string()
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn identity_env_filename_sanitizes_source_suffix() {
     let temp = TempDir::new();
     let dir = temp.file("dent8");

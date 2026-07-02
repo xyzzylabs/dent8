@@ -122,7 +122,8 @@ lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/
 colored help, errors, and verdict words in human-facing output. Use
 `--output json` for stable machine-readable output on the write commands, `explain`,
 `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`, `agent add`, `authority`,
-`identity status`, `doctor`, and `mcp install`; unsupported commands fail closed instead of silently returning
+`identity bootstrap`, `identity status`, `identity repair-env`, `identity rotate-source`,
+`doctor`, and `mcp install`; unsupported commands fail closed instead of silently returning
 prose.
 
 The core primitive is a claim event, not a generic memory item: every accepted write
@@ -258,7 +259,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   is what it is.
 - `dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-diagnostics]`:
   list known fact streams, hiding internal doctor/write-check diagnostics by default.
-- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|init|agent add|authority|identity status|doctor|mcp install`:
+- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|init|agent add|authority|identity bootstrap|identity status|identity repair-env|identity rotate-source|doctor|mcp install`:
   emit stable JSON for scripting and agent-side checks while preserving existing text output
   by default.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
