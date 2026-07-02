@@ -52,8 +52,17 @@ jobs:
         run: cargo clippy -p dent8-store-sqlite --all-targets -- -D warnings
       - name: Clippy CLI SQLite feature
         run: cargo clippy -p dent8-cli --features sqlite --all-targets -- -D warnings
+      # The minimal build (`--no-default-features` drops signed identity): the docs advertise
+      # it, and the identity/witness *fail-closed* fallback arms (`#[cfg(not(feature = …))]`)
+      # compile ONLY in this combo — without this step they are never even built in CI.
+      - name: Clippy CLI no default features
+        run: cargo clippy -p dent8-cli --no-default-features --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
+      # Runs the `#[cfg(not(feature = …))]` fail-closed tests (e.g. identity configured but
+      # not compiled must reject writes), which no other job exercises.
+      - name: Test CLI no default features
+        run: cargo test -p dent8-cli --no-default-features
       - name: Test signed-anchor feature
         run: cargo test -p dent8-core --features signed-anchor
       - name: Test CLI witness feature

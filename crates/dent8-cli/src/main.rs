@@ -2061,13 +2061,13 @@ fn cmd_agent_add(args: &AgentAddArgs, output: CliOutput) -> i32 {
     {
         let message = "`dent8 agent add` requires signed source identity; default builds include \
                        it, or rebuild this binary with `--features identity`";
-        return match output {
+        match output {
             CliOutput::Text => {
                 eprintln!("{message}");
                 1
             }
             CliOutput::Json => print_json_stderr(&agent_add_error_json(args, message), 1),
-        };
+        }
     }
 
     #[cfg(feature = "identity")]
