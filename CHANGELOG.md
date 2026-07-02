@@ -114,8 +114,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   ([examples/duckdb/](examples/duckdb/)). Read-only export; the log stays the source of truth.
 - **Verification**: hash chain + symmetric/asymmetric anchors, exhaustive authority-lattice
   tests, property-based + robustness proptests, golden replay fixtures, `#[cfg(kani)]` proof
-  harnesses (run manually), structured MCP schema tests, CI coverage for Postgres/SQLite and
-  feature combinations, and the adversarial corpus.
+  harnesses (run manually), structured MCP schema tests, libFuzzer targets over the
+  deserialize→fold→canonicalize path and `CanonicalJson` idempotency (`fuzz/`, with a bounded
+  CI smoke), a committed SQLite concurrent-writers regression test, CI coverage for
+  Postgres/SQLite and feature combinations, and the adversarial corpus.
 
 ### Changed
 

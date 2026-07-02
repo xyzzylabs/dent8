@@ -118,6 +118,28 @@ jobs:
           grep -q 'value         : "mysql"' <<< "$output"
           "$BIN" verify
 
+  # Bounded libFuzzer smoke over the attacker-exposed deserialize -> fold -> canonicalize path
+  # (fuzz/fuzz_targets/). 60s per target: enough to re-run the corpus + catch shallow
+  # regressions on every push; long exploratory runs stay a local/manual concern.
+  fuzz:
+    name: fuzz smoke (nightly, bounded)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Build fuzz targets
+        run: cargo fuzz build
+      - name: Fuzz deserialize -> apply -> canonicalize
+        run: cargo fuzz run deserialize_apply_canonicalize -- -max_total_time=60 -rss_limit_mb=4096
+      - name: Fuzz CanonicalJson idempotency
+        run: cargo fuzz run canonical_json -- -max_total_time=60 -rss_limit_mb=4096
+
   # A `cargo kani` CI job over the dent8-core proof harnesses was attempted but reverted: the
   # official kani-github-action's pinned nightly (Kani 0.67, nightly-2025-11-21) does not build
   # this edition-2024 workspace (`cargo` exits 101 with 0 compilation errors). The harnesses are

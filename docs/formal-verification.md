@@ -131,7 +131,8 @@ and validating it against the model's allowed behaviors [2].
    [`tests/golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs) freezes named
    event streams (`.events.jsonl`) and their replayed outcome (`.expected.json`: chain head +
    state summary), locking the on-disk encoding, the hash chain, and the fold against drift.
-   Remaining for (a): `proptest-stateful`/`bolero` escalation and `cargo-fuzz`.
+   `cargo-fuzz` targets over the deserialize→fold→canonicalize path are built ([`fuzz/`](../fuzz/)).
+   Remaining for (a): `proptest-stateful`/`bolero` escalation.
 2. **After event serialization + hashing exist:** keep the frozen canonical form explicit
    (dent8 currently uses sorted-key compact `serde_json`, **not** RFC 8785/JCS — see
    [storage.md](storage.md) and

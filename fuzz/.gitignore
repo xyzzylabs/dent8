@@ -1,0 +1,7 @@
+target/
+artifacts/
+coverage/
+Cargo.lock
+# Grown exploration corpus stays local; only curated seed-* files are committed.
+corpus/*/*
+!corpus/*/seed-*

@@ -49,8 +49,10 @@ What remains to make it a hardened multi-user product:
 - **Richer protocol/product surfaces.** The v0 MCP server is useful today; official `rmcp`,
   richer transports, `resources/subscribe`, prompts, HTTP, SDKs, and a debugger UI are later.
 - **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
-  fixtures, and the adversarial corpus are built. `cargo-fuzz` and the Stateright-style
-  append/projection model remain open.
+  fixtures, the adversarial corpus, and **`cargo-fuzz` targets** (the
+  deserialize→fold→canonicalize path and `CanonicalJson` idempotency, in [`fuzz/`](../fuzz/),
+  with a bounded 60s-per-target CI smoke) are built. The Stateright-style append/projection
+  model remains open.
 
 Operational persistence is no longer the gap — it is **built and runnable on two backends**
 (Postgres and embedded SQLite, behind the `AsyncEventStore` boundary). The remaining gap is
@@ -192,8 +194,11 @@ an encoding/hash/fold change is caught as a snapshot mismatch (regenerate with
 outcomes (admitted vs rejected writes, per-claim end-state, read-time freshness, retraction
 taint) for `beginner_to_senior`, `ttl_expiry`, `summary_drift`, `consistency_required`, and
 `low_authority_injection`. Robustness tests cover adversarial deserialization and
-panic-freedom over malformed but parseable event streams. Remaining: `cargo-fuzz` over the
-deserialize→apply→canonicalize path and a Stateright-style append/projection model.
+panic-freedom over malformed but parseable event streams. **`cargo-fuzz` is built**: libFuzzer
+targets over the deserialize→fold→canonicalize path (reload stability, hash determinism,
+attestation-message independence, fold totality) and `CanonicalJson` idempotency live in
+[`fuzz/`](../fuzz/), seeded from the golden fixtures, with a bounded CI smoke (60s/target).
+Remaining: a Stateright-style append/projection model.
 
 **Invariant.** All stated invariants, mechanized — see the property list in
 [formal-verification.md](formal-verification.md) §(a).
@@ -202,14 +207,14 @@ deserialize→apply→canonicalize path and a Stateright-style append/projection
 [evals.md](evals.md) — the supersession scenario ("beginner-in-January → senior-in-November"),
 the `consistency_required` LFI family, the `summary_drift` retraction taint, `ttl_expiry`, and
 `low_authority_injection` — each a frozen firewall outcome. The independent-reference-model
-stateful fold harness is built in `proptest_fold.rs`; still open are `cargo-fuzz` targets over
-the deserialize→apply→canonicalize path and a model of append/projection atomicity. Optionally
+stateful fold harness is built in `proptest_fold.rs`; `cargo-fuzz` targets over the
+deserialize→apply→canonicalize path are built (see above); still open is a model of
+append/projection atomicity. Optionally
 escalate terminal-immutability and fold-determinism to Kani/bolero (documented as **bounded**,
 not universal).
 
-**Crates.** `proptest` is in use. Future hardening should add `cargo-fuzz` +
-`libfuzzer-sys`; optionally use `bolero`/Kani and a Stateright-style model for
-append/projection atomicity.
+**Crates.** `proptest` and `cargo-fuzz` + `libfuzzer-sys` are in use; optionally use
+`bolero`/Kani and a Stateright-style model for append/projection atomicity.
 
 ## MCP Adapter — V0 Built
 
