@@ -24,33 +24,39 @@ const GRANT_DOMAIN: &[u8] = b"dent8.source-grant.v1\0";
 const DAY_MILLIS: i64 = 86_400_000;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TrustedIssuers {
     issuers: BTreeMap<String, TrustedIssuer>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TrustedIssuer {
     public_key: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SignedSourceGrant {
     grant: SourceGrantPayload,
     signature: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActiveSourceGrants {
     sources: BTreeMap<String, ActiveSourceGrant>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ActiveSourceGrant {
     grant_signature: String,
     public_key: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceGrantPayload {
     version: u8,
     source: String,

@@ -1515,7 +1515,12 @@ fn log_path() -> String {
 // one the CLI is permissive (dev mode). With one, a source not listed has an `Unknown` ceiling.
 
 /// What a registered source is allowed to assert.
+///
+/// Strict deserialization (`deny_unknown_fields`): the authority registry is a security
+/// artifact, and a silently-ignored unknown field (a typo'd `max_authorty`, an injected key)
+/// must fail loudly rather than weaken enforcement.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceGrant {
     max_authority: AuthorityLevel,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1525,6 +1530,7 @@ struct SourceGrant {
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceRegistry {
     sources: std::collections::BTreeMap<String, SourceGrant>,
 }

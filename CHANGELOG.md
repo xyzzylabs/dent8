@@ -126,6 +126,15 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
 - Removed the old `.dent8/identity.env` fallback for agent MCP installs/status. Agent setup now
   requires the source-specific `.dent8/identity-<source>.env`; run `dent8 identity repair-env`
   or `dent8 init --agent <profile>` to recreate it from current signed identity material.
+- **Pre-release format review** (format changes are free while unreleased, so they were made
+  deliberately now): security artifacts — signed grants, the trust / active-grant / authority
+  registries, and witness signed tree heads — **reject unknown fields** at load
+  (`deny_unknown_fields`): an unknown key in a security file is unsigned noise at best and
+  tampering at worst, so it fails loudly as corrupt instead of being silently ignored. The
+  *event model* deliberately stays lenient under the ADR 0013 optional-field rule (a later
+  `valid_to`-style field is a free, hash-stable addition), and event ids remain an opaque
+  validated string (a future DB-assigned id scheme needs no format change) — so the event
+  format is considered frozen for a first release.
 
 ### Fixed
 

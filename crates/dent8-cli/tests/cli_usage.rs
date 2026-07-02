@@ -5266,6 +5266,95 @@ fn writes_carry_attestations_that_verify_and_detect_tamper() {
     );
 }
 
+/// Security artifacts (grants, trust/active-grant/authority registries, witness heads) are
+/// deserialized strictly: an unknown field is unsigned noise at best and tampering at worst,
+/// so it must fail loudly ("corrupt …") instead of being silently ignored.
+#[cfg(all(feature = "identity", feature = "witness"))]
+#[test]
+fn security_artifacts_reject_unknown_fields() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+
+    // Authority registry with an injected unknown key.
+    let authority = temp.file("authority.json").to_string_lossy().into_owned();
+    fs::write(
+        &authority,
+        r#"{"sources":{"source:codex":{"max_authority":"High","backdoor":true}}}"#,
+    )
+    .expect("write authority");
+    let write = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_drink",
+            "tea",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &[
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_AUTHORITY", authority.as_str()),
+        ],
+    );
+    assert_eq!(write.status.code(), Some(2), "{}", stderr(&write));
+    assert!(stderr(&write).contains("corrupt authority registry"));
+
+    // Trust registry with an unknown top-level field.
+    let trust = temp.file("trust.json").to_string_lossy().into_owned();
+    fs::write(
+        &trust,
+        r#"{"issuers":{"owner":{"public_key":"aa"}},"extra":1}"#,
+    )
+    .expect("write trust");
+    let with_trust = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_drink",
+            "tea",
+            "--authority",
+            "high",
+            "--source",
+            "source:codex",
+        ],
+        &[("DENT8_LOG", log.as_str()), ("DENT8_TRUST", trust.as_str())],
+    );
+    assert_eq!(with_trust.status.code(), Some(2), "{}", stderr(&with_trust));
+    assert!(stderr(&with_trust).contains("corrupt identity trust registry"));
+
+    // Witness head with an unsigned extra field.
+    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    fs::write(
+        &witness_log,
+        format!(
+            "{{\"event_count\":0,\"head\":null,\"signature\":\"{}\",\"extra\":1}}\n",
+            "ab".repeat(64)
+        ),
+    )
+    .expect("write witness log");
+    let key = temp.file("witness.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(&["witness", "keygen"], &[("DENT8_WITNESS_KEY", &key)]),
+        "witness keygen",
+    );
+    let verify = run_dent8(
+        &["witness", "verify"],
+        &[
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_WITNESS_LOG", witness_log.as_str()),
+            ("DENT8_WITNESS_PUBKEY", &format!("{key}.pub")),
+        ],
+    );
+    assert_eq!(verify.status.code(), Some(1), "{}", stderr(&verify));
+    assert!(
+        stderr(&verify).contains("corrupt signed tree head"),
+        "{}",
+        stderr(&verify)
+    );
+}
+
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(None, args, envs)
 }

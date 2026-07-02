@@ -160,8 +160,14 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 // makes the anchor publicly auditable rather than shared-secret.
 
 /// An Ed25519-signed commitment to a log's chain head — a publicly-verifiable tree head.
+///
+/// Strict deserialization (`deny_unknown_fields`): a signed head is a security artifact whose
+/// signature covers only `(event_count, head)` — an unknown field in a stored/published head
+/// is unsigned noise at best and tampering at worst, so it fails loudly instead of being
+/// silently dropped.
 #[cfg(feature = "signed-anchor")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignedTreeHead {
     pub event_count: u64,
     /// Lowercase-hex head digest, or `None` for an empty log.
