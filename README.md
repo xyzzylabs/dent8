@@ -7,7 +7,7 @@ believed something.
 ![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt.](demo.gif)
 
 See it run through the real CLI path:
-**`DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh`** — a
+**`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`** — a
 high-authority fact is asserted, a low-authority source is rejected when it tries to override
 it, and an integrity receipt explains the result with a verified hash chain.
 
@@ -32,16 +32,18 @@ dependency-cascade integrity recency-only memory structurally cannot express.
 ## Install
 
 ```sh
-# From source (Rust 1.95+):
-cargo install --git https://github.com/xyzzylabs/dent8 dent8-cli   # installs the `dent8` binary
+# Install with Cargo (Rust 1.95+):
+cargo install dent8
+# …or from Git before the first crates.io release:
+cargo install --git https://github.com/xyzzylabs/dent8 dent8
 # …or run from a clone without installing:
-cargo run -p dent8-cli -- eval
+cargo run -p dent8 -- eval
 ```
 
-The stock `dent8` binary uses a local file log, needs no services, and includes signed source
-identity. Opt-in builds add the operational **Postgres** backend (`--features postgres`,
-selected by a `postgres://` `DENT8_STORE_URL`) and the Ed25519 **witness**
-(`--features witness`).
+The stock `dent8` binary uses a local file log by default, needs no services, and includes
+signed source identity plus the embedded **SQLite** backend (`sqlite://` `DENT8_STORE_URL`) for
+local multi-agent dogfooding. Opt-in builds add the operational **Postgres** backend
+(`--features postgres`) and the Ed25519 **witness** (`--features witness`).
 
 ## Quickstart
 
@@ -83,7 +85,7 @@ Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP co
 If doctor reports a stale generated identity bundle or MCP env, `dent8 doctor --agent
 <profile> --repair` repairs the generated env and refreshes the installed MCP config before
 rerunning the normal checks. For repo-local dogfood where MCP startup must not invoke Cargo,
-build once with `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features
+build once with `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features
 sqlite,witness`, then pass `--mcp-local-bin` on `init` / `agent add` or `--local-bin` on
 `mcp install`; dent8 writes `.dent8/bin/dent8` and doctor verifies the wrapper and prebuilt
 target.
@@ -218,7 +220,7 @@ Workspace crates:
 - `dent8-store`: storage and replay traits (`EventStore` + async `AsyncEventStore`) shared by backends.
 - `dent8-store-postgres`: Postgres adapter, schema, and migration boundary.
 - `dent8-store-sqlite`: embedded SQLite adapter (the second `AsyncEventStore` backend).
-- `dent8-cli`: operator and developer CLI surface.
+- `dent8`: operator and developer CLI surface.
 - `dent8-evals`: adversarial corpus behind the self-demonstrating `dent8 eval`.
 - `dent8-export`: Parquet export for offline DuckDB analysis (opt-in, `--features export`).
 
@@ -305,6 +307,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 
 **Planning & research**
 
+- [Release Checklist](docs/release.md)
 - [Roadmap](docs/roadmap.md)
 - [Related Work](docs/related-work.md)
 - [Research Dossier](docs/research/dossier.md)
@@ -319,7 +322,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh
+DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh
+scripts/release-acceptance.sh
 
 # The DB-verified Postgres adapter is feature-gated; its integration tests are gated
 # on DATABASE_URL (they skip without one). Throwaway DB via Docker:

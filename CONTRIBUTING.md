@@ -7,12 +7,13 @@ dent8 is intentionally correctness-first. Please favor small changes with clear 
 ```sh
 cargo fmt --all --check
 cargo test --workspace
+scripts/release-acceptance.sh
 ```
 
 For schema smoke testing:
 
 ```sh
-cargo run -q -p dent8-cli -- schema postgres
+cargo run -q -p dent8 -- schema postgres
 ```
 
 ## Design Expectations
@@ -26,4 +27,3 @@ cargo run -q -p dent8-cli -- schema postgres
 ## Commit Scope
 
 Keep commits focused. If a change alters architecture, storage semantics, event names, or public commands, update docs in the same change.
-
