@@ -3230,6 +3230,42 @@ fn identity_status_reports_bundle_and_expiry() {
     );
     assert_success(&inferred_status, "identity status infers active env");
     assert!(stdout(&inferred_status).contains("source=source:codex"));
+
+    let status_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "status",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&status_json, "identity status --output json");
+    let status_json = stdout_json(&status_json);
+    assert_eq!(status_json["status"], "ok");
+    assert_eq!(status_json["tool"], "identity status");
+    assert_eq!(status_json["ok"], true);
+    assert_eq!(status_json["dir"], dir_str);
+    assert_eq!(status_json["source"], "source:codex");
+    assert_eq!(status_json["issuer_key"], issuer_key);
+    assert!(
+        status_json["checks"]
+            .as_array()
+            .expect("identity checks")
+            .iter()
+            .any(|check| check["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("grant:")
+                    && message.contains("source=source:codex")
+                    && message.contains("max=High"))),
+        "{status_json}"
+    );
 }
 
 #[cfg(feature = "identity")]
@@ -3476,6 +3512,43 @@ fn identity_rotate_source_can_replace_an_expired_grant() {
     );
     assert_eq!(expired_status.status.code(), Some(1));
     assert!(stdout(&expired_status).contains("grant expiry: expired at 1"));
+
+    let expired_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "status",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_eq!(expired_json.status.code(), Some(1));
+    assert!(
+        stderr(&expired_json).is_empty(),
+        "{}",
+        stderr(&expired_json)
+    );
+    let expired_json = stdout_json(&expired_json);
+    assert_eq!(expired_json["status"], "failed");
+    assert_eq!(expired_json["tool"], "identity status");
+    assert_eq!(expired_json["ok"], false);
+    assert!(
+        expired_json["checks"]
+            .as_array()
+            .expect("identity checks")
+            .iter()
+            .any(|check| check["ok"] == false
+                && check["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("expired at 1"))),
+        "{expired_json}"
+    );
 
     assert_success(
         &run_dent8(

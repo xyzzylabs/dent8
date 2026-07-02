@@ -14,7 +14,7 @@ use dent8_core::{AuthorityLevel, TimestampMillis};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
-use crate::{CliAuthority, WriteAuth, env_flag, now_millis, parse_source, write_atomic};
+use crate::{CliAuthority, CliOutput, WriteAuth, env_flag, now_millis, parse_source, write_atomic};
 
 const DEFAULT_TRUST: &str = "dent8-trust.json";
 const ACTIVE_GRANTS_FILE: &str = "active-grants.json";
@@ -385,17 +385,53 @@ pub(crate) fn status(
     source: Option<&str>,
     issuer_key: Option<&str>,
     expires_warning_days: u64,
+    output: CliOutput,
 ) -> i32 {
     match identity_status(dir, source, issuer_key, expires_warning_days) {
-        Ok(lines) => {
-            println!("identity status");
-            let ok = print_status_lines(&lines);
-            i32::from(!ok)
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Ok(lines) => match output {
+            CliOutput::Text => {
+                println!("identity status");
+                let ok = print_status_lines(&lines);
+                i32::from(!ok)
+            }
+            CliOutput::Json => {
+                let ok = status_lines_ok(&lines);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&identity_status_json(
+                        dir,
+                        source,
+                        issuer_key,
+                        expires_warning_days,
+                        &lines,
+                    ))
+                    .expect("identity status JSON should serialize")
+                );
+                i32::from(!ok)
+            }
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "status": "failed",
+                        "tool": "identity status",
+                        "dir": dir,
+                        "source": source,
+                        "issuer_key": issuer_key,
+                        "expires_warning_days": expires_warning_days,
+                        "message": error,
+                    }))
+                    .expect("identity status error JSON should serialize")
+                );
+                1
+            }
+        },
     }
 }
 
@@ -434,14 +470,44 @@ pub(crate) fn rotate_source(
 }
 
 fn print_status_lines(lines: &[DoctorLine]) -> bool {
-    let mut ok = true;
+    let ok = status_lines_ok(lines);
     for line in lines {
-        if !line.ok {
-            ok = false;
-        }
         println!("  {}  {}", line.level, line.message);
     }
     ok
+}
+
+fn status_lines_ok(lines: &[DoctorLine]) -> bool {
+    lines.iter().all(|line| line.ok)
+}
+
+fn identity_status_json(
+    dir: &str,
+    source: Option<&str>,
+    issuer_key: Option<&str>,
+    expires_warning_days: u64,
+    lines: &[DoctorLine],
+) -> serde_json::Value {
+    let ok = status_lines_ok(lines);
+    serde_json::json!({
+        "status": if ok { "ok" } else { "failed" },
+        "tool": "identity status",
+        "ok": ok,
+        "dir": dir,
+        "source": source,
+        "issuer_key": issuer_key,
+        "expires_warning_days": expires_warning_days,
+        "checks": lines
+            .iter()
+            .map(|line| {
+                serde_json::json!({
+                    "level": line.level,
+                    "ok": line.ok,
+                    "message": line.message,
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
 }
 
 fn identity_status(

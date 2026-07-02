@@ -233,7 +233,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   operator issuer key outside the project/agent bundle, then creates a source key, trust
   registry, active-grant registry, grant, and shell-loadable `.dent8/identity-<source>.env` for
   one source. `status` checks the bundle/trust/active-grant/grant/source key/issuer key and
-  reports expiry. `repair-env` rewrites generated `.dent8/identity-<source>.env` and, when
+  reports expiry; `status` supports `--output json`. `repair-env` rewrites generated
+  `.dent8/identity-<source>.env` and, when
   missing, restores the
   active-grant entry from the current signed grant after verifying trust, grant, and source key
   consistency; it refuses to overwrite a different active grant. `rotate-source` replaces the
@@ -287,8 +288,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - `dent8 schema postgres` — prints the Postgres schema.
 - `dent8 --version`, `dent8 --help`, and the global presentation flag
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
-  data stays plain). The global `--output text|json` flag currently supports `facts list`,
-  `explain`, `verify`, and `doctor`; unsupported commands fail closed with a targeted usage
+  data stays plain). The global `--output text|json` flag currently supports the write
+  commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `authority`,
+  `identity status`, and `doctor`; unsupported commands fail closed with a targeted usage
   error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**

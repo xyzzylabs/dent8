@@ -32,7 +32,7 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, authority, doctor";
+                                      eval, authority, identity status, doctor";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -137,7 +137,7 @@ fn run_cli(cli: Cli) -> i32 {
             ),
             AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source, cli.output),
         },
-        Some(CliCommand::Identity(args)) => run_identity(&args.command),
+        Some(CliCommand::Identity(args)) => run_identity(&args.command, cli.output),
         Some(CliCommand::Hook(args)) => match args.command {
             HookCommand::NativeMemoryGuard => cmd_hook_native_memory_guard(),
         },
@@ -296,6 +296,9 @@ impl CliCommand {
                 | Self::Conflicts
                 | Self::Eval
                 | Self::Authority(_)
+                | Self::Identity(IdentityArgs {
+                    command: IdentityCommand::Status(_),
+                })
                 | Self::Doctor(_)
         )
     }
@@ -1111,12 +1114,30 @@ fn parse_source(raw: &str) -> Result<String, String> {
     Ok(raw.to_string())
 }
 
-fn run_identity(command: &IdentityCommand) -> i32 {
+fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
     #[cfg(not(feature = "identity"))]
     {
         let _ = command;
-        eprintln!("`dent8 identity` requires a build with `--features identity`");
-        2
+        match output {
+            CliOutput::Text => {
+                eprintln!("`dent8 identity` requires a build with `--features identity`");
+                2
+            }
+            CliOutput::Json => {
+                let tool = match command {
+                    IdentityCommand::Status(_) => "identity status",
+                    _ => "identity",
+                };
+                print_json_stderr(
+                    &serde_json::json!({
+                        "status": "failed",
+                        "tool": tool,
+                        "message": "`dent8 identity` requires a build with `--features identity`",
+                    }),
+                    2,
+                )
+            }
+        }
     }
     #[cfg(feature = "identity")]
     match command {
@@ -1134,6 +1155,7 @@ fn run_identity(command: &IdentityCommand) -> i32 {
             args.source.as_deref(),
             args.issuer_key.as_deref(),
             args.expires_warning_days,
+            output,
         ),
         IdentityCommand::RepairEnv(args) => identity::repair_env(&args.dir, &args.source),
         IdentityCommand::RotateSource(args) => identity::rotate_source(
