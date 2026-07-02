@@ -132,21 +132,26 @@ as "first to unify/transplant," never "first to invent"):
    bounded model checking; optional Creusot/Verus on the fold; Stateright for
    serializability) [5][8], with explicit bounded-vs-universal caveats.
 5. **System & implementation** — the Rust workspace (edition 2024, `unsafe`
-   forbidden, clippy pedantic); `dent8-core`; Postgres schema 001; honest status of
-   unbuilt components.
+   forbidden, clippy pedantic); `dent8-core` / `dent8-store`; CLI/MCP surfaces;
+   Postgres schemas 002/003 plus SQLite as a second async backend; the Parquet export
+   lane; signed identity and witness primitives; honest status of remaining product
+   hardening.
 6. **Evaluation** — the built `dent8-evals` adversarial corpus (MINJA, laundering,
    canonical contradiction, Sybil, poisoned-source retraction) showing **0/5 attack success
-   against the firewall vs 5/5 against a recency-only baseline** [3], plus the exhaustive
-   authority-lattice test
-   and Kani proofs; comparison axes. Still to add: golden replay fixtures, `proptest`
-   property results, TTL-expiry evaluation.
+   against the firewall vs 5/5 against a recency-only baseline** [3], plus exhaustive
+   authority-lattice tests, Kani harnesses, golden replay fixtures, `proptest` /
+   stateful fold suites, TTL-expiry evaluation, and anchor rewrite tests; comparison
+   axes. Still to add: `cargo-fuzz`, append/projection model checking, and an operated
+   witness deployment evaluation.
 7. **Threats to validity** — model-vs-implementation gap; bounded proofs;
-   canonicalization-not-yet-frozen; the file backend is a single-writer dev store (no
-   transactional/concurrent evaluation yet); **TTL-expiry and Postgres-layer evaluation
-   pending**; overlap with Zep [7].
+   canonicalization is sorted-key `serde_json`, not JCS; the file backend is a
+   single-writer dev store; Postgres concurrency is DB-verified but still needs
+   DB-assigned ids for heavy fan-out; the witness primitive is not an operated service;
+   overlap with Zep [7].
 8. **Limitations & future work** — ATMS-style assumption-environment replay; valid-
-   time intervals (`valid_to`); predicate-level volatility policy; the sqlx adapter
-   and log-conformance checking.
+   time intervals (`valid_to`); predicate-level volatility policy; DB-assigned ids;
+   `cargo-fuzz`; append/projection model checking; operated witness; HTTP/SDK/debugger
+   surfaces.
 
 ## Evaluation plan
 
@@ -176,8 +181,7 @@ as "first to unify/transplant," never "first to invent"):
 - **"Bitemporal + supersession + provenance are our differentiators."** Weakest
   claim: Zep ships all three [7]. *Strengthen* by reframing as the *combination* and
   making **authority-weighted supersession** the headline (Graphiti arbitrates
-  contradictions by recency only — "consistently prioritizes new information" [7]) —
-  after implementing it.
+  contradictions by recency only — "consistently prioritizes new information" [7]).
 - **"Belief-revision semantics."** Weak if stated as AGM compliance. *Strengthen* by
   claiming the *operational spirit of belief-base revision* and disclaiming closure +
   Recovery [1][2].

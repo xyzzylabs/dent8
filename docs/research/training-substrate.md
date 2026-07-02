@@ -2,10 +2,11 @@
 
 > **Status: exploratory.** This document maps how dent8 *could* feed model
 > fine-tuning (SFT, RL/RLVR, DPO, and related). It is a positioning/feasibility note,
-> **not a committed feature** and **not usable today**: dent8 has no serialized events
-> and no export path, so no training dataset can currently be materialized from it
-> (see §"The missing plumbing"). Read it after [related-work.md](../related-work.md)
-> and [novelty.md](novelty.md).
+> **not a committed feature** and **not usable today as a training pipeline**:
+> dent8 has serialized events and a Parquet event-log export, but no dataset schema,
+> label materializer, split/version manifest, or trainer integration yet (see
+> §"The missing plumbing"). Read it after [related-work.md](../related-work.md) and
+> [novelty.md](novelty.md).
 
 ## Thesis
 
@@ -21,9 +22,10 @@ Two honest boundaries frame everything below:
    about *what to believe, when to revise, and how to attribute* — not prose quality or
    broad instruction-following. The natural target is a *memory-managing* agent (or the
    memory-relevant behavior of a general agent), not a base model's style.
-2. **It is enabled-by-architecture, not built.** Every mapping below is supported by
-   dent8's design and the implemented `dent8-core`/`dent8-store` layer, but the
-   *export* that turns it into a dataset does not exist yet.
+2. **It is enabled-by-architecture, not built as a dataset product.** Every mapping
+   below is supported by dent8's design and the implemented `dent8-core`/`dent8-store`
+   layer, and the raw event-log export exists, but the materializer that turns those
+   logs and audits into training-ready examples does not.
 
 ## Cleanest-fit ranking
 
@@ -137,9 +139,10 @@ traces are product-critical rather than merely interesting.
 
 - **Behavior, not capability.** Repeated for emphasis: this trains memory/belief
   management, not general intelligence.
-- **Nothing is built for this yet.** No export, no dataset schema, no integration.
-  Pitching dent8 as a "fine-tuning tool" would be exactly the overclaim the rest of the
-  docs avoid — it is a *substrate provider* feeding an external trainer.
+- **The dataset product is not built.** The event-log export exists, but there is no
+  preference/reward dataset schema, materializer, split/version manifest, or trainer
+  integration. Pitching dent8 as a "fine-tuning tool" would be exactly the overclaim the
+  rest of the docs avoid — it is a *substrate provider* feeding an external trainer.
 - **Belief preferences ≠ response preferences.** The DPO mapping produces preferences
   over claims, which is a narrower (and arguably cleaner) signal than typical RLHF
   response-preference data.
@@ -155,8 +158,8 @@ integrity layer for verifiable rewards and preference data."** The features alre
 built map onto it one-to-one: supersession lineage → preference pairs;
 `unearned_supersessions` → preference *filtering*; the invariants → verifiable rewards;
 counterfactual replay → contrastive data. It is worth a paragraph in the
-[paper outline](../paper/outline.md)'s future-work once an export exists — but only
-then.
+[paper outline](../paper/outline.md)'s future-work now that raw export exists — but
+only as future work until a dataset materializer exists.
 
 ## Further reading (verify IDs before formal citation)
 

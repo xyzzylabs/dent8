@@ -294,8 +294,10 @@ rather than incidental validation; the Sybil family is not an error-code case �
 checked separately, by the divergence between a naïve corroboration *count* (fooled by
 volume) and authority-weighted corroboration (unmoved by ten low-authority sources). The external anchor is evaluated by
 the rewrite test in §6: on a re-hashed-forward edit, internal `verify_chain` returns true
-while `verify_against_anchor` returns false. Planned additions: golden replay fixtures, a
-`proptest` property suite, and a TTL-expiry (T4) family.
+while `verify_against_anchor` returns false. Golden replay fixtures, a `proptest`
+property suite, and a TTL-expiry (T4) family are now built; remaining hardening is
+fuzzing the deserialize→apply→canonicalize path and modeling append/projection
+concurrency.
 
 ## 10. Limitations and threats to validity
 
@@ -309,13 +311,16 @@ while `verify_against_anchor` returns false. Planned additions: golden replay fi
   `CanonicalJson` newtype, sorted-key + compact, re-applied on deserialize), so the bytes
   invariant holds for it too; freezing the *outer* encoding to JCS for cross-implementation
   interop is the remaining canonicalization item [6].
-- **The anchor is symmetric and assumes a witness deployment.** Resistance requires the
-  witness to issue the anchor at write time with an off-writer key and publish a monotonic
-  sequence; the primitive alone does not provide it, and a writer who holds the key, never
-  anchors, or replays a stale anchor gets no resistance.
-- **No operational persistence yet.** The file backend is single-writer and
-  non-transactional; concurrency/serializability are unevaluated until the Postgres adapter
-  exists.
+- **The witness is a primitive, not yet an operated service.** Resistance requires an
+  off-writer witness to issue and publish monotonic heads. The symmetric HMAC anchor and
+  Ed25519 signed-tree-head form are built, but a writer who holds the signing key, never
+  anchors, or replays a stale anchor gets no resistance. Packaging, monitoring, and key
+  rotation remain product work.
+- **Operational persistence exists, but production operations are not done.** The file
+  backend is single-writer and non-transactional; SQLite is an embedded backend; Postgres
+  is DB-verified with transactional append and projection materialization. Remaining
+  persistence work is operational tuning, DB-assigned ids for heavy fan-out, and richer
+  deployment packaging.
 - **Overlap with prior art.** Bitemporality, contradiction-driven invalidation, and
   provenance individually overlap with Zep [7]; the contribution is the combination (§11).
 

@@ -46,8 +46,10 @@ pass are folded into the topical docs and noted below.
    → [roadmap.md](../roadmap.md), [threat-model.md](../threat-model.md)
 
 5. **Publish in two stages.** A model + belief-revision-semantics workshop paper is
-   claimable now from `dent8-core`; the systems/security paper must wait for the
-   runtime and a populated `evals/`. → [paper/outline.md](../paper/outline.md)
+   claimable from the core semantics and runnable slice; the systems/security paper
+   should wait for stronger operational evidence: fuzzing/model checking, operated
+   witness deployment, and clearer production identity operations. →
+   [paper/outline.md](../paper/outline.md)
 
 6. **Defensible novelty is compositional, and an adversarial pass killed every
    single-primitive claim.** The surviving directions route through authority
@@ -66,7 +68,7 @@ pass are folded into the topical docs and noted below.
 | Paraconsistent contradiction tolerance ("contested") | LFI / paraconsistency | [belief-revision.md](../belief-revision.md) |
 | Authority-as-entrenchment arbitration | AGM entrenchment | [roadmap.md](../roadmap.md) / [ADR 0007](../decisions/0007-authority-as-entrenchment.md) |
 | LFI hard-alarm tier on canonical claims | Logics of Formal Inconsistency | [belief-revision.md](../belief-revision.md) §Adopt-3 |
-| RFC 8785 (JCS) canonicalization | IETF (Informational) | [ADR 0004](../decisions/0004-canonicalization-and-hash-chain.md) |
+| Sorted-key `serde_json` canonical form (**not** JCS) | project invariant; RFC 8785 kept as contrast | [ADR 0004](../decisions/0004-canonicalization-and-hash-chain.md) |
 | RFC 6962 domain-separated leaf/node hashing | Certificate Transparency | [storage.md](../storage.md) |
 | W3C PROV-DM export mapping | W3C Recommendation | [related-work.md](../related-work.md) |
 | Layered verification (proptest/Kani/Stateright) | AWS systems-correctness | [ADR 0006](../decisions/0006-formal-verification-stack.md) |
@@ -79,7 +81,8 @@ pass are folded into the topical docs and noted below.
   correctness at high spec cost; the unsafe-coverage framing was wrong. Fixed in
   [formal-verification.md](../formal-verification.md).
 - **Qualified:** RFC 8785 is an *Informational* RFC (Independent Submission), not
-  Standards Track; property names sort by UTF-16 code units. Noted in
+  Standards Track; property names sort by UTF-16 code units. dent8 deliberately ships a
+  sorted-key `serde_json` form instead, and documents that it is **not JCS** in
   [storage.md](../storage.md) / [ADR 0004](../decisions/0004-canonicalization-and-hash-chain.md).
 - **Critic corrections folded in:** confidence float hazard was overstated
   (`Confidence` is `u16`; only `ClaimValue::Json` was at risk, now canonicalized via the
@@ -93,10 +96,11 @@ pass are folded into the topical docs and noted below.
 These are the reviewer objections the project must pre-empt, not hide:
 
 1. **Authority-weighted supersession is THE differentiator vs Graphiti's recency-only
-   arbitration — now implemented in the core fold** (no longer "zero code"). The
-   remaining honesty caveat is narrower: it is enforced in `apply_event` but not yet
-   *transactionally* at a store layer (no Postgres adapter), and the *earned*-
-   entrenchment refinement is still future.
+   arbitration — now implemented, enforced at the write boundary, and runnable through
+   CLI/MCP over file, SQLite, and DB-verified Postgres stores** (no longer "zero code").
+   The remaining honesty caveat is product hardening: the *earned*-entrenchment
+   challenge-survival half still needs recorded refusals, and production deployments
+   still need operated witness and source-key workflows.
 2. **Three of four "combination" ingredients are individually prior art** (replay =
    event sourcing; hash-chain = transparency logs; bitemporal/provenance = SQL:2011/
    PROV). Only *typed authority-as-entrenchment arbitration* is uncommon in this

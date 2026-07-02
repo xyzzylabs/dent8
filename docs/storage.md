@@ -103,8 +103,9 @@ tested. See [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md). What 
    Merkle layer). Length-framing + a genesis tag mean no two distinct
    `(canonical, previous)` pairs share a hash input; a malformed `previous` is rejected.
 7. **`schema_version` is realized as the out-of-band `CANON_VERSION` constant** mixed
-   into every leaf hash, not a per-event field (ADR 0004 item 7). Bumping it on any
-   encoding change keeps hashes from different versions from colliding.
+   into every leaf hash, not a per-event field (ADR 0004 item 7). A future v2 must add
+   a per-event version before changing the mixed value, so existing v1 events keep the
+   same stored hashes while new events can use the new encoding.
 
 Crates: `serde` + `serde_derive`, `serde_json`, `sha2` (RustCrypto), `hex`.
 

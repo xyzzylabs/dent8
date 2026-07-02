@@ -118,10 +118,10 @@ immutable append-only contract — never mutated in place, evolved only by addin
 versions and *upcasting* old events on read — is standard event-sourcing practice.
 An empirical study of 19 industrial event-sourced systems found schema evolution to
 be the dominant pain point (≈15/19 struggled) with no tooling consensus [8]. This
-warns dent8 to commit to a `schema_version` field and upcasting hook *before* any
-events are stored, since `projection == fold(events)` is fragile under schema drift,
-and since the hash-chain must decide whether `schema_version` is inside or outside
-the hashed canonical bytes (see [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md)).
+is why dent8's hash leaf mixes a canonicalization version from day one. ADR 0004
+decides the v1 shape: `schema_version` is the out-of-band `CANON_VERSION` constant
+for now, and a future v2 must add a per-event version plus an upcasting path without
+rehashing existing v1 events.
 dent8's three time fields are an instance of bitemporal modeling (valid vs
 transaction time, standardized in SQL:2011), but PostgreSQL does not implement
 SQL:2011 temporal tables natively, so freshness and "replay as-of T" must be
@@ -137,7 +137,9 @@ not standard PROV [10].
 **Tamper-evident logs.** dent8 has `previous_event_hash`/`event_hash` columns and now a
 built+tested canonicalization + SHA-256 hash chain in `dent8-core` (sorted-key
 `serde_json` form — **not** RFC 8785/JCS; injective length-framed leaf; `0x00` domain
-separation), though the columns are not yet populated by any append path. RFC 8785
+separation). The Postgres append path populates and re-verifies those columns; the
+file and SQLite paths use the same event hashing semantics without a columnar schema.
+RFC 8785
 (JSON Canonicalization Scheme) was the original plan but is **not** what shipped (see
 [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md)); note it is an
 *Informational* RFC (Independent Submission stream), it sorts property
@@ -201,11 +203,13 @@ log as the single typed, hash-verified source of truth, deterministic replay
 (`projection == fold(events)`), and, above all, **typed authority-weighted
 supersession** (a regular-user write must not override a high-authority claim — a
 direct mitigation for MINJA-style poisoning that Graphiti's recency-only arbitration
-cannot offer). The honest caveat: *the headline differentiator is now real in the core
-fold but not yet end-to-end* — `apply_event` enforces authority arbitration and the
-canonical hard-alarm (with an exhaustive non-resurrection test), but serde, hashing,
-the Postgres adapter, replay, and the eval corpus do not yet exist, so the
-differentiator is not yet a running system. The closest contemporary system (Zep) —
+cannot offer). The honest caveat has moved from "not built" to "not yet hardened as
+an operated product": the headline differentiator is now enforced at the write
+boundary, runnable through the CLI/MCP surfaces, backed by file, SQLite, and
+DB-verified Postgres stores, and exercised by replay/eval fixtures. What remains is
+production hardening — operated witness deployment, source-key operations, heavier
+concurrency polish, fuzzing/model checking, and richer debugger surfaces. The closest
+contemporary system (Zep) —
 itself convergent on the same shared foundations — still occupies most of the
 conceptual ground. The correct positioning is "the governed, replayable store of record
 *beneath* Mem0/Letta/MCP," benchmarked on replay determinism, poisoning resistance,
