@@ -120,9 +120,9 @@ lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/
 `derive`/`explain`/`replay`/`facts`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
 `init`/`doctor`/`completions`/`mcp serve`/`mcp install`). Use the global `--color auto|always|never` flag to control
 colored help, errors, and verdict words in human-facing output. Use
-`--output json` for stable machine-readable output on `explain`, `replay`, `facts list`,
-`verify`, `conflicts`, `eval`, and `doctor`; unsupported commands fail closed instead of
-silently returning prose.
+`--output json` for stable machine-readable output on the write commands, `explain`,
+`replay`, `facts list`, `verify`, `conflicts`, `eval`, and `doctor`; unsupported commands
+fail closed instead of silently returning prose.
 
 The core primitive is a claim event, not a generic memory item: every accepted write
 preserves provenance, evidence, authority, freshness, contradiction state, supersession
@@ -257,8 +257,9 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   is what it is.
 - `dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-diagnostics]`:
   list known fact streams, hiding internal doctor/write-check diagnostics by default.
-- `dent8 --output json explain|replay|facts list|verify|conflicts|eval|doctor`: emit stable
-  JSON for scripting and agent-side checks while preserving existing text output by default.
+- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|doctor`:
+  emit stable JSON for scripting and agent-side checks while preserving existing text output
+  by default.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`: print a shell completion script.

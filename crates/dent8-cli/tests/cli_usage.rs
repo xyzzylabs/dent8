@@ -321,6 +321,123 @@ fn eval_emits_machine_readable_json() {
 }
 
 #[test]
+fn write_commands_emit_machine_readable_json() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let asserted = run_dent8(
+        &[
+            "--output",
+            "json",
+            "assert",
+            "person:alice",
+            "favorite_drink",
+            "tea",
+            "--authority",
+            "high",
+            "--source",
+            "user:alice",
+        ],
+        &envs,
+    );
+    assert_success(&asserted, "assert --output json");
+    let asserted = stdout_json(&asserted);
+    assert_eq!(asserted["status"], "ok");
+    assert_eq!(asserted["tool"], "assert");
+    assert_eq!(asserted["accepted"], true);
+    assert_eq!(asserted["subject"]["key"], "alice");
+    assert_eq!(asserted["predicate"], "favorite_drink");
+    assert_eq!(asserted["value"]["text"], "tea");
+    assert_eq!(asserted["authority"], "High");
+    assert_eq!(asserted["source"], "user:alice");
+
+    let rejected = run_dent8(
+        &[
+            "--output",
+            "json",
+            "supersede",
+            "person:alice",
+            "favorite_drink",
+            "coffee",
+            "--authority",
+            "low",
+            "--source",
+            "note:old",
+        ],
+        &envs,
+    );
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(stdout(&rejected).is_empty());
+    let rejected = serde_json::from_slice::<Value>(&rejected.stderr).unwrap_or_else(|error| {
+        panic!(
+            "stderr is not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
+            stdout(&rejected),
+            stderr(&rejected)
+        )
+    });
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["tool"], "supersede");
+    assert_eq!(rejected["accepted"], false);
+    assert_eq!(rejected["value"]["text"], "coffee");
+    assert!(
+        rejected["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("REJECTED")),
+        "{rejected}"
+    );
+}
+
+#[test]
+fn derived_write_json_includes_source_fact() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert source fact",
+    );
+    let derived = run_dent8(
+        &[
+            "--output",
+            "json",
+            "derive",
+            "person:alice",
+            "shopping_item",
+            "tea",
+            "--from",
+            "person:alice",
+            "favorite_drink",
+            "--authority",
+            "medium",
+            "--source",
+            "assistant:local",
+        ],
+        &envs,
+    );
+    assert_success(&derived, "derive --output json");
+    let derived = stdout_json(&derived);
+    assert_eq!(derived["status"], "ok");
+    assert_eq!(derived["tool"], "derive");
+    assert_eq!(derived["derived_from"]["subject"]["kind"], "person");
+    assert_eq!(derived["derived_from"]["subject"]["key"], "alice");
+    assert_eq!(derived["derived_from"]["predicate"], "favorite_drink");
+}
+
+#[test]
 fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
@@ -401,21 +518,7 @@ fn json_output_fails_closed_for_unsupported_commands() {
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
 
-    let output = run_dent8(
-        &[
-            "--output",
-            "json",
-            "assert",
-            "person:alice",
-            "favorite_drink",
-            "tea",
-            "--authority",
-            "high",
-            "--source",
-            "user:alice",
-        ],
-        &envs,
-    );
+    let output = run_dent8(&["--output", "json", "demo"], &envs);
     assert_eq!(output.status.code(), Some(2));
     assert!(stdout(&output).is_empty());
     assert!(stderr(&output).contains("does not support `--output json` yet"));

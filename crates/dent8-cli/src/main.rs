@@ -30,8 +30,9 @@ mod mcp_config;
 mod witness;
 
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
-const JSON_SUPPORTED_COMMANDS: &str =
-    "explain, replay, facts list, verify, conflicts, eval, doctor";
+const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
+                                      expire, explain, replay, facts list, verify, conflicts, \
+                                      eval, doctor";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -113,13 +114,13 @@ fn run_cli(cli: Cli) -> i32 {
                 2
             }
         }
-        Some(CliCommand::Assert(args)) => cmd_assert(&args),
-        Some(CliCommand::Derive(args)) => cmd_derive(&args),
-        Some(CliCommand::Supersede(args)) => cmd_supersede(&args),
-        Some(CliCommand::Retract(args)) => cmd_retract(&args),
-        Some(CliCommand::Reinforce(args)) => cmd_reinforce(&args),
-        Some(CliCommand::Expire(args)) => cmd_expire(&args),
-        Some(CliCommand::Contradict(args)) => cmd_contradict(&args),
+        Some(CliCommand::Assert(args)) => cmd_assert(&args, cli.output),
+        Some(CliCommand::Derive(args)) => cmd_derive(&args, cli.output),
+        Some(CliCommand::Supersede(args)) => cmd_supersede(&args, cli.output),
+        Some(CliCommand::Retract(args)) => cmd_retract(&args, cli.output),
+        Some(CliCommand::Reinforce(args)) => cmd_reinforce(&args, cli.output),
+        Some(CliCommand::Expire(args)) => cmd_expire(&args, cli.output),
+        Some(CliCommand::Contradict(args)) => cmd_contradict(&args, cli.output),
         Some(CliCommand::Explain(args)) => cmd_explain(&args, cli.output),
         Some(CliCommand::Replay(args)) => cmd_replay(&args, cli.output),
         Some(CliCommand::Facts(args)) => match args.command {
@@ -280,7 +281,14 @@ impl CliCommand {
     fn supports_json_output(&self) -> bool {
         matches!(
             self,
-            Self::Explain(_)
+            Self::Assert(_)
+                | Self::Supersede(_)
+                | Self::Retract(_)
+                | Self::Contradict(_)
+                | Self::Derive(_)
+                | Self::Reinforce(_)
+                | Self::Expire(_)
+                | Self::Explain(_)
                 | Self::Replay(_)
                 | Self::Facts(_)
                 | Self::Verify
@@ -5161,8 +5169,9 @@ fn op_assert(
     ))
 }
 
-fn cmd_assert(args: &ValueWriteArgs) -> i32 {
-    present(with_write_retry(|| {
+fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
+    let view = value_write_json_view("assert", args);
+    let outcome = with_write_retry(|| {
         op_assert(
             &log_path(),
             &args.subject.kind,
@@ -5172,7 +5181,8 @@ fn cmd_assert(args: &ValueWriteArgs) -> i32 {
             args.authority.level(),
             &args.source,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
 /// Assert a fact **derived from** another fact, recording the claim->claim dependency edge
@@ -5257,22 +5267,42 @@ fn op_derive(
     ))
 }
 
-fn cmd_derive(args: &DeriveWriteArgs) -> i32 {
+fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
     let from_subject = match CliSubject::from_str(&args.from[0]) {
         Ok(subject) => subject,
         Err(message) => {
-            eprintln!("{message}");
-            return 2;
+            return present_write(
+                Err(OpError::Invalid(message)),
+                output,
+                &WriteJsonView::derive_without_source(args),
+            );
         }
     };
     let from_predicate = match parse_predicate(&args.from[1]) {
         Ok(predicate) => predicate,
         Err(message) => {
-            eprintln!("{message}");
-            return 2;
+            return present_write(
+                Err(OpError::Invalid(message)),
+                output,
+                &WriteJsonView::derive_without_source(args),
+            );
         }
     };
-    present(with_write_retry(|| {
+    let view = WriteJsonView {
+        tool: "derive",
+        subject_kind: &args.subject.kind,
+        subject_key: &args.subject.key,
+        predicate: &args.predicate,
+        value: Some(&args.value),
+        authority: args.authority.level(),
+        source: &args.source,
+        derived_from: Some(DerivedFromJson {
+            subject_kind: &from_subject.kind,
+            subject_key: &from_subject.key,
+            predicate: &from_predicate,
+        }),
+    };
+    let outcome = with_write_retry(|| {
         op_derive(
             &log_path(),
             &args.subject.kind,
@@ -5285,7 +5315,8 @@ fn cmd_derive(args: &DeriveWriteArgs) -> i32 {
             &from_subject.key,
             &from_predicate,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
 /// Render an operation result for the CLI: success to stdout (exit 0), a malformed request
@@ -5337,6 +5368,151 @@ fn op_error_json(error: &OpError) -> serde_json::Value {
             "status": "rejected",
             "message": message,
         }),
+    }
+}
+
+struct DerivedFromJson<'a> {
+    subject_kind: &'a str,
+    subject_key: &'a str,
+    predicate: &'a str,
+}
+
+struct WriteJsonView<'a> {
+    tool: &'static str,
+    subject_kind: &'a str,
+    subject_key: &'a str,
+    predicate: &'a str,
+    value: Option<&'a str>,
+    authority: AuthorityLevel,
+    source: &'a str,
+    derived_from: Option<DerivedFromJson<'a>>,
+}
+
+impl<'a> WriteJsonView<'a> {
+    fn derive_without_source(args: &'a DeriveWriteArgs) -> Self {
+        Self {
+            tool: "derive",
+            subject_kind: &args.subject.kind,
+            subject_key: &args.subject.key,
+            predicate: &args.predicate,
+            value: Some(&args.value),
+            authority: args.authority.level(),
+            source: &args.source,
+            derived_from: None,
+        }
+    }
+}
+
+fn value_write_json_view<'a>(tool: &'static str, args: &'a ValueWriteArgs) -> WriteJsonView<'a> {
+    WriteJsonView {
+        tool,
+        subject_kind: &args.subject.kind,
+        subject_key: &args.subject.key,
+        predicate: &args.predicate,
+        value: Some(&args.value),
+        authority: args.authority.level(),
+        source: &args.source,
+        derived_from: None,
+    }
+}
+
+fn fact_write_json_view<'a>(tool: &'static str, args: &'a FactWriteArgs) -> WriteJsonView<'a> {
+    WriteJsonView {
+        tool,
+        subject_kind: &args.subject.kind,
+        subject_key: &args.subject.key,
+        predicate: &args.predicate,
+        value: None,
+        authority: args.authority.level(),
+        source: &args.source,
+        derived_from: None,
+    }
+}
+
+fn write_value_json(value: Option<&str>) -> serde_json::Value {
+    value.map_or(serde_json::Value::Null, |text| {
+        claim_value_json(&ClaimValue::Text(text.to_string()))
+    })
+}
+
+fn derived_from_write_json(value: Option<&DerivedFromJson<'_>>) -> serde_json::Value {
+    value.map_or(serde_json::Value::Null, |from| {
+        serde_json::json!({
+            "subject": {
+                "kind": from.subject_kind,
+                "key": from.subject_key,
+            },
+            "predicate": from.predicate,
+        })
+    })
+}
+
+fn write_success_json(view: &WriteJsonView<'_>, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": view.tool,
+        "accepted": true,
+        "subject": {
+            "kind": view.subject_kind,
+            "key": view.subject_key,
+        },
+        "predicate": view.predicate,
+        "value": write_value_json(view.value),
+        "authority": view.authority.name(),
+        "source": view.source,
+        "derived_from": derived_from_write_json(view.derived_from.as_ref()),
+        "message": message,
+    })
+}
+
+fn write_error_json(view: &WriteJsonView<'_>, error: &OpError) -> serde_json::Value {
+    let mut value = op_error_json(error);
+    let object = value
+        .as_object_mut()
+        .expect("operation error should serialize as an object");
+    object.insert("tool".to_string(), serde_json::json!(view.tool));
+    object.insert("accepted".to_string(), serde_json::json!(false));
+    object.insert(
+        "subject".to_string(),
+        serde_json::json!({
+            "kind": view.subject_kind,
+            "key": view.subject_key,
+        }),
+    );
+    object.insert("predicate".to_string(), serde_json::json!(view.predicate));
+    object.insert("value".to_string(), write_value_json(view.value));
+    object.insert(
+        "authority".to_string(),
+        serde_json::json!(view.authority.name()),
+    );
+    object.insert("source".to_string(), serde_json::json!(view.source));
+    object.insert(
+        "derived_from".to_string(),
+        derived_from_write_json(view.derived_from.as_ref()),
+    );
+    value
+}
+
+fn op_error_exit_code(error: &OpError) -> i32 {
+    match error {
+        OpError::Invalid(_) => 2,
+        OpError::Rejected(_) | OpError::Conflict(_) => 1,
+    }
+}
+
+fn present_write(
+    outcome: Result<String, OpError>,
+    output: CliOutput,
+    view: &WriteJsonView<'_>,
+) -> i32 {
+    match output {
+        CliOutput::Text => present(outcome),
+        CliOutput::Json => match outcome {
+            Ok(message) => print_json_stdout(&write_success_json(view, &message)),
+            Err(error) => {
+                print_json_stderr(&write_error_json(view, &error), op_error_exit_code(&error))
+            }
+        },
     }
 }
 
@@ -5498,8 +5674,9 @@ fn op_supersede(
 /// incumbent, so a lower-authority revision is rejected; uniqueness holds in the end state
 /// because all believed incumbents become terminal. Shared by `dent8 supersede` and the
 /// MCP `supersede` tool.
-fn cmd_supersede(args: &ValueWriteArgs) -> i32 {
-    present(with_write_retry(|| {
+fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
+    let view = value_write_json_view("supersede", args);
+    let outcome = with_write_retry(|| {
         op_supersede(
             &log_path(),
             &args.subject.kind,
@@ -5509,7 +5686,8 @@ fn cmd_supersede(args: &ValueWriteArgs) -> i32 {
             args.authority.level(),
             &args.source,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
 /// Build one `Retracted` event per believed incumbent. Each retraction is authority-gated
@@ -5612,8 +5790,9 @@ fn op_retract(
 /// there is no replacement; unlike a contradiction (dissent) it is authority-gated — the
 /// core fold rejects a retraction that under-ranks its incumbent, so a low-authority actor
 /// cannot delete a trusted fact. Shared by `dent8 retract` and the MCP `retract` tool.
-fn cmd_retract(args: &FactWriteArgs) -> i32 {
-    present(with_write_retry(|| {
+fn cmd_retract(args: &FactWriteArgs, output: CliOutput) -> i32 {
+    let view = fact_write_json_view("retract", args);
+    let outcome = with_write_retry(|| {
         op_retract(
             &log_path(),
             &args.subject.kind,
@@ -5622,7 +5801,8 @@ fn cmd_retract(args: &FactWriteArgs) -> i32 {
             args.authority.level(),
             &args.source,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
 /// Corroborate the believed fact(s): append a `Reinforced` event per believed claim. The
@@ -5751,8 +5931,9 @@ fn build_per_incumbent(
     Ok(events)
 }
 
-fn cmd_reinforce(args: &FactWriteArgs) -> i32 {
-    present(with_write_retry(|| {
+fn cmd_reinforce(args: &FactWriteArgs, output: CliOutput) -> i32 {
+    let view = fact_write_json_view("reinforce", args);
+    let outcome = with_write_retry(|| {
         op_reinforce(
             &log_path(),
             &args.subject.kind,
@@ -5761,11 +5942,13 @@ fn cmd_reinforce(args: &FactWriteArgs) -> i32 {
             args.authority.level(),
             &args.source,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
-fn cmd_expire(args: &FactWriteArgs) -> i32 {
-    present(with_write_retry(|| {
+fn cmd_expire(args: &FactWriteArgs, output: CliOutput) -> i32 {
+    let view = fact_write_json_view("expire", args);
+    let outcome = with_write_retry(|| {
         op_expire(
             &log_path(),
             &args.subject.kind,
@@ -5774,7 +5957,8 @@ fn cmd_expire(args: &FactWriteArgs) -> i32 {
             args.authority.level(),
             &args.source,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
 /// Build the `(events, opposing_claim_id)` for a `contradict`: a fresh opposing assertion
@@ -5901,8 +6085,9 @@ fn op_contradict(
 /// low-authority source can flag a wrong fact without overriding it — the one exception
 /// being a `Canonical` incumbent, which hard-alarms. Shared by `dent8 contradict` and the
 /// MCP `contradict` tool.
-fn cmd_contradict(args: &ValueWriteArgs) -> i32 {
-    present(with_write_retry(|| {
+fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
+    let view = value_write_json_view("contradict", args);
+    let outcome = with_write_retry(|| {
         op_contradict(
             &log_path(),
             &args.subject.kind,
@@ -5912,7 +6097,8 @@ fn cmd_contradict(args: &ValueWriteArgs) -> i32 {
             args.authority.level(),
             &args.source,
         )
-    }))
+    });
+    present_write(outcome, output, &view)
 }
 
 /// One line of a fact's event history for `replay`: what happened, with provenance.

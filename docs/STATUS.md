@@ -110,6 +110,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
   "poison does not survive in derivatives" differentiator, demonstrated by the
   `poisoned_source_retraction` eval.
+- The write commands above support `--output json` for agent wrappers/scripts. Accepted writes
+  return structured command metadata plus the human message; rejected writes return structured
+  `invalid`/`rejected` errors on stderr with nonzero exit codes.
 - **`dent8 explain <subject> <predicate>`** — replays the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
   a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
