@@ -223,6 +223,104 @@ fn read_audit_commands_emit_machine_readable_json() {
 }
 
 #[test]
+fn replay_and_conflicts_emit_machine_readable_json() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert alice fact",
+    );
+
+    let replay = run_dent8(
+        &[
+            "--output",
+            "json",
+            "replay",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_success(&replay, "replay --output json");
+    let replay = stdout_json(&replay);
+    assert_eq!(replay["status"], "ok");
+    assert_eq!(replay["tool"], "replay");
+    assert_eq!(replay["event_count"], 1);
+    assert_eq!(replay["events"][0]["kind"], "claim.asserted");
+    assert_eq!(replay["events"][0]["source"], "user:alice");
+    assert_eq!(replay["events"][0]["value"]["text"], "tea");
+    assert_eq!(replay["current"]["value"]["text"], "tea");
+
+    assert_success(
+        &run_dent8(
+            &[
+                "contradict",
+                "person:alice",
+                "favorite_drink",
+                "coffee",
+                "--authority",
+                "low",
+                "--source",
+                "note:counter",
+            ],
+            &envs,
+        ),
+        "contradict alice fact",
+    );
+    let conflicts = run_dent8(&["--output", "json", "conflicts"], &envs);
+    assert_success(&conflicts, "conflicts --output json");
+    let conflicts = stdout_json(&conflicts);
+    assert_eq!(conflicts["status"], "ok");
+    assert_eq!(conflicts["tool"], "conflicts");
+    assert_eq!(conflicts["count"], 1);
+    assert_eq!(conflicts["conflicts"][0]["subject"]["key"], "alice");
+    assert_eq!(conflicts["conflicts"][0]["predicate"], "favorite_drink");
+    let rivals = conflicts["conflicts"][0]["rivals"]
+        .as_array()
+        .expect("conflict rivals");
+    assert_eq!(rivals.len(), 2);
+    assert!(
+        rivals
+            .iter()
+            .any(|rival| rival["lifecycle"] == "Contested" && rival["value"]["text"] == "tea"),
+        "{conflicts}"
+    );
+}
+
+#[test]
+fn eval_emits_machine_readable_json() {
+    let eval = run_dent8(&["--output", "json", "eval"], &[]);
+    assert_success(&eval, "eval --output json");
+    let eval = stdout_json(&eval);
+    assert_eq!(eval["status"], "ok");
+    assert_eq!(eval["tool"], "eval");
+    assert_eq!(eval["scenario_count"], 5);
+    assert_eq!(eval["demonstrated_count"], 5);
+    assert!(
+        eval["scenarios"]
+            .as_array()
+            .expect("eval scenarios")
+            .iter()
+            .all(|scenario| scenario["demonstrates_defense"] == true),
+        "{eval}"
+    );
+}
+
+#[test]
 fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

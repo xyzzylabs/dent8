@@ -119,7 +119,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   receipt.
 - **`dent8 replay <subject> <predicate>`** — prints the full ordered event history
   (every assertion, supersession, retraction, contradiction, with authority + source) and
-  the current state — *why* the fact is what it is.
+  the current state — *why* the fact is what it is. Supports `--output json`.
 - **`dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE]
   [--include-diagnostics]`** — lists distinct fact streams known to dent8 as
   `dent8://{kind}/{key}/{predicate}` resources for human browsing. It hides internal
@@ -134,9 +134,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   nonzero exit code, with the structured report on stdout.
 - **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
   contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
-  the self-demonstrating "why dent8" benchmark.
+  the self-demonstrating "why dent8" benchmark. Supports `--output json`.
 - **`dent8 conflicts`** — lists every contested fact (in dispute) across all entities, showing
-  **both** rival claims (value + authority + lifecycle).
+  **both** rival claims (value + authority + lifecycle). Supports `--output json`.
 - **`dent8 export [out.parquet]`** — the **analytical/export lane** (behind `--features
   export`). Writes the whole log — backend-aware, so the file *or* the Postgres log — to a
   flattened, columnar **Parquet** table (one row per event; the queryable scalars promoted to

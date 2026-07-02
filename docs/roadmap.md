@@ -159,13 +159,13 @@ over the file dev store and async backends, use the same trusted reload/integrit
 the write path, show provenance/authority/freshness/lifecycle information, and share the
 same operation code as MCP. `verify` checks chain integrity, lineage issues, and retraction
 taint. The CLI parser is now `clap`, with generated shell completions and a global
-`--color auto|always|never` presentation flag. `facts list`, `explain`, `verify`, and
-`doctor` support `--output json` for scripts/agents; other commands fail closed when JSON is
-requested until their structured contract is designed.
+`--color auto|always|never` presentation flag. `explain`, `replay`, `facts list`, `verify`,
+`conflicts`, `eval`, and `doctor` support `--output json` for scripts/agents; other commands
+fail closed when JSON is requested until their structured contract is designed.
 
-**Remaining.** JSON contracts for write commands / `replay` / `conflicts` / `eval`,
-`replay_runs` persistence, `--as-of` / `--valid-at`, `valid_to` intervals, and a richer
-lineage/debugger view are future work.
+**Remaining.** JSON contracts for write/setup commands, `replay_runs` persistence,
+`--as-of` / `--valid-at`, `valid_to` intervals, and a richer lineage/debugger view are future
+work.
 
 **Crates.** `clap`, `clap_complete`, `serde_json`.
 

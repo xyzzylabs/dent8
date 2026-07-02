@@ -30,6 +30,8 @@ mod mcp_config;
 mod witness;
 
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
+const JSON_SUPPORTED_COMMANDS: &str =
+    "explain, replay, facts list, verify, conflicts, eval, doctor";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -64,7 +66,7 @@ fn run_cli(cli: Cli) -> i32 {
         && !command.supports_json_output()
     {
         eprintln!(
-            "`dent8 {}` does not support `--output json` yet (supported: explain, facts list, verify, doctor)",
+            "`dent8 {}` does not support `--output json` yet (supported: {JSON_SUPPORTED_COMMANDS})",
             command.cli_name()
         );
         return 2;
@@ -73,7 +75,7 @@ fn run_cli(cli: Cli) -> i32 {
         None => {
             if cli.output == CliOutput::Json {
                 eprintln!(
-                    "`dent8 --output json` requires a command (supported: explain, facts list, verify, doctor)"
+                    "`dent8 --output json` requires a command (supported: {JSON_SUPPORTED_COMMANDS})"
                 );
                 return 2;
             }
@@ -89,8 +91,8 @@ fn run_cli(cli: Cli) -> i32 {
             0
         }
         Some(CliCommand::Verify) => cmd_verify(cli.output),
-        Some(CliCommand::Conflicts) => cmd_conflicts(),
-        Some(CliCommand::Eval) => cmd_eval(),
+        Some(CliCommand::Conflicts) => cmd_conflicts(cli.output),
+        Some(CliCommand::Eval) => cmd_eval(cli.output),
         Some(CliCommand::Init(args)) => cmd_init(&args),
         Some(CliCommand::Agent(args)) => match args.command {
             AgentCommand::Add(args) => cmd_agent_add(&args),
@@ -119,7 +121,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Expire(args)) => cmd_expire(&args),
         Some(CliCommand::Contradict(args)) => cmd_contradict(&args),
         Some(CliCommand::Explain(args)) => cmd_explain(&args, cli.output),
-        Some(CliCommand::Replay(args)) => cmd_replay(&args),
+        Some(CliCommand::Replay(args)) => cmd_replay(&args, cli.output),
         Some(CliCommand::Facts(args)) => match args.command {
             FactsCommand::List(args) => cmd_facts_list(&args, cli.output),
         },
@@ -278,7 +280,13 @@ impl CliCommand {
     fn supports_json_output(&self) -> bool {
         matches!(
             self,
-            Self::Explain(_) | Self::Facts(_) | Self::Verify | Self::Doctor(_)
+            Self::Explain(_)
+                | Self::Replay(_)
+                | Self::Facts(_)
+                | Self::Verify
+                | Self::Conflicts
+                | Self::Eval
+                | Self::Doctor(_)
         )
     }
 
@@ -1398,10 +1406,8 @@ fn claim_value_json(value: &ClaimValue) -> serde_json::Value {
     }
 }
 
-fn receipt_json(tool: &str, receipt: &IntegrityReceipt) -> serde_json::Value {
+fn receipt_fields_json(receipt: &IntegrityReceipt) -> serde_json::Value {
     serde_json::json!({
-        "status": "ok",
-        "tool": tool,
         "subject": {
             "kind": receipt.subject.kind(),
             "key": receipt.subject.key(),
@@ -1425,6 +1431,16 @@ fn receipt_json(tool: &str, receipt: &IntegrityReceipt) -> serde_json::Value {
         "event_hash": receipt.event_hash,
         "chain_verified": receipt.chain_verified,
     })
+}
+
+fn receipt_json(tool: &str, receipt: &IntegrityReceipt) -> serde_json::Value {
+    let mut value = receipt_fields_json(receipt);
+    let object = value
+        .as_object_mut()
+        .expect("receipt fields should serialize as an object");
+    object.insert("status".to_string(), serde_json::json!("ok"));
+    object.insert("tool".to_string(), serde_json::json!(tool));
+    value
 }
 
 fn short(hash: &str) -> String {
@@ -4613,20 +4629,50 @@ fn is_native_memory_path(path: &str) -> bool {
 
 /// Run the adversarial corpus and print the firewall-vs-recency-baseline contrast — the
 /// self-demonstrating "why dent8" benchmark. Exits non-zero only if a scenario regresses.
-fn cmd_eval() -> i32 {
+fn cmd_eval(output: CliOutput) -> i32 {
     let results = dent8_evals::run_corpus();
     let demonstrated = results
         .iter()
         .filter(|result| result.demonstrates_defense())
         .count();
-    println!(
-        "dent8 adversarial corpus — {demonstrated}/{} scenarios demonstrate the firewall's \
-         defense:\nthe firewall blocks every attack a recency-only baseline (newest-write-wins, \
-         no authority/dependency) falls to.\n",
-        results.len()
-    );
-    print!("{}", dent8_evals::summary_table());
-    i32::from(demonstrated != results.len())
+    let exit_code = i32::from(demonstrated != results.len());
+    match output {
+        CliOutput::Text => {
+            println!(
+                "dent8 adversarial corpus — {demonstrated}/{} scenarios demonstrate the firewall's \
+                 defense:\nthe firewall blocks every attack a recency-only baseline (newest-write-wins, \
+                 no authority/dependency) falls to.\n",
+                results.len()
+            );
+            print!("{}", dent8_evals::summary_table());
+            exit_code
+        }
+        CliOutput::Json => {
+            print_json_stdout_with_code(&eval_json(&results, demonstrated), exit_code)
+        }
+    }
+}
+
+fn eval_json(results: &[dent8_evals::AttackResult], demonstrated: usize) -> serde_json::Value {
+    let scenarios = results
+        .iter()
+        .map(|result| {
+            serde_json::json!({
+                "name": result.name,
+                "family": result.family,
+                "firewall_blocked": result.firewall_blocked,
+                "baseline_compromised": result.baseline_compromised,
+                "demonstrates_defense": result.demonstrates_defense(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "status": if demonstrated == results.len() { "ok" } else { "failed" },
+        "tool": "eval",
+        "scenario_count": results.len(),
+        "demonstrated_count": demonstrated,
+        "scenarios": scenarios,
+    })
 }
 
 /// Export the whole event log to a flattened Parquet file for offline `DuckDB` analysis
@@ -5262,11 +5308,15 @@ fn present(outcome: Result<String, OpError>) -> i32 {
 }
 
 fn print_json_stdout(value: &serde_json::Value) -> i32 {
+    print_json_stdout_with_code(value, 0)
+}
+
+fn print_json_stdout_with_code(value: &serde_json::Value, code: i32) -> i32 {
     println!(
         "{}",
         serde_json::to_string_pretty(value).expect("CLI JSON output should serialize")
     );
-    0
+    code
 }
 
 fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
@@ -5892,17 +5942,23 @@ fn format_history_line(event: &ClaimEvent) -> String {
     )
 }
 
+struct ReplayOutcome {
+    subject_kind: String,
+    subject_key: String,
+    predicate: String,
+    events: Vec<ClaimEvent>,
+    current: Option<IntegrityReceipt>,
+}
+
 /// Replay the full ordered event history for a subject+predicate — every assertion,
 /// supersession, retraction, and contradiction, with its authority and source — then the
-/// current believed (or terminal) state. dent8's "replay *why* a fact is believed". Shared
-/// by `dent8 replay` and the MCP `replay` tool.
-fn op_replay(
+/// current believed (or terminal) state: dent8's "replay *why* a fact is believed".
+fn replay_outcome(
     path: &str,
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
-) -> Result<String, OpError> {
-    use std::fmt::Write;
+) -> Result<ReplayOutcome, OpError> {
     let store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -5921,15 +5977,34 @@ fn op_replay(
             "no events for {subject_kind}:{subject_key} {predicate}"
         )));
     }
+    let current = store
+        .explain_latest(&subject, &predicate_parsed, now_millis())
+        .ok()
+        .flatten();
+    Ok(ReplayOutcome {
+        subject_kind: subject_kind.to_string(),
+        subject_key: subject_key.to_string(),
+        predicate: predicate.to_string(),
+        events,
+        current,
+    })
+}
+
+fn format_replay(outcome: &ReplayOutcome) -> String {
+    use std::fmt::Write;
+
     let mut out = format!(
-        "replay {subject_kind}:{subject_key} {predicate}  ({} events)",
-        events.len()
+        "replay {}:{} {}  ({} events)",
+        outcome.subject_kind,
+        outcome.subject_key,
+        outcome.predicate,
+        outcome.events.len()
     );
-    for event in &events {
+    for event in &outcome.events {
         out.push('\n');
         out.push_str(&format_history_line(event));
     }
-    if let Ok(Some(receipt)) = store.explain_latest(&subject, &predicate_parsed, now_millis()) {
+    if let Some(receipt) = &outcome.current {
         // Freshness is folded into the non-terminal cases so the audit summary never
         // understates staleness (a contested *and* stale claim says so).
         let stale = if receipt.fresh { "" } else { " (stale)" };
@@ -5946,16 +6021,127 @@ fn op_replay(
             display_value(&receipt.value)
         );
     }
-    Ok(out)
+    out
 }
 
-fn cmd_replay(args: &ReadFactArgs) -> i32 {
-    present(op_replay(
-        &log_path(),
-        &args.subject.kind,
-        &args.subject.key,
-        &args.predicate,
-    ))
+fn op_replay(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+) -> Result<String, OpError> {
+    replay_outcome(path, subject_kind, subject_key, predicate)
+        .map(|outcome| format_replay(&outcome))
+}
+
+fn enum_name_json<T: serde::Serialize>(value: T) -> serde_json::Value {
+    serde_json::to_value(value).expect("enum name should serialize")
+}
+
+fn event_kind_details_json(kind: &ClaimEventKind) -> serde_json::Value {
+    match kind {
+        ClaimEventKind::Asserted => serde_json::json!({}),
+        ClaimEventKind::Reinforced { by } => serde_json::json!({
+            "by": by.as_str(),
+        }),
+        ClaimEventKind::Contradicted { by, basis } => serde_json::json!({
+            "by": by.as_str(),
+            "basis": enum_name_json(basis),
+        }),
+        ClaimEventKind::Superseded { by, reason } => serde_json::json!({
+            "by": by.as_str(),
+            "reason": enum_name_json(reason),
+        }),
+        ClaimEventKind::Expired { reason } => serde_json::json!({
+            "reason": enum_name_json(reason),
+        }),
+        ClaimEventKind::Retracted { reason } => serde_json::json!({
+            "reason": enum_name_json(reason),
+        }),
+        ClaimEventKind::Retrieved { purpose } => serde_json::json!({
+            "purpose": purpose,
+        }),
+        ClaimEventKind::UsedInDecision { decision_id } => serde_json::json!({
+            "decision_id": decision_id,
+        }),
+    }
+}
+
+fn claim_event_json(event: &ClaimEvent) -> serde_json::Value {
+    serde_json::json!({
+        "event_id": event.event_id.as_str(),
+        "claim_id": event.claim_id.as_str(),
+        "kind": event.kind.name(),
+        "details": event_kind_details_json(&event.kind),
+        "subject": {
+            "kind": event.subject.kind(),
+            "key": event.subject.key(),
+        },
+        "predicate": event.predicate.as_str(),
+        "value": event.value.as_ref().map(claim_value_json),
+        "authority": event.authority.level.name(),
+        "source": event.provenance.source.as_str(),
+        "actor": event.provenance.actor.as_str(),
+        "tool": event.provenance.tool.as_deref(),
+        "run_id": event.provenance.run_id.as_deref(),
+        "recorded_at": event.provenance.recorded_at.as_unix_millis(),
+        "observed_at": event.observed_at.map(TimestampMillis::as_unix_millis),
+        "valid_from": event.valid_from.map(TimestampMillis::as_unix_millis),
+        "evidence_count": event.evidence.len(),
+        "derived_from": event
+            .dependency_edges()
+            .into_iter()
+            .map(|claim_id| claim_id.as_str().to_string())
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn replay_json(outcome: &ReplayOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "replay",
+        "subject": {
+            "kind": outcome.subject_kind.as_str(),
+            "key": outcome.subject_key.as_str(),
+        },
+        "predicate": outcome.predicate.as_str(),
+        "event_count": outcome.events.len(),
+        "events": outcome
+            .events
+            .iter()
+            .map(claim_event_json)
+            .collect::<Vec<_>>(),
+        "current": outcome.current.as_ref().map(receipt_fields_json),
+    })
+}
+
+fn cmd_replay(args: &ReadFactArgs, output: CliOutput) -> i32 {
+    match (
+        replay_outcome(
+            &log_path(),
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+        ),
+        output,
+    ) {
+        (Ok(outcome), CliOutput::Text) => {
+            println!(
+                "{}",
+                paint_status(&format_replay(&outcome), CliStream::Stdout)
+            );
+            0
+        }
+        (Ok(outcome), CliOutput::Json) => print_json_stdout(&replay_json(&outcome)),
+        (Err(error), CliOutput::Text) => present(Err(error)),
+        (Err(error), CliOutput::Json) => {
+            let code = match error {
+                OpError::Invalid(_) => 2,
+                OpError::Rejected(_) | OpError::Conflict(_) => 1,
+            };
+            print_json_stderr(&op_error_json(&error), code)
+        }
+    }
 }
 
 /// Explain the believed (or terminal) fact + its integrity receipt. Shared by
@@ -6071,6 +6257,20 @@ struct FactsListOutcome {
     kind_filter: Option<String>,
     key_filter: Option<String>,
     predicate_filter: Option<String>,
+}
+
+struct ConflictRival {
+    claim_id: ClaimId,
+    value: ClaimValue,
+    authority: AuthorityLevel,
+    lifecycle: ClaimLifecycle,
+}
+
+struct ConflictFact {
+    subject_kind: String,
+    subject_key: String,
+    predicate: String,
+    rivals: Vec<ConflictRival>,
 }
 
 /// List distinct fact streams in the durable store. This is the human CLI counterpart to
@@ -6196,9 +6396,9 @@ fn cmd_facts_list(args: &FactsListArgs, output: CliOutput) -> i32 {
 /// List every contested fact (a fact in dispute — `Contested` lifecycle) across all
 /// entities. Read-only; backend-aware via `load_store`. Wires `EntityProjection::contested`
 /// to a runnable surface (gap-register #8).
-fn op_conflicts(path: &str) -> Result<String, OpError> {
+fn conflicts_outcome(path: &str) -> Result<Vec<ConflictFact>, OpError> {
     let store = load_store(path).map_err(OpError::Invalid)?;
-    let mut lines = Vec::new();
+    let mut conflicts = Vec::new();
     for (subject, predicate) in store.subjects() {
         let filter = EventFilter {
             subject: Some(subject.clone()),
@@ -6218,37 +6418,115 @@ fn op_conflicts(path: &str) -> Result<String, OpError> {
             .iter()
             .any(|state| state.lifecycle == ClaimLifecycle::Contested)
         {
-            let rivals: Vec<String> = believed
+            let rivals = believed
                 .iter()
-                .map(|state| {
-                    format!(
-                        "{:?} (authority={:?}, {:?})",
-                        state.value, state.authority.level, state.lifecycle
-                    )
+                .map(|state| ConflictRival {
+                    claim_id: state.claim_id.clone(),
+                    value: state.value.clone(),
+                    authority: state.authority.level,
+                    lifecycle: state.lifecycle,
                 })
-                .collect();
-            lines.push(format!(
-                "{}:{} {}: {}",
-                subject.kind(),
-                subject.key(),
-                predicate.as_str(),
-                rivals.join("  vs  ")
-            ));
+                .collect::<Vec<_>>();
+            conflicts.push(ConflictFact {
+                subject_kind: subject.kind().to_string(),
+                subject_key: subject.key().to_string(),
+                predicate: predicate.as_str().to_string(),
+                rivals,
+            });
         }
     }
-    if lines.is_empty() {
-        Ok("no contested facts — nothing in dispute".to_string())
+    Ok(conflicts)
+}
+
+fn format_conflicts(conflicts: &[ConflictFact]) -> String {
+    if conflicts.is_empty() {
+        "no contested facts — nothing in dispute".to_string()
     } else {
-        Ok(format!(
+        let lines = conflicts
+            .iter()
+            .map(|conflict| {
+                let rivals = conflict
+                    .rivals
+                    .iter()
+                    .map(|state| {
+                        format!(
+                            "{:?} (authority={:?}, {:?})",
+                            state.value, state.authority, state.lifecycle
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                format!(
+                    "{}:{} {}: {}",
+                    conflict.subject_kind.as_str(),
+                    conflict.subject_key.as_str(),
+                    conflict.predicate.as_str(),
+                    rivals.join("  vs  ")
+                )
+            })
+            .collect::<Vec<_>>();
+        format!(
             "{} contested fact(s) (resolve with `supersede`):\n  {}",
-            lines.len(),
+            conflicts.len(),
             lines.join("\n  ")
-        ))
+        )
     }
 }
 
-fn cmd_conflicts() -> i32 {
-    present(op_conflicts(&log_path()))
+fn op_conflicts(path: &str) -> Result<String, OpError> {
+    conflicts_outcome(path).map(|conflicts| format_conflicts(&conflicts))
+}
+
+fn conflicts_json(conflicts: &[ConflictFact]) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "conflicts",
+        "count": conflicts.len(),
+        "conflicts": conflicts
+            .iter()
+            .map(|conflict| {
+                serde_json::json!({
+                    "subject": {
+                        "kind": conflict.subject_kind.as_str(),
+                        "key": conflict.subject_key.as_str(),
+                    },
+                    "predicate": conflict.predicate.as_str(),
+                    "rivals": conflict
+                        .rivals
+                        .iter()
+                        .map(|rival| {
+                            serde_json::json!({
+                                "claim_id": rival.claim_id.as_str(),
+                                "value": claim_value_json(&rival.value),
+                                "authority": rival.authority.name(),
+                                "lifecycle": enum_name_json(rival.lifecycle),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn cmd_conflicts(output: CliOutput) -> i32 {
+    match (conflicts_outcome(&log_path()), output) {
+        (Ok(conflicts), CliOutput::Text) => {
+            println!(
+                "{}",
+                paint_status(&format_conflicts(&conflicts), CliStream::Stdout)
+            );
+            0
+        }
+        (Ok(conflicts), CliOutput::Json) => print_json_stdout(&conflicts_json(&conflicts)),
+        (Err(error), CliOutput::Text) => present(Err(error)),
+        (Err(error), CliOutput::Json) => {
+            let code = match error {
+                OpError::Invalid(_) => 2,
+                OpError::Rejected(_) | OpError::Conflict(_) => 1,
+            };
+            print_json_stderr(&op_error_json(&error), code)
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
