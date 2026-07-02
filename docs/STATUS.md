@@ -39,7 +39,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   of hiding the created `.dent8` bundle. It refuses to rewrite the env file unless `--force` is passed and refuses to overwrite
   existing identity key/grant material.
 - **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
-  [--mcp-command COMMAND] [--write-check]`** — diagnoses the current setup: binary path,
+  [--mcp-command COMMAND] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
   witness verification status when configured, `verify`, and MCP availability. With
   `--features witness`, configured witness status includes the witness log/public key paths,
@@ -52,7 +52,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` and a bounded timeout.
   If `--mcp-command` is omitted,
   the expected command is read from the installed config; pass it only to assert a specific
-  expected command. By default it is read-only; with `--write-check`, it runs an explicit
+  expected command. By default it is read-only; with `--repair`, it first repairs the
+  generated identity env from the current signed grant and refreshes the selected agent's
+  installed MCP config from the generated bundle, then runs the normal checks. With
+  `--write-check`, it runs an explicit
   Alice-style acceptance probe through the installed MCP server against the configured store:
   high-authority
   `favorite_drink=tea` is accepted, a low-authority supersession to `coffee` from the same

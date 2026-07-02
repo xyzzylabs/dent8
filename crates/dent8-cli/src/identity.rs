@@ -683,7 +683,7 @@ fn issuer_key_status(
     lines
 }
 
-fn repair_env_bundle(dir: &str, source: &str) -> Result<String, String> {
+pub(crate) fn repair_env_bundle(dir: &str, source: &str) -> Result<String, String> {
     parse_source(source)?;
     let paths = identity_bundle_paths(dir, Some(source))?;
     let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {

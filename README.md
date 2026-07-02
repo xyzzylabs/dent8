@@ -68,6 +68,9 @@ dent8 doctor --agent codex --write-check  # installed MCP smoke + MCP firewall w
 
 Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP config later
 (`--dry-run` renders without writing; `--check` exits non-zero if the config would change).
+If doctor reports a stale generated identity bundle or MCP env, `dent8 doctor --agent
+<profile> --repair` repairs the generated env and refreshes the installed MCP config before
+rerunning the normal checks.
 Source `.dent8/env` + `.dent8/identity.env` when you want to run CLI commands from the same
 shell. Use `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
 available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and
@@ -197,9 +200,10 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 init`: create a local `.dent8/` setup: env file, authority registry, and selected
   file/SQLite/Postgres store profile; optional `--witness` adds verifier-side signed-head
   paths without exposing the witness signing key to the writer env.
-- `dent8 doctor [--agent <profile>] [--write-check]`: inspect binary, store, authority,
+- `dent8 doctor [--agent <profile>] [--repair] [--write-check]`: inspect binary, store, authority,
   witness coverage when configured, verify, MCP availability; with `--agent`, validate the
   generated bundle/config and smoke `mcp serve` with `initialize` + `tools/list`;
+  with `--repair`, refresh stale generated identity env and installed MCP config;
   with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow (through
   the installed MCP server for agent profiles).
 - `dent8 identity bootstrap/status/repair-env/rotate-source`: create, inspect, repair generated

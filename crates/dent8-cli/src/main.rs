@@ -491,6 +491,9 @@ struct DoctorArgs {
     /// Command expected in the installed MCP config when --agent is set.
     #[arg(long, value_name = "COMMAND", requires = "agent")]
     mcp_command: Option<String>,
+    /// Repair stale generated identity/MCP agent setup before checking it.
+    #[arg(long, requires = "agent")]
+    repair: bool,
 }
 
 #[derive(Args, Debug)]
@@ -2087,47 +2090,23 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         ),
     );
 
-    let bundle_env = match mcp_config::load_agent_env(&dir, agent) {
-        Ok(env) => {
-            doctor_line(
-                &mut output,
-                "OK",
-                ".dent8 env: agent bundle is complete and source-bound",
-            );
-            env
-        }
-        Err(error) => {
-            let hint = agent_env_error_with_repair_hint(&error, agent, &dir);
-            doctor_line(&mut output, "FAIL", &format!("agent env: {hint}"));
-            return DoctorReport { output, ok: false };
-        }
-    };
+    if args.repair && !repair_agent_setup(&mut output, args, agent, &dir) {
+        return DoctorReport { output, ok: false };
+    }
 
-    let installed = match mcp_config::load_installed_server(
-        agent,
-        &dir,
-        args.mcp_config.as_deref().map(std::path::Path::new),
-    ) {
-        Ok(installed) => {
-            doctor_line(
-                &mut output,
-                "OK",
-                &format!(
-                    "agent mcp config: {} command={} args={:?}{}",
-                    installed.path.display(),
-                    installed.command,
-                    installed.args,
-                    installed
-                        .cwd
-                        .as_ref()
-                        .map(|cwd| format!(" cwd={}", cwd.display()))
-                        .unwrap_or_default()
-                ),
-            );
-            installed
-        }
+    let bundle_env =
+        match load_doctor_agent_env(&mut output, agent, &dir, args.mcp_config.as_deref()) {
+            Ok(env) => env,
+            Err(error) => {
+                doctor_line(&mut output, "FAIL", &error);
+                return DoctorReport { output, ok: false };
+            }
+        };
+
+    let installed = match load_doctor_installed_server(&mut output, args, agent, &dir) {
+        Ok(installed) => installed,
         Err(error) => {
-            doctor_line(&mut output, "FAIL", &format!("agent mcp config: {error}"));
+            doctor_line(&mut output, "FAIL", &error);
             return DoctorReport { output, ok: false };
         }
     };
@@ -2136,7 +2115,15 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         Ok(message) => doctor_line(&mut output, "OK", &message),
         Err(error) => {
             ok = false;
-            doctor_line(&mut output, "FAIL", &format!("agent mcp config: {error}"));
+            let command = args.mcp_command.as_deref().unwrap_or(&installed.command);
+            let hint = agent_mcp_config_error_with_repair_hint(
+                &error,
+                agent,
+                &dir,
+                args.mcp_config.as_deref(),
+                Some(command),
+            );
+            doctor_line(&mut output, "FAIL", &format!("agent mcp config: {hint}"));
         }
     }
 
@@ -2171,24 +2158,220 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
     DoctorReport { output, ok }
 }
 
+fn load_doctor_agent_env(
+    output: &mut String,
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    match mcp_config::load_agent_env(dir, agent) {
+        Ok(env) => {
+            doctor_line(
+                output,
+                "OK",
+                ".dent8 env: agent bundle is complete and source-bound",
+            );
+            Ok(env)
+        }
+        Err(error) => {
+            let hint = agent_env_error_with_repair_hint(&error, agent, dir, config);
+            Err(format!("agent env: {hint}"))
+        }
+    }
+}
+
+fn load_doctor_installed_server(
+    output: &mut String,
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> Result<mcp_config::InstalledServer, String> {
+    match mcp_config::load_installed_server(
+        agent,
+        dir,
+        args.mcp_config.as_deref().map(std::path::Path::new),
+    ) {
+        Ok(installed) => {
+            doctor_line(
+                output,
+                "OK",
+                &format!(
+                    "agent mcp config: {} command={} args={:?}{}",
+                    installed.path.display(),
+                    installed.command,
+                    installed.args,
+                    installed
+                        .cwd
+                        .as_ref()
+                        .map(|cwd| format!(" cwd={}", cwd.display()))
+                        .unwrap_or_default()
+                ),
+            );
+            Ok(installed)
+        }
+        Err(error) => {
+            let hint = agent_mcp_config_error_with_repair_hint(
+                &error,
+                agent,
+                dir,
+                args.mcp_config.as_deref(),
+                args.mcp_command.as_deref(),
+            );
+            Err(format!("agent mcp config: {hint}"))
+        }
+    }
+}
+
+fn repair_agent_setup(
+    output: &mut String,
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> bool {
+    match repair_agent_identity_env(agent, dir) {
+        Ok(message) => doctor_line(
+            output,
+            "OK",
+            &format!("agent env repair: {}", first_line(&message)),
+        ),
+        Err(error) => {
+            doctor_line(output, "FAIL", &format!("agent env repair: {error}"));
+            return false;
+        }
+    }
+
+    match repair_agent_mcp_config(args, agent, dir) {
+        Ok(message) => doctor_line(
+            output,
+            "OK",
+            &format!("agent mcp config repair: {}", first_line(&message)),
+        ),
+        Err(error) => {
+            doctor_line(output, "FAIL", &format!("agent mcp config repair: {error}"));
+            return false;
+        }
+    }
+
+    true
+}
+
+#[cfg(feature = "identity")]
+fn repair_agent_identity_env(agent: InitAgent, dir: &std::path::Path) -> Result<String, String> {
+    identity::repair_env_bundle(&dir.to_string_lossy(), agent.source())
+}
+
+#[cfg(not(feature = "identity"))]
+fn repair_agent_identity_env(agent: InitAgent, dir: &std::path::Path) -> Result<String, String> {
+    let _ = (agent, dir);
+    Err("`dent8 doctor --agent --repair` requires a build with `--features identity`".to_string())
+}
+
+fn repair_agent_mcp_config(
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> Result<String, String> {
+    let command = repair_agent_mcp_command(args, agent, dir);
+    install_mcp_config(
+        agent,
+        dir,
+        args.mcp_config.as_deref(),
+        &command,
+        mcp_config::InstallMode::Write,
+    )
+    .map(|outcome| outcome.message)
+}
+
+fn repair_agent_mcp_command(args: &DoctorArgs, agent: InitAgent, dir: &std::path::Path) -> String {
+    args.mcp_command
+        .clone()
+        .or_else(|| {
+            mcp_config::load_installed_server(
+                agent,
+                dir,
+                args.mcp_config.as_deref().map(std::path::Path::new),
+            )
+            .ok()
+            .map(|installed| installed.command)
+        })
+        .unwrap_or_else(|| "dent8".to_string())
+}
+
 fn agent_env_error_with_repair_hint(
     error: &str,
     agent: InitAgent,
     dir: &std::path::Path,
+    config: Option<&str>,
 ) -> String {
     if error.contains("generated dent8 env is missing DENT8_ACTIVE_GRANTS") {
         format!(
-            "{error}; repair the generated identity env with `dent8 identity repair-env --dir {} \
-             --source {}`; then rerun `dent8 mcp install --agent {} --dir {}` if the installed \
-             MCP config is stale",
+            "{error}; repair with `{}` or repair only the generated identity env with \
+             `dent8 identity repair-env --dir {} --source {}`",
+            doctor_agent_repair_command(agent, dir, config, None),
             shell_quote(&dir.to_string_lossy()),
-            agent.source(),
-            agent.cli_name(),
-            shell_quote(&dir.to_string_lossy())
+            agent.source()
         )
     } else {
         error.to_string()
     }
+}
+
+fn agent_mcp_config_error_with_repair_hint(
+    error: &str,
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    command: Option<&str>,
+) -> String {
+    format!(
+        "{error}; repair with `{}` or rerun `{}`",
+        mcp_install_repair_command(agent, dir, config, command),
+        doctor_agent_repair_command(agent, dir, config, command)
+    )
+}
+
+fn mcp_install_repair_command(
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    command: Option<&str>,
+) -> String {
+    let mut command_line = format!(
+        "dent8 mcp install --agent {} --dir {}",
+        agent.cli_name(),
+        shell_quote(&dir.to_string_lossy())
+    );
+    if let Some(config) = config {
+        command_line.push_str(" --config ");
+        command_line.push_str(&shell_quote(config));
+    }
+    if let Some(command) = command {
+        command_line.push_str(" --command ");
+        command_line.push_str(&shell_quote(command));
+    }
+    command_line
+}
+
+fn doctor_agent_repair_command(
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    command: Option<&str>,
+) -> String {
+    let mut command_line = format!(
+        "dent8 doctor --agent {} --dir {} --repair",
+        agent.cli_name(),
+        shell_quote(&dir.to_string_lossy())
+    );
+    if let Some(config) = config {
+        command_line.push_str(" --mcp-config ");
+        command_line.push_str(&shell_quote(config));
+    }
+    if let Some(command) = command {
+        command_line.push_str(" --mcp-command ");
+        command_line.push_str(&shell_quote(command));
+    }
+    command_line
 }
 
 fn validate_installed_agent_config(

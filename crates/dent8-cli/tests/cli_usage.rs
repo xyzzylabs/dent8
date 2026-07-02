@@ -974,6 +974,129 @@ fn identity_repair_env_recovers_legacy_agent_bundle_active_grants() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn doctor_agent_reports_stale_mcp_config_repair_command() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp",
+    );
+
+    let config_path = temp.file(".codex/config.toml");
+    let stale_config = fs::read_to_string(&config_path)
+        .expect("codex config")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("DENT8_ACTIVE_GRANTS ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&config_path, format!("{stale_config}\n")).expect("stale codex config");
+
+    let doctor = run_dent8(
+        &["doctor", "--agent", "codex", "--dir", &dir, "--write-check"],
+        &[],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = stdout(&doctor);
+    assert!(
+        stdout.contains("installed env does not match generated bundle")
+            && stdout.contains("DENT8_ACTIVE_GRANTS is missing")
+            && stdout.contains("dent8 mcp install --agent codex --dir")
+            && stdout.contains("--command"),
+        "{stdout}"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn doctor_agent_repair_refreshes_stale_env_and_mcp_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp",
+    );
+
+    let identity_env_path = temp.file(".dent8/identity.env");
+    let active_grants_path = temp.file(".dent8/active-grants.json");
+    let legacy_env = fs::read_to_string(&identity_env_path)
+        .expect("identity env")
+        .lines()
+        .filter(|line| !line.starts_with("DENT8_ACTIVE_GRANTS="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&identity_env_path, format!("{legacy_env}\n")).expect("legacy identity env");
+    fs::remove_file(&active_grants_path).expect("remove active grants");
+
+    let config_path = temp.file(".codex/config.toml");
+    let stale_config = fs::read_to_string(&config_path)
+        .expect("codex config")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("DENT8_ACTIVE_GRANTS ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&config_path, format!("{stale_config}\n")).expect("stale codex config");
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--repair",
+            "--write-check",
+        ],
+        &[],
+    );
+    assert_success(&doctor, "doctor --agent codex --repair --write-check");
+    let stdout = stdout(&doctor);
+    assert!(
+        stdout.contains("agent env repair: repaired signed identity env for source:codex")
+            && stdout.contains("agent mcp config repair: updated MCP config:")
+            && stdout.contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"),
+        "{stdout}"
+    );
+    let repaired_env = fs::read_to_string(&identity_env_path).expect("repaired identity env");
+    let repaired_config = fs::read_to_string(&config_path).expect("repaired codex config");
+    assert!(active_grants_path.exists());
+    assert!(repaired_env.contains("DENT8_ACTIVE_GRANTS="));
+    assert!(repaired_config.contains("DENT8_ACTIVE_GRANTS = "));
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn identity_repair_env_refuses_to_replace_a_different_active_grant() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
