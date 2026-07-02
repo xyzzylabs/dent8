@@ -1071,7 +1071,7 @@ pub(crate) fn render_local_mcp_wrapper(local: &LocalMcpBinary) -> String {
 
 pub(crate) fn local_mcp_build_command(local: &LocalMcpBinary) -> String {
     format!(
-        "CARGO_TARGET_DIR={} cargo build -p dent8-cli --features sqlite,witness",
+        "CARGO_TARGET_DIR={} cargo build -p dent8 --features sqlite,witness",
         shell_quote(
             &local
                 .target
@@ -1370,7 +1370,7 @@ pub(crate) fn init_store_output(
                 kind: store,
                 env_key: "DENT8_STORE_URL",
                 env_value: url.clone(),
-                summary: format!("SQLite backend at {url} (requires `--features sqlite` build)"),
+                summary: format!("SQLite backend at {url} (included in the stock build)"),
             })
         }
         InitStore::Postgres => {

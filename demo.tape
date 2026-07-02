@@ -1,7 +1,7 @@
 # dent8 demo tape — a 25-second story for the README.
 #
 # Prereq: build the CLI first so recording is snappy:
-#     cargo build -p dent8-cli
+#     cargo build -p dent8
 # Then record (https://github.com/charmbracelet/vhs):
 #     vhs demo.tape        # -> demo.gif
 #

@@ -2,8 +2,8 @@
 
 dent8 is configured by **environment variables** (for paths and the backend) and **Cargo
 features** (for opt-in backends/capabilities). This is the single source of truth for both;
-the stock binary needs no services (it uses a local file log) and includes signed source
-identity.
+the stock binary needs no services (it uses a local file log by default) and includes signed
+source identity plus the embedded SQLite backend for local multi-agent use.
 
 For a project-local setup, run `dent8 init`, then load the generated env file:
 
@@ -15,9 +15,9 @@ set +a
 dent8 doctor --write-check
 ```
 
-`dent8 init --store sqlite` writes a `sqlite://…` `DENT8_STORE_URL` profile (requires a
-`--features sqlite` build). `dent8 init --store postgres --store-url postgres://…` writes a
-Postgres profile (requires a `--features postgres` build).
+`dent8 init --store sqlite` writes a `sqlite://…` `DENT8_STORE_URL` profile (supported by the
+stock build). `dent8 init --store postgres --store-url postgres://…` writes a Postgres profile
+(requires a `--features postgres` build).
 `dent8 init --witness` adds witness verification paths to `.dent8/env`; it does **not** put a
 witness signing key in the writer environment.
 
@@ -33,7 +33,7 @@ dent8 doctor --agent codex --write-check
 | Variable | Used by | Default | Purpose |
 |---|---|---|---|
 | `DENT8_LOG` | CLI / MCP (file backend) | `./dent8-log.jsonl` | Path to the JSON-lines dev-store log. |
-| `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | *(unset → file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`postgres://…` needs `--features postgres`; `sqlite://…` needs `--features sqlite`). When set, reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
+| `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | *(unset → file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`sqlite://…` is included in the stock build; `postgres://…` needs `--features postgres`). When set, reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
 | `DENT8_AUTHORITY` | `dent8 init`, `dent8 authority` + every write | `./dent8-authority.json` | Path to the source→authority **ceiling** registry. Enforcement is **opt-in**: it activates only once this file exists (created by `dent8 init` or `dent8 authority add`); then it is deny-by-default. |
 | `DENT8_REQUIRE_AUTHORITY` | every write | *(unset / false)* | Fail-closed deployment guard. When true (`1`, `true`, `yes`, or `on`), a missing authority registry is an error instead of permissive dev mode. |
 | `DENT8_TRUST` | signed identity | `./dent8-trust.json` | Path to trusted issuer public keys. If this file exists, signed source identity is active for every write. |
@@ -54,29 +54,30 @@ The optional hook helper `dent8 hook native-memory-guard` has its own variables:
 The bundled [`compose.yml`](../compose.yml) brings up a throwaway `postgres:16`; the matching
 URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhost:5432/dent8`).
 
-## Cargo features (on `dent8-cli`)
+## Cargo features (on the `dent8` package)
 
 | Feature | Adds | Default? |
 |---|---|---|
-| *(default)* | the full firewall + lifecycle over the **file dev store**, plus `facts list`, `eval`, `verify`, `conflicts`, `authority`, signed identity, MCP | yes |
+| *(default)* | the full firewall + lifecycle over the **file dev store**, embedded SQLite, plus `facts list`, `eval`, `verify`, `conflicts`, `authority`, signed identity, MCP | yes |
 | `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by a `postgres://` `DENT8_STORE_URL` | no |
-| `sqlite` | the embedded **SQLite backend** (sqlx + bundled libsqlite3, no server), selected by a `sqlite://` `DENT8_STORE_URL` | no |
+| `sqlite` | the embedded **SQLite backend** (sqlx + bundled libsqlite3, no server), selected by a `sqlite://` `DENT8_STORE_URL` | yes |
 | `identity` | Ed25519 signed source identity commands and write-boundary grant verification | yes |
 | `witness` | the `dent8 witness` Ed25519 signed-tree-head commands | no |
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
 ```sh
-cargo build -p dent8-cli                                    # stock: file store + signed identity
-cargo build -p dent8-cli --no-default-features              # minimal: file store only
-cargo build -p dent8-cli --features postgres                # + Postgres backend
-cargo build -p dent8-cli --features sqlite                  # + embedded SQLite backend
-cargo build -p dent8-cli --features witness                 # + witness
-cargo build -p dent8-cli --features export                  # + Parquet export for DuckDB
-cargo build -p dent8-cli --features postgres,sqlite,identity,witness,export # all
+cargo build -p dent8                                    # stock: file store + SQLite + signed identity
+cargo build -p dent8 --no-default-features              # minimal: file store only
+cargo build -p dent8 --features postgres                # + Postgres backend
+cargo build -p dent8 --features sqlite                  # explicit SQLite (already default)
+cargo build -p dent8 --features witness                 # + witness
+cargo build -p dent8 --features export                  # + Parquet export for DuckDB
+cargo build -p dent8 --features postgres,sqlite,identity,witness,export # all
 ```
 
-Postgres, SQLite, export, and witness stay off by default so the stock binary stays free of
-the async sqlx, Arrow/Parquet, and witness stacks. The authority registry, identity
+Postgres, export, and witness stay off by default so the stock binary stays free of the
+Postgres, Arrow/Parquet, and witness stacks. SQLite is default because it is the no-server
+shared backend for local multi-agent dogfooding. The authority registry, identity
 trust/grants/keys, and witness keys are **host-local config**, independent of the event backend
 — a Postgres deployment still reads these from the local filesystem, so provision them per
 instance. Set `DENT8_REQUIRE_AUTHORITY=1` and `DENT8_REQUIRE_IDENTITY=1` for deployments that
@@ -113,7 +114,7 @@ repo-local alternative is `--mcp-local-bin` on `init` / `agent add`, or `--local
 `mcp install`. Build the target first:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite,witness
 dent8 mcp install --agent codex --local-bin
 dent8 doctor --agent codex --mcp-local-bin
 ```

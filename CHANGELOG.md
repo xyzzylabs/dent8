@@ -21,8 +21,8 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   registry). Runnable as `assert` / `supersede` / `retract` / `contradict` / `reinforce` /
   `expire` / `explain` / `replay`.
 - **Persistence on a pluggable backend**: a local file dev store (default), or a transactional
-  async backend selected by `DENT8_STORE_URL` — the **DB-verified Postgres backend**
-  (`--features postgres`) or the **embedded SQLite backend** (`--features sqlite`) — each
+  async backend selected by `DENT8_STORE_URL` — the **embedded SQLite backend** (included in
+  the stock build) or the **DB-verified Postgres backend** (`--features postgres`) — each
   committing multi-event operations atomically with concurrent CLI writers auto-retried.
 - **Authority layer** (`dent8 authority`): an opt-in source→authority *ceiling* that rejects
   an over-ceiling write before the firewall (deny-by-default once a registry exists). Set

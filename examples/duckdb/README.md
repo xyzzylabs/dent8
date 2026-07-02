@@ -51,7 +51,7 @@ build) it snapshots the Postgres log instead of the file.
 that poisons the derivative), exports it, and runs the queries above. From a clone:
 
 ```sh
-DENT8="cargo run -q -p dent8-cli --features export --" ./examples/duckdb/demo.sh
+DENT8="cargo run -q -p dent8 --features export --" ./examples/duckdb/demo.sh
 ```
 
 (The export needs only `dent8`; the queries additionally need the [`duckdb`](https://duckdb.org)

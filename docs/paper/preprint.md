@@ -248,7 +248,7 @@ dent8 is a Rust workspace (edition 2024, `rustc` 1.95, `unsafe_code = "forbid"`,
 pedantic) of five crates: `dent8-core` (model, fold, hashing, anchor), `dent8-store`
 (the `EventStore` trait, the firewall `arbitrate`, an in-memory backend, the coding-agent
 registry, policy-counterfactual and entity replay), `dent8-evals` (the adversarial
-corpus), `dent8-cli` (the runnable surface), and `dent8-store-postgres` (the operational
+corpus), `dent8` (the runnable surface), and `dent8-store-postgres` (the operational
 schema, adapter pending). The base firewall *is* `EventStore::append`: every write passes
 base arbitration (override-gate, anti-laundering, canonical hard-alarm), with no
 un-arbitrated write path *for those invariants*; the per-predicate authority floor and

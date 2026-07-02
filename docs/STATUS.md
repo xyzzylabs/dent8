@@ -197,7 +197,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   and registries while keeping per-agent identity env values distinct. `--local-bin` is the
   repo-local no-Cargo-startup path: it writes/validates `.dent8/bin/dent8`, a wrapper around a
   prebuilt `.dent8/target-sqlite/debug/dent8` created with
-  `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness`.
+  `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite,witness`.
   `doctor --agent ... --mcp-local-bin` verifies that wrapper, checks the target can load the
   configured store, runs witness writer checks when witness env is present, and warns when the
   target is older than the workspace Rust sources. A single long-lived local/remote HTTP MCP
@@ -448,12 +448,12 @@ subject+predicate.
   multi-event operation (supersede/retract/contradict) committed as one transaction
   (`append_many`). Both the *adapter* **and the CLI-over-Postgres path** are **CI-verified**
   against live Postgres (the gated `postgres` job runs the adapter tests *and* a live
-  `assert → supersede → explain → verify` end-to-end). The stock binary keeps the file dev
-  store (sqlx is opt-in). The async side is a backend-agnostic **`AsyncEventStore`** trait
+  `assert → supersede → explain → verify` end-to-end). The stock binary still defaults to the
+  file dev store but includes SQLite for no-server shared stores. The async side is a backend-agnostic **`AsyncEventStore`** trait
   (`?Send`, with atomic `append_many`) that both `PostgresEventStore` and **`SqliteEventStore`**
   implement; the CLI's `connect_backend` dispatches by URL scheme into a
   `Box<dyn AsyncEventStore>`. The **embedded SQLite backend** (`dent8-store-sqlite`,
-  `--features sqlite`, a `sqlite://` URL) is **runnable + tested** — assert/supersede/explain/verify
+  `sqlite://` URL, included in stock CLI builds) is **runnable + tested** — assert/supersede/explain/verify
   run end-to-end over it (it runs in-memory, so its tests run in plain `cargo test`, no server),
   proving the boundary is genuinely backend-agnostic.
   What remains *design-only*: a richer per-column event table + `uses_as_evidence` edges (a

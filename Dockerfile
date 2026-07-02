@@ -13,14 +13,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release -p dent8-cli --features postgres,sqlite,witness \
+RUN cargo build --release -p dent8 --features postgres,sqlite,witness \
     && strip target/release/dent8
 
 FROM debian:bookworm-slim
 # ca-certificates for TLS Postgres connections.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --create-home --home-dir /home/dent8 dent8
+    && useradd --system --create-home --home-dir /home/dent8 dent8 \
+    # Volume mount points for the operated-witness split, owned by the runtime user (a fresh
+    # named volume inherits the image's ownership for its mount path).
+    && mkdir -p /witness /published \
+    && chown dent8 /witness /published
 COPY --from=build /src/target/release/dent8 /usr/local/bin/dent8
 USER dent8
 WORKDIR /home/dent8

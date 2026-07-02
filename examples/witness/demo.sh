@@ -5,10 +5,10 @@
 # - monitor env verifies externally published heads using only the event log and public key.
 #
 # Requires a dent8 binary built with the witness feature. From a clone:
-#   DENT8="cargo run -q -p dent8-cli --features witness --" ./examples/witness/demo.sh
+#   DENT8="cargo run -q -p dent8 --features witness --" ./examples/witness/demo.sh
 set -euo pipefail
 
-# Split intentionally so callers can pass `DENT8="cargo run -q -p dent8-cli --features witness --"`.
+# Split intentionally so callers can pass `DENT8="cargo run -q -p dent8 --features witness --"`.
 read -r -a DENT8_CMD <<<"${DENT8:-dent8}"
 DENT8_ENV=(
   env

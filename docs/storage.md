@@ -132,9 +132,11 @@ Postgres is the MVP operational store because the log needs append-only ordering
 uniqueness constraints, transactional projection updates, and future multi-user
 operation — and Postgres transactions bundle append + projection + edges into one
 atomic, durable, isolation-respecting unit ([PostgreSQL transactions](https://www.postgresql.org/docs/current/tutorial-transactions.html)).
-The live schema is [002_event_log.sql](../migrations/postgres/002_event_log.sql) +
-[003_materialization.sql](../migrations/postgres/003_materialization.sql), exposed in-crate as
-`EVENT_LOG_SCHEMA_SQL` / `MATERIALIZATION_SCHEMA_SQL` (and printed by `dent8 schema postgres`).
+The live schema is
+[002_event_log.sql](../crates/dent8-store-postgres/migrations/postgres/002_event_log.sql) +
+[003_materialization.sql](../crates/dent8-store-postgres/migrations/postgres/003_materialization.sql),
+exposed in-crate as `EVENT_LOG_SCHEMA_SQL` / `MATERIALIZATION_SCHEMA_SQL` (and printed by
+`dent8 schema postgres`).
 
 **Chain semantics (the `EventStore` contract).** The hash chain is **global**: each
 `event_hash` links to the previous event across the *whole* log (by `global_sequence`),

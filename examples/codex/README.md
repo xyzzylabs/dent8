@@ -38,7 +38,7 @@ Use this while developing dent8 itself:
 ```toml
 [mcp_servers.dent8]
 command = "cargo"
-args = ["run", "-q", "-p", "dent8-cli", "--", "mcp", "serve"]
+args = ["run", "-q", "-p", "dent8", "--", "mcp", "serve"]
 cwd = "/abs/path/to/dent8"
 startup_timeout_sec = 30
 tool_timeout_sec = 60

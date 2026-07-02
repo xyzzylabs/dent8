@@ -666,7 +666,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dent8-cli"
+name = "dent8"
 version = "0.1.0"
 dependencies = [
  "clap",

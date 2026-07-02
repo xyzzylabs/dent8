@@ -7,7 +7,7 @@ witness key out of the writer/agent/MCP environment.
 Run the end-to-end local demo from a clone:
 
 ```sh
-DENT8="cargo run -q -p dent8-cli --features witness --" ./examples/witness/demo.sh
+DENT8="cargo run -q -p dent8 --features witness --" ./examples/witness/demo.sh
 ```
 
 The demo creates three separate environments in a temporary directory:
@@ -22,7 +22,7 @@ and proves that a rolled-back event log is rejected by `verify-published`.
 To wire the same shape manually, first build a witness-capable CLI:
 
 ```sh
-cargo build -p dent8-cli --features witness
+cargo build -p dent8 --features witness
 ```
 
 First configure verifier paths for the writer or agent process:

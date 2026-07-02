@@ -4,8 +4,8 @@
 # override is REJECTED, `explain` replays the believed fact, and `verify` checks integrity.
 #
 # Requires the `dent8` binary. Either install it (`cargo install --git
-# https://github.com/xyzzylabs/dent8 dent8-cli`) and run `./demo.sh`, or from a clone:
-#   DENT8="cargo run -q -p dent8-cli --" ./examples/mcp/demo.sh
+# https://github.com/xyzzylabs/dent8 dent8`) and run `./demo.sh`, or from a clone:
+#   DENT8="cargo run -q -p dent8 --" ./examples/mcp/demo.sh
 set -euo pipefail
 
 DENT8="${DENT8:-dent8}"

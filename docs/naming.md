@@ -7,7 +7,7 @@ Public package names use hyphens:
 - `dent8-core`
 - `dent8-store`
 - `dent8-store-postgres`
-- `dent8-cli`
+- `dent8` (published CLI package; source lives under `crates/dent8-cli`)
 - `dent8-policy`
 - `dent8-mcp`
 - `dent8-debugger`

@@ -54,6 +54,6 @@ exits before calling a model. That gives you a quick local wiring check.
   runtime boundary.
 - The source id used by the prompt is `source:vercel-ai-sdk`. `dent8 init --identity --source
   source:vercel-ai-sdk` creates the authority grant and signed identity files the sample uses.
-- For operational persistence, run dent8 with `DENT8_STORE_URL` and a `--features postgres`
-  or `--features sqlite` build. The AI SDK integration remains just a caller; dent8 remains
-  the memory firewall.
+- For operational persistence, run dent8 with `DENT8_STORE_URL`. `sqlite://` works in the
+  stock build; `postgres://` needs a `--features postgres` build. The AI SDK integration
+  remains just a caller; dent8 remains the memory firewall.

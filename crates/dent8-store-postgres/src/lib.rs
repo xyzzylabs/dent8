@@ -1,11 +1,10 @@
 /// The v0 append-only event-log table the [`adapter`] writes/reads (migration 002).
-pub const EVENT_LOG_SCHEMA_SQL: &str =
-    include_str!("../../../migrations/postgres/002_event_log.sql");
+pub const EVENT_LOG_SCHEMA_SQL: &str = include_str!("../migrations/postgres/002_event_log.sql");
 
 /// The materialized projection + edge-graph tables the [`adapter`] maintains in the append
 /// transaction (migration 003). Derived caches of the event log, not a source of truth.
 pub const MATERIALIZATION_SCHEMA_SQL: &str =
-    include_str!("../../../migrations/postgres/003_materialization.sql");
+    include_str!("../migrations/postgres/003_materialization.sql");
 
 #[cfg(feature = "adapter")]
 mod adapter;

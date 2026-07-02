@@ -2747,7 +2747,8 @@ async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventSto
         }
         _ => Err(format!(
             "unsupported store URL `{url}`: no matching backend in this build \
-             (postgres:// needs `--features postgres`, sqlite:// needs `--features sqlite`)"
+             (postgres:// needs `--features postgres`; sqlite:// is in default builds or \
+             needs `--features sqlite` when defaults are disabled)"
         )),
     }
 }

@@ -30,7 +30,8 @@ dent8/
     dent8-cli/             # CLI commands for schema, replay, explain, MCP
     dent8-evals/           # adversarial corpus behind the self-demonstrating `dent8 eval`
     dent8-export/          # Parquet export for DuckDB analysis (opt-in, `--features export`)
-  migrations/postgres/     # SQL migrations
+  crates/dent8-store-postgres/migrations/postgres/
+                           # SQL migrations packaged with the Postgres crate
   docs/                    # architecture, eval strategy, naming, MVP notes
   evals/
     fixtures/              # canonical event streams

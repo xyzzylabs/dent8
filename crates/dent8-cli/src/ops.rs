@@ -60,7 +60,7 @@ pub(crate) fn build_event(
         provenance: Provenance {
             source: dent8_core::SourceId::new(source).map_err(|e| format!("source: {e}"))?,
             actor: ActorId::new("actor:cli").map_err(|e| format!("actor: {e}"))?,
-            tool: Some("dent8-cli".to_string()),
+            tool: Some("dent8".to_string()),
             run_id: None,
             input_digest: None,
             recorded_at: now,

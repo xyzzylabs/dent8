@@ -51,7 +51,8 @@ The agent then gets these tools — `list_facts`, `verify`, `conflicts`, `assert
 `replay` — plus readable `dent8://{kind}/{key}/{predicate}` resources. A rejected write
 comes back as a tool **error with the reason**, so the agent learns *why* (e.g.
 "repo.database requires authority High, got Low"). For an operational backend, set
-`DENT8_STORE_URL` and run a `--features postgres` (or `--features sqlite`) build.
+`DENT8_STORE_URL`; `sqlite://` works in the stock build, while `postgres://` needs a
+`--features postgres` build.
 
 The installed stdio config reuses one `dent8` binary, but each MCP client usually launches its
 own server subprocess. To share memory across Codex, Claude Code, Cursor, Gemini, Grok Build,
@@ -97,5 +98,5 @@ $ ./demo.sh
 From a clone, point it at the workspace binary:
 
 ```sh
-DENT8="cargo run -q -p dent8-cli --" ./examples/mcp/demo.sh
+DENT8="cargo run -q -p dent8 --" ./examples/mcp/demo.sh
 ```

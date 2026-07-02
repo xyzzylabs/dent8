@@ -1,25 +1,26 @@
 [package]
-name = "dent8-cli"
+name = "dent8"
 description = "Command-line interface for dent8."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
+exclude = ["tests/**"]
 
 [[bin]]
 name = "dent8"
 path = "src/main.rs"
 
 [dependencies]
-dent8-core = { path = "../dent8-core" }
-dent8-store = { path = "../dent8-store" }
-dent8-store-postgres = { path = "../dent8-store-postgres" }
+dent8-core = { path = "../dent8-core", version = "0.1.0" }
+dent8-store = { path = "../dent8-store", version = "0.1.0" }
+dent8-store-postgres = { path = "../dent8-store-postgres", version = "0.1.0" }
 # Opt-in: the embedded SQLite backend (sqlx + bundled libsqlite3), selected by a sqlite:// URL.
-dent8-store-sqlite = { path = "../dent8-store-sqlite", optional = true }
+dent8-store-sqlite = { path = "../dent8-store-sqlite", version = "0.1.0", optional = true }
 # Pure logic over core/store (no extra heavy deps) — powers the self-demonstrating
 # `dent8 eval` benchmark.
-dent8-evals = { path = "../dent8-evals" }
+dent8-evals = { path = "../dent8-evals", version = "0.1.0" }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 serde = { version = "1", features = ["derive"] }
@@ -36,10 +37,10 @@ getrandom = { version = "0.2", optional = true }
 hex = { version = "0.4", optional = true }
 # Opt-in: the `dent8 export` analytical lane (Parquet for DuckDB). Off by default so the stock
 # binary stays free of the arrow/parquet columnar stack.
-dent8-export = { path = "../dent8-export", optional = true }
+dent8-export = { path = "../dent8-export", version = "0.1.0", optional = true }
 
 [features]
-default = ["identity"]
+default = ["identity", "sqlite"]
 # Umbrella enabled by every async backend: it brings in the `AsyncEventStore` trait + the
 # tokio bridge, so the generic `connect_backend`/`backend_*` facade compiles. A backend
 # feature (e.g. `postgres`) turns it on; selection is by URL scheme at runtime.

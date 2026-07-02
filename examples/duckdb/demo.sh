@@ -6,8 +6,8 @@
 #
 # Requires a `dent8` built with the export feature, plus the `duckdb` CLI for the queries
 # (the export itself needs no DuckDB). From a clone:
-#   DENT8="cargo run -q -p dent8-cli --features export --" ./examples/duckdb/demo.sh
-# or install it: `cargo install --git https://github.com/xyzzylabs/dent8 --features export dent8-cli`
+#   DENT8="cargo run -q -p dent8 --features export --" ./examples/duckdb/demo.sh
+# or install it: `cargo install --git https://github.com/xyzzylabs/dent8 --features export dent8`
 set -euo pipefail
 
 DENT8="${DENT8:-dent8}"

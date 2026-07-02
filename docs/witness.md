@@ -19,7 +19,7 @@ Use this when you want to exercise the flow on one machine. It proves the toolin
 not the strongest security posture because the writer and witness key are colocated.
 
 ```sh
-cargo build -p dent8-cli --features witness
+cargo build -p dent8 --features witness
 
 dent8 init --witness
 set -a
@@ -52,7 +52,7 @@ Use this shape when the event writer and witness are different processes or host
 For a runnable local version of this split, use the checked example:
 
 ```sh
-DENT8="cargo run -q -p dent8-cli --features witness --" ./examples/witness/demo.sh
+DENT8="cargo run -q -p dent8 --features witness --" ./examples/witness/demo.sh
 ```
 
 It creates separate writer, signer, and monitor environments in a temporary directory,

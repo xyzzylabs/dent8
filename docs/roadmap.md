@@ -27,8 +27,8 @@ now runs end to end through the CLI and MCP surfaces:
   `replay`/`facts list`/`verify`/`conflicts`/`eval`/`export`, plus MCP tools for the same belief
   surface.
 - Persistence runs over the local file dev store by default, or over the transactional
-  async backends selected by `DENT8_STORE_URL`: Postgres (`--features postgres`) and
-  embedded SQLite (`--features sqlite`).
+  async backends selected by `DENT8_STORE_URL`: embedded SQLite (stock build) and Postgres
+  (`--features postgres`).
 
 What remains to make it a hardened multi-user product:
 
@@ -143,8 +143,8 @@ materialization and a live CLI-over-Postgres path.
 
 **Also done.** The sync-vs-async decision is resolved as two traits: sync `EventStore` for
 the file/in-memory path and feature-gated `AsyncEventStore` for async backends. Embedded
-SQLite is implemented as the second async backend (`--features sqlite`, `sqlite://`), proving
-Postgres is an adapter, not the architecture.
+SQLite is implemented as the stock local async backend (`sqlite://`), proving Postgres is an
+adapter, not the architecture.
 
 **Remaining.** DB-assigned ids for heavy fan-out, richer per-column event tables /
 `uses_as_evidence` edges, operational tuning, and identity operations (key distribution /

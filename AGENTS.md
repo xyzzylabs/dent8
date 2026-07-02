@@ -12,7 +12,7 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
 - Postgres (first) and embedded SQLite (second) are *adapters* of the storage boundary, not the architecture — keep durable storage design backend-agnostic against the `EventStore` / `AsyncEventStore` traits.
 - DuckDB and Parquet are an **export-only** analytical lane (built: `dent8 export` → Parquet, behind `--features export`), not runtime write stores.
 - dent8's formal identity is a **belief base** with paraconsistent contradiction tolerance and authority-as-entrenchment (`docs/belief-revision.md`). Do not claim AGM compliance; do not enforce global consistency; do not satisfy Recovery.
-- Be honest about the gap between *implemented in the library*, *runnable by a user*, and *production-ready*. Authority arbitration, freshness, and the hash chain are **enforced at the write boundary** (`EventStore::append` via `arbitrate` — there is no un-arbitrated write path); the CLI/MCP run that firewall end-to-end over a **file-backed dev store**; the **Postgres adapter is DB-verified** (transactional append + materialized projection/edges); and an **embedded SQLite adapter** is the runnable + tested second backend. The CLI/MCP run on the file dev store **or** any async backend selected by `DENT8_STORE_URL` (a `--features postgres` or `--features sqlite` build, each multi-event operation committed transactionally via the shared `AsyncEventStore`). The remaining gap is *productization*, not enforcement: **authz is built** (a source→authority *ceiling*, `dent8 authority`, that rejects an over-ceiling write at the write boundary), **authn is built as a feature-gated primitive** (`dent8 identity`, issuer-signed grants + per-write source-key possession checks at the CLI/MCP boundary), and the witness is a runnable *primitive* (`dent8 witness`), but key distribution/rotation, stronger secret storage, and an operated witness service are still product work. Check [docs/STATUS.md](docs/STATUS.md) (the single source of truth) before describing anything as "working" or "production," and keep it accurate when you move an item between tiers.
+- Be honest about the gap between *implemented in the library*, *runnable by a user*, and *production-ready*. Authority arbitration, freshness, and the hash chain are **enforced at the write boundary** (`EventStore::append` via `arbitrate` — there is no un-arbitrated write path); the CLI/MCP run that firewall end-to-end over a **file-backed dev store**; the **Postgres adapter is DB-verified** (transactional append + materialized projection/edges); and an **embedded SQLite adapter** is the default local async backend. The CLI/MCP run on the file dev store **or** any async backend selected by `DENT8_STORE_URL` (SQLite in stock builds; Postgres with `--features postgres`; each multi-event operation committed transactionally via the shared `AsyncEventStore`). The remaining gap is *productization*, not enforcement: **authz is built** (a source→authority *ceiling*, `dent8 authority`, that rejects an over-ceiling write at the write boundary), **authn is built as a feature-gated primitive** (`dent8 identity`, issuer-signed grants + per-write source-key possession checks at the CLI/MCP boundary), and the witness is a runnable *primitive* (`dent8 witness`), but key distribution/rotation, stronger secret storage, and an operated witness service are still product work. Check [docs/STATUS.md](docs/STATUS.md) (the single source of truth) before describing anything as "working" or "production," and keep it accurate when you move an item between tiers.
 - Keep changes small, but preserve the shape needed for replay, audit, and debugger workflows.
 
 ## Key docs
@@ -41,7 +41,7 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
 - To validate the local dogfood path, build the isolated SQLite+witness target and run:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite,witness
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check
@@ -65,7 +65,7 @@ cargo test --workspace
 Useful smoke command:
 
 ```sh
-cargo run -q -p dent8-cli -- schema postgres
+cargo run -q -p dent8 -- schema postgres
 ```
 
 ## Documentation
