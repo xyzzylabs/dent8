@@ -597,6 +597,61 @@ fn json_output_fails_closed_for_unsupported_commands() {
 }
 
 #[test]
+fn artifact_commands_emit_machine_readable_json() {
+    let schema = run_dent8(&["--output", "json", "schema", "postgres"], &[]);
+    assert_success(&schema, "schema postgres --output json");
+    assert!(stderr(&schema).is_empty(), "{}", stderr(&schema));
+    let schema = stdout_json(&schema);
+    assert_eq!(schema["status"], "ok");
+    assert_eq!(schema["tool"], "schema postgres");
+    assert_eq!(schema["schema"], "postgres");
+    assert!(
+        schema["sql"]
+            .as_str()
+            .expect("postgres sql")
+            .contains("dent8_event_log")
+    );
+
+    let completions = run_dent8(&["--output", "json", "completions", "bash"], &[]);
+    assert_success(&completions, "completions bash --output json");
+    assert!(stderr(&completions).is_empty(), "{}", stderr(&completions));
+    let completions = stdout_json(&completions);
+    assert_eq!(completions["status"], "ok");
+    assert_eq!(completions["tool"], "completions");
+    assert_eq!(completions["shell"], "bash");
+    assert!(
+        completions["script"]
+            .as_str()
+            .expect("completion script")
+            .contains("dent8")
+    );
+}
+
+#[cfg(not(feature = "export"))]
+#[test]
+fn export_json_reports_missing_feature() {
+    let temp = TempDir::new();
+    let out = temp.file("memory.parquet").to_string_lossy().into_owned();
+    let exported = run_dent8(&["--output", "json", "export", &out], &[]);
+    assert_eq!(exported.status.code(), Some(2));
+    assert!(
+        stdout(&exported).is_empty(),
+        "export feature error should not write stdout:\n{}",
+        stdout(&exported)
+    );
+    let exported = stderr_json(&exported);
+    assert_eq!(exported["status"], "failed");
+    assert_eq!(exported["tool"], "export");
+    assert_eq!(exported["out"], out);
+    assert!(
+        exported["message"]
+            .as_str()
+            .expect("export message")
+            .contains("--features export")
+    );
+}
+
+#[test]
 fn low_authority_supersede_is_rejected_and_original_fact_remains() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

@@ -289,14 +289,17 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   publication/monitoring. See [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
-  `completion` and `autocomplete` are accepted.
-- `dent8 schema postgres` — prints the Postgres schema.
+  `completion` and `autocomplete` are accepted. Supports `--output json` with the generated
+  script string.
+- `dent8 schema postgres` — prints the Postgres schema. Supports `--output json` with the SQL
+  string.
 - `dent8 --version`, `dent8 --help`, and the global presentation flag
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
   data stays plain). The global `--output text|json` flag currently supports the write
   commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
-  `agent add`, `authority`, `identity <subcommand>`, `doctor`, and `mcp install`; unsupported
-  commands fail closed with a targeted usage error rather than falling back to prose.
+  `agent add`, `authority`, `identity <subcommand>`, `doctor`, `completions`, `export`,
+  `schema postgres`, and `mcp install`; unsupported commands fail closed with a targeted usage
+  error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload

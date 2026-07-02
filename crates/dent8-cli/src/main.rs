@@ -33,7 +33,7 @@ const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
                                       eval, init, agent add, authority, identity <subcommand>, \
-                                      doctor, mcp install";
+                                      doctor, completions, export, schema postgres, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -100,19 +100,15 @@ fn run_cli(cli: Cli) -> i32 {
             AgentCommand::Add(args) => cmd_agent_add(&args, cli.output),
         },
         Some(CliCommand::Doctor(args)) => cmd_doctor(&args, cli.output),
-        Some(CliCommand::Completions(args)) => cmd_completions(args.shell),
+        Some(CliCommand::Completions(args)) => cmd_completions(args.shell, cli.output),
         Some(CliCommand::Export(args)) => {
             #[cfg(feature = "export")]
             {
-                cmd_export(&args.out)
+                cmd_export(&args.out, cli.output)
             }
             #[cfg(not(feature = "export"))]
             {
-                let _ = args;
-                eprintln!(
-                    "`dent8 export` (Parquet for DuckDB) requires a build with `--features export`"
-                );
-                2
+                cmd_export_unavailable(&args.out, cli.output)
             }
         }
         Some(CliCommand::Assert(args)) => cmd_assert(&args, cli.output),
@@ -147,13 +143,7 @@ fn run_cli(cli: Cli) -> i32 {
             McpCommand::Install(args) => cmd_mcp_install(&args, cli.output),
         },
         Some(CliCommand::Schema(args)) => match args.command {
-            SchemaCommand::Postgres => {
-                // Print exactly the schema `migrate()` deploys (the event-log table + the
-                // materialized projection/edges), so an operator who pre-creates it gets the
-                // tables the runtime actually uses (a richer per-column layout is possible later).
-                print!("{EVENT_LOG_SCHEMA_SQL}{MATERIALIZATION_SCHEMA_SQL}");
-                0
-            }
+            SchemaCommand::Postgres => cmd_schema_postgres(cli.output),
         },
         Some(CliCommand::Witness(args)) => run_witness(&args.args),
     }
@@ -303,6 +293,9 @@ impl CliCommand {
                 | Self::Authority(_)
                 | Self::Identity(_)
                 | Self::Doctor(_)
+                | Self::Completions(_)
+                | Self::Export(_)
+                | Self::Schema(_)
                 | Self::Mcp(McpArgs {
                     command: McpCommand::Install(_),
                 })
@@ -1245,11 +1238,54 @@ fn run_witness(args: &[String]) -> i32 {
     }
 }
 
-fn cmd_completions(shell: Shell) -> i32 {
+fn cmd_completions(shell: Shell, output: CliOutput) -> i32 {
     let mut command = Cli::command();
     let name = command.get_name().to_string();
-    generate(shell, &mut command, name, &mut std::io::stdout());
-    0
+    let mut script = Vec::new();
+    generate(shell, &mut command, name, &mut script);
+    let script = String::from_utf8(script).expect("completion scripts should be UTF-8");
+    match output {
+        CliOutput::Text => {
+            print!("{script}");
+            0
+        }
+        CliOutput::Json => print_json_stdout(&serde_json::json!({
+            "status": "ok",
+            "tool": "completions",
+            "shell": completion_shell_name(shell),
+            "script": script,
+        })),
+    }
+}
+
+fn completion_shell_name(shell: Shell) -> &'static str {
+    match shell {
+        Shell::Bash => "bash",
+        Shell::Elvish => "elvish",
+        Shell::Fish => "fish",
+        Shell::PowerShell => "powershell",
+        Shell::Zsh => "zsh",
+        _ => "unknown",
+    }
+}
+
+fn cmd_schema_postgres(output: CliOutput) -> i32 {
+    // Print exactly the schema `migrate()` deploys (the event-log table + the materialized
+    // projection/edges), so an operator who pre-creates it gets the tables the runtime actually
+    // uses (a richer per-column layout is possible later).
+    let sql = format!("{EVENT_LOG_SCHEMA_SQL}{MATERIALIZATION_SCHEMA_SQL}");
+    match output {
+        CliOutput::Text => {
+            print!("{sql}");
+            0
+        }
+        CliOutput::Json => print_json_stdout(&serde_json::json!({
+            "status": "ok",
+            "tool": "schema postgres",
+            "schema": "postgres",
+            "sql": sql,
+        })),
+    }
 }
 
 /// A runnable, self-contained demonstration of the firewall + replay/explain loop,
@@ -5407,43 +5443,106 @@ fn eval_json(results: &[dent8_evals::AttackResult], demonstrated: usize) -> serd
 /// snapshots the file *or* the Postgres log. Gated behind `--features export` so the stock
 /// binary carries no arrow/parquet stack.
 #[cfg(feature = "export")]
-fn cmd_export(out: &str) -> i32 {
+fn cmd_export(out: &str, output: CliOutput) -> i32 {
     let store = match load_store(&log_path()) {
         Ok(store) => store,
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{error}");
+                    2
+                }
+                CliOutput::Json => print_json_stderr(&export_error_json(out, &error), 2),
+            };
         }
     };
     let events = match store.scan_events(&EventFilter::default()) {
         Ok(events) => events,
         Err(error) => {
-            eprintln!("cannot read the log: {error}");
-            return 1;
+            let message = format!("cannot read the log: {error}");
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{message}");
+                    1
+                }
+                CliOutput::Json => print_json_stderr(&export_error_json(out, &message), 1),
+            };
         }
     };
     let file = match std::fs::File::create(out) {
         Ok(file) => file,
         Err(error) => {
-            eprintln!("cannot create {out}: {error}");
-            return 1;
+            let message = format!("cannot create {out}: {error}");
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{message}");
+                    1
+                }
+                CliOutput::Json => print_json_stderr(&export_error_json(out, &message), 1),
+            };
         }
     };
     match dent8_export::export_events(&events, file) {
         Ok(()) => {
-            println!(
-                "exported {} event(s) to {out}\n  query it with DuckDB, e.g.:\n    \
-                 duckdb -c \"SELECT source, count(*) AS writes FROM '{out}' GROUP BY 1 ORDER BY 2 DESC\"\n    \
-                 duckdb -c \"SELECT claim_id, UNNEST(derived_from) AS source_claim FROM '{out}' WHERE derived_from IS NOT NULL\"",
-                events.len()
-            );
-            0
+            let event_count = events.len();
+            let message = export_message(out, event_count);
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "tool": "export",
+                    "out": out,
+                    "format": "parquet",
+                    "event_count": event_count,
+                    "message": message,
+                })),
+            }
         }
         Err(error) => {
-            eprintln!("export failed: {error}");
-            1
+            let message = format!("export failed: {error}");
+            match output {
+                CliOutput::Text => {
+                    eprintln!("{message}");
+                    1
+                }
+                CliOutput::Json => print_json_stderr(&export_error_json(out, &message), 1),
+            }
         }
     }
+}
+
+#[cfg(not(feature = "export"))]
+fn cmd_export_unavailable(out: &str, output: CliOutput) -> i32 {
+    let message = "`dent8 export` (Parquet for DuckDB) requires a build with `--features export`";
+    match output {
+        CliOutput::Text => {
+            eprintln!("{message}");
+            2
+        }
+        CliOutput::Json => print_json_stderr(&export_error_json(out, message), 2),
+    }
+}
+
+#[cfg(feature = "export")]
+fn export_message(out: &str, event_count: usize) -> String {
+    format!(
+        "exported {event_count} event(s) to {out}\n  query it with DuckDB, e.g.:\n    \
+         duckdb -c \"SELECT source, count(*) AS writes FROM '{out}' GROUP BY 1 ORDER BY 2 DESC\"\n    \
+         duckdb -c \"SELECT claim_id, UNNEST(derived_from) AS source_claim FROM '{out}' WHERE derived_from IS NOT NULL\"",
+    )
+}
+
+fn export_error_json(out: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "export",
+        "out": out,
+        "format": "parquet",
+        "message": message,
+    })
 }
 
 /// The next event/claim sequence: one past the **highest** `event:{n}` id actually
