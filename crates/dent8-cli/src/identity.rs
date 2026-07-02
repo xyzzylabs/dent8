@@ -3,14 +3,16 @@
 //! The authority registry answers "what may this source claim?" Signed identity answers
 //! "is this caller actually holding the key for that source?" The model is deliberately
 //! small: a trusted issuer public key verifies a signed grant binding a source id to a
-//! source public key and authority ceiling; the dent8 process signs each write request with
-//! the source private key and verifies that signature before the write reaches the firewall.
+//! source public key and authority ceiling; the write boundary checks the caller holds the
+//! matching source private key, and every persisted event carries a **signed write
+//! attestation** (ADR 0013) — an Ed25519 signature by that key over the event's canonical
+//! content — so provenance is offline-re-verifiable long after the write.
 
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use dent8_core::{AuthorityLevel, TimestampMillis};
+use dent8_core::{AuthorityLevel, ClaimEvent, TimestampMillis};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +21,6 @@ use crate::{CliAuthority, CliOutput, WriteAuth, env_flag, now_millis, parse_sour
 const DEFAULT_TRUST: &str = "dent8-trust.json";
 const ACTIVE_GRANTS_FILE: &str = "active-grants.json";
 const GRANT_DOMAIN: &[u8] = b"dent8.source-grant.v1\0";
-const WRITE_DOMAIN: &[u8] = b"dent8.source-write.v1\0";
 const DAY_MILLIS: i64 = 86_400_000;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -60,28 +61,6 @@ struct SourceGrantPayload {
     scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expires_at_ms: Option<i64>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct WriteSignaturePayload<'a> {
-    version: u8,
-    operation: &'a str,
-    source: &'a str,
-    authority: AuthorityLevel,
-    subject_kind: &'a str,
-    subject_key: &'a str,
-    predicate: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    derived_from: Option<WriteSignatureSource<'a>>,
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-struct WriteSignatureSource<'a> {
-    subject_kind: &'a str,
-    subject_key: &'a str,
-    predicate: &'a str,
 }
 
 #[derive(Clone, Debug)]
@@ -436,13 +415,82 @@ pub(crate) fn enforce_write(auth: &WriteAuth<'_>, now: TimestampMillis) -> Resul
             grant.grant.source
         ));
     }
-
-    let payload = write_payload(auth);
-    let signature = signing.sign(&framed(WRITE_DOMAIN, &payload)?);
-    source_key
-        .verify(&framed(WRITE_DOMAIN, &payload)?, &signature)
-        .map_err(|error| format!("could not verify write signature: {error}"))?;
+    // Possession is proven for real by the persisted per-event attestation ([`attest_events`],
+    // ADR 0013), signed at the append boundary over the final event content.
     Ok(())
+}
+
+/// Attach a signed write attestation (ADR 0013) to each event when signed identity is
+/// configured; a no-op (`Ok(false)`) in unconfigured dev mode. Runs at the append boundary,
+/// **after** every event mutation, so the signature covers exactly the persisted content.
+/// [`enforce_write`] has already validated the grant against the trust registry and the
+/// write's source/authority/scope; this signs [`dent8_core::attestation_message`] with the
+/// source key and embeds the public key + signature in `provenance.attestation`.
+pub(crate) fn attest_events(events: &mut [ClaimEvent]) -> Result<bool, String> {
+    let required = identity_required()?;
+    let path = trust_path();
+    let configured = required
+        || nonempty_env_is_set("DENT8_TRUST")
+        || nonempty_env_is_set("DENT8_GRANT")
+        || nonempty_env_is_set("DENT8_IDENTITY_KEY")
+        || std::path::Path::new(&path).exists();
+    if !configured {
+        return Ok(false);
+    }
+    let grant = load_grant(&grant_path()?)?;
+    let signing = load_signing_key(&identity_key_path()?)?;
+    if signing.verifying_key().to_bytes()
+        != verifying_key_from_hex(&grant.grant.public_key)?.to_bytes()
+    {
+        return Err(format!(
+            "identity key does not match the grant for {}",
+            grant.grant.source
+        ));
+    }
+    for event in events.iter_mut() {
+        // Never sign over a stale/foreign attestation: the message strips the field, and the
+        // stored value is replaced wholesale below.
+        event.provenance.attestation = None;
+        let message = dent8_core::attestation_message(event)
+            .map_err(|error| format!("attestation canonicalization: {error}"))?;
+        let signature = signing.sign(&message);
+        event.provenance.attestation = Some(dent8_core::WriteAttestation {
+            algorithm: dent8_core::AttestationAlgorithm::Ed25519,
+            public_key: grant.grant.public_key.clone(),
+            signature: hex::encode(signature.to_bytes()),
+        });
+    }
+    Ok(true)
+}
+
+/// Re-verify one event's persisted attestation (ADR 0013): recompute the attestation message
+/// from the stored event and check the embedded signature against the embedded public key.
+/// `Ok(false)` = the event carries no attestation (a pre-attestation or dev-mode write).
+///
+/// This proves the event content is exactly what the holder of `public_key` signed. Whether
+/// that key was *entitled* to the claimed source/authority at write time is a trust question
+/// (grant history) deliberately out of scope here — see ADR 0013.
+pub(crate) fn verify_event_attestation(event: &ClaimEvent) -> Result<bool, String> {
+    let Some(attestation) = event.provenance.attestation.as_ref() else {
+        return Ok(false);
+    };
+    let dent8_core::AttestationAlgorithm::Ed25519 = attestation.algorithm;
+    let key = verifying_key_from_hex(&attestation.public_key).map_err(|error| {
+        format!(
+            "{}: attestation public key: {error}",
+            event.event_id.as_str()
+        )
+    })?;
+    let signature = signature_from_hex(&attestation.signature)?;
+    let message = dent8_core::attestation_message(event)
+        .map_err(|error| format!("attestation canonicalization: {error}"))?;
+    key.verify(&message, &signature).map_err(|error| {
+        format!(
+            "{}: attestation does not verify (content altered or signature forged): {error}",
+            event.event_id.as_str()
+        )
+    })?;
+    Ok(true)
 }
 
 fn nonempty_env_is_set(name: &str) -> bool {
@@ -2975,24 +3023,6 @@ fn verify_grant_matches_write(
         ));
     }
     Ok(())
-}
-
-fn write_payload<'a>(auth: &WriteAuth<'a>) -> WriteSignaturePayload<'a> {
-    WriteSignaturePayload {
-        version: 1,
-        operation: auth.operation,
-        source: auth.source,
-        authority: auth.authority,
-        subject_kind: auth.subject_kind,
-        subject_key: auth.subject_key,
-        predicate: auth.predicate,
-        value: auth.value,
-        derived_from: auth.derived_from.map(|source| WriteSignatureSource {
-            subject_kind: source.subject_kind,
-            subject_key: source.subject_key,
-            predicate: source.predicate,
-        }),
-    }
 }
 
 fn framed<T: Serialize>(domain: &[u8], value: &T) -> Result<Vec<u8>, String> {

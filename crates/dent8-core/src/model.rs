@@ -226,6 +226,34 @@ pub struct Provenance {
     pub run_id: Option<String>,
     pub input_digest: Option<String>,
     pub recorded_at: TimestampMillis,
+    /// Optional signed write attestation (ADR 0013): the writer's persisted proof that the
+    /// holder of `public_key` signed this event's content. `None` (the pre-attestation
+    /// default) is **skipped during serialization**, so events written before this field
+    /// existed keep byte-identical canonical form and their stored hashes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<WriteAttestation>,
+}
+
+/// A per-write source signature carried inside [`Provenance`] (ADR 0013). The signed message
+/// is [`crate::attestation_message`] — the domain-framed canonical bytes of the event with
+/// `attestation` stripped — so any holder of `public_key` can re-verify offline that the
+/// event content is exactly what the source key signed. The hash chain covers the attestation
+/// bytes themselves, so the attestation is as tamper-evident as the rest of the event.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WriteAttestation {
+    pub algorithm: AttestationAlgorithm,
+    /// The source's Ed25519 verifying key, lowercase hex (32 bytes).
+    pub public_key: String,
+    /// Signature over [`crate::attestation_message`], lowercase hex (64 bytes).
+    pub signature: String,
+}
+
+/// The attestation signature scheme. A closed enum (not a free string) so an unknown or
+/// misspelled algorithm fails loudly at deserialize time instead of silently "verifying".
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum AttestationAlgorithm {
+    #[serde(rename = "ed25519")]
+    Ed25519,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

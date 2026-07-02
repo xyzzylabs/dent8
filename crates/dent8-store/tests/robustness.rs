@@ -48,6 +48,7 @@ fn event(
             run_id: None,
             input_digest: None,
             recorded_at: TimestampMillis::from_unix_millis(recorded_at_ms),
+            attestation: None,
         },
         evidence: (0..evidence_count)
             .map(|i| Evidence {

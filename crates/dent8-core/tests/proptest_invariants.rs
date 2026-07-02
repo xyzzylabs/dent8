@@ -196,6 +196,7 @@ fn arb_provenance() -> impl Strategy<Value = Provenance> {
                 run_id,
                 input_digest,
                 recorded_at: TimestampMillis::from_unix_millis(recorded_at),
+                attestation: None,
             },
         )
 }

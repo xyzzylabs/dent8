@@ -20,6 +20,15 @@
 //! re-applied on deserialize), so two semantically-equal JSON blobs that differ only in key
 //! order or whitespace hash identically (ADR 0004 item 6, resolved).
 //!
+//! **Adding optional fields.** A new field may be added *without* bumping [`CANON_VERSION`]
+//! only if it is (a) a static ASCII key, and (b) `Option` with
+//! `#[serde(default, skip_serializing_if = "Option::is_none")]` — then every pre-existing
+//! event still serializes to byte-identical canonical form (its stored hash keeps
+//! verifying), and events carrying the field produce new bytes that no v1 event could have
+//! emitted (no cross-collision). `provenance.attestation` (ADR 0013) is added under this
+//! rule. Any other shape of change still requires the versioning procedure on
+//! [`CANON_VERSION`].
+//!
 //! [`event_hash`] chains events with an **injective, length-framed** leaf encoding —
 //! `SHA-256(0x00 || version || len(canonical) || canonical || tag || prev_digest)` —
 //! with RFC 6962-style domain separation (a `0x00` leaf prefix). Length-prefixing the
@@ -57,6 +66,28 @@ pub fn canonical_bytes(event: &ClaimEvent) -> Result<Vec<u8>, CanonError> {
     // default Map is BTreeMap-backed); to_vec is compact (no insignificant whitespace).
     let value = serde_json::to_value(event).map_err(CanonError::Serialize)?;
     serde_json::to_vec(&value).map_err(CanonError::Serialize)
+}
+
+/// Domain-separation prefix for a signed write attestation (ADR 0013). Versioned and
+/// NUL-terminated like the identity-grant domains, so an attestation signature can never be
+/// confused with a grant, write-payload, or tree-head signature.
+const ATTESTATION_DOMAIN: &[u8] = b"dent8.event-attestation.v1\0";
+
+/// The exact bytes a write attestation signs (ADR 0013): the domain tag, then the
+/// length-framed canonical bytes of the event **with `provenance.attestation` stripped**
+/// (the signature cannot cover itself). Both the signer and any later verifier derive this
+/// from the event alone, so an attested event is offline-re-verifiable: recompute this
+/// message from the stored event and check the embedded signature against the embedded
+/// public key.
+pub fn attestation_message(event: &ClaimEvent) -> Result<Vec<u8>, CanonError> {
+    let mut unattested = event.clone();
+    unattested.provenance.attestation = None;
+    let body = canonical_bytes(&unattested)?;
+    let mut message = Vec::with_capacity(ATTESTATION_DOMAIN.len() + 8 + body.len());
+    message.extend_from_slice(ATTESTATION_DOMAIN);
+    message.extend_from_slice(&(body.len() as u64).to_be_bytes());
+    message.extend_from_slice(&body);
+    Ok(message)
 }
 
 /// The tamper-evident hash of an event, chained to `previous` (the prior event's hash
@@ -172,6 +203,7 @@ mod tests {
                 run_id: None,
                 input_digest: None,
                 recorded_at: TimestampMillis::from_unix_millis(1),
+                attestation: None,
             },
             evidence: vec![Evidence {
                 id: EvidenceId::new("evidence:1").expect("evidence id"),
@@ -341,5 +373,98 @@ mod tests {
         assert_eq!(recomputed[0], original[0]); // before the tamper: unchanged
         assert_ne!(recomputed[1], original[1]); // the tampered event
         assert_ne!(recomputed[2], original[2]); // and everything after cascades
+    }
+
+    #[test]
+    fn attestation_field_is_skipped_when_none_so_v1_bytes_are_stable() {
+        // The ADR 0013 compatibility rule: an unattested event must serialize byte-identically
+        // to the pre-attestation encoding — no "attestation" key at all — so every stored v1
+        // hash keeps verifying without a CANON_VERSION bump.
+        let unattested = event(
+            "event:1",
+            ClaimEventKind::Asserted,
+            Some(ClaimValue::Text("postgres".into())),
+        );
+        let bytes = canonical_bytes(&unattested).expect("canonical bytes");
+        assert!(
+            !String::from_utf8(bytes)
+                .expect("utf8")
+                .contains("attestation"),
+            "None attestation must not appear in canonical bytes"
+        );
+
+        // An attested event *does* carry the field (covered by its own hash)…
+        let mut attested = unattested.clone();
+        attested.provenance.attestation = Some(crate::model::WriteAttestation {
+            algorithm: crate::model::AttestationAlgorithm::Ed25519,
+            public_key: "aa".repeat(32),
+            signature: "bb".repeat(64),
+        });
+        assert_ne!(
+            canonical_bytes(&attested).expect("canonical bytes"),
+            canonical_bytes(&unattested).expect("canonical bytes"),
+        );
+        assert_ne!(
+            event_hash(&attested, None).expect("hash"),
+            event_hash(&unattested, None).expect("hash"),
+        );
+    }
+
+    #[test]
+    fn attestation_message_strips_the_attestation_itself() {
+        // The signed message must be derivable from the event alone and independent of the
+        // attestation it carries (the signature cannot cover itself): attested and unattested
+        // forms of the same event produce the identical message.
+        let unattested = event(
+            "event:1",
+            ClaimEventKind::Asserted,
+            Some(ClaimValue::Text("postgres".into())),
+        );
+        let mut attested = unattested.clone();
+        attested.provenance.attestation = Some(crate::model::WriteAttestation {
+            algorithm: crate::model::AttestationAlgorithm::Ed25519,
+            public_key: "aa".repeat(32),
+            signature: "bb".repeat(64),
+        });
+        let message_unattested =
+            super::attestation_message(&unattested).expect("attestation message");
+        let message_attested = super::attestation_message(&attested).expect("attestation message");
+        assert_eq!(message_unattested, message_attested);
+
+        // …but the message is bound to the event *content*: changing the value changes it.
+        let other = event(
+            "event:1",
+            ClaimEventKind::Asserted,
+            Some(ClaimValue::Text("mysql".into())),
+        );
+        assert_ne!(
+            super::attestation_message(&other).expect("attestation message"),
+            message_unattested
+        );
+
+        // Domain separation: the message is not the raw canonical bytes.
+        assert!(message_unattested.starts_with(b"dent8.event-attestation.v1\0"));
+    }
+
+    #[test]
+    fn attestation_round_trips_through_serde() {
+        let mut attested = event(
+            "event:1",
+            ClaimEventKind::Asserted,
+            Some(ClaimValue::Text("postgres".into())),
+        );
+        attested.provenance.attestation = Some(crate::model::WriteAttestation {
+            algorithm: crate::model::AttestationAlgorithm::Ed25519,
+            public_key: "aa".repeat(32),
+            signature: "bb".repeat(64),
+        });
+        let json = serde_json::to_string(&attested).expect("serialize");
+        assert!(json.contains("\"algorithm\":\"ed25519\""));
+        let back: ClaimEvent = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, attested);
+
+        // An unknown algorithm fails loudly instead of silently "verifying".
+        let forged = json.replace("\"ed25519\"", "\"none\"");
+        assert!(serde_json::from_str::<ClaimEvent>(&forged).is_err());
     }
 }

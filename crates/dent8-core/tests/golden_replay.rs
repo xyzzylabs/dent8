@@ -95,6 +95,7 @@ impl Stream {
                 run_id: None,
                 input_digest: None,
                 recorded_at: TimestampMillis::from_unix_millis(i64::try_from(seq).expect("seq")),
+                attestation: None,
             },
             evidence: vec![Evidence {
                 id: EvidenceId::new(format!("evidence:{seq}")).expect("evidence id"),

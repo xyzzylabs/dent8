@@ -306,6 +306,7 @@ fn build_event(base: &Base, index: usize, op: &Op) -> ClaimEvent {
             input_digest: None,
             // Monotonic, so the applied event's stamp is `index`.
             recorded_at: TimestampMillis::from_unix_millis(i64::try_from(index).expect("index")),
+            attestation: None,
         },
         evidence: vec![Evidence {
             id: EvidenceId::new("evidence:1").expect("evidence id"),

@@ -249,7 +249,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   operator-held issuer key signs a grant that
   binds `source` -> source public key + max authority + optional subject scope/expiration, and
   each write verifies the grant plus source-key possession before the candidate event reaches
-  the firewall. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
+  the firewall, and every accepted write persists a **signed write attestation**
+  (`provenance.attestation`, ADR 0013) that `verify` re-checks offline — the file dev store
+  thereby detects content edits to attested events. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
   `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`; when
   `DENT8_ACTIVE_GRANTS` or the sibling active-grant registry exists, the presented grant must
   also be the current grant for that source. Otherwise local dev mode stays permissive. A

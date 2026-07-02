@@ -217,6 +217,7 @@ mod tests {
                 run_id: None,
                 input_digest: None,
                 recorded_at: TimestampMillis::from_unix_millis(42),
+                attestation: None,
             },
             evidence,
             observed_at: None,

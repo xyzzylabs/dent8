@@ -42,7 +42,11 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   private source-key backup after a successful rotation. The lower-level commands still expose
   Ed25519 issuer/source key generation, trusted-issuer registry management, signed source
   grants, grant verification, and write-boundary source-key possession checks for CLI/MCP
-  writes. Identity fails closed when
+  writes. Every accepted write now carries a persisted **signed write attestation**
+  (`provenance.attestation`, [ADR 0013](docs/decisions/0013-signed-write-attestation.md)):
+  an Ed25519 signature by the source key over the event content, re-verified by
+  `dent8 verify` — on the file dev store this detects a content edit to an attested event,
+  which previously required a witness. Identity fails closed when
   configured in a `--no-default-features` build, when identity material points at a missing
   trust registry, when the grant source/key/scope does not match the write, or when the write
   exceeds the grant's authority ceiling ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).

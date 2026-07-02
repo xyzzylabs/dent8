@@ -406,6 +406,7 @@ mod tests {
                 run_id: None,
                 input_digest: None,
                 recorded_at: TimestampMillis::from_unix_millis(1),
+                attestation: None,
             },
             evidence: vec![Evidence {
                 id: EvidenceId::new("evidence:1").expect("valid evidence id"),
@@ -774,6 +775,7 @@ mod proofs {
                 run_id: None,
                 input_digest: None,
                 recorded_at: TimestampMillis::from_unix_millis(1),
+                attestation: None,
             },
             evidence: vec![Evidence {
                 id: EvidenceId::new("evidence:1").unwrap(),

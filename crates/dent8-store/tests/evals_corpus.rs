@@ -134,6 +134,7 @@ fn ev(
             run_id: None,
             input_digest: None,
             recorded_at: TimestampMillis::from_unix_millis(seq),
+            attestation: None,
         },
         evidence: vec![Evidence {
             id: EvidenceId::new(format!("evidence:{seq}")).expect("evidence id"),

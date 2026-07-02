@@ -550,6 +550,7 @@ fn event(
             run_id: None,
             input_digest: None,
             recorded_at: TimestampMillis::from_unix_millis(at),
+            attestation: None,
         },
         evidence: vec![Evidence {
             id: EvidenceId::new(format!("evidence:{event_id}")).expect("evidence id"),

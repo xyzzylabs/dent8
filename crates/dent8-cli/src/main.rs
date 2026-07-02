@@ -1542,62 +1542,32 @@ fn authority_registry_path() -> String {
     std::env::var("DENT8_AUTHORITY").unwrap_or_else(|_| DEFAULT_AUTHORITY.to_string())
 }
 
+/// What the write-boundary auth gate needs to know about a write: the subject (for grant
+/// scope checks), the claimed authority (for ceiling checks), and the source. The full write
+/// *content* is no longer carried here — the persisted per-event attestation (ADR 0013) signs
+/// the whole event at the append boundary, which covers strictly more than any summary could.
 #[derive(Clone, Copy, Debug)]
 #[cfg_attr(not(feature = "identity"), allow(dead_code))]
 struct WriteAuth<'a> {
-    operation: &'a str,
     subject_kind: &'a str,
     subject_key: &'a str,
-    predicate: &'a str,
-    value: Option<&'a str>,
     authority: AuthorityLevel,
     source: &'a str,
-    derived_from: Option<WriteAuthSource<'a>>,
-}
-
-#[derive(Clone, Copy, Debug)]
-#[cfg_attr(not(feature = "identity"), allow(dead_code))]
-struct WriteAuthSource<'a> {
-    subject_kind: &'a str,
-    subject_key: &'a str,
-    predicate: &'a str,
 }
 
 impl<'a> WriteAuth<'a> {
-    #[allow(clippy::too_many_arguments)]
     fn new(
-        operation: &'a str,
         subject_kind: &'a str,
         subject_key: &'a str,
-        predicate: &'a str,
-        value: Option<&'a str>,
         authority: AuthorityLevel,
         source: &'a str,
     ) -> Self {
         Self {
-            operation,
             subject_kind,
             subject_key,
-            predicate,
-            value,
             authority,
             source,
-            derived_from: None,
         }
-    }
-
-    fn with_derived_from(
-        mut self,
-        subject_kind: &'a str,
-        subject_key: &'a str,
-        predicate: &'a str,
-    ) -> Self {
-        self.derived_from = Some(WriteAuthSource {
-            subject_kind,
-            subject_key,
-            predicate,
-        });
-        self
     }
 
     #[cfg(feature = "identity")]
@@ -4915,6 +4885,71 @@ fn backend_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
 /// tamper-evidence — a mutated stored event is caught); for the **file dev store** it
 /// re-folds and checks structural integrity (tamper-*resistance* over the file log is the
 /// witness's job, not this).
+/// The result of re-checking persisted write attestations (ADR 0013) during `verify`.
+struct AttestationSummary {
+    /// Events carrying an attestation.
+    attested: usize,
+    /// Whether this build can actually verify them (`identity` feature).
+    verifiable: bool,
+    /// One line per invalid attestation (empty when everything verifies or nothing is attested).
+    issues: Vec<String>,
+}
+
+impl AttestationSummary {
+    /// The clause appended to a verify OK line: silent when nothing is attested, counts when
+    /// attestations verify, and an honest "present but unverifiable" note on a
+    /// `--no-default-features` build.
+    fn ok_clause(&self) -> String {
+        if self.attested == 0 {
+            String::new()
+        } else if self.verifiable {
+            format!(", {} write attestation(s) verify", self.attested)
+        } else {
+            format!(
+                ", {} write attestation(s) present but NOT verifiable in this build (rebuild \
+                 with the identity feature)",
+                self.attested
+            )
+        }
+    }
+}
+
+/// Re-verify every persisted write attestation: recompute each attested event's message and
+/// check the embedded signature against the embedded public key.
+#[cfg(feature = "identity")]
+fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
+    let mut summary = AttestationSummary {
+        attested: 0,
+        verifiable: true,
+        issues: Vec::new(),
+    };
+    for event in events {
+        match identity::verify_event_attestation(event) {
+            Ok(true) => summary.attested += 1,
+            Ok(false) => {}
+            Err(message) => {
+                summary.attested += 1;
+                summary.issues.push(format!("ATTESTATION: {message}"));
+            }
+        }
+    }
+    summary
+}
+
+/// Without the `identity` feature there is no Ed25519 verifier — count the attestations and
+/// let the caller report them as present-but-unverified rather than silently claiming "OK".
+#[cfg(not(feature = "identity"))]
+fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
+    AttestationSummary {
+        attested: events
+            .iter()
+            .filter(|event| event.provenance.attestation.is_some())
+            .count(),
+        verifiable: false,
+        issues: Vec::new(),
+    }
+}
+
 fn verify_log(path: &str) -> Result<String, String> {
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
@@ -4976,6 +5011,11 @@ fn verify_log(path: &str) -> Result<String, String> {
             taint.root_lifecycle
         ));
     }
+    // Signed write attestations (ADR 0013): re-verify each persisted signature. On the file
+    // dev store this is the one *content-tamper* check available without a witness — an edit
+    // to an attested event breaks its signature even though there is no stored hash.
+    let attestations = check_attestations(&all_events);
+    issues.extend(attestations.issues.iter().cloned());
     if !issues.is_empty() {
         return Err(format!(
             "INTEGRITY ISSUES ({} found):\n  {}",
@@ -4985,11 +5025,13 @@ fn verify_log(path: &str) -> Result<String, String> {
     }
     Ok(format!(
         "OK: {} event(s) across {} entit(ies) — STRUCTURAL integrity holds (uniqueness + \
-         lineage intact, no retraction taint, all events canonicalize). This does NOT detect a \
-         content edit: the file dev store keeps no stored hash to compare against — use \
-         `dent8 witness verify` (or the Postgres backend) for tamper-detection.",
+         lineage intact, no retraction taint, all events canonicalize){}. This does NOT \
+         detect a content edit to *unattested* events: the file dev store keeps no stored \
+         hash to compare against — use `dent8 witness verify` (or the Postgres backend) for \
+         tamper-detection.",
         store.len(),
-        subjects.len()
+        subjects.len(),
+        attestations.ok_clause()
     ))
 }
 
@@ -5019,18 +5061,21 @@ fn backend_verify(url: &str) -> Result<String, String> {
         // Retraction taint (ADR 0010): surviving poison — a believed claim deriving from a
         // retracted/expired source.
         let tainted = tainted_claims(&events).map_err(|error| error.to_string())?;
-        if !tainted.is_empty() {
-            let lines: Vec<String> = tainted
-                .iter()
-                .map(|taint| {
-                    format!(
-                        "TAINTED: {} derives from {} (now {:?})",
-                        taint.claim.as_str(),
-                        taint.root.as_str(),
-                        taint.root_lifecycle
-                    )
-                })
-                .collect();
+        let mut lines: Vec<String> = tainted
+            .iter()
+            .map(|taint| {
+                format!(
+                    "TAINTED: {} derives from {} (now {:?})",
+                    taint.claim.as_str(),
+                    taint.root.as_str(),
+                    taint.root_lifecycle
+                )
+            })
+            .collect();
+        // Signed write attestations (ADR 0013): re-verify each persisted signature.
+        let attestations = check_attestations(&events);
+        lines.extend(attestations.issues.iter().cloned());
+        if !lines.is_empty() {
             return Err(format!(
                 "INTEGRITY ISSUES ({} found):\n  {}",
                 lines.len(),
@@ -5038,9 +5083,10 @@ fn backend_verify(url: &str) -> Result<String, String> {
             ));
         }
         Ok(format!(
-            "OK: {} event(s) — the stored global hash chain re-verifies, no retraction taint. \
+            "OK: {} event(s) — the stored global hash chain re-verifies, no retraction taint{}. \
              (Tamper-resistance needs an external operated witness.)",
-            events.len()
+            events.len(),
+            attestations.ok_clause()
         ))
     })
 }
@@ -5642,18 +5688,23 @@ enum WriteError {
 /// multi-event operation (e.g. a supersession's replacement + supersession events) lands
 /// all-or-nothing at the file boundary. This is best-effort file atomicity for the dev
 /// store; true transactional atomicity belongs to the async backends.
-fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
+fn append_events(path: &str, events: &mut [ClaimEvent]) -> Result<(), WriteError> {
     use std::io::Write;
+    // Sign the write attestations (ADR 0013) at this choke point — after every op-level
+    // mutation, immediately before persistence — so each signature covers exactly the stored
+    // content and the append's hash chain covers the attestation.
+    attest_events(events).map_err(WriteError::Other)?;
     // An async backend commits the whole operation (assert / supersede / retract / contradict)
     // as one transaction via `append_many`; the file store just appends the lines. (A build
     // with no async backend that reaches here with a store URL set already errored in
     // `load_store`.)
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
-        return backend_append(&url, events);
+        let refs: Vec<&ClaimEvent> = events.iter().collect();
+        return backend_append(&url, &refs);
     }
     let mut buffer = String::new();
-    for event in events {
+    for event in events.iter() {
         let line = serde_json::to_string(event)
             .map_err(|error| WriteError::Other(format!("serialize: {error}")))?;
         buffer.push_str(&line);
@@ -5666,6 +5717,22 @@ fn append_events(path: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
         .map_err(|error| WriteError::Other(format!("cannot open {path}: {error}")))?;
     file.write_all(buffer.as_bytes())
         .map_err(|error| WriteError::Other(format!("cannot write {path}: {error}")))
+}
+
+/// Sign per-event write attestations when signed identity is configured (ADR 0013); a no-op
+/// in unconfigured dev mode.
+#[cfg(feature = "identity")]
+fn attest_events(events: &mut [ClaimEvent]) -> Result<(), String> {
+    identity::attest_events(events).map(|_| ())
+}
+
+/// Without the `identity` feature there is no signer. `enforce_source_identity` has already
+/// failed closed if identity is *configured* in this build, so reaching here means dev mode —
+/// events are simply written unattested.
+#[cfg(not(feature = "identity"))]
+#[allow(clippy::unnecessary_wraps)] // signature mirrors the identity variant
+fn attest_events(_events: &mut [ClaimEvent]) -> Result<(), String> {
+    Ok(())
 }
 
 /// The async-backend URL from `DENT8_STORE_URL` (dispatched by scheme). `None` selects the
@@ -5827,6 +5894,7 @@ fn build_event(
             run_id: None,
             input_digest: None,
             recorded_at: now,
+            attestation: None,
         },
         evidence: vec![Evidence {
             id: EvidenceId::new("evidence:cli").map_err(|e| format!("evidence id: {e}"))?,
@@ -5942,11 +6010,8 @@ fn op_assert(
     source: &str,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
-        "assert",
         subject_kind,
         subject_key,
-        predicate,
-        Some(value),
         authority,
         source,
     ))?;
@@ -5973,9 +6038,12 @@ fn op_assert(
     // to the one `admit` arbitrates and hashes (otherwise the durable event would carry
     // `Ttl::Never` and a hash that disagrees with the receipt on reload).
     apply_policy_defaults(&registry, &mut event);
+    // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
+    // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
+    attest_events(std::slice::from_mut(&mut event)).map_err(OpError::Invalid)?;
     let receipt = admit(&mut store, &registry, event.clone(), now)
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
-    append_events(path, &[&event]).map_err(write_error_to_op)?;
+    append_events(path, std::slice::from_mut(&mut event)).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?})\n  \
          seq={}  hash={}",
@@ -6018,18 +6086,12 @@ fn op_derive(
     from_key: &str,
     from_predicate: &str,
 ) -> Result<String, OpError> {
-    enforce_write_authority(
-        &WriteAuth::new(
-            "derive",
-            subject_kind,
-            subject_key,
-            predicate,
-            Some(value),
-            authority,
-            source,
-        )
-        .with_derived_from(from_kind, from_key, from_predicate),
-    )?;
+    enforce_write_authority(&WriteAuth::new(
+        subject_kind,
+        subject_key,
+        authority,
+        source,
+    ))?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let from_subject = EntityRef::new(from_kind, from_key)
         .map_err(|error| OpError::Invalid(format!("invalid source subject: {error}")))?;
@@ -6071,9 +6133,12 @@ fn op_derive(
     }
     let registry = PredicateRegistry::coding_agent();
     apply_policy_defaults(&registry, &mut event);
+    // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
+    // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
+    attest_events(std::slice::from_mut(&mut event)).map_err(OpError::Invalid)?;
     let receipt = admit(&mut store, &registry, event.clone(), now)
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
-    append_events(path, &[&event]).map_err(write_error_to_op)?;
+    append_events(path, std::slice::from_mut(&mut event)).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?}, \
          derived from {from_kind}:{from_key} {from_predicate})\n  seq={}  hash={}",
@@ -6402,11 +6467,8 @@ fn op_supersede(
     source: &str,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
-        "supersede",
         subject_kind,
         subject_key,
-        predicate,
-        Some(new_value),
         authority,
         source,
     ))?;
@@ -6471,8 +6533,7 @@ fn op_supersede(
             .append(event.clone())
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
-    let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs).map_err(write_error_to_op)?;
+    append_events(path, &mut events).map_err(write_error_to_op)?;
 
     let count = incumbents.len();
     let claims = if count == 1 { "claim" } else { "claims" };
@@ -6550,11 +6611,8 @@ fn op_retract(
     source: &str,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
-        "retract",
         subject_kind,
         subject_key,
-        predicate,
-        None,
         authority,
         source,
     ))?;
@@ -6574,7 +6632,7 @@ fn op_retract(
             )));
         }
     };
-    let events = build_retractions(
+    let mut events = build_retractions(
         next_seq(&store),
         &incumbents,
         subject_kind,
@@ -6591,8 +6649,7 @@ fn op_retract(
             .append(event.clone())
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
-    let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs).map_err(write_error_to_op)?;
+    append_events(path, &mut events).map_err(write_error_to_op)?;
     let count = incumbents.len();
     let claims = if count == 1 { "claim" } else { "claims" };
     Ok(format!(
@@ -6696,11 +6753,8 @@ fn build_per_incumbent(
     kind_for: impl Fn(&ClaimId) -> ClaimEventKind,
 ) -> Result<Vec<ClaimEvent>, OpError> {
     enforce_write_authority(&WriteAuth::new(
-        verb,
         subject_kind,
         subject_key,
-        predicate,
-        None,
         authority,
         source,
     ))?;
@@ -6741,8 +6795,7 @@ fn build_per_incumbent(
             .append(event.clone())
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
-    let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs).map_err(write_error_to_op)?;
+    append_events(path, &mut events).map_err(write_error_to_op)?;
     Ok(events)
 }
 
@@ -6834,11 +6887,8 @@ fn op_contradict(
     source: &str,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
-        "contradict",
         subject_kind,
         subject_key,
-        predicate,
-        Some(opposing_value),
         authority,
         source,
     ))?;
@@ -6884,8 +6934,7 @@ fn op_contradict(
             .append(event.clone())
             .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     }
-    let refs: Vec<&ClaimEvent> = events.iter().collect();
-    append_events(path, &refs).map_err(write_error_to_op)?;
+    append_events(path, &mut events).map_err(write_error_to_op)?;
     Ok(format!(
         "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
          (authority={authority:?})\n  both are now believed; resolve with `supersede` (install a \
@@ -7587,6 +7636,7 @@ fn base(
             run_id: None,
             input_digest: None,
             recorded_at: TimestampMillis::from_unix_millis(1),
+            attestation: None,
         },
         evidence: vec![Evidence {
             id: EvidenceId::new("evidence:1").expect("evidence id"),

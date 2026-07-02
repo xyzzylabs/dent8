@@ -29,8 +29,10 @@ Add an opt-in signed source identity layer at the CLI/MCP write boundary.
   - optional subject scope (`*` or exact `<kind>:<key>`)
   - optional expiration as Unix milliseconds
 - Every write first checks the existing source->authority ceiling, then, if identity trust is
-  configured, verifies the signed grant and signs/verifies a per-write payload with the source
-  private key before the candidate event reaches the firewall.
+  configured, verifies the signed grant and source-key possession before the candidate event
+  reaches the firewall. **Updated by ADR 0013:** the original ephemeral per-write payload
+  signature is replaced by a *persisted* signed write attestation in `provenance.attestation`,
+  signed over the whole event at the append boundary and re-verifiable offline.
 - Signed identity is **opt-in** like the authority registry. If no trust registry exists and
   `DENT8_REQUIRE_IDENTITY` is unset, dev mode remains permissive. If a trust registry exists
   or `DENT8_REQUIRE_IDENTITY=1`, missing/invalid grant/key material fails closed.

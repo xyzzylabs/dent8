@@ -5119,6 +5119,153 @@ fn signed_identity_grant_is_required_and_bound_to_the_write() {
     assert!(stderr(&out_of_scope).contains("does not cover write subject"));
 }
 
+#[cfg(feature = "identity")]
+#[test]
+#[allow(clippy::too_many_lines)] // one linear scenario: bootstrap -> attest -> verify -> tamper
+fn writes_carry_attestations_that_verify_and_detect_tamper() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let trust = temp.file("trust.json").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let source_key = temp.file("codex.key").to_string_lossy().into_owned();
+    let grant = temp.file("codex.grant.json").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(&["identity", "issuer-keygen", "--out", &issuer_key], &[]),
+        "issuer keygen",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "agent-keygen",
+                "source:codex",
+                "--out",
+                &source_key,
+            ],
+            &[],
+        ),
+        "source keygen",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "trust-add",
+                "owner",
+                &format!("{issuer_key}.pub"),
+            ],
+            &[("DENT8_TRUST", &trust)],
+        ),
+        "trust add",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "grant-issue",
+                "source:codex",
+                "--public-key",
+                &format!("{source_key}.pub"),
+                "--max",
+                "high",
+                "--issuer",
+                "owner",
+                "--issuer-key",
+                &issuer_key,
+                "--scope",
+                "*",
+                "--out",
+                &grant,
+            ],
+            &[],
+        ),
+        "grant issue",
+    );
+
+    let identity_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grant.as_str()),
+        ("DENT8_IDENTITY_KEY", source_key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &identity_env,
+        ),
+        "attested write",
+    );
+
+    // The persisted event carries the attestation, bound to the grant's public key (ADR 0013).
+    let line = fs::read_to_string(&log).expect("event log");
+    let event: Value =
+        serde_json::from_str(line.lines().next().expect("one event")).expect("stored event JSON");
+    let attestation = &event["provenance"]["attestation"];
+    assert_eq!(attestation["algorithm"], "ed25519", "{attestation:#}");
+    let grant_pubkey = fs::read_to_string(format!("{source_key}.pub")).expect("source pubkey");
+    assert_eq!(
+        attestation["public_key"].as_str().expect("public key"),
+        grant_pubkey.trim()
+    );
+
+    // `verify` re-checks the signature and reports the count.
+    let verify = run_dent8(&["verify"], &identity_env);
+    assert_success(&verify, "verify attested log");
+    assert!(
+        stdout(&verify).contains("1 write attestation(s) verify"),
+        "{}",
+        stdout(&verify)
+    );
+
+    // Tampering with an attested event's content breaks its signature — the file dev store
+    // now DETECTS a content edit (previously undetectable without a witness).
+    let contents = fs::read_to_string(&log).expect("event log");
+    fs::write(&log, contents.replacen("tea", "chai", 1)).expect("tamper event log");
+    let tampered = run_dent8(&["verify"], &identity_env);
+    assert_eq!(tampered.status.code(), Some(1));
+    assert!(
+        stderr(&tampered).contains("ATTESTATION:"),
+        "{}",
+        stderr(&tampered)
+    );
+    assert!(stderr(&tampered).contains("does not verify"));
+
+    // Unconfigured dev mode still writes plain, unattested events.
+    let plain_log = temp.file("plain.jsonl").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &[("DENT8_LOG", plain_log.as_str())],
+        ),
+        "unattested dev-mode write",
+    );
+    let line = fs::read_to_string(&plain_log).expect("plain log");
+    assert!(
+        !line.contains("attestation"),
+        "dev-mode event must not carry an attestation: {line}"
+    );
+}
+
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(None, args, envs)
 }

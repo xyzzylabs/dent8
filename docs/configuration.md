@@ -85,7 +85,10 @@ must fail closed if registry or identity material was not provisioned.
 ## Signed source identity flow
 
 Signed identity proves source-key possession at the CLI/MCP boundary. It is not a login
-server: the operator holds an issuer key and issues grants to agent/source keys.
+server: the operator holds an issuer key and issues grants to agent/source keys. Every
+accepted write also persists a **signed write attestation** in `provenance.attestation`
+(ADR 0013) — an Ed25519 signature by the source key over the event content — which
+`dent8 verify` re-checks offline, so attribution outlives the write.
 
 ```sh
 dent8 init --agent codex --install-mcp
