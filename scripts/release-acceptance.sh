@@ -3,6 +3,7 @@
 #
 # By default this builds the stock `dent8` package and tests the installed-user shape in a
 # temporary project. Set DENT8_BIN=/path/to/dent8 to test an already installed/release binary.
+# Set DENT8_EXPECT_WITNESS=1 when that binary is expected to include `--features witness`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,11 +26,29 @@ if [ ! -x "$BIN" ]; then
 fi
 
 WORK="$(mktemp -d -t dent8-release-acceptance.XXXXXX)"
-trap 'rm -rf "$WORK"' EXIT
 PROJECT="$WORK/project"
 OUT="$WORK/out"
 mkdir -p "$PROJECT"
 mkdir -p "$OUT"
+
+cleanup() {
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    rm -rf "$WORK"
+    return
+  fi
+
+  echo "release acceptance failed; artifacts left in $WORK" >&2
+  if [ -d "$OUT" ]; then
+    for file in "$OUT"/*; do
+      [ -f "$file" ] || continue
+      echo "----- $file -----" >&2
+      sed -n '1,200p' "$file" >&2 || true
+    done
+  fi
+}
+trap cleanup EXIT
+
 cd "$PROJECT"
 
 # Keep the acceptance path hermetic if the caller's shell is already dogfooding dent8.
@@ -99,7 +118,16 @@ if "$BIN" --output json witness head >"$OUT/witness-probe.json" 2>"$OUT/witness-
   DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
     "$BIN" --output json witness verify-published "$PUBLISHED" >"$OUT/witness-published.json"
 else
-  echo "witness smoke skipped: binary does not include --features witness"
+  if grep -q -- "--features witness" "$OUT/witness-probe.err"; then
+    if [ "${DENT8_EXPECT_WITNESS:-0}" = "1" ]; then
+      echo "witness smoke failed: binary was expected to include --features witness" >&2
+      exit 1
+    fi
+    echo "witness smoke skipped: binary does not include --features witness"
+  else
+    echo "witness smoke failed during feature probe" >&2
+    exit 1
+  fi
 fi
 
 echo "OK: dent8 release acceptance path passed"

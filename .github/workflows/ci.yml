@@ -65,6 +65,10 @@ jobs:
         run: cargo test -p dent8 --no-default-features
       - name: Release acceptance smoke
         run: scripts/release-acceptance.sh
+      - name: Release acceptance smoke with witness
+        run: |
+          cargo build -p dent8 --features witness
+          DENT8_BIN=target/debug/dent8 DENT8_EXPECT_WITNESS=1 scripts/release-acceptance.sh
       - name: Test signed-anchor feature
         run: cargo test -p dent8-core --features signed-anchor
       - name: Test CLI witness feature

@@ -11,7 +11,7 @@ Requires::
 
     pip install langchain-mcp-adapters langgraph "langchain[openai]"
     export OPENAI_API_KEY=...          # any LangChain-supported model works
-    # the `dent8` binary on PATH (e.g. cargo install --path crates/dent8-cli)
+    # the `dent8` binary on PATH (e.g. cargo install --path crates/dent8-cli --bin dent8)
 
 Run::
 

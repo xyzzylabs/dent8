@@ -45,13 +45,14 @@ To include the witness smoke:
 
 ```sh
 cargo build -p dent8 --features witness
-DENT8_BIN=target/debug/dent8 scripts/release-acceptance.sh
+DENT8_BIN=target/debug/dent8 DENT8_EXPECT_WITNESS=1 scripts/release-acceptance.sh
 ```
 
 The script initializes a throwaway project with the Codex profile, signed identity, a stock
 SQLite backend, and an MCP config; then it runs `doctor --agent --write-check`,
-`assert`, `facts list`, `explain`, and `verify`. With a witness build, it also checks
-`keygen -> sign -> verify -> publish -> verify-published`.
+`assert`, `facts list`, `explain`, and `verify`. With `DENT8_EXPECT_WITNESS=1`, it also
+requires the witness feature and checks `keygen -> sign -> verify -> publish ->
+verify-published`.
 
 ## Packaging
 
