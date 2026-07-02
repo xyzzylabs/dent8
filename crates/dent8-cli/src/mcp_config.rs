@@ -324,23 +324,21 @@ fn load_agent_identity_env(
     #[cfg(feature = "identity")]
     {
         let per_source = identity::identity_env_path_for_source(dir, agent.source())?;
-        if per_source.exists() {
-            return read_env_file(&per_source);
-        }
+        read_env_file(&per_source).map_err(|error| {
+            format!(
+                "{error}; run `dent8 init --agent {}` or \
+                 `dent8 identity repair-env --dir {} --source {}` before installing MCP config",
+                agent.cli_name(),
+                dir.display(),
+                agent.source()
+            )
+        })
     }
     #[cfg(not(feature = "identity"))]
-    let _ = agent;
-
-    let legacy = dir.join("identity.env");
-    read_env_file(&legacy).map_err(|error| {
-        format!(
-            "{error}; run `dent8 init --agent {}` or \
-             `dent8 identity repair-env --dir {} --source {}` before installing MCP config",
-            agent.cli_name(),
-            dir.display(),
-            agent.source()
-        )
-    })
+    {
+        let _ = (dir, agent);
+        Err("`dent8 mcp install --agent` requires a build with `--features identity`".to_string())
+    }
 }
 
 fn require_env_key<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Result<&'a String, String> {

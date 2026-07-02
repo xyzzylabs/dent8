@@ -79,7 +79,7 @@ Point each at `{ command: "dent8", args: ["mcp", "serve"] }`:
 - MCP-client APIs move fast; if `MultiServerMCPClient` / `get_tools()` has shifted, check the
   langchain-mcp-adapters README — the dent8 side (`dent8 mcp serve`) is stable.
 - For a protected local setup, run `dent8 init --identity --source <source>` and pass the
-  generated `.dent8/env` + `.dent8/identity.env` variables into the process that launches
+  generated `.dent8/env` + `.dent8/identity-<source>.env` variables into the process that launches
   `dent8 mcp serve`. For an operational backend, set `DENT8_STORE_URL` (a `postgres://…` /
   `sqlite://…` build). dent8 stays the firewall; the framework just calls it.
 - An ergonomic native client (`pip install dent8` / `npm i dent8` with first-class framework

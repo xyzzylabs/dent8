@@ -1706,33 +1706,6 @@ fn identity_bundle_paths(
         });
     }
 
-    let legacy_env = dir.join("identity.env");
-    if legacy_env.exists() {
-        let env = read_identity_env_file(&legacy_env)?;
-        let grant_file = env
-            .get("DENT8_GRANT")
-            .ok_or_else(|| format!("{} is missing DENT8_GRANT", legacy_env.display()))
-            .map(|path| env_path_value(path, &dir))?;
-        let source_key_path = env
-            .get("DENT8_IDENTITY_KEY")
-            .ok_or_else(|| format!("{} is missing DENT8_IDENTITY_KEY", legacy_env.display()))
-            .map(|path| env_path_value(path, &dir))?;
-        let trust_file = env
-            .get("DENT8_TRUST")
-            .map_or(trust_file, |path| env_path_value(path, &dir));
-        let active_grants_file = env
-            .get("DENT8_ACTIVE_GRANTS")
-            .map_or(active_grants_file, |path| env_path_value(path, &dir));
-        return Ok(IdentityBundlePaths {
-            dir,
-            trust_file,
-            active_grants_file,
-            grant_file,
-            source_key_path,
-            env_file: legacy_env,
-        });
-    }
-
     if active_grants_file.exists() {
         let active = load_active_grants_at(&active_grants_file, true)?
             .ok_or_else(|| format!("{} is empty", active_grants_file.display()))?;
@@ -1758,48 +1731,11 @@ fn identity_bundle_paths(
     }
 
     Err(format!(
-        "cannot read {}; run `dent8 identity repair-env --dir {} --source <source>`",
-        legacy_env.display(),
+        "cannot infer identity source from {}; pass --source or run \
+         `dent8 identity repair-env --dir {} --source <source>`",
+        active_grants_file.display(),
         shell_quote(&path_string(&dir))
     ))
-}
-
-fn env_path_value(raw: &str, bundle_dir: &Path) -> PathBuf {
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        bundle_dir.join(path)
-    }
-}
-
-fn read_identity_env_file(path: &Path) -> Result<BTreeMap<String, String>, String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let mut env = BTreeMap::new();
-    for (line_no, line) in contents.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            return Err(format!(
-                "{}:{} is not a KEY=VALUE line",
-                path.display(),
-                line_no + 1
-            ));
-        };
-        env.insert(key.trim().to_string(), shell_unquote(value.trim()));
-    }
-    Ok(env)
-}
-
-fn shell_unquote(value: &str) -> String {
-    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
-        value[1..value.len() - 1].replace("'\\''", "'")
-    } else {
-        value.to_string()
-    }
 }
 
 fn write_identity_env(paths: &IdentityBundlePaths) -> Result<(), String> {

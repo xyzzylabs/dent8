@@ -103,7 +103,7 @@ one-command path for that shared-backend case: it refuses file-dev bundles, adds
 agent's identity, grants its source an authority ceiling, patches the MCP config, and prints
 the follow-up doctor command. A single long-lived local/remote MCP daemon over HTTP is future
 transport work, not part of v0. `dent8 identity status` checks a local
-identity bundle; `dent8 identity repair-env` repairs legacy generated identity env /
+identity bundle; `dent8 identity repair-env` repairs the generated per-source identity env /
 active-grants files from the current signed grant without rotating keys; and
 `dent8 identity rotate-source` replaces the active source key/grant while keeping the stable
 `.dent8/identity-<source>.env` paths that MCP configs use. Rotation updates `.dent8/active-grants.json`,

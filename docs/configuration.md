@@ -124,7 +124,7 @@ issuer key when supplied, and expiry.
 `dent8 identity repair-env --dir .dent8 --source <source>` rewrites generated
 `.dent8/identity-<source>.env` from the current signed grant and restores a missing active-grant
 entry without rotating keys; it refuses to overwrite a different active grant. Use it when a
-legacy bundle predates per-source envs / `DENT8_ACTIVE_GRANTS` or doctor reports a repair hint.
+generated env/active-grant registry is stale or doctor reports a repair hint.
 `dent8 identity rotate-source` generates a replacement source key, issues a replacement grant,
 updates `.dent8/active-grants.json`, rewrites `.dent8/identity-<source>.env` at the same stable
 path, rejects the previous grant at the write boundary, and removes the previous private

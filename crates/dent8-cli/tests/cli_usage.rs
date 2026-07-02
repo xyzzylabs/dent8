@@ -759,7 +759,7 @@ fn malformed_subject_is_rejected_before_store_access() {
 }
 
 #[test]
-fn legacy_positional_write_form_is_no_longer_accepted() {
+fn positional_write_form_is_no_longer_accepted() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
@@ -1672,6 +1672,48 @@ fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn mcp_install_requires_per_source_identity_env() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+
+    let per_source_env = temp.file(".dent8/identity-codex.env");
+    fs::copy(&per_source_env, temp.file(".dent8/identity.env")).expect("seed old identity env");
+    fs::remove_file(&per_source_env).expect("remove per-source identity env");
+
+    let install = run_dent8(&["mcp", "install", "--agent", "codex", "--dir", &dir], &[]);
+    assert_eq!(install.status.code(), Some(1));
+    let output = format!("{}{}", stdout(&install), stderr(&install));
+    assert!(
+        output.contains("identity-codex.env")
+            && output.contains("dent8 identity repair-env --dir")
+            && output.contains("--source source:codex"),
+        "mcp install should require the per-source identity env, not .dent8/identity.env; output:\n{output}"
+    );
+    assert!(
+        !temp.file(".codex/config.toml").exists(),
+        "failed install should not write an MCP config"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn mcp_install_local_bin_writes_wrapper_and_config() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -1970,7 +2012,7 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
 
 #[cfg(feature = "identity")]
 #[test]
-fn identity_repair_env_recovers_legacy_agent_bundle_active_grants() {
+fn identity_repair_env_recovers_stale_agent_bundle_active_grants() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
     let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
@@ -1996,13 +2038,13 @@ fn identity_repair_env_recovers_legacy_agent_bundle_active_grants() {
 
     let identity_env_path = temp.file(".dent8/identity-codex.env");
     let active_grants_path = temp.file(".dent8/active-grants.json");
-    let legacy_env = fs::read_to_string(&identity_env_path)
+    let stale_env = fs::read_to_string(&identity_env_path)
         .expect("identity env")
         .lines()
         .filter(|line| !line.starts_with("DENT8_ACTIVE_GRANTS="))
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(&identity_env_path, format!("{legacy_env}\n")).expect("legacy identity env");
+    fs::write(&identity_env_path, format!("{stale_env}\n")).expect("stale identity env");
     fs::remove_file(&active_grants_path).expect("remove active grants");
 
     let doctor = run_dent8(
@@ -2130,13 +2172,13 @@ fn doctor_agent_repair_refreshes_stale_env_and_mcp_config() {
 
     let identity_env_path = temp.file(".dent8/identity-codex.env");
     let active_grants_path = temp.file(".dent8/active-grants.json");
-    let legacy_env = fs::read_to_string(&identity_env_path)
+    let stale_env = fs::read_to_string(&identity_env_path)
         .expect("identity env")
         .lines()
         .filter(|line| !line.starts_with("DENT8_ACTIVE_GRANTS="))
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(&identity_env_path, format!("{legacy_env}\n")).expect("legacy identity env");
+    fs::write(&identity_env_path, format!("{stale_env}\n")).expect("stale identity env");
     fs::remove_file(&active_grants_path).expect("remove active grants");
 
     let config_path = temp.file(".codex/config.toml");

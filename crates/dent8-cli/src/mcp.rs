@@ -1649,7 +1649,7 @@ mod tests {
         let (_guard, path) = temp_log();
         let (err, text) = call_tool(&path, "assert", diagnostic("ok", "high"));
         assert!(!err, "{text}");
-        let (err, text) = call_tool(&path, "assert", legacy_doctor_probe("tea", "high"));
+        let (err, text) = call_tool(&path, "assert", hidden_doctor_probe("tea", "high"));
         assert!(!err, "{text}");
 
         let facts = call_tool_result(&path, "list_facts", json!({}));
@@ -1658,7 +1658,7 @@ mod tests {
         let text = facts["content"][0]["text"].as_str().expect("text");
         assert!(text.contains("diagnostic stream(s) hidden"), "{text}");
         assert!(!text.contains("dent8://diagnostic/doctor/dent8.write_check"));
-        assert!(!text.contains("dent8://person/alice-doctor-legacy/favorite_drink"));
+        assert!(!text.contains("dent8://person/alice-doctor-hidden/favorite_drink"));
 
         let facts = call_tool_result(&path, "list_facts", json!({ "include_diagnostics": true }));
         assert_eq!(facts["structuredContent"]["count"], 2);
@@ -1669,7 +1669,7 @@ mod tests {
         );
         assert_eq!(
             facts["structuredContent"]["facts"][1]["uri"],
-            "dent8://person/alice-doctor-legacy/favorite_drink"
+            "dent8://person/alice-doctor-hidden/favorite_drink"
         );
 
         let resources = handle(
@@ -2047,10 +2047,10 @@ mod tests {
         })
     }
 
-    fn legacy_doctor_probe(value: &str, authority: &str) -> Value {
+    fn hidden_doctor_probe(value: &str, authority: &str) -> Value {
         json!({
             "subject_kind": "person",
-            "subject_key": "alice-doctor-legacy",
+            "subject_key": "alice-doctor-hidden",
             "predicate": "favorite_drink",
             "value": value,
             "authority": authority,

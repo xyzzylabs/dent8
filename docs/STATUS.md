@@ -59,8 +59,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   warnings, and `FAIL` on tamper/rollback/corrupt heads. A non-witness build warns when no
   heads exist and fails if signed heads are configured but cannot be verified. With `--agent`,
   it loads the generated `.dent8/env` plus the selected source's identity env
-  (`.dent8/identity-<source>.env`, with legacy `.dent8/identity.env` fallback) without requiring
-  the shell to source it, parses the selected
+  (`.dent8/identity-<source>.env`) without requiring the shell to source it, parses the selected
   agent's installed MCP config, checks that it is up to date, then smokes the exact installed
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` and a bounded timeout.
   If `--mcp-command` is omitted,

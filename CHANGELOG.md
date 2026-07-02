@@ -32,10 +32,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
 - **Signed source identity** (`dent8 init --identity`, `dent8 init --agent <profile>`,
   `dent8 identity`): included in the default CLI build. `init --identity` creates or reuses an
   operator issuer key outside the project bundle, then creates a local source key, trust
-  registry, grant, and `.dent8/identity.env`; `init --agent` selects a known agent source id
+  registry, grant, and `.dent8/identity-<source>.env`; `init --agent` selects a known agent source id
   (`codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, `hecate`) and implies
   identity. `dent8 identity status` checks bundle/trust/active-grant/grant/key/expiry health;
-  `dent8 identity repair-env` repairs legacy generated `.dent8/identity.env` /
+  `dent8 identity repair-env` repairs generated `.dent8/identity-<source>.env` /
   `.dent8/active-grants.json` files from the current signed grant without rotating keys; and
   `dent8 identity rotate-source` replaces the active source key and grant at stable paths,
   updates `.dent8/active-grants.json` so old grant+key pairs are rejected, and removes the old
@@ -114,6 +114,9 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   the human-readable firewall walkthrough now lives in
   [`examples/firewall/demo.sh`](examples/firewall/demo.sh) and drives real CLI writes,
   `explain`, and `verify` against a temporary file-backed dev store.
+- Removed the old `.dent8/identity.env` fallback for agent MCP installs/status. Agent setup now
+  requires the source-specific `.dent8/identity-<source>.env`; run `dent8 identity repair-env`
+  or `dent8 init --agent <profile>` to recreate it from current signed identity material.
 
 ### Fixed
 
