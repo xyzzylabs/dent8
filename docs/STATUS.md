@@ -40,7 +40,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   of hiding the created `.dent8` bundle. It refuses to rewrite the env file unless `--force` is passed and refuses to overwrite
   existing identity key/grant material.
 - **`dent8 agent add --agent <profile> [--dir .dent8] [--authority <level>]
-  [--issuer ISSUER] [--issuer-key PATH] [--mcp-config PATH] [--mcp-command COMMAND]`** —
+  [--issuer ISSUER] [--issuer-key PATH] [--mcp-config PATH]
+  [--mcp-command COMMAND|--mcp-local-bin]`** —
   adds a known agent profile to an existing shared `.dent8/` bundle. It requires
   `DENT8_STORE_URL` in the generated env, so a second agent cannot accidentally share another
   agent's file-dev log. It creates or reuses/repairs the selected source's signed identity
@@ -50,7 +51,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   trusted issuers, pass `--issuer`; Hecate still needs `--mcp-config` because there is no
   stable project-local config path to infer.
 - **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
-  [--mcp-command COMMAND] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
+  [--mcp-command COMMAND|--mcp-local-bin] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
   witness verification status when configured, `verify`, and MCP availability. With
   `--features witness`, configured witness status includes the witness log/public key paths,
@@ -166,7 +167,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
   omitted; an empty batch is `-32600`).
 - **`dent8 mcp install --agent <profile> [--dir .dent8] [--config PATH]
-  [--command COMMAND] [--dry-run|--check]`** — patches the selected agent's MCP config with
+  [--command COMMAND|--local-bin] [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.
   `--dry-run` renders the expected file without writing; `--check` does not write and exits
   `0` only when the existing file already matches. It reads the generated `.dent8/env` plus the
@@ -181,8 +182,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   which is intended for one globally installed binary used by many agents. Stdio MCP clients
   generally launch separate dent8 subprocesses; sharing memory across those agents means
   sharing the backend (`DENT8_STORE_URL`, preferably Postgres for operational concurrency)
-  and registries while keeping per-agent identity env values distinct. A single long-lived
-  local/remote HTTP MCP server is design-only.
+  and registries while keeping per-agent identity env values distinct. `--local-bin` is the
+  repo-local no-Cargo-startup path: it writes/validates `.dent8/bin/dent8`, a wrapper around a
+  prebuilt `.dent8/target-sqlite/debug/dent8` created with
+  `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness`.
+  `doctor --agent ... --mcp-local-bin` verifies that wrapper, checks the target can load the
+  configured store, runs witness writer checks when witness env is present, and warns when the
+  target is older than the workspace Rust sources. A single long-lived local/remote HTTP MCP
+  server is design-only.
 - **`dent8 hook native-memory-guard`** — a built-in provider hook helper. It reads hook JSON
   from stdin, recognizes common native memory/rules paths (`AGENTS.md`, `CLAUDE.md`,
   `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`, `.windsurf/rules`,

@@ -880,6 +880,217 @@ fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
 
 #[cfg(feature = "identity")]
 #[test]
+fn mcp_install_local_bin_writes_wrapper_and_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    seed_local_mcp_target(&dir);
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+
+    let install = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--local-bin",
+        ],
+        &[],
+    );
+    assert_success(&install, "mcp install --local-bin");
+    let install_stdout = stdout(&install);
+    assert!(install_stdout.contains("local MCP wrapper:"));
+    assert!(install_stdout.contains(".dent8/target-sqlite/debug/dent8"));
+
+    let wrapper = fs::read_to_string(temp.file(".dent8/bin/dent8")).expect("local wrapper");
+    assert!(wrapper.contains("target-sqlite/debug/dent8"));
+    assert!(
+        !wrapper.contains("cargo run"),
+        "local wrapper must not run Cargo during MCP startup"
+    );
+
+    let config = fs::read_to_string(temp.file(".codex/config.toml")).expect("codex mcp config");
+    assert!(config.contains(&format!(
+        "command = \"{}\"",
+        temp.file(".dent8/bin/dent8").display()
+    )));
+
+    let checked = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--local-bin",
+            "--check",
+        ],
+        &[],
+    );
+    assert_success(&checked, "mcp install --local-bin --check");
+    assert!(stdout(&checked).contains("local MCP wrapper up to date:"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_local_bin_requires_prebuilt_target_before_writing() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+
+    let install = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--local-bin",
+        ],
+        &[],
+    );
+    assert_eq!(install.status.code(), Some(1));
+    assert!(stderr(&install).contains("local MCP binary target is missing or not executable"));
+    assert!(
+        !temp.file(".dent8/bin/dent8").exists(),
+        "failed local-bin install should not leave a wrapper behind"
+    );
+    assert!(
+        !temp.file(".codex/config.toml").exists(),
+        "failed local-bin install should not patch MCP config"
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn doctor_agent_accepts_local_bin_install() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    seed_local_mcp_target(&dir);
+
+    let init = run_dent8(
+        &[
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--issuer-key",
+            &issuer_key,
+            "--install-mcp",
+            "--mcp-local-bin",
+        ],
+        &[],
+    );
+    assert_success(&init, "init --agent codex --install-mcp --mcp-local-bin");
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--mcp-local-bin",
+        ],
+        &[],
+    );
+    assert_success(&doctor, "doctor --agent codex --mcp-local-bin");
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("local MCP wrapper:"));
+    assert!(stdout.contains("local MCP binary: installed command can load the configured store"));
+    assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn doctor_agent_reports_stale_local_bin_repair_command() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    seed_local_mcp_target(&dir);
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-local-bin",
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp --mcp-local-bin",
+    );
+    fs::write(temp.file(".dent8/bin/dent8"), "#!/bin/sh\nexit 0\n").expect("stale wrapper");
+    make_executable(&temp.file(".dent8/bin/dent8"));
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--mcp-local-bin",
+        ],
+        &[],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("local MCP wrapper:"));
+    assert!(stdout.contains("is stale; repair with `dent8 doctor --agent codex --dir"));
+    assert!(stdout.contains("--repair --mcp-local-bin`"));
+    assert!(
+        !stdout.contains("local MCP binary: installed command can load the configured store"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("<profile>"), "{stdout}");
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -3299,6 +3510,30 @@ fn make_owner_only(path: &Path) {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o600))
             .unwrap_or_else(|error| panic!("chmod 0600 {}: {error}", path.display()));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+#[cfg(feature = "identity")]
+fn seed_local_mcp_target(dir: &str) {
+    let target = Path::new(dir).join("target-sqlite/debug/dent8");
+    fs::create_dir_all(target.parent().expect("local target parent"))
+        .unwrap_or_else(|error| panic!("create {}: {error}", target.display()));
+    fs::copy(dent8_bin(), &target)
+        .unwrap_or_else(|error| panic!("copy local target {}: {error}", target.display()));
+    make_executable(&target);
+}
+
+#[cfg(feature = "identity")]
+fn make_executable(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|error| panic!("chmod 0755 {}: {error}", path.display()));
     }
     #[cfg(not(unix))]
     {

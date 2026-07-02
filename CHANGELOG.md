@@ -74,7 +74,9 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   `--write-check`, it runs the acceptance probe through that installed MCP server. `dent8 agent
   add --agent <profile>` adds a second agent to an existing shared SQLite/Postgres-backed bundle
   by creating/reusing its signed identity, authority ceiling, and MCP config while refusing
-  file-dev bundles. The CLI now
+  file-dev bundles. `--mcp-local-bin` / `mcp install --local-bin` writes and verifies a
+  repo-local `.dent8/bin/dent8` wrapper around a prebuilt `.dent8/target-sqlite/debug/dent8`,
+  avoiding Cargo during MCP startup while letting doctor warn about stale local binaries. The CLI now
   uses `clap` with named write arguments, targeted usage errors, global
   `--color auto|always|never`, `--version`, and
   `dent8 completions <bash|elvish|fish|powershell|zsh>`.

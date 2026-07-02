@@ -79,7 +79,11 @@ Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP co
 (`--dry-run` renders without writing; `--check` exits non-zero if the config would change).
 If doctor reports a stale generated identity bundle or MCP env, `dent8 doctor --agent
 <profile> --repair` repairs the generated env and refreshes the installed MCP config before
-rerunning the normal checks.
+rerunning the normal checks. For repo-local dogfood where MCP startup must not invoke Cargo,
+build once with `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features
+sqlite,witness`, then pass `--mcp-local-bin` on `init` / `agent add` or `--local-bin` on
+`mcp install`; dent8 writes `.dent8/bin/dent8` and doctor verifies the wrapper and prebuilt
+target.
 Source `.dent8/env` + the source-specific identity env (for example
 `.dent8/identity-codex.env`) when you want to run CLI commands from the same shell. Use
 `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
@@ -254,7 +258,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 mcp serve`: expose read/audit tools, the full belief surface, resources, and
   JSON-RPC batches to agents over MCP (stdio JSON-RPC), with `structuredContent` fields
   for accepted/rejected/contested decisions, accepted event hashes, and integrity receipts.
-- `dent8 mcp install --agent <profile> [--dry-run|--check] [--command dent8]`: patch the
+- `dent8 mcp install --agent <profile> [--dry-run|--check] [--command dent8|--local-bin]`: patch the
   selected agent's MCP config with dent8, write it atomically, and print the resulting file.
 
 ## Project Docs

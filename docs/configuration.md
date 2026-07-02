@@ -106,6 +106,19 @@ installed globally but not on the agent host's `PATH`. If you use a bundle direc
 `.dent8`, pass `--mcp-config` / `--config` because dent8 cannot infer the project-local MCP
 config path safely. `dent8 doctor --agent <profile>` reads the installed MCP config back, so
 custom commands do not need to be repeated for the normal post-install check. The
+repo-local alternative is `--mcp-local-bin` on `init` / `agent add`, or `--local-bin` on
+`mcp install`. Build the target first:
+
+```sh
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness
+dent8 mcp install --agent codex --local-bin
+dent8 doctor --agent codex --mcp-local-bin
+```
+
+This writes `.dent8/bin/dent8`, a tiny wrapper that execs
+`.dent8/target-sqlite/debug/dent8`; it avoids Cargo locks/rebuilds during MCP startup while
+letting doctor verify the wrapper, configured store support, witness support when configured,
+and stale prebuilt binaries.
 `dent8 identity status` command checks the bundle, active-grant registry, grant, source key,
 issuer key when supplied, and expiry.
 `dent8 identity repair-env --dir .dent8 --source <source>` rewrites generated

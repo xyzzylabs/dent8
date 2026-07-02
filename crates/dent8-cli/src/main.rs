@@ -377,6 +377,7 @@ struct InitArgs {
 }
 
 #[derive(Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct InitMcpArgs {
     /// Patch the selected agent's MCP config after init and show the resulting file.
     #[arg(long, requires = "agent")]
@@ -385,8 +386,16 @@ struct InitMcpArgs {
     #[arg(long, value_name = "PATH", requires = "install_mcp")]
     mcp_config: Option<String>,
     /// Command written into the installed MCP config.
-    #[arg(long, value_name = "COMMAND", requires = "install_mcp")]
+    #[arg(
+        long,
+        value_name = "COMMAND",
+        requires = "install_mcp",
+        conflicts_with = "mcp_local_bin"
+    )]
     mcp_command: Option<String>,
+    /// Use .dent8/bin/dent8, a wrapper around a prebuilt .dent8/target-sqlite/debug/dent8.
+    #[arg(long, requires = "install_mcp")]
+    mcp_local_bin: bool,
     /// Render the MCP config change after init without writing it.
     #[arg(long, requires = "install_mcp", conflicts_with = "mcp_check")]
     mcp_dry_run: bool,
@@ -438,10 +447,13 @@ struct AgentAddArgs {
     #[arg(
         long,
         visible_alias = "command",
-        default_value = "dent8",
-        value_name = "COMMAND"
+        value_name = "COMMAND",
+        conflicts_with = "mcp_local_bin"
     )]
-    mcp_command: String,
+    mcp_command: Option<String>,
+    /// Use .dent8/bin/dent8, a wrapper around a prebuilt .dent8/target-sqlite/debug/dent8.
+    #[arg(long)]
+    mcp_local_bin: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -543,8 +555,16 @@ struct DoctorArgs {
     #[arg(long, value_name = "PATH", requires = "agent")]
     mcp_config: Option<String>,
     /// Command expected in the installed MCP config when --agent is set.
-    #[arg(long, value_name = "COMMAND", requires = "agent")]
+    #[arg(
+        long,
+        value_name = "COMMAND",
+        requires = "agent",
+        conflicts_with = "mcp_local_bin"
+    )]
     mcp_command: Option<String>,
+    /// Repair/check against .dent8/bin/dent8, a wrapper around .dent8/target-sqlite/debug/dent8.
+    #[arg(long, requires = "agent")]
+    mcp_local_bin: bool,
     /// Repair stale generated identity/MCP agent setup before checking it.
     #[arg(long, requires = "agent")]
     repair: bool,
@@ -795,8 +815,11 @@ struct McpInstallArgs {
     #[arg(long, value_name = "PATH")]
     config: Option<String>,
     /// Command written into the installed MCP config.
-    #[arg(long, default_value = "dent8", value_name = "COMMAND")]
-    command: String,
+    #[arg(long, value_name = "COMMAND", conflicts_with = "local_bin")]
+    command: Option<String>,
+    /// Use .dent8/bin/dent8, a wrapper around a prebuilt .dent8/target-sqlite/debug/dent8.
+    #[arg(long)]
+    local_bin: bool,
     /// Render the resulting file without writing it.
     #[arg(long, conflicts_with = "check")]
     dry_run: bool,
@@ -1647,11 +1670,12 @@ fn cmd_init(args: &InitArgs) -> i32 {
 fn cmd_mcp_install(args: &McpInstallArgs) -> i32 {
     let dir = std::path::PathBuf::from(&args.dir);
     let mode = mcp_install_mode(args.dry_run, args.check);
-    match install_mcp_config(
+    match install_mcp_config_prepared(
         args.agent,
         &dir,
         args.config.as_deref(),
-        &args.command,
+        args.command.as_deref(),
+        args.local_bin,
         mode,
     ) {
         Ok(outcome) => {
@@ -1751,7 +1775,11 @@ fn agent_add_inner(args: &AgentAddArgs) -> Result<CommandOutcome, String> {
 
 #[cfg(feature = "identity")]
 fn validate_agent_add_args(args: &AgentAddArgs) -> Result<(), String> {
-    if args.mcp_command.trim().is_empty() {
+    if args
+        .mcp_command
+        .as_deref()
+        .is_some_and(|command| command.trim().is_empty())
+    {
         return Err("MCP command must not be empty".to_string());
     }
     if args.agent == InitAgent::Hecate && args.mcp_config.is_none() {
@@ -1841,11 +1869,12 @@ fn append_agent_add_mcp_install(
     dir: &std::path::Path,
     mut message: String,
 ) -> CommandOutcome {
-    let install = match install_mcp_config(
+    let install = match install_mcp_config_prepared(
         args.agent,
         dir,
         args.mcp_config.as_deref(),
-        &args.mcp_command,
+        args.mcp_command.as_deref(),
+        args.mcp_local_bin,
         mcp_config::InstallMode::Write,
     ) {
         Ok(install) => install,
@@ -2014,11 +2043,12 @@ fn append_init_mcp_install(
         .agent
         .ok_or_else(|| "`dent8 init --install-mcp` requires --agent".to_string())?;
     let mode = mcp_install_mode(args.mcp.mcp_dry_run, args.mcp.mcp_check);
-    match install_mcp_config(
+    match install_mcp_config_prepared(
         agent,
         dir,
         args.mcp.mcp_config.as_deref(),
-        args.mcp.mcp_command.as_deref().unwrap_or("dent8"),
+        args.mcp.mcp_command.as_deref(),
+        args.mcp.mcp_local_bin,
         mode,
     ) {
         Ok(install) => {
@@ -2059,6 +2089,220 @@ fn install_mcp_config(
         message: result.message(),
         exit_code: result.exit_code(),
     })
+}
+
+fn install_mcp_config_prepared(
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    command: Option<&str>,
+    local_bin: bool,
+    mode: mcp_config::InstallMode,
+) -> Result<CommandOutcome, String> {
+    let prepared = prepare_mcp_command(dir, command, local_bin, mode)?;
+    let mut outcome = install_mcp_config(agent, dir, config, &prepared.command, mode)?;
+    if let Some(message) = prepared.message {
+        outcome.message = format!("{message}\n\n{}", outcome.message);
+        outcome.exit_code = outcome.exit_code.max(prepared.exit_code);
+    }
+    Ok(outcome)
+}
+
+struct PreparedMcpCommand {
+    command: String,
+    message: Option<String>,
+    exit_code: i32,
+}
+
+struct LocalMcpBinary {
+    wrapper: std::path::PathBuf,
+    target: std::path::PathBuf,
+    repo: std::path::PathBuf,
+}
+
+fn prepare_mcp_command(
+    dir: &std::path::Path,
+    command: Option<&str>,
+    local_bin: bool,
+    mode: mcp_config::InstallMode,
+) -> Result<PreparedMcpCommand, String> {
+    if !local_bin {
+        let command = command.unwrap_or("dent8");
+        if command.trim().is_empty() {
+            return Err("MCP command must not be empty".to_string());
+        }
+        return Ok(PreparedMcpCommand {
+            command: command.to_string(),
+            message: None,
+            exit_code: 0,
+        });
+    }
+
+    let local = local_mcp_binary(dir)?;
+    let expected = render_local_mcp_wrapper(&local);
+    let existing = match std::fs::read_to_string(&local.wrapper) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("cannot read {}: {error}", local.wrapper.display())),
+    };
+    let changed = existing.as_deref() != Some(expected.as_str());
+    let action = match (existing.is_some(), changed) {
+        (false, _) => "create",
+        (true, true) => "update",
+        (true, false) => "leave unchanged",
+    };
+    let target_ok = is_executable_file(&local.target);
+
+    if mode == mcp_config::InstallMode::Write && !target_ok {
+        return Err(local_mcp_missing_target_message(&local));
+    }
+
+    if mode == mcp_config::InstallMode::Write && changed {
+        if let Some(parent) = local.wrapper.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+        }
+        write_atomic(&local.wrapper.to_string_lossy(), &expected)?;
+        restrict_executable_owner_only(&local.wrapper)?;
+    }
+
+    let (header, exit_code) = match mode {
+        mcp_config::InstallMode::Write => (
+            format!(
+                "{} local MCP wrapper: {}",
+                past_tense(action),
+                local.wrapper.display()
+            ),
+            0,
+        ),
+        mcp_config::InstallMode::DryRun => (
+            format!(
+                "would {action} local MCP wrapper: {}",
+                local.wrapper.display()
+            ),
+            0,
+        ),
+        mcp_config::InstallMode::Check if !changed && target_ok => (
+            format!("local MCP wrapper up to date: {}", local.wrapper.display()),
+            0,
+        ),
+        mcp_config::InstallMode::Check => (
+            format!(
+                "local MCP wrapper needs update: {}",
+                local.wrapper.display()
+            ),
+            1,
+        ),
+    };
+    let mut message = format!(
+        "{header}\n  target: {}\n  build: {}",
+        local.target.display(),
+        local_mcp_build_command(&local)
+    );
+    if !target_ok {
+        message.push_str("\n  status: target is missing or not executable");
+    }
+
+    Ok(PreparedMcpCommand {
+        command: local.wrapper.to_string_lossy().into_owned(),
+        message: Some(message),
+        exit_code,
+    })
+}
+
+fn past_tense(action: &str) -> &'static str {
+    match action {
+        "create" => "created",
+        "update" => "updated",
+        "leave unchanged" => "unchanged",
+        _ => "prepared",
+    }
+}
+
+fn local_mcp_binary(dir: &std::path::Path) -> Result<LocalMcpBinary, String> {
+    let dir = absolute_path(dir)?;
+    let repo = dir
+        .parent()
+        .ok_or_else(|| format!("{} has no parent project directory", dir.display()))?
+        .to_path_buf();
+    Ok(LocalMcpBinary {
+        wrapper: dir.join("bin/dent8"),
+        target: dir.join("target-sqlite/debug/dent8"),
+        repo,
+    })
+}
+
+fn render_local_mcp_wrapper(local: &LocalMcpBinary) -> String {
+    format!(
+        "#!/bin/sh\n\
+         set -eu\n\n\
+         repo={}\n\
+         cd \"$repo\"\n\n\
+         bin={}\n\
+         if [ ! -x \"$bin\" ]; then\n\
+         \x20 echo \"dent8 dogfood binary is missing: $bin\" >&2\n\
+         \x20 echo \"build it with: {}\" >&2\n\
+         \x20 exit 127\n\
+         fi\n\n\
+         exec \"$bin\" \"$@\"\n",
+        shell_quote(&local.repo.to_string_lossy()),
+        shell_quote(&local.target.to_string_lossy()),
+        local_mcp_build_command(local).replace('"', "\\\""),
+    )
+}
+
+fn local_mcp_build_command(local: &LocalMcpBinary) -> String {
+    format!(
+        "CARGO_TARGET_DIR={} cargo build -p dent8-cli --features sqlite,witness",
+        shell_quote(
+            &local
+                .target
+                .parent()
+                .and_then(std::path::Path::parent)
+                .unwrap_or(&local.repo)
+                .to_string_lossy()
+        )
+    )
+}
+
+fn local_mcp_missing_target_message(local: &LocalMcpBinary) -> String {
+    format!(
+        "local MCP binary target is missing or not executable: {}; build it with `{}`",
+        local.target.display(),
+        local_mcp_build_command(local)
+    )
+}
+
+fn is_executable_file(path: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn restrict_executable_owner_only(path: &std::path::Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("cannot chmod 0700 {}: {error}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
 }
 
 fn mcp_install_mode(dry_run: bool, check: bool) -> mcp_config::InstallMode {
@@ -2401,11 +2645,12 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
         }
     };
 
-    match validate_installed_agent_config(&bundle_env, &installed, args.mcp_command.as_deref()) {
+    let expected_command = expected_doctor_mcp_command(args, &dir);
+    match validate_installed_agent_config(&bundle_env, &installed, expected_command.as_deref()) {
         Ok(message) => doctor_line(&mut output, "OK", &message),
         Err(error) => {
             ok = false;
-            let command = args.mcp_command.as_deref().unwrap_or(&installed.command);
+            let command = expected_command.as_deref().unwrap_or(&installed.command);
             let hint = agent_mcp_config_error_with_repair_hint(
                 &error,
                 agent,
@@ -2415,6 +2660,18 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
             );
             doctor_line(&mut output, "FAIL", &format!("agent mcp config: {hint}"));
         }
+    }
+
+    if !doctor_local_mcp_binary(
+        &mut output,
+        &installed,
+        agent,
+        &dir,
+        args.mcp_config.as_deref(),
+        &bundle_env,
+        source,
+    ) {
+        ok = false;
     }
 
     match run_doctor_with_env(source, false, &installed.env, !args.write_check) {
@@ -2446,6 +2703,15 @@ fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {
     }
 
     DoctorReport { output, ok }
+}
+
+fn expected_doctor_mcp_command(args: &DoctorArgs, dir: &std::path::Path) -> Option<String> {
+    if args.mcp_local_bin {
+        return local_mcp_binary(dir)
+            .ok()
+            .map(|local| local.wrapper.to_string_lossy().into_owned());
+    }
+    args.mcp_command.clone()
 }
 
 fn load_doctor_agent_env(
@@ -2500,12 +2766,13 @@ fn load_doctor_installed_server(
             Ok(installed)
         }
         Err(error) => {
+            let expected = expected_doctor_mcp_command(args, dir);
             let hint = agent_mcp_config_error_with_repair_hint(
                 &error,
                 agent,
                 dir,
                 args.mcp_config.as_deref(),
-                args.mcp_command.as_deref(),
+                expected.as_deref(),
             );
             Err(format!("agent mcp config: {hint}"))
         }
@@ -2561,30 +2828,54 @@ fn repair_agent_mcp_config(
     agent: InitAgent,
     dir: &std::path::Path,
 ) -> Result<String, String> {
-    let command = repair_agent_mcp_command(args, agent, dir);
-    install_mcp_config(
+    let use_local_bin = args.mcp_local_bin || installed_agent_uses_local_bin(args, agent, dir);
+    let command = if use_local_bin {
+        None
+    } else {
+        repair_agent_mcp_command(args, agent, dir)
+    };
+    install_mcp_config_prepared(
         agent,
         dir,
         args.mcp_config.as_deref(),
-        &command,
+        command.as_deref(),
+        use_local_bin,
         mcp_config::InstallMode::Write,
     )
     .map(|outcome| outcome.message)
 }
 
-fn repair_agent_mcp_command(args: &DoctorArgs, agent: InitAgent, dir: &std::path::Path) -> String {
-    args.mcp_command
-        .clone()
-        .or_else(|| {
-            mcp_config::load_installed_server(
-                agent,
-                dir,
-                args.mcp_config.as_deref().map(std::path::Path::new),
-            )
-            .ok()
-            .map(|installed| installed.command)
-        })
-        .unwrap_or_else(|| "dent8".to_string())
+fn repair_agent_mcp_command(
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> Option<String> {
+    args.mcp_command.clone().or_else(|| {
+        mcp_config::load_installed_server(
+            agent,
+            dir,
+            args.mcp_config.as_deref().map(std::path::Path::new),
+        )
+        .ok()
+        .map(|installed| installed.command)
+    })
+}
+
+fn installed_agent_uses_local_bin(
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> bool {
+    let Ok(local) = local_mcp_binary(dir) else {
+        return false;
+    };
+    mcp_config::load_installed_server(
+        agent,
+        dir,
+        args.mcp_config.as_deref().map(std::path::Path::new),
+    )
+    .ok()
+    .is_some_and(|installed| std::path::Path::new(&installed.command) == local.wrapper)
 }
 
 fn agent_env_error_with_repair_hint(
@@ -2636,8 +2927,12 @@ fn mcp_install_repair_command(
         command_line.push_str(&shell_quote(config));
     }
     if let Some(command) = command {
-        command_line.push_str(" --command ");
-        command_line.push_str(&shell_quote(command));
+        if command_is_local_mcp_wrapper(dir, command) {
+            command_line.push_str(" --local-bin");
+        } else {
+            command_line.push_str(" --command ");
+            command_line.push_str(&shell_quote(command));
+        }
     }
     command_line
 }
@@ -2658,10 +2953,20 @@ fn doctor_agent_repair_command(
         command_line.push_str(&shell_quote(config));
     }
     if let Some(command) = command {
-        command_line.push_str(" --mcp-command ");
-        command_line.push_str(&shell_quote(command));
+        if command_is_local_mcp_wrapper(dir, command) {
+            command_line.push_str(" --mcp-local-bin");
+        } else {
+            command_line.push_str(" --mcp-command ");
+            command_line.push_str(&shell_quote(command));
+        }
     }
     command_line
+}
+
+fn command_is_local_mcp_wrapper(dir: &std::path::Path, command: &str) -> bool {
+    local_mcp_binary(dir)
+        .ok()
+        .is_some_and(|local| std::path::Path::new(command) == local.wrapper)
 }
 
 fn validate_installed_agent_config(
@@ -2700,6 +3005,213 @@ fn validate_installed_agent_config(
         message.push_str(expected);
     }
     Ok(message)
+}
+
+fn doctor_local_mcp_binary(
+    output: &mut String,
+    installed: &mcp_config::InstalledServer,
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+    source: &str,
+) -> bool {
+    let Ok(local) = local_mcp_binary(dir) else {
+        return true;
+    };
+    if std::path::Path::new(&installed.command) != local.wrapper {
+        return true;
+    }
+
+    let wrapper_ok = doctor_local_mcp_wrapper(output, &local, agent, dir, config);
+    let target_ok = doctor_local_mcp_target(output, &local);
+    let mut ok = wrapper_ok && target_ok;
+
+    if !ok {
+        return ok;
+    }
+
+    if local_mcp_command_loads_store(installed, env, source) {
+        doctor_line(
+            output,
+            "OK",
+            "local MCP binary: installed command can load the configured store",
+        );
+    } else {
+        ok = false;
+        doctor_line(
+            output,
+            "FAIL",
+            "local MCP binary: installed command cannot load the configured store; rebuild with the backend feature required by DENT8_STORE_URL",
+        );
+    }
+
+    if env.contains_key("DENT8_WITNESS_LOG") || env.contains_key("DENT8_WITNESS_PUBKEY") {
+        if local_mcp_command_has_witness(installed, env) {
+            doctor_line(
+                output,
+                "OK",
+                "local MCP binary: witness writer checks are available",
+            );
+        } else {
+            ok = false;
+            doctor_line(
+                output,
+                "FAIL",
+                "local MCP binary: witness checks failed; rebuild with `--features sqlite,witness`",
+            );
+        }
+    }
+
+    ok
+}
+
+fn doctor_local_mcp_wrapper(
+    output: &mut String,
+    local: &LocalMcpBinary,
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+) -> bool {
+    let expected = render_local_mcp_wrapper(local);
+    match std::fs::read_to_string(&local.wrapper) {
+        Ok(actual) if actual == expected => {
+            doctor_line(
+                output,
+                "OK",
+                &format!(
+                    "local MCP wrapper: {} (matches dent8 template)",
+                    local.wrapper.display()
+                ),
+            );
+            true
+        }
+        Ok(_) => {
+            let wrapper_command = local.wrapper.to_string_lossy();
+            let repair = doctor_agent_repair_command(agent, dir, config, Some(&wrapper_command));
+            doctor_line(
+                output,
+                "FAIL",
+                &format!(
+                    "local MCP wrapper: {} is stale; repair with `{repair}`",
+                    local.wrapper.display(),
+                ),
+            );
+            false
+        }
+        Err(error) => {
+            doctor_line(
+                output,
+                "FAIL",
+                &format!(
+                    "local MCP wrapper: cannot read {}: {error}",
+                    local.wrapper.display()
+                ),
+            );
+            false
+        }
+    }
+}
+
+fn doctor_local_mcp_target(output: &mut String, local: &LocalMcpBinary) -> bool {
+    if !is_executable_file(&local.target) {
+        doctor_line(output, "FAIL", &local_mcp_missing_target_message(local));
+        return false;
+    }
+    doctor_line(
+        output,
+        "OK",
+        &format!("local MCP binary: {}", local.target.display()),
+    );
+    if local_mcp_target_is_stale(local) {
+        doctor_line(
+            output,
+            "WARN",
+            &format!(
+                "local MCP binary: {} is older than workspace Rust sources; rebuild with `{}`",
+                local.target.display(),
+                local_mcp_build_command(local)
+            ),
+        );
+    }
+    true
+}
+
+fn local_mcp_command_loads_store(
+    installed: &mcp_config::InstalledServer,
+    env: &std::collections::BTreeMap<String, String>,
+    source: &str,
+) -> bool {
+    let mut command = Command::new(&installed.command);
+    command.args(["doctor", "--source", source]);
+    apply_dent8_env(&mut command, env);
+    if let Some(cwd) = installed.cwd.as_ref() {
+        command.current_dir(cwd);
+    }
+    command.output().is_ok_and(|output| output.status.success())
+}
+
+fn local_mcp_command_has_witness(
+    installed: &mcp_config::InstalledServer,
+    env: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let mut command = Command::new(&installed.command);
+    command.args(["witness", "doctor", "writer"]);
+    apply_dent8_env(&mut command, env);
+    if let Some(cwd) = installed.cwd.as_ref() {
+        command.current_dir(cwd);
+    }
+    command.output().is_ok_and(|output| output.status.success())
+}
+
+fn local_mcp_target_is_stale(local: &LocalMcpBinary) -> bool {
+    let Ok(target_mtime) = std::fs::metadata(&local.target).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    latest_workspace_rust_mtime(&local.repo).is_some_and(|latest| target_mtime < latest)
+}
+
+fn latest_workspace_rust_mtime(repo: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut latest = None;
+    for path in [
+        repo.join("Cargo.toml"),
+        repo.join("Cargo.lock"),
+        repo.join("crates"),
+    ] {
+        collect_latest_rust_mtime(&path, &mut latest);
+    }
+    latest
+}
+
+fn collect_latest_rust_mtime(path: &std::path::Path, latest: &mut Option<std::time::SystemTime>) {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return;
+    };
+    if metadata.is_file() {
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            return;
+        };
+        if (path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
+            || name == "Cargo.toml"
+            || name == "Cargo.lock")
+            && let Ok(modified) = metadata.modified()
+            && latest.is_none_or(|current| current < modified)
+        {
+            *latest = Some(modified);
+        }
+        return;
+    }
+    if !metadata.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        collect_latest_rust_mtime(&entry.path(), latest);
+    }
 }
 
 fn run_doctor_with_env(
