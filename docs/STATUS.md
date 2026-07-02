@@ -68,11 +68,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   expected command. By default it is read-only; with `--repair`, it first repairs the
   generated identity env from the current signed grant and refreshes the selected agent's
   installed MCP config from the generated bundle, then runs the normal checks. With
-  `--write-check`, it runs an explicit
-  Alice-style acceptance probe through the installed MCP server against the configured store:
-  high-authority
-  `favorite_drink=tea` is accepted, a low-authority supersession to `coffee` from the same
-  configured source is rejected, `explain` still returns `tea`, and `verify` passes.
+  `--write-check`, it runs an explicit acceptance probe through the installed MCP server
+  against the configured store: a high-authority internal diagnostic fact
+  (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a low-authority supersession to
+  a tampered value from the same configured source is rejected, `explain` still returns `ok`,
+  and `verify` passes. Diagnostic streams are hidden from normal MCP fact/resource browsing by
+  default.
 - **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and

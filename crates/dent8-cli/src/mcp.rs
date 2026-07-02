@@ -235,7 +235,7 @@ fn handle_tool_call(id: &Value, params: Option<&Value>, path: &str) -> Value {
 
 /// `resources/list`: one resource per distinct fact stream in the log.
 fn handle_resources_list(id: &Value, path: &str) -> Value {
-    match op_list_subjects(path) {
+    match op_list_subjects(path, false) {
         Ok(subjects) => {
             let resources: Vec<Value> = subjects
                 .iter()
@@ -351,7 +351,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
     let key = || arg(arguments, "subject_key");
     let predicate = || arg(arguments, "predicate");
     match name {
-        "list_facts" => list_facts(path),
+        "list_facts" => list_facts(path, arguments),
         // `verify_log` returns Err for integrity *findings* (taint, lineage, a corrupt log) as
         // well as for a genuine couldn't-run — but for an MCP agent those findings are the
         // audit's whole point, not a failed tool call. Surface the verdict text as a normal
@@ -603,12 +603,33 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
     }
 }
 
-fn list_facts(path: &str) -> Result<ToolOutput, ToolError> {
-    let subjects = op_list_subjects(path).map_err(into_tool_error)?;
+fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
+    let include_diagnostics = optional_bool(arguments, "include_diagnostics")?;
+    let subjects = op_list_subjects(path, include_diagnostics).map_err(into_tool_error)?;
+    let hidden_diagnostics_count = if include_diagnostics {
+        0
+    } else {
+        let all_subjects = op_list_subjects(path, true).map_err(into_tool_error)?;
+        all_subjects.len().saturating_sub(subjects.len())
+    };
     if subjects.is_empty() {
+        let hidden_note = if hidden_diagnostics_count == 0 {
+            String::new()
+        } else {
+            format!(
+                " ({hidden_diagnostics_count} diagnostic stream(s) hidden; pass include_diagnostics=true to show)"
+            )
+        };
         return Ok(ToolOutput::new(
-            "no dent8 facts recorded yet",
-            json!({ "status": "ok", "tool": "list_facts", "count": 0, "facts": [] }),
+            format!("no dent8 facts recorded yet{hidden_note}"),
+            json!({
+                "status": "ok",
+                "tool": "list_facts",
+                "count": 0,
+                "facts": [],
+                "include_diagnostics": include_diagnostics,
+                "hidden_diagnostics_count": hidden_diagnostics_count,
+            }),
         ));
     }
     let facts: Vec<Value> = subjects
@@ -644,6 +665,8 @@ fn list_facts(path: &str) -> Result<ToolOutput, ToolError> {
             "tool": "list_facts",
             "count": count,
             "facts": facts,
+            "include_diagnostics": include_diagnostics,
+            "hidden_diagnostics_count": hidden_diagnostics_count,
         }),
     ))
 }
@@ -950,6 +973,16 @@ fn arg(arguments: &Value, name: &str) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::Invalid(format!("missing required string argument: {name}")))
 }
 
+fn optional_bool(arguments: &Value, name: &str) -> Result<bool, ToolError> {
+    match arguments.get(name) {
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(ToolError::Invalid(format!(
+            "optional argument {name} must be a boolean"
+        ))),
+        None => Ok(false),
+    }
+}
+
 /// The required `authority` argument, parsed to a level.
 fn arg_authority(arguments: &Value) -> Result<dent8_core::AuthorityLevel, ToolError> {
     let raw = arg(arguments, "authority")?;
@@ -974,6 +1007,12 @@ fn into_tool_error(error: OpError) -> ToolError {
 #[allow(clippy::too_many_lines)]
 fn tool_list() -> Vec<Value> {
     let empty = json!({});
+    let list_facts = json!({
+        "include_diagnostics": {
+            "type": "boolean",
+            "description": "include internal diagnostic fact streams such as doctor write-check probes"
+        },
+    });
     let subject = json!({
         "subject_kind": { "type": "string", "description": "entity kind, e.g. repo" },
         "subject_key": { "type": "string", "description": "entity key, e.g. myproj" },
@@ -1023,7 +1062,7 @@ fn tool_list() -> Vec<Value> {
         tool(
             "list_facts",
             "List known dent8 fact streams and their dent8:// resource URIs. Use before relying on project memory.",
-            &empty,
+            &list_facts,
             &[],
         ),
         tool(
@@ -1143,6 +1182,8 @@ fn list_facts_output_schema() -> Value {
             "status": { "const": "ok" },
             "tool": { "const": "list_facts" },
             "count": { "type": "integer", "minimum": 0 },
+            "include_diagnostics": { "type": "boolean" },
+            "hidden_diagnostics_count": { "type": "integer", "minimum": 0 },
             "facts": {
                 "type": "array",
                 "items": object_schema(
@@ -1155,7 +1196,14 @@ fn list_facts_output_schema() -> Value {
                 ),
             },
         }),
-        &["status", "tool", "count", "facts"],
+        &[
+            "status",
+            "tool",
+            "count",
+            "include_diagnostics",
+            "hidden_diagnostics_count",
+            "facts",
+        ],
     )
 }
 
@@ -1597,6 +1645,48 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_fact_streams_are_hidden_from_browse_surfaces_by_default() {
+        let (_guard, path) = temp_log();
+        let (err, text) = call_tool(&path, "assert", diagnostic("ok", "high"));
+        assert!(!err, "{text}");
+        let (err, text) = call_tool(&path, "assert", legacy_doctor_probe("tea", "high"));
+        assert!(!err, "{text}");
+
+        let facts = call_tool_result(&path, "list_facts", json!({}));
+        assert_eq!(facts["structuredContent"]["count"], 0);
+        assert_eq!(facts["structuredContent"]["hidden_diagnostics_count"], 2);
+        let text = facts["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("diagnostic stream(s) hidden"), "{text}");
+        assert!(!text.contains("dent8://diagnostic/doctor/dent8.write_check"));
+        assert!(!text.contains("dent8://person/alice-doctor-legacy/favorite_drink"));
+
+        let facts = call_tool_result(&path, "list_facts", json!({ "include_diagnostics": true }));
+        assert_eq!(facts["structuredContent"]["count"], 2);
+        assert_eq!(facts["structuredContent"]["include_diagnostics"], true);
+        assert_eq!(
+            facts["structuredContent"]["facts"][0]["uri"],
+            "dent8://diagnostic/doctor/dent8.write_check"
+        );
+        assert_eq!(
+            facts["structuredContent"]["facts"][1]["uri"],
+            "dent8://person/alice-doctor-legacy/favorite_drink"
+        );
+
+        let resources = handle(
+            &json!({ "jsonrpc": "2.0", "id": 1, "method": "resources/list" }),
+            &path,
+        )
+        .expect("response");
+        assert_eq!(
+            resources["result"]["resources"]
+                .as_array()
+                .expect("resources")
+                .len(),
+            0
+        );
+    }
+
+    #[test]
     fn resources_read_rejects_a_bad_uri() {
         let (_guard, path) = temp_log();
         let response = handle(
@@ -1943,6 +2033,28 @@ mod tests {
         json!({
             "subject_kind": "repo", "subject_key": "p", "predicate": "database",
             "value": value, "authority": authority, "source": "src",
+        })
+    }
+
+    fn diagnostic(value: &str, authority: &str) -> Value {
+        json!({
+            "subject_kind": "diagnostic",
+            "subject_key": "doctor",
+            "predicate": "dent8.write_check",
+            "value": value,
+            "authority": authority,
+            "source": "src",
+        })
+    }
+
+    fn legacy_doctor_probe(value: &str, authority: &str) -> Value {
+        json!({
+            "subject_kind": "person",
+            "subject_key": "alice-doctor-legacy",
+            "predicate": "favorite_drink",
+            "value": value,
+            "authority": authority,
+            "source": "src",
         })
     }
 

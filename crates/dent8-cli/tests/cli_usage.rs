@@ -212,9 +212,14 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
     );
     assert_success(&doctor, "doctor --write-check");
     let stdout = stdout(&doctor);
-    assert!(stdout.contains("write-check: accepted trusted person:alice-doctor-"));
-    assert!(stdout.contains("rejected low-authority coffee"));
+    assert!(stdout.contains("write-check: accepted trusted diagnostic:doctor-"));
+    assert!(stdout.contains("dent8.write_check=ok"));
+    assert!(stdout.contains("rejected low-authority tampered value"));
     assert!(stdout.contains("verify OK"));
+    let log_contents = fs::read_to_string(&log_path).expect("doctor write-check log");
+    assert!(log_contents.contains("\"kind\":\"diagnostic\""));
+    assert!(log_contents.contains("dent8.write_check"));
+    assert!(!log_contents.contains("alice-doctor"));
 }
 
 #[test]
@@ -1128,9 +1133,10 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     assert!(stdout.contains("source:codex max=High"));
     assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
     assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
-    assert!(stdout.contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"));
+    assert!(stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"));
+    assert!(stdout.contains("dent8.write_check=ok"));
     assert!(
-        !stdout.contains("  OK  write-check: accepted trusted person:alice-doctor-"),
+        !stdout.contains("  OK  write-check: accepted trusted diagnostic:doctor-"),
         "{stdout}"
     );
 }
@@ -1213,7 +1219,7 @@ fn identity_repair_env_recovers_legacy_agent_bundle_active_grants() {
     );
     assert_success(&doctor, "doctor after identity repair-env");
     assert!(
-        stdout(&doctor).contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"),
+        stdout(&doctor).contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"),
         "{}",
         stdout(&doctor)
     );
@@ -1332,7 +1338,7 @@ fn doctor_agent_repair_refreshes_stale_env_and_mcp_config() {
     assert!(
         stdout.contains("agent env repair: repaired signed identity env for source:codex")
             && stdout.contains("agent mcp config repair: updated MCP config:")
-            && stdout.contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"),
+            && stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"),
         "{stdout}"
     );
     let repaired_env = fs::read_to_string(&identity_env_path).expect("repaired identity env");
@@ -3460,7 +3466,7 @@ fn assert_installed_agent_doctor_ok(output: &Output, agent: &str, source: &str, 
         "{stdout}"
     );
     assert!(
-        stdout.contains("mcp write-check: accepted trusted person:alice-doctor-mcp-"),
+        stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"),
         "{stdout}"
     );
 }

@@ -224,8 +224,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   witness coverage when configured, verify, MCP availability; with `--agent`, validate the
   generated bundle/config and smoke `mcp serve` with `initialize` + `tools/list`;
   with `--repair`, refresh stale generated identity env and installed MCP config;
-  with `--write-check`, run the Alice trusted-fact / low-authority-rejection flow (through
-  the installed MCP server for agent profiles).
+  with `--write-check`, run an internal diagnostic trusted-write / low-authority-rejection
+  flow (through the installed MCP server for agent profiles).
 - `dent8 identity bootstrap/status/repair-env/rotate-source`: create, inspect, repair generated
   env files for, and rotate a local signed source identity bundle (operator issuer key outside
   the bundle, source key, trust registry, active-grant registry, grant, and

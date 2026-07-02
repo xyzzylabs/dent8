@@ -3298,7 +3298,7 @@ fn mcp_write_check_with_server(
     source: &str,
 ) -> Result<String, String> {
     let subject_key = format!(
-        "alice-doctor-mcp-{}-{}",
+        "doctor-mcp-{}-{}",
         std::process::id(),
         now_millis().as_unix_millis()
     );
@@ -3310,12 +3310,12 @@ fn mcp_write_check_with_server(
             mcp_tool_call(
                 2,
                 "assert",
-                &mcp_value_fact_args(&subject_key, "tea", "high", source),
+                &mcp_value_fact_args(&subject_key, "ok", "high", source),
             ),
             mcp_tool_call(
                 3,
                 "supersede",
-                &mcp_value_fact_args(&subject_key, "coffee", "low", source),
+                &mcp_value_fact_args(&subject_key, "tampered", "low", source),
             ),
             mcp_tool_call(4, "explain", &mcp_read_fact_args(&subject_key)),
             mcp_tool_call(5, "verify", &serde_json::json!({})),
@@ -3352,9 +3352,9 @@ fn mcp_write_check_with_server(
     if explained["isError"].as_bool() != Some(false) {
         return Err(format!("explain failed: {explained}"));
     }
-    if explained["structuredContent"]["current_value"]["text"] != "tea" {
+    if explained["structuredContent"]["current_value"]["text"] != "ok" {
         return Err(format!(
-            "expected trusted value tea to remain; got {}",
+            "expected trusted value ok to remain; got {}",
             explained["structuredContent"]["current_value"]
         ));
     }
@@ -3367,7 +3367,7 @@ fn mcp_write_check_with_server(
     }
 
     Ok(format!(
-        "mcp write-check: accepted trusted person:{subject_key} favorite_drink=tea, rejected low-authority coffee, explain+verify OK"
+        "mcp write-check: accepted trusted diagnostic:{subject_key} dent8.write_check=ok, rejected low-authority tampered value, explain+verify OK"
     ))
 }
 
@@ -3488,9 +3488,9 @@ fn mcp_value_fact_args(
 
 fn mcp_read_fact_args(subject_key: &str) -> serde_json::Value {
     serde_json::json!({
-        "subject_kind": "person",
+        "subject_kind": "diagnostic",
         "subject_key": subject_key,
-        "predicate": "favorite_drink",
+        "predicate": "dent8.write_check",
     })
 }
 
@@ -3792,16 +3792,16 @@ fn env_present(name: &str) -> bool {
 
 fn doctor_write_check(source: &str) -> Result<String, String> {
     let subject_key = format!(
-        "alice-doctor-{}-{}",
+        "doctor-{}-{}",
         std::process::id(),
         now_millis().as_unix_millis()
     );
     op_assert(
         &log_path(),
-        "person",
+        "diagnostic",
         &subject_key,
-        "favorite_drink",
-        "tea",
+        "dent8.write_check",
+        "ok",
         AuthorityLevel::High,
         source,
     )
@@ -3809,10 +3809,10 @@ fn doctor_write_check(source: &str) -> Result<String, String> {
 
     match op_supersede(
         &log_path(),
-        "person",
+        "diagnostic",
         &subject_key,
-        "favorite_drink",
-        "coffee",
+        "dent8.write_check",
+        "tampered",
         AuthorityLevel::Low,
         source,
     ) {
@@ -3825,16 +3825,16 @@ fn doctor_write_check(source: &str) -> Result<String, String> {
         Err(error) => return Err(error.message().to_string()),
     }
 
-    let explained = op_explain(&log_path(), "person", &subject_key, "favorite_drink")
+    let explained = op_explain(&log_path(), "diagnostic", &subject_key, "dent8.write_check")
         .map_err(|error| error.message().to_string())?;
-    if !explained.contains("value         : \"tea\"") {
+    if !explained.contains("value         : \"ok\"") {
         return Err(format!(
-            "expected trusted value tea to remain; got:\n{explained}"
+            "expected trusted value ok to remain; got:\n{explained}"
         ));
     }
     verify_log(&log_path())?;
     Ok(format!(
-        "write-check: accepted trusted person:{subject_key} favorite_drink=tea, rejected low-authority coffee, verify OK"
+        "write-check: accepted trusted diagnostic:{subject_key} dent8.write_check=ok, rejected low-authority tampered value, verify OK"
     ))
 }
 
@@ -5770,7 +5770,10 @@ fn cmd_explain(args: &ReadFactArgs) -> i32 {
 
 /// The distinct `(kind, key, predicate)` fact streams in the log, in append order — the
 /// enumeration behind the MCP `resources/list` surface.
-fn op_list_subjects(path: &str) -> Result<Vec<(String, String, String)>, OpError> {
+fn op_list_subjects(
+    path: &str,
+    include_diagnostics: bool,
+) -> Result<Vec<(String, String, String)>, OpError> {
     let store = load_store(path).map_err(OpError::Invalid)?;
     Ok(store
         .subjects()
@@ -5782,7 +5785,15 @@ fn op_list_subjects(path: &str) -> Result<Vec<(String, String, String)>, OpError
                 predicate.as_str().to_string(),
             )
         })
+        .filter(|(kind, key, predicate)| {
+            include_diagnostics || !is_diagnostic_fact_stream(kind, key, predicate)
+        })
         .collect())
+}
+
+fn is_diagnostic_fact_stream(kind: &str, key: &str, predicate: &str) -> bool {
+    (kind == "diagnostic" && predicate.starts_with("dent8."))
+        || (kind == "person" && key.starts_with("alice-doctor-") && predicate == "favorite_drink")
 }
 
 /// List every contested fact (a fact in dispute — `Contested` lifecycle) across all

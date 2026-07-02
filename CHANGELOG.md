@@ -71,7 +71,8 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   the generated bundle/config and smokes the installed MCP command/args/cwd/env with
   `initialize` + `tools/list`, with a bounded timeout; with `--repair`, it repairs stale
   generated identity env and refreshes the installed MCP config before checking it; with
-  `--write-check`, it runs the acceptance probe through that installed MCP server. `dent8 agent
+  `--write-check`, it runs the acceptance probe through that installed MCP server using
+  internal diagnostic fact streams that normal fact/resource browsing hides by default. `dent8 agent
   add --agent <profile>` adds a second agent to an existing shared SQLite/Postgres-backed bundle
   by creating/reusing its signed identity, authority ceiling, and MCP config while refusing
   file-dev bundles. `--mcp-local-bin` / `mcp install --local-bin` writes and verifies a
