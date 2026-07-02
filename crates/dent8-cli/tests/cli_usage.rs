@@ -210,6 +210,7 @@ fn read_audit_commands_emit_machine_readable_json() {
     assert_eq!(doctor["status"], "ok");
     assert_eq!(doctor["tool"], "doctor");
     assert_eq!(doctor["ok"], true);
+    assert_doctor_json_groups(&doctor);
     assert!(
         doctor["checks"]
             .as_array()
@@ -219,6 +220,52 @@ fn read_audit_commands_emit_machine_readable_json() {
                 .as_str()
                 .is_some_and(|message| message.starts_with("verify: OK"))),
         "{doctor}"
+    );
+}
+
+fn assert_doctor_json_groups(doctor: &Value) {
+    assert_eq!(doctor["summary"]["fail"], 0);
+    assert!(
+        doctor["sections"]["ok"]
+            .as_array()
+            .expect("doctor ok checks")
+            .iter()
+            .any(|check| check["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("verify: OK"))),
+        "{doctor}"
+    );
+    assert!(
+        doctor["sections"]["skip"]
+            .as_array()
+            .expect("doctor skipped checks")
+            .iter()
+            .any(|check| {
+                check["status"] == "skip"
+                    && check["message"]
+                        .as_str()
+                        .is_some_and(|message| message.starts_with("write-check: not requested"))
+            }),
+        "{doctor}"
+    );
+}
+
+#[test]
+fn doctor_optional_write_check_is_a_skip_not_a_warning() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let doctor = run_dent8(&["doctor"], &envs);
+    assert_success(&doctor, "doctor");
+    let stdout = stdout(&doctor);
+    assert!(
+        stdout.contains("SKIP  write-check: not requested"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("WARN  write-check:"),
+        "optional write-check should not look like a warning:\n{stdout}"
     );
 }
 

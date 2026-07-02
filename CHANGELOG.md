@@ -78,7 +78,9 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   by creating/reusing its signed identity, authority ceiling, and MCP config while refusing
   file-dev bundles. `--mcp-local-bin` / `mcp install --local-bin` writes and verifies a
   repo-local `.dent8/bin/dent8` wrapper around a prebuilt `.dent8/target-sqlite/debug/dent8`,
-  avoiding Cargo during MCP startup while letting doctor warn about stale local binaries. The CLI now
+  avoiding Cargo during MCP startup while letting doctor warn about stale local binaries.
+  Optional doctor probes that are not requested are reported as `SKIP`, not `WARN`, and
+  `doctor --output json` includes stable `ok` / `warn` / `fail` / `skip` sections. The CLI now
   uses `clap` with named write arguments, targeted usage errors, global
   `--color auto|always|never`, machine-readable `--output json` for write commands,
   `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`, `authority`,

@@ -72,7 +72,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a low-authority supersession to
   a tampered value from the same configured source is rejected, `explain` still returns `ok`,
   and `verify` passes. Diagnostic streams are hidden from normal MCP fact/resource browsing by
-  default.
+  default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
+  than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections.
 - **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and

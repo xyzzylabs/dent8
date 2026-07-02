@@ -263,7 +263,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   list known fact streams, hiding internal doctor/write-check diagnostics by default.
 - `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|init|agent add|authority|identity <subcommand>|doctor|completions|export|schema postgres|mcp install`:
   emit stable JSON for scripting and agent-side checks while preserving existing text output
-  by default.
+  by default. `doctor --output json` groups checks into stable `ok`, `warn`, `fail`, and `skip`
+  sections.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`: print a shell completion script.

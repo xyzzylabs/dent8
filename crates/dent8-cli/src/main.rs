@@ -3325,21 +3325,56 @@ fn doctor_report_json(report: &DoctorReport) -> serde_json::Value {
         .lines()
         .filter_map(parse_doctor_report_line)
         .collect::<Vec<_>>();
+    let mut ok = Vec::new();
+    let mut warn = Vec::new();
+    let mut fail = Vec::new();
+    let mut skip = Vec::new();
+    for check in &checks {
+        match check.level {
+            "OK" => ok.push(doctor_check_json(check)),
+            "WARN" => warn.push(doctor_check_json(check)),
+            "FAIL" => fail.push(doctor_check_json(check)),
+            "SKIP" => skip.push(doctor_check_json(check)),
+            _ => {}
+        }
+    }
     serde_json::json!({
         "status": if report.ok { "ok" } else { "failed" },
         "tool": "doctor",
         "ok": report.ok,
-        "checks": checks,
+        "summary": {
+            "ok": ok.len(),
+            "warn": warn.len(),
+            "fail": fail.len(),
+            "skip": skip.len(),
+        },
+        "sections": {
+            "ok": ok,
+            "warn": warn,
+            "fail": fail,
+            "skip": skip,
+        },
+        "checks": checks.iter().map(doctor_check_json).collect::<Vec<_>>(),
     })
 }
 
-fn parse_doctor_report_line(line: &str) -> Option<serde_json::Value> {
+struct DoctorCheck<'a> {
+    level: &'a str,
+    message: &'a str,
+}
+
+fn parse_doctor_report_line(line: &str) -> Option<DoctorCheck<'_>> {
     let line = line.strip_prefix("  ")?;
     let (level, message) = line.split_once("  ")?;
-    Some(serde_json::json!({
-        "level": level,
-        "message": message,
-    }))
+    Some(DoctorCheck { level, message })
+}
+
+fn doctor_check_json(check: &DoctorCheck<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "status": check.level.to_ascii_lowercase(),
+        "level": check.level,
+        "message": check.message,
+    })
 }
 
 fn doctor_report(args: &DoctorArgs) -> DoctorReport {
@@ -3406,8 +3441,8 @@ fn doctor_report(args: &DoctorArgs) -> DoctorReport {
     } else {
         doctor_line(
             &mut output,
-            "WARN",
-            "write-check: skipped (pass `--write-check` to run assert -> reject -> explain)",
+            "SKIP",
+            "write-check: not requested (pass `--write-check` to run assert -> reject -> explain)",
         );
     }
 
@@ -4055,7 +4090,10 @@ fn run_doctor_with_env(
         .lines()
         .skip_while(|line| line.trim() == "dent8 doctor")
     {
-        if !include_write_check_skip && line.contains("write-check: skipped") {
+        if !include_write_check_skip
+            && (line.contains("write-check: skipped")
+                || line.contains("write-check: not requested"))
+        {
             continue;
         }
         forwarded.push_str(line);
