@@ -57,7 +57,12 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   the local witness log is rolled back. `publish` appends the latest head idempotently and
   refuses to publish behind an existing external sequence. `doctor <writer|signer|both>` role
   checks help operated setups verify that writer/agent/MCP envs have only verifier material
-  while the signer holds the private key. Finite witness subcommands support `--output json`
+  while the signer holds the private key. The operated split is **packaged**:
+  [`examples/witness-operated/`](examples/witness-operated/) runs signer / publisher /
+  monitor as separate Docker Compose services over a shared Postgres store (built from the
+  repo [`Dockerfile`](Dockerfile), CI-built and smoked), with hardened systemd units for
+  bare-metal hosts; the monitor alerts by exiting non-zero on a `tamper`/`rollback` verdict.
+  Finite witness subcommands support `--output json`
   for CI/monitors, with `doctor` grouped into stable `ok` / `warn` / `fail` sections.
   `examples/witness/demo.sh` runs the writer/signer/monitor split end to end and proves an
   externally published head rejects event-log rollback.

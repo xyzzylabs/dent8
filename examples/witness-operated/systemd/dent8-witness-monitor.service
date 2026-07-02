@@ -1,0 +1,19 @@
+# One-shot monitor: re-verify externally published heads against the live log with only the
+# PUBLIC key. Pair with the .timer; a tamper/rollback verdict fails the unit (exit 1), which
+# is your alert hook (OnFailure=, or scrape failed units).
+#   /etc/dent8/monitor.env:
+#     DENT8_STORE_URL=postgres://…
+#     DENT8_WITNESS_PUBKEY=/etc/dent8/witness.key.pub
+#     PUBLISHED_HEADS=/var/lib/dent8/published-heads.jsonl   (synced from the publication channel)
+[Unit]
+Description=dent8 witness published-heads verification
+
+[Service]
+Type=oneshot
+User=dent8
+EnvironmentFile=/etc/dent8/monitor.env
+ExecStart=/bin/sh -c '/usr/local/bin/dent8 --output json witness verify-published "$PUBLISHED_HEADS"'
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true

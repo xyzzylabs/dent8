@@ -6,7 +6,12 @@ periodically signs the current chain head so a later rewrite or rollback can be 
 
 The mechanism is built as `dent8 witness` behind `--features witness`. The operated product
 shape is: keep the signing key off the writer, append signed tree heads to a witness log, and
-publish the latest head somewhere the writer cannot silently roll back.
+publish the latest head somewhere the writer cannot silently roll back. That shape is
+**packaged** in [`examples/witness-operated/`](../examples/witness-operated/) — a Docker
+Compose split (signer / publisher / monitor as separate services over a shared Postgres
+store, built from the repo [`Dockerfile`](../Dockerfile)) plus hardened systemd units for
+bare-metal signer/monitor hosts; the monitor alerts by exiting non-zero on a
+`tamper`/`rollback` verdict.
 
 ## Local Dev Setup
 
@@ -194,5 +199,7 @@ The guarantee is only as strong as the witness deployment:
   insufficient to erase retained evidence, assuming the published-heads file lives outside the
   writer's control.
 
-Remaining product work: key rotation, managed head publication/monitoring, and a hosted or
-team-operated witness service.
+The packaged deployment (compose + systemd) lives in
+[`examples/witness-operated/`](../examples/witness-operated/), including key-rotation and
+publication-channel guidance. Remaining product work: *managed/hosted* operation — running
+the signer and publication channel as a service rather than on your own second host.

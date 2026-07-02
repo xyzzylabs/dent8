@@ -1,0 +1,8 @@
+target/
+.dent8/
+.git/
+fuzz/target/
+fuzz/corpus/
+docs/
+examples/
+*.md

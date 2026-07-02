@@ -1,0 +1,30 @@
+# The witness signer as a systemd service, for bare-metal signer hosts. Install the dent8
+# binary (a --features witness build), provision /etc/dent8/witness.env with:
+#   DENT8_STORE_URL=postgres://…      (read access to the event store)
+#   DENT8_WITNESS_KEY=/var/lib/dent8/witness.key
+#   DENT8_WITNESS_LOG=/var/lib/dent8/witness.jsonl
+# Generate the key once with `dent8 witness keygen` as the service user. The private key
+# must exist ONLY on this host — that separation is what upgrades tamper-evidence to
+# tamper-resistance (docs/witness.md).
+[Unit]
+Description=dent8 witness cadence signer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dent8
+EnvironmentFile=/etc/dent8/witness.env
+ExecStart=/usr/local/bin/dent8 witness serve 60
+Restart=on-failure
+RestartSec=10
+# Hardening: the signer needs its state dir and network, nothing else.
+StateDirectory=dent8
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/dent8
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

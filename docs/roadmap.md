@@ -40,9 +40,12 @@ What remains to make it a hardened multi-user product:
 - **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
   role doctor checks validate writer/signer separation, `publish` idempotently appends heads to
   an external JSONL sequence, and `verify-published` verifies externally saved heads so local
-  witness-log rollback cannot erase retained evidence. The remaining product work is
-  packaging/running it on separate infrastructure, managed head publication/monitoring, and
-  rotating keys.
+  witness-log rollback cannot erase retained evidence. The deployment is **packaged** in
+  [`examples/witness-operated/`](../examples/witness-operated/) (Docker Compose signer /
+  publisher / monitor split over a shared Postgres store, built from the repo `Dockerfile`,
+  plus hardened systemd units) with key-rotation and publication-channel guidance; what
+  remains is *hosting* it — a managed signer/publication service instead of your own second
+  host.
 - **Production ergonomics and heavy-concurrency polish.** The Postgres adapter serializes
   appends and the CLI retries id collisions, but DB-assigned ids remain the end-state for
   heavy write fan-out.

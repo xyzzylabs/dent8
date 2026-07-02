@@ -1,0 +1,117 @@
+# The **operated witness split**, packaged: the tamper-resistance topology from
+# docs/witness.md as running services. Three trust domains, one shared Postgres store:
+#
+#   writer   — your agents/CLI/MCP. Point DENT8_STORE_URL at this db (port 5432). Their env
+#              holds NO witness key (prove it: `dent8 witness doctor writer`). Not a service
+#              here — the writer is wherever your agents already run.
+#   signer   — holds the ONLY copy of the private witness key (the `witness-keys` volume,
+#              never mounted anywhere else). Signs a tree head whenever the log grew, and
+#              publishes heads + the public key into the `published` volume — the stand-in
+#              for a channel outside the writer's control (object storage, git, another host).
+#   monitor  — sees only the store, the published heads, and the PUBLIC key. Re-verifies
+#              every published head against the live log; its container exits non-zero on a
+#              tamper/rollback verdict, which is the alert hook.
+#
+# Demo lane (`--profile demo`): a one-shot writer that asserts a fact so the pipeline has
+# something to witness end to end.
+#
+#   docker compose up -d --build db signer publisher monitor
+#   docker compose --profile demo run --rm demo-writer
+#   docker compose logs -f monitor
+#
+# Production notes are in README.md (key rotation, real external publication, alerting).
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: dent8
+      POSTGRES_DB: dent8
+    ports:
+      - "5432:5432"
+    volumes:
+      - store:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "dent8"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+  signer:
+    build: ../..
+    entrypoint: ["/bin/sh", "/opt/dent8/signer.sh"]
+    environment:
+      DENT8_STORE_URL: postgres://postgres:dent8@db:5432/dent8
+      DENT8_WITNESS_KEY: /witness/witness.key
+      DENT8_WITNESS_LOG: /witness/witness.jsonl
+      SIGN_INTERVAL_SECONDS: "15"
+    volumes:
+      - witness-keys:/witness
+      - ./signer.sh:/opt/dent8/signer.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Publishes the latest signed head (idempotently) + the public key into the `published`
+  # volume. Runs in the signer's trust domain (it reads the witness log); in production,
+  # replace the volume with a push to storage the writer cannot touch.
+  publisher:
+    build: ../..
+    entrypoint: ["/bin/sh", "/opt/dent8/publisher.sh"]
+    environment:
+      DENT8_STORE_URL: postgres://postgres:dent8@db:5432/dent8
+      DENT8_WITNESS_KEY: /witness/witness.key
+      DENT8_WITNESS_LOG: /witness/witness.jsonl
+      PUBLISH_INTERVAL_SECONDS: "15"
+    volumes:
+      - witness-keys:/witness:ro
+      - published:/published
+      - ./publisher.sh:/opt/dent8/publisher.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  monitor:
+    build: ../..
+    entrypoint: ["/bin/sh", "/opt/dent8/monitor.sh"]
+    environment:
+      DENT8_STORE_URL: postgres://postgres:dent8@db:5432/dent8
+      DENT8_WITNESS_PUBKEY: /published/witness.key.pub
+      MONITOR_INTERVAL_SECONDS: "15"
+    volumes:
+      - published:/published:ro
+      - ./monitor.sh:/opt/dent8/monitor.sh:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    # A tamper/rollback verdict exits the container non-zero and stays down — visible in
+    # `docker compose ps`, and the hook for real alerting.
+    restart: "no"
+
+  # Demo lane: one trusted write so the pipeline has an event to witness.
+  demo-writer:
+    profiles: ["demo"]
+    build: ../..
+    command:
+      [
+        "assert",
+        "repo:operated-demo",
+        "database",
+        "postgres",
+        "--authority",
+        "high",
+        "--source",
+        "source:owner",
+      ]
+    environment:
+      DENT8_STORE_URL: postgres://postgres:dent8@db:5432/dent8
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  store:
+  witness-keys:
+  published:
