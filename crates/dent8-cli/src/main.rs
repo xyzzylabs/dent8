@@ -32,7 +32,7 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, doctor";
+                                      eval, authority, doctor";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -127,14 +127,15 @@ fn run_cli(cli: Cli) -> i32 {
             FactsCommand::List(args) => cmd_facts_list(&args, cli.output),
         },
         Some(CliCommand::Authority(args)) => match args.command {
-            AuthorityCommand::List => cmd_authority_list(),
+            AuthorityCommand::List => cmd_authority_list(cli.output),
             AuthorityCommand::Add(args) => cmd_authority_add(
                 &args.source,
                 args.max.level(),
                 args.issuer.as_deref(),
                 args.scope.as_deref(),
+                cli.output,
             ),
-            AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source),
+            AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source, cli.output),
         },
         Some(CliCommand::Identity(args)) => run_identity(&args.command),
         Some(CliCommand::Hook(args)) => match args.command {
@@ -294,6 +295,7 @@ impl CliCommand {
                 | Self::Verify
                 | Self::Conflicts
                 | Self::Eval
+                | Self::Authority(_)
                 | Self::Doctor(_)
         )
     }
@@ -1705,44 +1707,46 @@ fn ceiling_check(
     Ok(())
 }
 
-fn cmd_authority_list() -> i32 {
+struct AuthorityListOutcome {
+    path: String,
+    required: bool,
+    registry: Option<SourceRegistry>,
+}
+
+fn authority_list_outcome() -> Result<AuthorityListOutcome, String> {
     // A diagnostic/read command: load WITHOUT the fail-closed gate (like the edit commands),
     // so `authority list` can always report state — including "no registry yet" under
     // DENT8_REQUIRE_AUTHORITY, which is exactly when an operator needs to inspect it. (Only the
     // write gate `enforce_source_ceiling` consults the flag.)
-    let required = match authority_required() {
-        Ok(required) => required,
-        Err(error) => {
-            eprintln!("{error}");
-            return 2;
+    let required = authority_required()?;
+    Ok(AuthorityListOutcome {
+        path: authority_registry_path(),
+        required,
+        registry: load_authority_registry_for_edit()?,
+    })
+}
+
+fn format_authority_list(outcome: &AuthorityListOutcome) -> String {
+    match &outcome.registry {
+        None if outcome.required => format!(
+            "no authority registry at {} — but DENT8_REQUIRE_AUTHORITY is set, so every \
+             write is BLOCKED until you create one with `dent8 authority add <source> <max>`.",
+            outcome.path
+        ),
+        None => format!(
+            "no authority registry at {} — enforcement is OFF (dev mode). Add a source \
+             with `dent8 authority add <source> <max>`.",
+            outcome.path
+        ),
+        Some(registry) if registry.sources.is_empty() => {
+            "authority registry is empty — deny-by-default: every source is blocked from \
+             writing until granted with `dent8 authority add <source> <max>`."
+                .to_string()
         }
-    };
-    match load_authority_registry_for_edit() {
-        Ok(None) if required => {
-            println!(
-                "no authority registry at {} — but DENT8_REQUIRE_AUTHORITY is set, so every \
-                 write is BLOCKED until you create one with `dent8 authority add <source> <max>`.",
-                authority_registry_path()
-            );
-            0
-        }
-        Ok(None) => {
-            println!(
-                "no authority registry at {} — enforcement is OFF (dev mode). Add a source \
-                 with `dent8 authority add <source> <max>`.",
-                authority_registry_path()
-            );
-            0
-        }
-        Ok(Some(registry)) if registry.sources.is_empty() => {
-            println!(
-                "authority registry is empty — deny-by-default: every source is blocked from \
-                 writing until granted with `dent8 authority add <source> <max>`."
-            );
-            0
-        }
-        Ok(Some(registry)) => {
-            for (source, grant) in &registry.sources {
+        Some(registry) => registry
+            .sources
+            .iter()
+            .map(|(source, grant)| {
                 let issuer = grant
                     .issuer
                     .as_deref()
@@ -1756,17 +1760,85 @@ fn cmd_authority_list() -> i32 {
                 } else {
                     ""
                 };
-                println!(
+                format!(
                     "{source}  max={:?}{issuer}{scope}{note}",
                     grant.max_authority
-                );
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn authority_enforcement_state(outcome: &AuthorityListOutcome) -> &'static str {
+    match &outcome.registry {
+        None if outcome.required => "blocked_missing_registry",
+        None => "off_dev_mode",
+        Some(registry) if registry.sources.is_empty() => "deny_by_default_empty",
+        Some(_) => "deny_by_default",
+    }
+}
+
+fn authority_sources_json(registry: Option<&SourceRegistry>) -> Vec<serde_json::Value> {
+    registry.map_or_else(Vec::new, |registry| {
+        registry
+            .sources
+            .iter()
+            .map(|(source, grant)| {
+                serde_json::json!({
+                    "source": source,
+                    "max_authority": grant.max_authority.name(),
+                    "issuer": grant.issuer,
+                    "scope": grant.scope,
+                    "issuer_enforced": false,
+                    "scope_enforced": false,
+                })
+            })
+            .collect()
+    })
+}
+
+fn authority_list_json(outcome: &AuthorityListOutcome) -> serde_json::Value {
+    let sources = authority_sources_json(outcome.registry.as_ref());
+    serde_json::json!({
+        "status": "ok",
+        "tool": "authority list",
+        "path": outcome.path,
+        "require_authority": outcome.required,
+        "registry_present": outcome.registry.is_some(),
+        "enforcement": authority_enforcement_state(outcome),
+        "count": sources.len(),
+        "sources": sources,
+    })
+}
+
+fn authority_error_json(tool: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": tool,
+        "path": authority_registry_path(),
+        "message": message,
+    })
+}
+
+fn cmd_authority_list(output: CliOutput) -> i32 {
+    match authority_list_outcome() {
+        Ok(outcome) => match output {
+            CliOutput::Text => {
+                println!("{}", format_authority_list(&outcome));
+                0
             }
-            0
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            2
-        }
+            CliOutput::Json => print_json_stdout(&authority_list_json(&outcome)),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                2
+            }
+            CliOutput::Json => {
+                print_json_stderr(&authority_error_json("authority list", &error), 2)
+            }
+        },
     }
 }
 
@@ -1775,12 +1847,20 @@ fn cmd_authority_add(
     max_authority: AuthorityLevel,
     issuer: Option<&str>,
     scope: Option<&str>,
+    output: CliOutput,
 ) -> i32 {
     let mut registry = match load_authority_registry_for_edit() {
         Ok(registry) => registry.unwrap_or_default(),
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{error}");
+                    2
+                }
+                CliOutput::Json => {
+                    print_json_stderr(&authority_error_json("authority add", &error), 2)
+                }
+            };
         }
     };
     registry.sources.insert(
@@ -1793,41 +1873,101 @@ fn cmd_authority_add(
     );
     match save_authority_registry(&registry) {
         Ok(()) => {
-            println!("granted {source} a max authority of {max_authority:?}");
-            0
+            let message = format!("granted {source} a max authority of {max_authority:?}");
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "tool": "authority add",
+                    "path": authority_registry_path(),
+                    "source": source,
+                    "max_authority": max_authority.name(),
+                    "issuer": issuer,
+                    "scope": scope,
+                    "issuer_enforced": false,
+                    "scope_enforced": false,
+                    "message": message,
+                })),
+            }
         }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(&authority_error_json("authority add", &error), 1),
+        },
     }
 }
 
-fn cmd_authority_remove(source: &str) -> i32 {
+fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
     let mut registry = match load_authority_registry_for_edit() {
         Ok(Some(registry)) => registry,
         Ok(None) => {
-            eprintln!("no authority registry to remove from");
-            return 1;
+            let message = "no authority registry to remove from";
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{message}");
+                    1
+                }
+                CliOutput::Json => {
+                    print_json_stderr(&authority_error_json("authority remove", message), 1)
+                }
+            };
         }
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{error}");
+                    2
+                }
+                CliOutput::Json => {
+                    print_json_stderr(&authority_error_json("authority remove", &error), 2)
+                }
+            };
         }
     };
     if registry.sources.remove(source).is_none() {
-        eprintln!("{source} is not in the authority registry");
-        return 1;
+        let message = format!("{source} is not in the authority registry");
+        return match output {
+            CliOutput::Text => {
+                eprintln!("{message}");
+                1
+            }
+            CliOutput::Json => {
+                print_json_stderr(&authority_error_json("authority remove", &message), 1)
+            }
+        };
     }
     match save_authority_registry(&registry) {
         Ok(()) => {
-            println!("revoked {source}");
-            0
+            let message = format!("revoked {source}");
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "tool": "authority remove",
+                    "path": authority_registry_path(),
+                    "source": source,
+                    "message": message,
+                })),
+            }
         }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => {
+                print_json_stderr(&authority_error_json("authority remove", &error), 1)
+            }
+        },
     }
 }
 

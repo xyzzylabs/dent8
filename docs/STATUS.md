@@ -224,7 +224,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   v0 (scope does not restrict predicates); the ceiling is an `op_*`-layer check, so a process
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
   boundary. The ceiling caps *what a source may claim*; use signed source identity below to
-  prove *who is holding that source's key* at the CLI/MCP boundary.
+  prove *who is holding that source's key* at the CLI/MCP boundary. Supports `--output json`
+  for `list`/`add`/`remove`.
 - **`dent8 identity bootstrap | status | repair-env | rotate-source | issuer-keygen |
   agent-keygen | trust-add | trust-list | grant-issue | grant-verify`** — the **signed source identity layer
   (authn)**, included in the default CLI build. `init --identity` / `init --agent <profile>`

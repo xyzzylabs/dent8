@@ -438,6 +438,78 @@ fn derived_write_json_includes_source_fact() {
 }
 
 #[test]
+fn authority_commands_emit_machine_readable_json() {
+    let temp = TempDir::new();
+    let authority = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_AUTHORITY", authority.as_str()),
+        ("DENT8_REQUIRE_AUTHORITY", "1"),
+    ];
+
+    let before = run_dent8(&["--output", "json", "authority", "list"], &envs);
+    assert_success(&before, "authority list --output json before registry");
+    let before = stdout_json(&before);
+    assert_eq!(before["status"], "ok");
+    assert_eq!(before["tool"], "authority list");
+    assert_eq!(before["registry_present"], false);
+    assert_eq!(before["require_authority"], true);
+    assert_eq!(before["enforcement"], "blocked_missing_registry");
+    assert_eq!(before["count"], 0);
+
+    let add = run_dent8(
+        &[
+            "--output",
+            "json",
+            "authority",
+            "add",
+            "source:codex",
+            "high",
+            "owner",
+            "project:dent8",
+        ],
+        &envs,
+    );
+    assert_success(&add, "authority add --output json");
+    let add = stdout_json(&add);
+    assert_eq!(add["status"], "ok");
+    assert_eq!(add["tool"], "authority add");
+    assert_eq!(add["source"], "source:codex");
+    assert_eq!(add["max_authority"], "High");
+    assert_eq!(add["issuer"], "owner");
+    assert_eq!(add["scope"], "project:dent8");
+    assert_eq!(add["issuer_enforced"], false);
+    assert_eq!(add["scope_enforced"], false);
+
+    let listed = run_dent8(&["--output", "json", "authority", "list"], &envs);
+    assert_success(&listed, "authority list --output json after add");
+    let listed = stdout_json(&listed);
+    assert_eq!(listed["registry_present"], true);
+    assert_eq!(listed["enforcement"], "deny_by_default");
+    assert_eq!(listed["count"], 1);
+    assert_eq!(listed["sources"][0]["source"], "source:codex");
+    assert_eq!(listed["sources"][0]["max_authority"], "High");
+    assert_eq!(listed["sources"][0]["issuer"], "owner");
+    assert_eq!(listed["sources"][0]["scope"], "project:dent8");
+
+    let removed = run_dent8(
+        &["--output", "json", "authority", "remove", "source:codex"],
+        &envs,
+    );
+    assert_success(&removed, "authority remove --output json");
+    let removed = stdout_json(&removed);
+    assert_eq!(removed["status"], "ok");
+    assert_eq!(removed["tool"], "authority remove");
+    assert_eq!(removed["source"], "source:codex");
+
+    let empty = run_dent8(&["--output", "json", "authority", "list"], &envs);
+    assert_success(&empty, "authority list --output json after remove");
+    let empty = stdout_json(&empty);
+    assert_eq!(empty["registry_present"], true);
+    assert_eq!(empty["enforcement"], "deny_by_default_empty");
+    assert_eq!(empty["count"], 0);
+}
+
+#[test]
 fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
