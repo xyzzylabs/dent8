@@ -33,7 +33,8 @@ const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
                                       eval, init, agent add, authority, identity <subcommand>, \
-                                      doctor, completions, export, schema postgres, mcp install";
+                                      doctor, completions, export, witness <one-shot>, schema \
+                                      postgres, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -141,7 +142,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Schema(args)) => match args.command {
             SchemaCommand::Postgres => cmd_schema_postgres(cli.output),
         },
-        Some(CliCommand::Witness(args)) => run_witness(&args.args),
+        Some(CliCommand::Witness(args)) => run_witness(&args.args, cli.output),
     }
 }
 
@@ -265,35 +266,38 @@ enum CliCommand {
 
 impl CliCommand {
     fn supports_json_output(&self) -> bool {
-        matches!(
-            self,
-            Self::Assert(_)
-                | Self::Supersede(_)
-                | Self::Retract(_)
-                | Self::Contradict(_)
-                | Self::Derive(_)
-                | Self::Reinforce(_)
-                | Self::Expire(_)
-                | Self::Explain(_)
-                | Self::Replay(_)
-                | Self::Facts(_)
-                | Self::Verify
-                | Self::Conflicts
-                | Self::Eval
-                | Self::Init(_)
-                | Self::Agent(AgentArgs {
-                    command: AgentCommand::Add(_),
-                })
-                | Self::Authority(_)
-                | Self::Identity(_)
-                | Self::Doctor(_)
-                | Self::Completions(_)
-                | Self::Export(_)
-                | Self::Schema(_)
-                | Self::Mcp(McpArgs {
-                    command: McpCommand::Install(_),
-                })
-        )
+        match self {
+            Self::Witness(args) => witness_args_support_json(&args.args),
+            _ => matches!(
+                self,
+                Self::Assert(_)
+                    | Self::Supersede(_)
+                    | Self::Retract(_)
+                    | Self::Contradict(_)
+                    | Self::Derive(_)
+                    | Self::Reinforce(_)
+                    | Self::Expire(_)
+                    | Self::Explain(_)
+                    | Self::Replay(_)
+                    | Self::Facts(_)
+                    | Self::Verify
+                    | Self::Conflicts
+                    | Self::Eval
+                    | Self::Init(_)
+                    | Self::Agent(AgentArgs {
+                        command: AgentCommand::Add(_),
+                    })
+                    | Self::Authority(_)
+                    | Self::Identity(_)
+                    | Self::Doctor(_)
+                    | Self::Completions(_)
+                    | Self::Export(_)
+                    | Self::Schema(_)
+                    | Self::Mcp(McpArgs {
+                        command: McpCommand::Install(_),
+                    })
+            ),
+        }
     }
 
     fn cli_name(&self) -> &'static str {
@@ -1203,31 +1207,63 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
 
 /// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
 /// exists only to explain how to enable it.
-fn run_witness(args: &[String]) -> i32 {
+fn run_witness(args: &[String], output: CliOutput) -> i32 {
     #[cfg(not(feature = "witness"))]
     {
         let _ = args;
-        eprintln!("`dent8 witness` requires a build with `--features witness`");
-        2
+        match output {
+            CliOutput::Text => {
+                eprintln!("`dent8 witness` requires a build with `--features witness`");
+                2
+            }
+            CliOutput::Json => print_json_stderr(
+                &serde_json::json!({
+                    "status": "failed",
+                    "tool": "witness",
+                    "required_feature": "witness",
+                    "message": "`dent8 witness` requires a build with `--features witness`",
+                }),
+                2,
+            ),
+        }
     }
     #[cfg(feature = "witness")]
     match args {
-        [sub] if sub == "keygen" => witness::keygen(),
-        [sub] if sub == "sign" => witness::sign(),
-        [sub] if sub == "verify" => witness::verify(),
-        [sub, rest @ ..] if sub == "verify-published" => witness::verify_published(rest),
-        [sub] if sub == "head" => witness::head(),
-        [sub, rest @ ..] if sub == "publish" => witness::publish(rest),
+        [sub] if sub == "keygen" => witness::keygen(output),
+        [sub] if sub == "sign" => witness::sign(output),
+        [sub] if sub == "verify" => witness::verify(output),
+        [sub, rest @ ..] if sub == "verify-published" => witness::verify_published(rest, output),
+        [sub] if sub == "head" => witness::head(output),
+        [sub, rest @ ..] if sub == "publish" => witness::publish(rest, output),
         [sub, rest @ ..] if sub == "serve" => witness::serve(rest),
-        [sub, rest @ ..] if sub == "doctor" => witness::doctor(rest),
-        _ => {
-            eprintln!(
-                "usage: dent8 witness <keygen | sign | verify | verify-published \
+        [sub, rest @ ..] if sub == "doctor" => witness::doctor(rest, output),
+        _ => witness_usage_error(output),
+    }
+}
+
+fn witness_args_support_json(args: &[String]) -> bool {
+    !matches!(args.first().map(String::as_str), Some("serve"))
+}
+
+#[cfg(feature = "witness")]
+fn witness_usage_error(output: CliOutput) -> i32 {
+    let usage = "dent8 witness <keygen | sign | verify | verify-published \
                  <published-heads.jsonl> | head | publish <published-heads.jsonl> | serve \
-                 [interval-seconds] [max-heads] | doctor <writer|signer|both>>"
-            );
+                 [interval-seconds] [max-heads] | doctor <writer|signer|both>>";
+    match output {
+        CliOutput::Text => {
+            eprintln!("usage: {usage}");
             2
         }
+        CliOutput::Json => print_json_stderr(
+            &serde_json::json!({
+                "status": "invalid",
+                "tool": "witness",
+                "usage": usage,
+                "message": "invalid witness command",
+            }),
+            2,
+        ),
     }
 }
 

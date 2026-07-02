@@ -671,6 +671,11 @@ fn json_output_fails_closed_for_unsupported_commands() {
     assert_eq!(output.status.code(), Some(2));
     assert!(stdout(&output).is_empty());
     assert!(stderr(&output).contains("does not support `--output json` yet"));
+
+    let witness_serve = run_dent8(&["--output", "json", "witness", "serve"], &envs);
+    assert_eq!(witness_serve.status.code(), Some(2));
+    assert!(stdout(&witness_serve).is_empty());
+    assert!(stderr(&witness_serve).contains("does not support `--output json` yet"));
 }
 
 #[test]
@@ -1217,6 +1222,207 @@ fn witness_doctor_checks_writer_signer_separation() {
             && signer_stdout.contains("matches the signing key"),
         "{signer_stdout}"
     );
+}
+
+#[cfg(feature = "witness")]
+#[test]
+fn witness_commands_emit_machine_readable_json() {
+    let fixture = WitnessJsonFixture::new();
+    assert_witness_keygen_json(&fixture);
+    assert_alice_fact(&fixture.log, "favorite_drink", "tea", "assert first fact");
+    assert_witness_sign_head_and_verify_json(&fixture);
+    assert_witness_publish_json(&fixture);
+    assert_witness_doctor_and_trailing_json(&fixture);
+}
+
+#[cfg(feature = "witness")]
+struct WitnessJsonFixture {
+    _temp: TempDir,
+    log: String,
+    key: String,
+    pubkey: String,
+    witness_log: String,
+    published: String,
+}
+
+#[cfg(feature = "witness")]
+impl WitnessJsonFixture {
+    fn new() -> Self {
+        let temp = TempDir::new();
+        let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let key = temp.file("witness.key").to_string_lossy().into_owned();
+        let pubkey = format!("{key}.pub");
+        let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
+        let published = temp
+            .file("published-heads.jsonl")
+            .to_string_lossy()
+            .into_owned();
+        Self {
+            _temp: temp,
+            log,
+            key,
+            pubkey,
+            witness_log,
+            published,
+        }
+    }
+
+    fn sign_env(&self) -> [(&str, &str); 3] {
+        [
+            ("DENT8_LOG", self.log.as_str()),
+            ("DENT8_WITNESS_KEY", self.key.as_str()),
+            ("DENT8_WITNESS_LOG", self.witness_log.as_str()),
+        ]
+    }
+
+    fn verify_env(&self) -> [(&str, &str); 3] {
+        [
+            ("DENT8_LOG", self.log.as_str()),
+            ("DENT8_WITNESS_LOG", self.witness_log.as_str()),
+            ("DENT8_WITNESS_PUBKEY", self.pubkey.as_str()),
+        ]
+    }
+}
+
+#[cfg(feature = "witness")]
+fn assert_witness_keygen_json(fixture: &WitnessJsonFixture) {
+    let keygen = run_dent8(
+        &["--output", "json", "witness", "keygen"],
+        &[("DENT8_WITNESS_KEY", fixture.key.as_str())],
+    );
+    assert_success(&keygen, "witness keygen --output json");
+    assert!(stderr(&keygen).is_empty(), "{}", stderr(&keygen));
+    let keygen = stdout_json(&keygen);
+    assert_eq!(keygen["status"], "ok");
+    assert_eq!(keygen["tool"], "witness keygen");
+    assert_eq!(keygen["key_path"], fixture.key);
+    assert_eq!(keygen["public_key_path"], fixture.pubkey);
+    assert_eq!(keygen["writer_must_not_inherit_key"], true);
+}
+
+#[cfg(feature = "witness")]
+fn assert_witness_sign_head_and_verify_json(fixture: &WitnessJsonFixture) {
+    let sign_env = fixture.sign_env();
+    let verify_env = fixture.verify_env();
+    let sign = run_dent8(&["--output", "json", "witness", "sign"], &sign_env);
+    assert_success(&sign, "witness sign --output json");
+    let sign = stdout_json(&sign);
+    assert_eq!(sign["status"], "ok");
+    assert_eq!(sign["tool"], "witness sign");
+    assert_eq!(sign["signed_head"]["event_count"], 1);
+    assert_eq!(sign["witness_log_path"], fixture.witness_log);
+
+    let head = run_dent8(
+        &["--output", "json", "witness", "head"],
+        &[("DENT8_WITNESS_LOG", fixture.witness_log.as_str())],
+    );
+    assert_success(&head, "witness head --output json");
+    let head = stdout_json(&head);
+    assert_eq!(head["status"], "ok");
+    assert_eq!(head["latest_head"]["event_count"], 1);
+    assert!(
+        head["jsonl"]
+            .as_str()
+            .is_some_and(|line| line.starts_with('{'))
+    );
+
+    let verify = run_dent8(&["--output", "json", "witness", "verify"], &verify_env);
+    assert_success(&verify, "witness verify --output json");
+    let verify = stdout_json(&verify);
+    assert_eq!(verify["status"], "ok");
+    assert_eq!(verify["tool"], "witness verify");
+    assert_eq!(verify["coverage"], "complete");
+    assert_eq!(verify["latest_witnessed_count"], 1);
+    assert_eq!(verify["current_event_count"], 1);
+}
+
+#[cfg(feature = "witness")]
+fn assert_witness_publish_json(fixture: &WitnessJsonFixture) {
+    let verify_env = fixture.verify_env();
+    let publish = run_dent8(
+        &["--output", "json", "witness", "publish", &fixture.published],
+        &verify_env,
+    );
+    assert_success(&publish, "witness publish --output json");
+    let publish = stdout_json(&publish);
+    assert_eq!(publish["status"], "ok");
+    assert_eq!(publish["action"], "appended");
+    assert_eq!(publish["coverage"], "complete");
+    assert_eq!(publish["published_heads_path"], fixture.published);
+    assert_eq!(publish["published_signed_head_count"], 1);
+
+    let duplicate = run_dent8(
+        &["--output", "json", "witness", "publish", &fixture.published],
+        &verify_env,
+    );
+    assert_success(&duplicate, "duplicate witness publish --output json");
+    let duplicate = stdout_json(&duplicate);
+    assert_eq!(duplicate["action"], "already_published");
+    assert_eq!(duplicate["published_signed_head_count"], 1);
+
+    let published_verify = run_dent8(
+        &[
+            "--output",
+            "json",
+            "witness",
+            "verify-published",
+            &fixture.published,
+        ],
+        &verify_env,
+    );
+    assert_success(&published_verify, "witness verify-published --output json");
+    let published_verify = stdout_json(&published_verify);
+    assert_eq!(published_verify["status"], "ok");
+    assert_eq!(published_verify["level"], "ok");
+    assert_eq!(published_verify["coverage"], "complete");
+}
+
+#[cfg(feature = "witness")]
+fn assert_witness_doctor_and_trailing_json(fixture: &WitnessJsonFixture) {
+    let verify_env = fixture.verify_env();
+    let writer_doctor = run_dent8(
+        &["--output", "json", "witness", "doctor", "writer"],
+        &verify_env,
+    );
+    assert_success(&writer_doctor, "witness doctor writer --output json");
+    let writer_doctor = stdout_json(&writer_doctor);
+    assert_eq!(writer_doctor["status"], "ok");
+    assert_eq!(writer_doctor["tool"], "witness doctor");
+    assert_eq!(writer_doctor["role"], "writer");
+    assert_eq!(writer_doctor["summary"]["fail"], 0);
+    assert!(
+        writer_doctor["sections"]["ok"]
+            .as_array()
+            .expect("ok checks")
+            .iter()
+            .any(|check| check["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("DENT8_WITNESS_KEY is not set"))),
+        "{writer_doctor}"
+    );
+
+    assert_alice_fact(
+        &fixture.log,
+        "favorite_snack",
+        "apple",
+        "assert unwitnessed tail",
+    );
+    let trailing = run_dent8(
+        &[
+            "--output",
+            "json",
+            "witness",
+            "verify-published",
+            &fixture.published,
+        ],
+        &verify_env,
+    );
+    assert_success(&trailing, "witness verify-published trailing --output json");
+    let trailing = stdout_json(&trailing);
+    assert_eq!(trailing["status"], "ok");
+    assert_eq!(trailing["level"], "warn");
+    assert_eq!(trailing["coverage"], "trailing");
+    assert_eq!(trailing["unwitnessed_events"], 1);
 }
 
 #[cfg(all(feature = "witness", unix))]

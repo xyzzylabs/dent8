@@ -53,8 +53,10 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   the local witness log is rolled back. `publish` appends the latest head idempotently and
   refuses to publish behind an existing external sequence. `doctor <writer|signer|both>` role
   checks help operated setups verify that writer/agent/MCP envs have only verifier material
-  while the signer holds the private key. `examples/witness/demo.sh` runs the writer/signer/
-  monitor split end to end and proves an externally published head rejects event-log rollback.
+  while the signer holds the private key. Finite witness subcommands support `--output json`
+  for CI/monitors, with `doctor` grouped into stable `ok` / `warn` / `fail` sections.
+  `examples/witness/demo.sh` runs the writer/signer/monitor split end to end and proves an
+  externally published head rejects event-log rollback.
 - **Evidence-dependency edges + retraction taint** (ADR 0010): `dent8 derive` records a
   claim→claim derivation; `dent8 verify` flags a believed claim deriving from a
   retracted/expired source ("poison does not survive in derivatives").
@@ -80,11 +82,12 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   repo-local `.dent8/bin/dent8` wrapper around a prebuilt `.dent8/target-sqlite/debug/dent8`,
   avoiding Cargo during MCP startup while letting doctor warn about stale local binaries.
   Optional doctor probes that are not requested are reported as `SKIP`, not `WARN`, and
-  `doctor --output json` includes stable `ok` / `warn` / `fail` / `skip` sections. The CLI now
+  `doctor --output json` includes stable `ok` / `warn` / `fail` / `skip` sections. Finite
+  witness subcommands now emit structured JSON for monitors and CI. The CLI now
   uses `clap` with named write arguments, targeted usage errors, global
   `--color auto|always|never`, machine-readable `--output json` for write commands,
   `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`, `authority`,
-  `agent add`, all `identity` subcommands, `doctor`, `completions`, `export`,
+  `agent add`, all `identity` subcommands, `doctor`, `completions`, `export`, `witness`,
   `schema postgres`, and `mcp install`, `--version`, and
   `dent8 completions <bash|elvish|fish|powershell|zsh>`.
 - **MCP server** (`dent8 mcp serve`): the full belief surface as stdio JSON-RPC tools +

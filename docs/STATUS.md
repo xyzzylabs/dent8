@@ -281,7 +281,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   and a matching public key). What is *built* is the mechanism (cadence signing + publishable
   heads + idempotent publication to an external JSONL file + verification of externally saved
   heads + setup/doctor visibility + role readiness checks + a checked
-  [`examples/witness/`](../examples/witness/) operator-split demo); what remains
+  [`examples/witness/`](../examples/witness/) operator-split demo). The finite subcommands
+  support `--output json` for CI/monitoring (`keygen`, `sign`, `head`, `publish`, `verify`,
+  `verify-published`, `doctor`); `serve` is a streaming cadence signer and remains text-only.
+  `witness doctor --output json` groups checks into stable `ok` / `warn` / `fail` sections.
+  What remains
   *operational* is packaging/running it separately, key rotation, and managed head
   publication/monitoring. See [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
@@ -295,8 +299,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   data stays plain). The global `--output text|json` flag currently supports the write
   commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
   `agent add`, `authority`, `identity <subcommand>`, `doctor`, `completions`, `export`,
-  `schema postgres`, and `mcp install`; unsupported commands fail closed with a targeted usage
-  error rather than falling back to prose.
+  `witness <one-shot>`, `schema postgres`, and `mcp install`; unsupported commands fail closed
+  with a targeted usage error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload

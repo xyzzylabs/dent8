@@ -200,6 +200,8 @@ reports signed-head coverage; `dent8 witness doctor <writer|signer|both>` checks
 operator split so writer/agent/MCP processes do not inherit the private witness key; and
 `dent8 witness publish <heads.jsonl>` / `verify-published <heads.jsonl>` append and check
 externally saved heads so a local witness-log rollback cannot erase retained evidence. The
+finite witness commands support `--output json` for monitors and CI; `witness serve` remains
+a streaming text command.
 remaining gap to a hardened multi-user product is operating those controls well: key
 distribution/rotation, stronger secret storage, managed head publication, and an **operated
 witness service** that signs on a cadence from separate infrastructure. See
@@ -261,7 +263,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   is what it is.
 - `dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-diagnostics]`:
   list known fact streams, hiding internal doctor/write-check diagnostics by default.
-- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|init|agent add|authority|identity <subcommand>|doctor|completions|export|schema postgres|mcp install`:
+- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|init|agent add|authority|identity <subcommand>|doctor|completions|export|witness <one-shot>|schema postgres|mcp install`:
   emit stable JSON for scripting and agent-side checks while preserving existing text output
   by default. `doctor --output json` groups checks into stable `ok`, `warn`, `fail`, and `skip`
   sections.

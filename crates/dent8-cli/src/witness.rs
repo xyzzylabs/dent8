@@ -30,6 +30,7 @@
 
 use std::io::Write;
 
+use crate::{CliOutput, print_json_stderr, print_json_stdout};
 use dent8_core::{ClaimEvent, SignedTreeHead, sign_head, verify_signed_head};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
@@ -38,6 +39,14 @@ const DEFAULT_LOG: &str = "dent8-witness.jsonl";
 
 /// `serve` bails after this many consecutive failed ticks (a deleted key, a full disk).
 const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+
+const KEYGEN_TOOL: &str = "witness keygen";
+const SIGN_TOOL: &str = "witness sign";
+const HEAD_TOOL: &str = "witness head";
+const PUBLISH_TOOL: &str = "witness publish";
+const VERIFY_TOOL: &str = "witness verify";
+const VERIFY_PUBLISHED_TOOL: &str = "witness verify-published";
+const DOCTOR_TOOL: &str = "witness doctor";
 
 fn key_path() -> String {
     std::env::var("DENT8_WITNESS_KEY").unwrap_or_else(|_| DEFAULT_KEY.to_string())
@@ -55,6 +64,83 @@ fn public_key_path(key: &str) -> String {
     format!("{key}.pub")
 }
 
+fn witness_error_json(tool: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": tool,
+        "message": message,
+    })
+}
+
+fn witness_error_with_paths_json(
+    tool: &str,
+    message: &str,
+    key_path: Option<&str>,
+    public_key_path: Option<&str>,
+    witness_log_path: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": tool,
+        "key_path": key_path,
+        "public_key_path": public_key_path,
+        "witness_log_path": witness_log_path,
+        "message": message,
+    })
+}
+
+fn print_witness_error(output: CliOutput, tool: &str, message: &str, code: i32) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("{message}");
+            code
+        }
+        CliOutput::Json => print_json_stderr(&witness_error_json(tool, message), code),
+    }
+}
+
+fn print_witness_usage(output: CliOutput, tool: &str, usage: &str) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("usage: {usage}");
+            2
+        }
+        CliOutput::Json => print_json_stderr(
+            &serde_json::json!({
+                "status": "invalid",
+                "tool": tool,
+                "usage": usage,
+                "message": "invalid witness command arguments",
+            }),
+            2,
+        ),
+    }
+}
+
+fn signed_head_json(sth: &SignedTreeHead) -> serde_json::Value {
+    serde_json::to_value(sth).expect("signed tree head should serialize")
+}
+
+fn signed_head_json_line(sth: &SignedTreeHead) -> Result<String, String> {
+    serde_json::to_string(sth).map_err(|error| format!("could not serialize the head: {error}"))
+}
+
+fn unwitnessed_events(witnessed: u64, current: u64) -> u64 {
+    current.saturating_sub(witnessed)
+}
+
+fn coverage_level(witnessed: u64, current: u64) -> &'static str {
+    if witnessed == current { "ok" } else { "warn" }
+}
+
+fn coverage_status(witnessed: u64, current: u64) -> &'static str {
+    if witnessed == current {
+        "complete"
+    } else {
+        "trailing"
+    }
+}
+
 /// The current event log in global append order — the chain `sign_head`/`verify_signed_head`
 /// commit to. Backend-aware (file dev store or Postgres). Loaded **raw**, without the
 /// trusted-reload integrity gate, so the witness renders its own tamper verdict on a log that
@@ -66,22 +152,36 @@ fn load_events() -> Result<Vec<ClaimEvent>, String> {
 /// Generate an Ed25519 witness keypair: the private signing key (hex, `0600`) at
 /// `DENT8_WITNESS_KEY`, the public verifying key (hex) alongside as `<key>.pub`. Refuses to
 /// clobber an existing key.
-pub fn keygen() -> i32 {
+pub fn keygen(output: CliOutput) -> i32 {
     let key = key_path();
     if std::path::Path::new(&key).exists() {
-        eprintln!("{key} already exists — refusing to overwrite a witness signing key");
-        return 1;
+        let message = format!("{key} already exists — refusing to overwrite a witness signing key");
+        return match output {
+            CliOutput::Text => {
+                eprintln!("{message}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &witness_error_with_paths_json(
+                    KEYGEN_TOOL,
+                    &message,
+                    Some(&key),
+                    Some(&public_key_path(&key)),
+                    None,
+                ),
+                1,
+            ),
+        };
     }
     let mut seed = [0u8; 32];
     if let Err(error) = getrandom::getrandom(&mut seed) {
-        eprintln!("could not gather randomness for the key: {error}");
-        return 1;
+        let message = format!("could not gather randomness for the key: {error}");
+        return print_witness_error(output, KEYGEN_TOOL, &message, 1);
     }
     let signing = SigningKey::from_bytes(&seed);
     let verifying = signing.verifying_key();
     if let Err(error) = write_secret(&key, &hex::encode(signing.to_bytes())) {
-        eprintln!("{error}");
-        return 1;
+        return print_witness_error(output, KEYGEN_TOOL, &error, 1);
     }
     let public = public_key_path(&key);
     if let Err(error) = std::fs::write(&public, format!("{}\n", hex::encode(verifying.to_bytes())))
@@ -89,55 +189,106 @@ pub fn keygen() -> i32 {
         // Don't strand a private key with no public counterpart — a later `keygen` would refuse
         // to overwrite it. Best-effort remove the half-written pair.
         let _ = std::fs::remove_file(&key);
-        eprintln!("cannot write {public}: {error} (removed the partial key {key})");
-        return 1;
+        let message = format!("cannot write {public}: {error} (removed the partial key {key})");
+        return match output {
+            CliOutput::Text => {
+                eprintln!("{message}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &witness_error_with_paths_json(
+                    KEYGEN_TOOL,
+                    &message,
+                    Some(&key),
+                    Some(&public),
+                    None,
+                ),
+                1,
+            ),
+        };
     }
-    println!(
+    let message = format!(
         "wrote witness signing key to {key} (keep it OFF the log-writer's machine — that \
          separation is what gives tamper-resistance)\nwrote public verifying key to {public}"
     );
-    #[cfg(not(unix))]
-    println!(
-        "note: this is a non-Unix platform — {key} was NOT restricted to owner-only file \
-         permissions; protect it yourself"
-    );
-    0
+    let permission_warning = {
+        #[cfg(unix)]
+        {
+            None::<String>
+        }
+        #[cfg(not(unix))]
+        {
+            Some(format!(
+                "note: this is a non-Unix platform — {key} was NOT restricted to owner-only file \
+                 permissions; protect it yourself"
+            ))
+        }
+    };
+    match output {
+        CliOutput::Text => {
+            println!("{message}");
+            if let Some(warning) = &permission_warning {
+                println!("{warning}");
+            }
+            0
+        }
+        CliOutput::Json => print_json_stdout(&serde_json::json!({
+            "status": "ok",
+            "tool": KEYGEN_TOOL,
+            "key_path": key,
+            "public_key_path": public,
+            "operated_role": "signer",
+            "writer_must_not_inherit_key": true,
+            "permission_warning": permission_warning,
+            "message": message,
+        })),
+    }
 }
 
 /// Sign a tree head over the current log and append it to the witness log.
-pub fn sign() -> i32 {
+pub fn sign(output: CliOutput) -> i32 {
     let events = match load_events() {
         Ok(events) => events,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, SIGN_TOOL, &error, 1);
         }
     };
     let signing = match load_signing_key() {
         Ok(key) => key,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, SIGN_TOOL, &error, 1);
         }
     };
     let sth = match sign_head(&events, &signing) {
         Ok(sth) => sth,
         Err(error) => {
-            eprintln!("could not sign the tree head: {error}");
-            return 1;
+            let message = format!("could not sign the tree head: {error}");
+            return print_witness_error(output, SIGN_TOOL, &message, 1);
         }
     };
     let path = witness_log_path();
     if let Err(error) = append_head(&path, &sth) {
-        eprintln!("{error}");
-        return 1;
+        return print_witness_error(output, SIGN_TOOL, &error, 1);
     }
-    println!(
+    let message = format!(
         "signed tree head: count={} head={} -> appended to {path}",
         sth.event_count,
         sth.head.as_deref().unwrap_or("(empty log)"),
     );
-    0
+    match output {
+        CliOutput::Text => {
+            println!("{message}");
+            0
+        }
+        CliOutput::Json => print_json_stdout(&serde_json::json!({
+            "status": "ok",
+            "tool": SIGN_TOOL,
+            "witness_log_path": path,
+            "current_event_count": events.len(),
+            "signed_head": signed_head_json(&sth),
+            "message": message,
+        })),
+    }
 }
 
 /// Run as a **cadence signer** — the *operated* witness loop. Every `interval` seconds, sign
@@ -254,31 +405,51 @@ fn warn_if_prior_head_broken(
 
 /// Print the latest signed tree head (as one JSON line) for an operator to **publish** —
 /// recording it externally is what lets a third party detect a later rollback.
-pub fn head() -> i32 {
+pub fn head(output: CliOutput) -> i32 {
     match load_witness_log() {
         Ok(heads) => match heads.last() {
             None => {
-                println!(
+                let message = format!(
                     "no signed tree heads in {} yet (run `dent8 witness sign` or `serve`)",
                     witness_log_path()
                 );
-                0
+                match output {
+                    CliOutput::Text => {
+                        println!("{message}");
+                        0
+                    }
+                    CliOutput::Json => print_json_stdout(&serde_json::json!({
+                        "status": "ok",
+                        "level": "warn",
+                        "tool": HEAD_TOOL,
+                        "witness_log_path": witness_log_path(),
+                        "signed_head_count": 0,
+                        "latest_head": null,
+                        "jsonl": null,
+                        "message": message,
+                    })),
+                }
             }
-            Some(sth) => match serde_json::to_string(sth) {
-                Ok(json) => {
-                    println!("{json}");
-                    0
-                }
-                Err(error) => {
-                    eprintln!("could not serialize the head: {error}");
-                    1
-                }
+            Some(sth) => match signed_head_json_line(sth) {
+                Ok(json) => match output {
+                    CliOutput::Text => {
+                        println!("{json}");
+                        0
+                    }
+                    CliOutput::Json => print_json_stdout(&serde_json::json!({
+                        "status": "ok",
+                        "level": "ok",
+                        "tool": HEAD_TOOL,
+                        "witness_log_path": witness_log_path(),
+                        "signed_head_count": heads.len(),
+                        "latest_head": signed_head_json(sth),
+                        "jsonl": json,
+                    })),
+                },
+                Err(error) => print_witness_error(output, HEAD_TOOL, &error, 1),
             },
         },
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Err(error) => print_witness_error(output, HEAD_TOOL, &error, 1),
     }
 }
 
@@ -288,160 +459,232 @@ pub fn head() -> i32 {
 /// append a local head behind the already-published sequence, treats an identical latest head
 /// as idempotent, and verifies the resulting published sequence against the current log before
 /// writing.
-pub fn publish(args: &[String]) -> i32 {
+pub fn publish(args: &[String], output: CliOutput) -> i32 {
     let [path] = args else {
-        eprintln!("usage: dent8 witness publish <published-heads.jsonl>");
-        return 2;
-    };
-    let events = match load_events() {
-        Ok(events) => events,
-        Err(error) => {
-            eprintln!("{error}");
-            return 1;
-        }
-    };
-    let verifying = match load_verifying_key() {
-        Ok(key) => key,
-        Err(error) => {
-            eprintln!("{error}");
-            return 1;
-        }
-    };
-    let local_heads = match load_witness_log() {
-        Ok(heads) => heads,
-        Err(error) => {
-            eprintln!("{error}");
-            return 1;
-        }
-    };
-    let Some(latest) = local_heads.last() else {
-        eprintln!(
-            "no signed tree heads in {} yet (run `dent8 witness sign` or `serve`)",
-            witness_log_path()
+        return print_witness_usage(
+            output,
+            PUBLISH_TOOL,
+            "dent8 witness publish <published-heads.jsonl>",
         );
-        return 1;
     };
-    match verify_heads(&events, &local_heads, &verifying) {
-        Ok(()) => {}
-        Err(WitnessFault::CannotVerify(message)) => {
-            eprintln!("local witness log verification could not be performed: {message}");
-            return 2;
+    let outcome = match publish_outcome(path) {
+        Ok(outcome) => outcome,
+        Err((message, code)) => return print_witness_error(output, PUBLISH_TOOL, &message, code),
+    };
+    match output {
+        CliOutput::Text => {
+            println!("{}", outcome.message);
+            warn_if_published_head_trails(outcome.latest.event_count, outcome.current_count);
+            0
         }
-        Err(WitnessFault::Detected(message)) => {
-            eprintln!("{message}");
-            return 1;
-        }
+        CliOutput::Json => print_json_stdout(&serde_json::json!({
+            "status": "ok",
+            "level": coverage_level(outcome.latest.event_count, outcome.current_count),
+            "tool": PUBLISH_TOOL,
+            "action": outcome.action,
+            "published_heads_path": path,
+            "local_witness_log_path": witness_log_path(),
+            "local_signed_head_count": outcome.local_head_count,
+            "published_signed_head_count": outcome.published_head_count,
+            "latest_published_count": outcome.latest.event_count,
+            "current_event_count": outcome.current_count,
+            "unwitnessed_events": unwitnessed_events(outcome.latest.event_count, outcome.current_count),
+            "coverage": coverage_status(outcome.latest.event_count, outcome.current_count),
+            "latest_head": signed_head_json(&outcome.latest),
+            "message": outcome.message,
+        })),
     }
-    let mut published = match load_signed_heads(path, "published heads", true) {
-        Ok(heads) => heads,
-        Err(error) => {
-            eprintln!("{error}");
-            return 1;
-        }
-    };
+}
 
-    let already_published = match published.last() {
-        Some(previous) if previous.event_count > latest.event_count => {
-            eprintln!(
-                "ROLLBACK: published heads in {path} are already at count {}, ahead of the \
-                 local witness log's latest count {}",
-                previous.event_count, latest.event_count
-            );
-            return 1;
-        }
-        Some(previous) if previous.event_count == latest.event_count && previous != latest => {
-            eprintln!(
-                "CONFLICT: published head at count {} does not match the local witness head",
-                latest.event_count
-            );
-            return 1;
-        }
-        Some(previous) if previous.event_count == latest.event_count => true,
-        Some(_) | None => false,
-    };
+struct PublishOutcome {
+    action: &'static str,
+    message: String,
+    latest: SignedTreeHead,
+    local_head_count: usize,
+    published_head_count: usize,
+    current_count: u64,
+}
 
+fn publish_outcome(path: &str) -> Result<PublishOutcome, (String, i32)> {
+    let events = load_events().map_err(|error| (error, 1))?;
+    let verifying = load_verifying_key().map_err(|error| (error, 1))?;
+    let local_heads = load_witness_log().map_err(|error| (error, 1))?;
+    let latest = local_heads
+        .last()
+        .cloned()
+        .ok_or_else(|| (empty_witness_log_message(), 1))?;
+    verify_heads_for_publish(&events, &local_heads, &verifying, "local witness log")?;
+
+    let mut published =
+        load_signed_heads(path, "published heads", true).map_err(|error| (error, 1))?;
+    let already_published = publication_state(path, &published, &latest)?;
     if !already_published {
         published.push(latest.clone());
     }
-    match verify_heads(&events, &published, &verifying) {
-        Ok(()) => {}
-        Err(WitnessFault::CannotVerify(message)) => {
-            eprintln!("published-head verification could not be performed: {message}");
-            return 2;
-        }
-        Err(WitnessFault::Detected(message)) => {
-            eprintln!("{message}");
-            return 1;
-        }
-    }
+    verify_heads_for_publish(&events, &published, &verifying, "published-head")?;
 
-    if already_published {
-        println!(
-            "OK: latest witness head at count {} is already published in {path}",
-            latest.event_count
-        );
-    } else if let Err(error) = append_head(path, latest) {
-        eprintln!("{error}");
-        return 1;
+    let (action, message) = if already_published {
+        (
+            "already_published",
+            format!(
+                "OK: latest witness head at count {} is already published in {path}",
+                latest.event_count
+            ),
+        )
     } else {
-        println!(
-            "published witness head: count={} head={} -> appended to {path}",
-            latest.event_count,
-            latest.head.as_deref().unwrap_or("(empty log)")
-        );
+        append_head(path, &latest).map_err(|error| (error, 1))?;
+        (
+            "appended",
+            format!(
+                "published witness head: count={} head={} -> appended to {path}",
+                latest.event_count,
+                latest.head.as_deref().unwrap_or("(empty log)")
+            ),
+        )
+    };
+
+    Ok(PublishOutcome {
+        action,
+        message,
+        latest,
+        local_head_count: local_heads.len(),
+        published_head_count: published.len(),
+        current_count: events.len() as u64,
+    })
+}
+
+fn empty_witness_log_message() -> String {
+    format!(
+        "no signed tree heads in {} yet (run `dent8 witness sign` or `serve`)",
+        witness_log_path()
+    )
+}
+
+fn verify_heads_for_publish(
+    events: &[ClaimEvent],
+    heads: &[SignedTreeHead],
+    verifying: &VerifyingKey,
+    label: &str,
+) -> Result<(), (String, i32)> {
+    match verify_heads(events, heads, verifying) {
+        Ok(()) => Ok(()),
+        Err(WitnessFault::CannotVerify(message)) => Err((
+            format!("{label} verification could not be performed: {message}"),
+            2,
+        )),
+        Err(WitnessFault::Detected(message)) => Err((message, 1)),
     }
-    warn_if_published_head_trails(latest.event_count, events.len() as u64);
-    0
+}
+
+fn publication_state(
+    path: &str,
+    published: &[SignedTreeHead],
+    latest: &SignedTreeHead,
+) -> Result<bool, (String, i32)> {
+    match published.last() {
+        Some(previous) if previous.event_count > latest.event_count => Err((
+            format!(
+                "ROLLBACK: published heads in {path} are already at count {}, ahead of the \
+                 local witness log's latest count {}",
+                previous.event_count, latest.event_count
+            ),
+            1,
+        )),
+        Some(previous) if previous.event_count == latest.event_count && previous != latest => {
+            Err((
+                format!(
+                    "CONFLICT: published head at count {} does not match the local witness head",
+                    latest.event_count
+                ),
+                1,
+            ))
+        }
+        Some(previous) if previous.event_count == latest.event_count => Ok(true),
+        Some(_) | None => Ok(false),
+    }
 }
 
 /// Verify the witness log against the current event log and public key.
-pub fn verify() -> i32 {
+pub fn verify(output: CliOutput) -> i32 {
     let events = match load_events() {
         Ok(events) => events,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, VERIFY_TOOL, &error, 1);
         }
     };
     let verifying = match load_verifying_key() {
         Ok(key) => key,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, VERIFY_TOOL, &error, 1);
         }
     };
     let heads = match load_witness_log() {
         Ok(heads) => heads,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, VERIFY_TOOL, &error, 1);
         }
     };
     if heads.is_empty() {
-        println!(
+        let message = format!(
             "no signed tree heads in {} — nothing to verify (run `dent8 witness sign`)",
             witness_log_path()
         );
-        return 0;
+        return match output {
+            CliOutput::Text => {
+                println!("{message}");
+                0
+            }
+            CliOutput::Json => print_json_stdout(&serde_json::json!({
+                "status": "ok",
+                "level": "warn",
+                "tool": VERIFY_TOOL,
+                "witness_log_path": witness_log_path(),
+                "public_key_path": verifying_key_path(),
+                "signed_head_count": 0,
+                "latest_witnessed_count": 0,
+                "current_event_count": events.len(),
+                "unwitnessed_events": events.len(),
+                "coverage": "none",
+                "message": message,
+            })),
+        };
     }
     match verify_heads(&events, &heads, &verifying) {
         Ok(()) => {
             let head_count = heads.last().map_or(0, |sth| sth.event_count);
-            println!(
+            let current_count = events.len() as u64;
+            let message = format!(
                 "OK: {} signed tree head(s) verify — the log is append-only consistent with the \
-                 witness (latest witnessed count {head_count}, current log {} events)",
-                heads.len(),
-                events.len()
+                 witness (latest witnessed count {head_count}, current log {current_count} events)",
+                heads.len()
             );
-            0
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "level": coverage_level(head_count, current_count),
+                    "tool": VERIFY_TOOL,
+                    "witness_log_path": witness_log_path(),
+                    "public_key_path": verifying_key_path(),
+                    "signed_head_count": heads.len(),
+                    "latest_witnessed_count": head_count,
+                    "current_event_count": current_count,
+                    "unwitnessed_events": unwitnessed_events(head_count, current_count),
+                    "coverage": coverage_status(head_count, current_count),
+                    "latest_head": heads.last().map(signed_head_json),
+                    "message": message,
+                })),
+            }
         }
         Err(WitnessFault::CannotVerify(message)) => {
-            eprintln!("verification could not be performed: {message}");
-            2
+            let message = format!("verification could not be performed: {message}");
+            print_witness_error(output, VERIFY_TOOL, &message, 2)
         }
         Err(WitnessFault::Detected(message)) => {
-            eprintln!("{message}");
-            1
+            print_witness_error(output, VERIFY_TOOL, &message, 1)
         }
     }
 }
@@ -453,66 +696,85 @@ pub fn verify() -> i32 {
 /// published-heads file is expected to live somewhere outside that control boundary (CI
 /// artifact, Git history, object storage, another host) and contain JSON lines printed by
 /// `dent8 witness head`.
-pub fn verify_published(args: &[String]) -> i32 {
+pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
     let [path] = args else {
-        eprintln!("usage: dent8 witness verify-published <published-heads.jsonl>");
-        return 2;
+        return print_witness_usage(
+            output,
+            VERIFY_PUBLISHED_TOOL,
+            "dent8 witness verify-published <published-heads.jsonl>",
+        );
     };
     let events = match load_events() {
         Ok(events) => events,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, VERIFY_PUBLISHED_TOOL, &error, 1);
         }
     };
     let verifying = match load_verifying_key() {
         Ok(key) => key,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, VERIFY_PUBLISHED_TOOL, &error, 1);
         }
     };
     let heads = match load_signed_heads(path, "published heads", false) {
         Ok(heads) => heads,
         Err(error) => {
-            eprintln!("{error}");
-            return 1;
+            return print_witness_error(output, VERIFY_PUBLISHED_TOOL, &error, 1);
         }
     };
     if heads.is_empty() {
-        eprintln!(
+        let message = format!(
             "no published signed tree heads in {path} — cannot prove external witness coverage"
         );
-        return 1;
+        return print_witness_error(output, VERIFY_PUBLISHED_TOOL, &message, 1);
     }
     match verify_heads(&events, &heads, &verifying) {
         Ok(()) => {
             let head_count = heads.last().map_or(0, |sth| sth.event_count);
             let current = events.len() as u64;
-            if head_count == current {
-                println!(
+            let level = coverage_level(head_count, current);
+            let message = if head_count == current {
+                format!(
                     "OK: {} published signed tree head(s) verify from {path} — latest published \
                      count {head_count}, current log {current} events",
                     heads.len()
-                );
+                )
             } else {
                 let published_heads = heads.len();
                 let unwitnessed = current.saturating_sub(head_count);
-                println!(
+                format!(
                     "WARN: {published_heads} published signed tree head(s) verify from {path}, but latest \
                      published count {head_count} trails current log {current} by {unwitnessed} \
                      unwitnessed event(s)"
-                );
+                )
+            };
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "level": level,
+                    "tool": VERIFY_PUBLISHED_TOOL,
+                    "published_heads_path": path,
+                    "public_key_path": verifying_key_path(),
+                    "published_signed_head_count": heads.len(),
+                    "latest_published_count": head_count,
+                    "current_event_count": current,
+                    "unwitnessed_events": unwitnessed_events(head_count, current),
+                    "coverage": coverage_status(head_count, current),
+                    "latest_head": heads.last().map(signed_head_json),
+                    "message": message,
+                })),
             }
-            0
         }
         Err(WitnessFault::CannotVerify(message)) => {
-            eprintln!("published-head verification could not be performed: {message}");
-            2
+            let message = format!("published-head verification could not be performed: {message}");
+            print_witness_error(output, VERIFY_PUBLISHED_TOOL, &message, 2)
         }
         Err(WitnessFault::Detected(message)) => {
-            eprintln!("{message}");
-            1
+            print_witness_error(output, VERIFY_PUBLISHED_TOOL, &message, 1)
         }
     }
 }
@@ -528,23 +790,73 @@ fn warn_if_published_head_trails(published_count: u64, current_count: u64) {
 }
 
 /// Check witness operator readiness for one side of the deployment boundary.
-pub fn doctor(args: &[String]) -> i32 {
+pub fn doctor(args: &[String], output: CliOutput) -> i32 {
     let role = match args {
         [role] if role == "writer" || role == "verifier" => WitnessDoctorRole::Writer,
         [role] if role == "signer" => WitnessDoctorRole::Signer,
         [role] if role == "both" || role == "local" => WitnessDoctorRole::Both,
         _ => {
-            eprintln!("usage: dent8 witness doctor <writer|signer|both>");
-            return 2;
+            return print_witness_usage(
+                output,
+                DOCTOR_TOOL,
+                "dent8 witness doctor <writer|signer|both>",
+            );
         }
     };
 
     let lines = role.doctor_lines();
     let ok = lines.iter().all(|line| line.ok);
-    for line in lines {
-        println!("{}  {}", line.level, line.message);
+    match output {
+        CliOutput::Text => {
+            for line in lines {
+                println!("{}  {}", line.level, line.message);
+            }
+        }
+        CliOutput::Json => {
+            print_json_stdout(&witness_doctor_json(role.name(), ok, &lines));
+        }
     }
     i32::from(!ok)
+}
+
+fn witness_doctor_json(role: &str, ok: bool, lines: &[DoctorLine]) -> serde_json::Value {
+    let mut ok_lines = Vec::new();
+    let mut warn_lines = Vec::new();
+    let mut fail_lines = Vec::new();
+    for line in lines {
+        match line.level {
+            "OK" => ok_lines.push(doctor_line_json(line)),
+            "WARN" => warn_lines.push(doctor_line_json(line)),
+            "FAIL" => fail_lines.push(doctor_line_json(line)),
+            _ => {}
+        }
+    }
+    serde_json::json!({
+        "status": if ok { "ok" } else { "failed" },
+        "tool": DOCTOR_TOOL,
+        "role": role,
+        "ok": ok,
+        "summary": {
+            "ok": ok_lines.len(),
+            "warn": warn_lines.len(),
+            "fail": fail_lines.len(),
+        },
+        "sections": {
+            "ok": ok_lines,
+            "warn": warn_lines,
+            "fail": fail_lines,
+        },
+        "checks": lines.iter().map(doctor_line_json).collect::<Vec<_>>(),
+    })
+}
+
+fn doctor_line_json(line: &DoctorLine) -> serde_json::Value {
+    serde_json::json!({
+        "status": line.level.to_ascii_lowercase(),
+        "level": line.level,
+        "ok": line.ok,
+        "message": line.message,
+    })
 }
 
 pub(crate) struct DoctorLine {
@@ -586,6 +898,14 @@ enum WitnessDoctorRole {
 }
 
 impl WitnessDoctorRole {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Writer => "writer",
+            Self::Signer => "signer",
+            Self::Both => "both",
+        }
+    }
+
     fn doctor_lines(&self) -> Vec<DoctorLine> {
         match self {
             Self::Writer => writer_doctor_lines(false),

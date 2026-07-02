@@ -127,6 +127,19 @@ if the current log is shorter than a published count (`ROLLBACK`), or if a publi
 rewritten (`TAMPER`). It exits successfully but warns if the published sequence is valid while
 the current log has unwitnessed tail events beyond the latest published count.
 
+All finite witness commands support `--output json` for CI and monitors:
+
+```sh
+dent8 --output json witness publish /external/dent8-published-heads.jsonl
+dent8 --output json witness verify-published /external/dent8-published-heads.jsonl
+dent8 --output json witness doctor writer
+```
+
+The JSON includes stable `status`, `tool`, count/path fields, `coverage`
+(`complete` / `trailing` / `none` where relevant), and `level: "warn"` when a verification
+is valid but has unwitnessed tail events. `witness serve` is intentionally not JSON mode: it is
+a long-running signer loop that streams human-readable progress.
+
 ## Doctor Checks
 
 `dent8 doctor` now reports witness status when witness paths are configured:
@@ -149,6 +162,9 @@ by the witness cadence.
   decodes, checks owner-only permissions on Unix, and verifies that the public key matches.
 - `both` is for local demos only; it runs both sets of checks and warns that the roles are
   colocated.
+
+With `--output json`, `dent8 witness doctor` groups checks into stable `ok`, `warn`, and `fail`
+sections so automation can fail on `summary.fail > 0` without scraping text.
 
 ## Security Boundaries
 
