@@ -8,7 +8,41 @@
 #   DENT8="cargo run -q -p dent8-cli --features witness --" ./examples/witness/demo.sh
 set -euo pipefail
 
-DENT8="${DENT8:-dent8}"
+# Split intentionally so callers can pass `DENT8="cargo run -q -p dent8-cli --features witness --"`.
+read -r -a DENT8_CMD <<<"${DENT8:-dent8}"
+DENT8_ENV=(
+  env
+  -u DENT8_STORE_URL
+  -u DENT8_LOG
+  -u DENT8_AUTHORITY
+  -u DENT8_REQUIRE_AUTHORITY
+  -u DENT8_TRUST
+  -u DENT8_ACTIVE_GRANTS
+  -u DENT8_REQUIRE_IDENTITY
+  -u DENT8_GRANT
+  -u DENT8_IDENTITY_KEY
+  -u DENT8_ISSUER_KEY
+  -u DENT8_WITNESS_LOG
+  -u DENT8_WITNESS_PUBKEY
+  -u DENT8_WITNESS_KEY
+)
+
+run_dent8() {
+  local env_args=()
+  while (($# > 0)); do
+    case "$1" in
+      *=*)
+        env_args+=("$1")
+        shift
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+  "${DENT8_ENV[@]}" "${env_args[@]}" "${DENT8_CMD[@]}" "$@"
+}
+
 WORK="$(mktemp -d -t dent8-witness-demo.XXXXXX)"
 SHARED="$WORK/shared"
 SECURE="$WORK/secure"
@@ -45,62 +79,62 @@ export DENT8_WITNESS_PUBKEY='$WITNESS_PUBKEY'
 EOF
 
 echo "# 1. Generate the witness key on the signer side"
-env DENT8_WITNESS_KEY="$WITNESS_KEY" $DENT8 witness keygen
+run_dent8 DENT8_WITNESS_KEY="$WITNESS_KEY" witness keygen
 cp "$WITNESS_KEY.pub" "$WITNESS_PUBKEY"
 
 echo
 echo "# 2. Check the intended role split"
-env \
+run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_LOG="$WITNESS_LOG" \
   DENT8_WITNESS_PUBKEY="$WITNESS_PUBKEY" \
-  $DENT8 witness doctor writer
-env \
+  witness doctor writer
+run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_LOG="$WITNESS_LOG" \
   DENT8_WITNESS_KEY="$WITNESS_KEY" \
-  $DENT8 witness doctor signer
+  witness doctor signer
 
 echo
 echo "# 3. Writer appends an event; signer signs the current tree head"
-env DENT8_LOG="$LOG" \
-  $DENT8 assert person:alice favorite_drink tea --authority high --source user:alice
-env \
+run_dent8 DENT8_LOG="$LOG" \
+  assert person:alice favorite_drink tea --authority high --source user:alice
+run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_LOG="$WITNESS_LOG" \
   DENT8_WITNESS_KEY="$WITNESS_KEY" \
-  $DENT8 witness sign
+  witness sign
 
 echo
 echo "# 4. Writer verifies local witness coverage"
-env \
+run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_LOG="$WITNESS_LOG" \
   DENT8_WITNESS_PUBKEY="$WITNESS_PUBKEY" \
-  $DENT8 witness verify
+  witness verify
 
 echo
 echo "# 5. Publish the signed head outside the writer-controlled witness log"
-env \
+run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_LOG="$WITNESS_LOG" \
   DENT8_WITNESS_PUBKEY="$WITNESS_PUBKEY" \
-  $DENT8 witness publish "$PUBLISHED"
+  witness publish "$PUBLISHED"
 
 echo
 echo "# 6. Monitor verifies the externally published head"
-env \
+run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_PUBKEY="$WITNESS_PUBKEY" \
-  $DENT8 witness verify-published "$PUBLISHED"
+  witness verify-published "$PUBLISHED"
 
 echo
 echo "# 7. A rolled-back event log is rejected against the externally published head"
 : >"$ROLLBACK_LOG"
-if env \
+if run_dent8 \
   DENT8_LOG="$ROLLBACK_LOG" \
   DENT8_WITNESS_PUBKEY="$WITNESS_PUBKEY" \
-  $DENT8 witness verify-published "$PUBLISHED" >"$ROLLBACK_OUT" 2>&1; then
+  witness verify-published "$PUBLISHED" >"$ROLLBACK_OUT" 2>&1; then
   cat "$ROLLBACK_OUT"
   echo "expected verify-published to reject the rolled-back event log" >&2
   exit 1
