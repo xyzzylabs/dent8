@@ -32,7 +32,8 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, init, authority, identity status, doctor, mcp install";
+                                      eval, init, agent add, authority, identity status, doctor, \
+                                      mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -96,7 +97,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Eval) => cmd_eval(cli.output),
         Some(CliCommand::Init(args)) => cmd_init(&args, cli.output),
         Some(CliCommand::Agent(args)) => match args.command {
-            AgentCommand::Add(args) => cmd_agent_add(&args),
+            AgentCommand::Add(args) => cmd_agent_add(&args, cli.output),
         },
         Some(CliCommand::Doctor(args)) => cmd_doctor(&args, cli.output),
         Some(CliCommand::Completions(args)) => cmd_completions(args.shell),
@@ -296,6 +297,9 @@ impl CliCommand {
                 | Self::Conflicts
                 | Self::Eval
                 | Self::Init(_)
+                | Self::Agent(AgentArgs {
+                    command: AgentCommand::Add(_),
+                })
                 | Self::Authority(_)
                 | Self::Identity(IdentityArgs {
                     command: IdentityCommand::Status(_),
@@ -2058,33 +2062,39 @@ fn cmd_mcp_install(args: &McpInstallArgs, output: CliOutput) -> i32 {
     }
 }
 
-fn cmd_agent_add(args: &AgentAddArgs) -> i32 {
-    match agent_add(args) {
-        Ok(outcome) => {
-            println!("{}", outcome.message);
-            outcome.exit_code
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
-    }
-}
-
-#[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
-fn agent_add(args: &AgentAddArgs) -> Result<CommandOutcome, String> {
+fn cmd_agent_add(args: &AgentAddArgs, output: CliOutput) -> i32 {
     #[cfg(not(feature = "identity"))]
     {
-        let _ = args;
-        return Err(
-            "`dent8 agent add` requires signed source identity; default builds include it, \
-             or rebuild this binary with `--features identity`"
-                .to_string(),
-        );
+        let message = "`dent8 agent add` requires signed source identity; default builds include \
+                       it, or rebuild this binary with `--features identity`";
+        return match output {
+            CliOutput::Text => {
+                eprintln!("{message}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(&agent_add_error_json(args, message), 1),
+        };
     }
 
     #[cfg(feature = "identity")]
-    agent_add_inner(args)
+    match agent_add_inner(args) {
+        Ok(outcome) => match output {
+            CliOutput::Text => {
+                println!("{}", outcome.message());
+                outcome.exit_code()
+            }
+            CliOutput::Json => {
+                print_json_stdout_with_code(&agent_add_json(args, &outcome), outcome.exit_code())
+            }
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(&agent_add_error_json(args, &error), 1),
+        },
+    }
 }
 
 #[cfg(feature = "identity")]
@@ -2096,7 +2106,46 @@ struct AgentAddBundle {
 }
 
 #[cfg(feature = "identity")]
-fn agent_add_inner(args: &AgentAddArgs) -> Result<CommandOutcome, String> {
+struct AgentAddOutcome {
+    agent: InitAgent,
+    dir: std::path::PathBuf,
+    store_url: String,
+    authority_path: std::path::PathBuf,
+    authority_ceiling: AuthorityLevel,
+    identity: identity::SourceIdentityOutput,
+    mcp_install: McpInstallAttempt,
+}
+
+#[cfg(feature = "identity")]
+impl AgentAddOutcome {
+    fn message(&self) -> String {
+        let mut message = agent_add_base_message(
+            self.agent,
+            &self.dir,
+            &self.store_url,
+            &self.authority_path,
+            &self.identity,
+            self.authority_ceiling,
+        );
+        message.push_str("\n\n");
+        message.push_str(&self.mcp_install.message());
+        if self.mcp_install.result.is_ok() {
+            message.push_str("\n\nNext:\n  dent8 doctor --agent ");
+            message.push_str(self.agent.cli_name());
+            message.push_str(" --dir ");
+            message.push_str(&shell_quote(&self.dir.to_string_lossy()));
+            message.push_str(" --write-check");
+        }
+        message
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.mcp_install.exit_code()
+    }
+}
+
+#[cfg(feature = "identity")]
+fn agent_add_inner(args: &AgentAddArgs) -> Result<AgentAddOutcome, String> {
     validate_agent_add_args(args)?;
     let mut bundle = load_agent_add_bundle(args)?;
     let source = args.agent.source();
@@ -2138,8 +2187,23 @@ fn agent_add_inner(args: &AgentAddArgs) -> Result<CommandOutcome, String> {
     );
     save_authority_registry_at(&bundle.authority_path.to_string_lossy(), &bundle.registry)?;
 
-    let message = agent_add_base_message(args, &bundle, &identity, authority_ceiling);
-    Ok(append_agent_add_mcp_install(args, &bundle.dir, message))
+    let mcp_install = mcp_install_attempt(
+        args.agent,
+        &bundle.dir,
+        args.mcp_config.clone(),
+        args.mcp_command.clone(),
+        args.mcp_local_bin,
+        mcp_config::InstallMode::Write,
+    );
+    Ok(AgentAddOutcome {
+        agent: args.agent,
+        dir: bundle.dir,
+        store_url: bundle.store_url,
+        authority_path: bundle.authority_path,
+        authority_ceiling,
+        identity,
+        mcp_install,
+    })
 }
 
 #[cfg(feature = "identity")]
@@ -2210,20 +2274,22 @@ fn shared_store_url_from_bundle_env(
 
 #[cfg(feature = "identity")]
 fn agent_add_base_message(
-    args: &AgentAddArgs,
-    bundle: &AgentAddBundle,
+    agent: InitAgent,
+    dir: &std::path::Path,
+    store_url: &str,
+    authority_path: &std::path::Path,
     identity: &identity::SourceIdentityOutput,
     authority_ceiling: AuthorityLevel,
 ) -> String {
     let identity_action = if identity.reused { "reused" } else { "created" };
     format!(
         "added dent8 agent {} in {}\n  source: {} authority ceiling={:?}\n  store: {}\n  authority: {}\n  identity: {identity_action} grant {} (max={:?}, source key: {}, env: {}, active grants: {})",
-        args.agent.cli_name(),
-        bundle.dir.display(),
+        agent.cli_name(),
+        dir.display(),
         identity.source,
         authority_ceiling,
-        bundle.store_url,
-        bundle.authority_path.display(),
+        store_url,
+        authority_path.display(),
         identity.grant_file.display(),
         identity.max_authority,
         identity.source_key_path.display(),
@@ -2233,49 +2299,72 @@ fn agent_add_base_message(
 }
 
 #[cfg(feature = "identity")]
-fn append_agent_add_mcp_install(
-    args: &AgentAddArgs,
-    dir: &std::path::Path,
-    mut message: String,
-) -> CommandOutcome {
-    let install = match install_mcp_config_prepared(
-        args.agent,
-        dir,
-        args.mcp_config.as_deref(),
-        args.mcp_command.as_deref(),
-        args.mcp_local_bin,
-        mcp_config::InstallMode::Write,
-    ) {
-        Ok(install) => install,
-        Err(error) => {
-            message.push_str("\n\nMCP install failed: ");
-            message.push_str(&error);
-            message.push_str("\nRun: dent8 mcp install --agent ");
-            message.push_str(args.agent.cli_name());
-            message.push_str(" --dir ");
-            message.push_str(&shell_quote(&dir.to_string_lossy()));
-            if let Some(config) = args.mcp_config.as_deref() {
-                message.push_str(" --config ");
-                message.push_str(&shell_quote(config));
-            }
-            return CommandOutcome {
-                message,
-                exit_code: 1,
-            };
-        }
-    };
+fn agent_add_json(args: &AgentAddArgs, outcome: &AgentAddOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "status": agent_add_status(outcome),
+        "tool": "agent add",
+        "exit_code": outcome.exit_code(),
+        "agent": outcome.agent.cli_name(),
+        "dir": path_string(&outcome.dir),
+        "source": outcome.identity.source.as_str(),
+        "store_url": outcome.store_url.as_str(),
+        "authority": {
+            "path": path_string(&outcome.authority_path),
+            "source": outcome.identity.source.as_str(),
+            "max_authority": outcome.authority_ceiling.name(),
+        },
+        "identity": {
+            "source": outcome.identity.source.as_str(),
+            "issuer": outcome.identity.issuer.as_str(),
+            "max_authority": outcome.identity.max_authority.name(),
+            "scope": outcome.identity.scope.as_str(),
+            "active_grants_file": path_string(&outcome.identity.active_grants_file),
+            "grant_file": path_string(&outcome.identity.grant_file),
+            "source_key_path": path_string(&outcome.identity.source_key_path),
+            "env_file": path_string(&outcome.identity.env_file),
+            "reused": outcome.identity.reused,
+        },
+        "mcp_install": mcp_install_attempt_json(&outcome.mcp_install),
+        "next": {
+            "doctor_command": format!(
+                "dent8 doctor --agent {} --dir {} --write-check",
+                outcome.agent.cli_name(),
+                shell_quote(&outcome.dir.to_string_lossy())
+            ),
+        },
+        "message": outcome.message(),
+        "requested": {
+            "agent": args.agent.cli_name(),
+            "dir": args.dir.as_str(),
+            "authority": args.authority.map(|authority| authority.level().name()),
+            "issuer": args.issuer.as_deref(),
+            "issuer_key": args.issuer_key.as_deref(),
+            "identity_scope": args.identity_scope.as_str(),
+            "identity_expires_at_ms": args.identity_expires_at_ms,
+            "mcp_config": args.mcp_config.as_deref(),
+            "mcp_command": args.mcp_command.as_deref(),
+            "mcp_local_bin": args.mcp_local_bin,
+        },
+    })
+}
 
-    message.push_str("\n\n");
-    message.push_str(&install.message);
-    message.push_str("\n\nNext:\n  dent8 doctor --agent ");
-    message.push_str(args.agent.cli_name());
-    message.push_str(" --dir ");
-    message.push_str(&shell_quote(&dir.to_string_lossy()));
-    message.push_str(" --write-check");
-    CommandOutcome {
-        message,
-        exit_code: install.exit_code,
+#[cfg(feature = "identity")]
+fn agent_add_status(outcome: &AgentAddOutcome) -> &'static str {
+    if outcome.mcp_install.result.is_ok() {
+        "ok"
+    } else {
+        "partial"
     }
+}
+
+fn agent_add_error_json(args: &AgentAddArgs, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "agent add",
+        "agent": args.agent.cli_name(),
+        "dir": args.dir.as_str(),
+        "message": message,
+    })
 }
 
 #[cfg(feature = "identity")]
@@ -2299,11 +2388,6 @@ fn bundle_env_path_value(raw: &str, bundle_dir: &std::path::Path) -> std::path::
     }
 }
 
-struct CommandOutcome {
-    message: String,
-    exit_code: i32,
-}
-
 struct InitOutcome {
     message: String,
     exit_code: i32,
@@ -2316,7 +2400,7 @@ struct InitOutcome {
     store: InitStoreOutput,
     identity: InitIdentityOutput,
     witness: InitWitnessOutput,
-    mcp_install: Option<InitMcpInstallOutcome>,
+    mcp_install: Option<McpInstallAttempt>,
 }
 
 struct InitStoreOutput {
@@ -2326,7 +2410,7 @@ struct InitStoreOutput {
     summary: String,
 }
 
-struct InitMcpInstallOutcome {
+struct McpInstallAttempt {
     agent: InitAgent,
     dir: std::path::PathBuf,
     config: Option<String>,
@@ -2336,7 +2420,7 @@ struct InitMcpInstallOutcome {
     result: Result<PreparedMcpInstall, String>,
 }
 
-impl InitMcpInstallOutcome {
+impl McpInstallAttempt {
     fn message(&self) -> String {
         match &self.result {
             Ok(install) => install.message(),
@@ -2428,9 +2512,7 @@ fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
         args.agent,
     );
     let mcp_install = init_mcp_install(args, &dir)?;
-    let exit_code = mcp_install
-        .as_ref()
-        .map_or(0, InitMcpInstallOutcome::exit_code);
+    let exit_code = mcp_install.as_ref().map_or(0, McpInstallAttempt::exit_code);
     if let Some(install) = mcp_install.as_ref() {
         message.push_str("\n\n");
         message.push_str(&install.message());
@@ -2510,7 +2592,7 @@ fn init_base_message(
 fn init_mcp_install(
     args: &InitArgs,
     dir: &std::path::Path,
-) -> Result<Option<InitMcpInstallOutcome>, String> {
+) -> Result<Option<McpInstallAttempt>, String> {
     if !args.mcp.install_mcp {
         return Ok(None);
     }
@@ -2518,23 +2600,41 @@ fn init_mcp_install(
         .agent
         .ok_or_else(|| "`dent8 init --install-mcp` requires --agent".to_string())?;
     let mode = mcp_install_mode(args.mcp.mcp_dry_run, args.mcp.mcp_check);
+    Ok(Some(mcp_install_attempt(
+        agent,
+        dir,
+        args.mcp.mcp_config.clone(),
+        args.mcp.mcp_command.clone(),
+        args.mcp.mcp_local_bin,
+        mode,
+    )))
+}
+
+fn mcp_install_attempt(
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<String>,
+    command: Option<String>,
+    local_bin: bool,
+    mode: mcp_config::InstallMode,
+) -> McpInstallAttempt {
     let result = install_mcp_config_prepared_detail(
         agent,
         dir,
-        args.mcp.mcp_config.as_deref(),
-        args.mcp.mcp_command.as_deref(),
-        args.mcp.mcp_local_bin,
+        config.as_deref(),
+        command.as_deref(),
+        local_bin,
         mode,
     );
-    Ok(Some(InitMcpInstallOutcome {
+    McpInstallAttempt {
         agent,
         dir: dir.to_path_buf(),
-        config: args.mcp.mcp_config.clone(),
-        command: args.mcp.mcp_command.clone(),
-        local_bin: args.mcp.mcp_local_bin,
+        config,
+        command,
+        local_bin,
         mode,
         result,
-    }))
+    }
 }
 
 fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::Value {
@@ -2562,7 +2662,7 @@ fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::Value {
         },
         "identity": init_identity_json(&outcome.identity),
         "witness": init_witness_json(&outcome.witness),
-        "mcp_install": outcome.mcp_install.as_ref().map(init_mcp_install_json),
+        "mcp_install": outcome.mcp_install.as_ref().map(mcp_install_attempt_json),
         "next": {
             "doctor_command": format!("dent8 doctor --source {} --write-check", outcome.source),
             "agent_example": outcome.agent.map(InitAgent::example_path),
@@ -2638,7 +2738,7 @@ fn init_witness_json(witness: &InitWitnessOutput) -> serde_json::Value {
     })
 }
 
-fn init_mcp_install_json(install: &InitMcpInstallOutcome) -> serde_json::Value {
+fn mcp_install_attempt_json(install: &McpInstallAttempt) -> serde_json::Value {
     match &install.result {
         Ok(outcome) => serde_json::json!({
             "status": mcp_install_status(outcome),
@@ -2692,9 +2792,9 @@ fn install_mcp_config_prepared(
     command: Option<&str>,
     local_bin: bool,
     mode: mcp_config::InstallMode,
-) -> Result<CommandOutcome, String> {
+) -> Result<String, String> {
     install_mcp_config_prepared_detail(agent, dir, config, command, local_bin, mode)
-        .map(PreparedMcpInstall::command_outcome)
+        .map(|install| install.message())
 }
 
 fn install_mcp_config_prepared_detail(
@@ -2732,13 +2832,6 @@ impl PreparedMcpInstall {
 
     fn exit_code(&self) -> i32 {
         self.config.exit_code().max(self.prepared.exit_code)
-    }
-
-    fn command_outcome(self) -> CommandOutcome {
-        CommandOutcome {
-            message: self.message(),
-            exit_code: self.exit_code(),
-        }
     }
 }
 
@@ -3661,7 +3754,6 @@ fn repair_agent_mcp_config(
         use_local_bin,
         mcp_config::InstallMode::Write,
     )
-    .map(|outcome| outcome.message)
 }
 
 fn repair_agent_mcp_command(

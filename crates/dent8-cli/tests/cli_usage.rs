@@ -2292,6 +2292,67 @@ fn agent_add_rejects_file_store_bundle() {
     );
 }
 
+#[cfg(feature = "identity")]
+#[test]
+fn agent_add_error_emits_machine_readable_json() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+
+    let added = run_dent8(
+        &[
+            "--output",
+            "json",
+            "agent",
+            "add",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_eq!(added.status.code(), Some(1));
+    assert!(
+        stdout(&added).is_empty(),
+        "failed JSON command should not write stdout:\n{}",
+        stdout(&added)
+    );
+    let error = stderr_json(&added);
+    assert_eq!(error["status"], "failed");
+    assert_eq!(error["tool"], "agent add");
+    assert_eq!(error["agent"], "claude-code");
+    assert_eq!(error["dir"], dir);
+    assert!(
+        error["message"]
+            .as_str()
+            .expect("error message")
+            .contains("file-dev bundle")
+    );
+    assert!(
+        !temp.file(".dent8/identity-claude-code.env").exists(),
+        "agent add should fail before creating a second identity on a file-dev bundle"
+    );
+}
+
 #[cfg(all(feature = "identity", feature = "sqlite"))]
 #[test]
 fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
@@ -2378,6 +2439,78 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
             "doctor should validate installed MCP env for {agent}; stdout:\n{doctor_stdout}"
         );
     }
+}
+
+#[cfg(all(feature = "identity", feature = "sqlite"))]
+#[test]
+fn agent_add_emits_machine_readable_json() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex --store sqlite",
+    );
+
+    let added = run_dent8(
+        &[
+            "--output",
+            "json",
+            "agent",
+            "add",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--issuer-key",
+            &issuer_key,
+            "--mcp-command",
+            &mcp_command,
+        ],
+        &[],
+    );
+    assert_success(&added, "agent add --output json");
+    assert!(stderr(&added).is_empty(), "{}", stderr(&added));
+    let added = stdout_json(&added);
+    assert_eq!(added["status"], "ok");
+    assert_eq!(added["tool"], "agent add");
+    assert_eq!(added["agent"], "claude-code");
+    assert_eq!(added["source"], "source:claude-code");
+    assert_eq!(
+        added["store_url"],
+        format!("sqlite://{}", temp.file(".dent8/dent8.db").display())
+    );
+    assert_eq!(added["authority"]["max_authority"], "High");
+    assert_eq!(added["identity"]["reused"], false);
+    assert_eq!(
+        added["identity"]["env_file"],
+        fs::canonicalize(temp.file(".dent8/identity-claude-code.env"))
+            .expect("identity env path")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(added["mcp_install"]["status"], "ok");
+    assert_eq!(added["mcp_install"]["command_written"], mcp_command);
+    assert_eq!(added["mcp_install"]["config"]["written"], true);
+    assert!(
+        temp.file(".dent8/identity-claude-code.env").exists(),
+        "agent add should create a per-source identity env"
+    );
 }
 
 #[cfg(all(feature = "identity", feature = "sqlite"))]

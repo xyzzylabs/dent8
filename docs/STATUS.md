@@ -51,7 +51,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   patches the selected agent's MCP config, prints the resulting file, and prints the follow-up
   `dent8 doctor --agent <profile> --dir <dir> --write-check` command. If a bundle has multiple
   trusted issuers, pass `--issuer`; Hecate still needs `--mcp-config` because there is no
-  stable project-local config path to infer.
+  stable project-local config path to infer. Supports `--output json` with structured identity,
+  authority, store, MCP install, and follow-up doctor fields.
 - **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND|--mcp-local-bin] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
@@ -293,8 +294,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
   data stays plain). The global `--output text|json` flag currently supports the write
   commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
-  `authority`, `identity status`, `doctor`, and `mcp install`; unsupported commands fail closed with a
-  targeted usage error rather than falling back to prose.
+  `agent add`, `authority`, `identity status`, `doctor`, and `mcp install`; unsupported
+  commands fail closed with a targeted usage error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload

@@ -82,7 +82,7 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   uses `clap` with named write arguments, targeted usage errors, global
   `--color auto|always|never`, machine-readable `--output json` for write commands,
   `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`, `authority`,
-  `identity status`, `doctor`, and `mcp install`, `--version`, and
+  `agent add`, `identity status`, `doctor`, and `mcp install`, `--version`, and
   `dent8 completions <bash|elvish|fish|powershell|zsh>`.
 - **MCP server** (`dent8 mcp serve`): the full belief surface as stdio JSON-RPC tools +
   readable resources, through the same firewall ([examples/mcp/](examples/mcp/)). Adds
