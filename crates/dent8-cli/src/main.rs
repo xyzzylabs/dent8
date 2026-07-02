@@ -32,9 +32,8 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, init, agent add, authority, identity bootstrap, \
-                                      identity status, identity repair-env, identity \
-                                      rotate-source, doctor, mcp install";
+                                      eval, init, agent add, authority, identity <subcommand>, \
+                                      doctor, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -302,12 +301,7 @@ impl CliCommand {
                     command: AgentCommand::Add(_),
                 })
                 | Self::Authority(_)
-                | Self::Identity(IdentityArgs {
-                    command: IdentityCommand::Bootstrap(_)
-                        | IdentityCommand::Status(_)
-                        | IdentityCommand::RepairEnv(_)
-                        | IdentityCommand::RotateSource(_),
-                })
+                | Self::Identity(_)
                 | Self::Doctor(_)
                 | Self::Mcp(McpArgs {
                     command: McpCommand::Install(_),
@@ -1151,12 +1145,12 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
                     IdentityCommand::Status(_) => "identity status",
                     IdentityCommand::RepairEnv(_) => "identity repair-env",
                     IdentityCommand::RotateSource(_) => "identity rotate-source",
-                    IdentityCommand::IssuerKeygen(_)
-                    | IdentityCommand::AgentKeygen(_)
-                    | IdentityCommand::TrustAdd(_)
-                    | IdentityCommand::TrustList
-                    | IdentityCommand::GrantIssue(_)
-                    | IdentityCommand::GrantVerify(_) => "identity",
+                    IdentityCommand::IssuerKeygen(_) => "identity issuer-keygen",
+                    IdentityCommand::AgentKeygen(_) => "identity agent-keygen",
+                    IdentityCommand::TrustAdd(_) => "identity trust-add",
+                    IdentityCommand::TrustList => "identity trust-list",
+                    IdentityCommand::GrantIssue(_) => "identity grant-issue",
+                    IdentityCommand::GrantVerify(_) => "identity grant-verify",
                 };
                 print_json_stderr(
                     &serde_json::json!({
@@ -1198,10 +1192,14 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             args.expires_at_ms,
             output,
         ),
-        IdentityCommand::IssuerKeygen(args) => identity::issuer_keygen(&args.out),
-        IdentityCommand::AgentKeygen(args) => identity::agent_keygen(&args.source, &args.out),
-        IdentityCommand::TrustAdd(args) => identity::trust_add(&args.issuer, &args.public_key),
-        IdentityCommand::TrustList => identity::trust_list(),
+        IdentityCommand::IssuerKeygen(args) => identity::issuer_keygen(&args.out, output),
+        IdentityCommand::AgentKeygen(args) => {
+            identity::agent_keygen(&args.source, &args.out, output)
+        }
+        IdentityCommand::TrustAdd(args) => {
+            identity::trust_add(&args.issuer, &args.public_key, output)
+        }
+        IdentityCommand::TrustList => identity::trust_list(output),
         IdentityCommand::GrantIssue(args) => identity::grant_issue(
             &args.source,
             &args.public_key,
@@ -1211,8 +1209,9 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             &args.out,
             args.scope.as_deref(),
             args.expires_at_ms,
+            output,
         ),
-        IdentityCommand::GrantVerify(args) => identity::grant_verify(&args.grant),
+        IdentityCommand::GrantVerify(args) => identity::grant_verify(&args.grant, output),
     }
 }
 

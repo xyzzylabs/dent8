@@ -3687,6 +3687,140 @@ fn identity_lifecycle_commands_emit_machine_readable_json() {
 
 #[cfg(feature = "identity")]
 #[test]
+#[allow(clippy::too_many_lines)]
+fn identity_artifact_commands_emit_machine_readable_json() {
+    let temp = TempDir::new();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let source_key = temp.file("codex.key").to_string_lossy().into_owned();
+    let trust = temp.file("trust.json").to_string_lossy().into_owned();
+    let grant = temp.file("codex.grant.json").to_string_lossy().into_owned();
+
+    let issuer_keygen = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "issuer-keygen",
+            "--out",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&issuer_keygen, "identity issuer-keygen --output json");
+    assert!(
+        stderr(&issuer_keygen).is_empty(),
+        "{}",
+        stderr(&issuer_keygen)
+    );
+    let issuer_keygen = stdout_json(&issuer_keygen);
+    assert_eq!(issuer_keygen["status"], "ok");
+    assert_eq!(issuer_keygen["tool"], "identity issuer-keygen");
+    assert_eq!(issuer_keygen["private_key_path"], issuer_key);
+    assert!(temp.file("owner.key.pub").exists());
+
+    let agent = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "agent-keygen",
+            "source:codex",
+            "--out",
+            &source_key,
+        ],
+        &[],
+    );
+    assert_success(&agent, "identity agent-keygen --output json");
+    assert!(stderr(&agent).is_empty(), "{}", stderr(&agent));
+    let agent = stdout_json(&agent);
+    assert_eq!(agent["status"], "ok");
+    assert_eq!(agent["tool"], "identity agent-keygen");
+    assert_eq!(agent["source"], "source:codex");
+    assert!(temp.file("codex.key.pub").exists());
+
+    let issuer_pub = temp.file("owner.key.pub").to_string_lossy().into_owned();
+    let trusted = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "trust-add",
+            "owner",
+            &issuer_pub,
+        ],
+        &[("DENT8_TRUST", &trust)],
+    );
+    assert_success(&trusted, "identity trust-add --output json");
+    assert!(stderr(&trusted).is_empty(), "{}", stderr(&trusted));
+    let trusted = stdout_json(&trusted);
+    assert_eq!(trusted["status"], "ok");
+    assert_eq!(trusted["tool"], "identity trust-add");
+    assert_eq!(trusted["issuer"], "owner");
+    assert_eq!(trusted["path"], trust);
+
+    let listed = run_dent8(
+        &["--output", "json", "identity", "trust-list"],
+        &[("DENT8_TRUST", &trust)],
+    );
+    assert_success(&listed, "identity trust-list --output json");
+    assert!(stderr(&listed).is_empty(), "{}", stderr(&listed));
+    let listed = stdout_json(&listed);
+    assert_eq!(listed["status"], "ok");
+    assert_eq!(listed["tool"], "identity trust-list");
+    assert_eq!(listed["count"], 1);
+    assert_eq!(listed["issuers"][0]["issuer"], "owner");
+
+    let source_pub = temp.file("codex.key.pub").to_string_lossy().into_owned();
+    let grant_issued = run_dent8(
+        &[
+            "--output",
+            "json",
+            "identity",
+            "grant-issue",
+            "source:codex",
+            "--public-key",
+            &source_pub,
+            "--max",
+            "high",
+            "--issuer",
+            "owner",
+            "--issuer-key",
+            &issuer_key,
+            "--out",
+            &grant,
+        ],
+        &[],
+    );
+    assert_success(&grant_issued, "identity grant-issue --output json");
+    assert!(
+        stderr(&grant_issued).is_empty(),
+        "{}",
+        stderr(&grant_issued)
+    );
+    let grant_issued = stdout_json(&grant_issued);
+    assert_eq!(grant_issued["status"], "ok");
+    assert_eq!(grant_issued["tool"], "identity grant-issue");
+    assert_eq!(grant_issued["source"], "source:codex");
+    assert_eq!(grant_issued["issuer"], "owner");
+    assert_eq!(grant_issued["max_authority"], "High");
+    assert!(temp.file("codex.grant.json").exists());
+
+    let verified = run_dent8(
+        &["--output", "json", "identity", "grant-verify", &grant],
+        &[("DENT8_TRUST", &trust)],
+    );
+    assert_success(&verified, "identity grant-verify --output json");
+    assert!(stderr(&verified).is_empty(), "{}", stderr(&verified));
+    let verified = stdout_json(&verified);
+    assert_eq!(verified["status"], "ok");
+    assert_eq!(verified["tool"], "identity grant-verify");
+    assert_eq!(verified["path"], grant);
+    assert_eq!(verified["source"], "source:codex");
+    assert_eq!(verified["max_authority"], "High");
+}
+
+#[cfg(feature = "identity")]
+#[test]
 fn identity_env_filename_sanitizes_source_suffix() {
     let temp = TempDir::new();
     let dir = temp.file("dent8");

@@ -219,6 +219,90 @@ impl RotateSourceOutput {
 }
 
 #[derive(Clone, Debug)]
+struct KeygenOutput {
+    label: String,
+    private_key_path: PathBuf,
+    public_key_path: PathBuf,
+}
+
+impl KeygenOutput {
+    fn message(&self) -> String {
+        format!(
+            "wrote {} signing key to {}\nwrote public key to {}",
+            self.label,
+            self.private_key_path.display(),
+            self.public_key_path.display()
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TrustAddOutput {
+    path: String,
+    issuer: String,
+    public_key: String,
+}
+
+impl TrustAddOutput {
+    fn message(&self) -> String {
+        format!("trusted issuer {} at {}", self.issuer, self.path)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TrustListOutput {
+    path: String,
+    trust: Option<TrustedIssuers>,
+}
+
+impl TrustListOutput {
+    fn message(&self) -> String {
+        match &self.trust {
+            None => format!("no identity trust registry at {}", self.path),
+            Some(trust) if trust.issuers.is_empty() => {
+                "identity trust registry is empty".to_string()
+            }
+            Some(trust) => trust
+                .issuers
+                .iter()
+                .map(|(issuer, trusted)| format!("{issuer}  public_key={}", trusted.public_key))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GrantIssueOutput {
+    out: String,
+    grant: SourceGrantPayload,
+}
+
+impl GrantIssueOutput {
+    fn message(&self) -> String {
+        format!(
+            "issued signed grant for {} -> {}",
+            self.grant.source, self.out
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GrantVerifyOutput {
+    path: String,
+    grant: SourceGrantPayload,
+}
+
+impl GrantVerifyOutput {
+    fn message(&self) -> String {
+        format!(
+            "OK: grant for {} max={:?} issuer={}",
+            self.grant.source, self.grant.max_authority, self.grant.issuer
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 struct BootstrapPlan {
     dir: PathBuf,
     identities_dir: PathBuf,
@@ -490,24 +574,112 @@ fn identity_bootstrap_error_json(
     })
 }
 
-pub(crate) fn issuer_keygen(out: &str) -> i32 {
-    keygen(out, "issuer")
-}
-
-pub(crate) fn agent_keygen(source: &str, out: &str) -> i32 {
-    if let Err(error) = parse_source(source) {
-        eprintln!("{error}");
-        return 2;
+pub(crate) fn issuer_keygen(out: &str, output: CliOutput) -> i32 {
+    match keygen_outcome(out, "issuer") {
+        Ok(result) => match output {
+            CliOutput::Text => {
+                println!("{}", result.message());
+                0
+            }
+            CliOutput::Json => print_json_stdout(&identity_keygen_json(
+                "identity issuer-keygen",
+                None,
+                out,
+                &result,
+            )),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &identity_keygen_error_json("identity issuer-keygen", None, out, &error),
+                1,
+            ),
+        },
     }
-    keygen(out, source)
 }
 
-pub(crate) fn trust_add(issuer: &str, public_key_path: &str) -> i32 {
+pub(crate) fn agent_keygen(source: &str, out: &str, output: CliOutput) -> i32 {
+    if let Err(error) = parse_source(source) {
+        return match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                2
+            }
+            CliOutput::Json => print_json_stderr(
+                &identity_keygen_error_json("identity agent-keygen", Some(source), out, &error),
+                2,
+            ),
+        };
+    }
+    match keygen_outcome(out, source) {
+        Ok(result) => match output {
+            CliOutput::Text => {
+                println!("{}", result.message());
+                0
+            }
+            CliOutput::Json => print_json_stdout(&identity_keygen_json(
+                "identity agent-keygen",
+                Some(source),
+                out,
+                &result,
+            )),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &identity_keygen_error_json("identity agent-keygen", Some(source), out, &error),
+                1,
+            ),
+        },
+    }
+}
+
+fn identity_keygen_json(
+    tool: &'static str,
+    source: Option<&str>,
+    out: &str,
+    output: &KeygenOutput,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": tool,
+        "source": source,
+        "private_key_path": path_string(&output.private_key_path),
+        "public_key_path": path_string(&output.public_key_path),
+        "message": output.message(),
+        "requested": {
+            "out": out,
+            "source": source,
+        },
+    })
+}
+
+fn identity_keygen_error_json(
+    tool: &'static str,
+    source: Option<&str>,
+    out: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": tool,
+        "source": source,
+        "out": out,
+        "message": message,
+    })
+}
+
+pub(crate) fn trust_add(issuer: &str, public_key_path: &str, output: CliOutput) -> i32 {
     let public_key = match read_public_key_hex(public_key_path) {
         Ok(public_key) => public_key,
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_trust_add_error(issuer, public_key_path, &error, 2, output);
         }
     };
     let path = trust_path();
@@ -515,8 +687,7 @@ pub(crate) fn trust_add(issuer: &str, public_key_path: &str) -> i32 {
         Ok(Some(trust)) => trust,
         Ok(None) => TrustedIssuers::default(),
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_trust_add_error(issuer, public_key_path, &error, 2, output);
         }
     };
     trust.issuers.insert(
@@ -527,37 +698,127 @@ pub(crate) fn trust_add(issuer: &str, public_key_path: &str) -> i32 {
     );
     match save_trust_at(&path, &trust) {
         Ok(()) => {
-            println!("trusted issuer {issuer} at {path}");
-            0
+            let result = TrustAddOutput {
+                path,
+                issuer: issuer.to_string(),
+                public_key,
+            };
+            match output {
+                CliOutput::Text => {
+                    println!("{}", result.message());
+                    0
+                }
+                CliOutput::Json => {
+                    print_json_stdout(&identity_trust_add_json(public_key_path, &result))
+                }
+            }
         }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Err(error) => identity_trust_add_error(issuer, public_key_path, &error, 1, output),
     }
 }
 
-pub(crate) fn trust_list() -> i32 {
-    match load_trust_at(&trust_path(), false) {
-        Ok(None) => {
-            println!("no identity trust registry at {}", trust_path());
-            0
+fn identity_trust_add_error(
+    issuer: &str,
+    public_key_path: &str,
+    message: &str,
+    code: i32,
+    output: CliOutput,
+) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("{message}");
+            code
         }
-        Ok(Some(trust)) if trust.issuers.is_empty() => {
-            println!("identity trust registry is empty");
-            0
-        }
-        Ok(Some(trust)) => {
-            for (issuer, trusted) in trust.issuers {
-                println!("{issuer}  public_key={}", trusted.public_key);
-            }
-            0
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            2
-        }
+        CliOutput::Json => print_json_stderr(
+            &identity_trust_add_error_json(issuer, public_key_path, message),
+            code,
+        ),
     }
+}
+
+fn identity_trust_add_json(public_key_path: &str, output: &TrustAddOutput) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity trust-add",
+        "path": output.path.as_str(),
+        "issuer": output.issuer.as_str(),
+        "public_key": output.public_key.as_str(),
+        "message": output.message(),
+        "requested": {
+            "issuer": output.issuer.as_str(),
+            "public_key_path": public_key_path,
+        },
+    })
+}
+
+fn identity_trust_add_error_json(
+    issuer: &str,
+    public_key_path: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity trust-add",
+        "issuer": issuer,
+        "public_key_path": public_key_path,
+        "message": message,
+    })
+}
+
+pub(crate) fn trust_list(output: CliOutput) -> i32 {
+    let path = trust_path();
+    match load_trust_at(&path, false) {
+        Ok(trust) => {
+            let result = TrustListOutput { path, trust };
+            match output {
+                CliOutput::Text => {
+                    println!("{}", result.message());
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&identity_trust_list_json(&result)),
+            }
+        }
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                2
+            }
+            CliOutput::Json => print_json_stderr(&identity_trust_list_error_json(&path, &error), 2),
+        },
+    }
+}
+
+fn identity_trust_list_json(output: &TrustListOutput) -> serde_json::Value {
+    let issuers = output.trust.as_ref().map_or_else(Vec::new, |trust| {
+        trust
+            .issuers
+            .iter()
+            .map(|(issuer, trusted)| {
+                serde_json::json!({
+                    "issuer": issuer,
+                    "public_key": trusted.public_key.as_str(),
+                })
+            })
+            .collect()
+    });
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity trust-list",
+        "path": output.path.as_str(),
+        "registry_present": output.trust.is_some(),
+        "count": issuers.len(),
+        "issuers": issuers,
+        "message": output.message(),
+    })
+}
+
+fn identity_trust_list_error_json(path: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity trust-list",
+        "path": path,
+        "message": message,
+    })
 }
 
 pub(crate) fn status(
@@ -1872,23 +2133,48 @@ pub(crate) fn grant_issue(
     out: &str,
     scope: Option<&str>,
     expires_at_ms: Option<i64>,
+    output: CliOutput,
 ) -> i32 {
     if let Err(error) = parse_source(source) {
-        eprintln!("{error}");
-        return 2;
+        return identity_grant_issue_error(
+            source,
+            public_key_path,
+            issuer,
+            issuer_key_path,
+            out,
+            &error,
+            2,
+            output,
+        );
     }
     let public_key = match read_public_key_hex(public_key_path) {
         Ok(public_key) => public_key,
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_grant_issue_error(
+                source,
+                public_key_path,
+                issuer,
+                issuer_key_path,
+                out,
+                &error,
+                2,
+                output,
+            );
         }
     };
     let issuer_key = match load_signing_key(issuer_key_path) {
         Ok(key) => key,
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_grant_issue_error(
+                source,
+                public_key_path,
+                issuer,
+                issuer_key_path,
+                out,
+                &error,
+                2,
+                output,
+            );
         }
     };
     let grant = SourceGrantPayload {
@@ -1903,8 +2189,16 @@ pub(crate) fn grant_issue(
     let message = match framed(GRANT_DOMAIN, &grant) {
         Ok(message) => message,
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_grant_issue_error(
+                source,
+                public_key_path,
+                issuer,
+                issuer_key_path,
+                out,
+                &error,
+                2,
+                output,
+            );
         }
     };
     let signed = SignedSourceGrant {
@@ -1913,48 +2207,187 @@ pub(crate) fn grant_issue(
     };
     match write_json(out, &signed) {
         Ok(()) => {
-            println!("issued signed grant for {source} -> {out}");
-            0
+            let result = GrantIssueOutput {
+                out: out.to_string(),
+                grant: signed.grant,
+            };
+            match output {
+                CliOutput::Text => {
+                    println!("{}", result.message());
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&identity_grant_issue_json(
+                    public_key_path,
+                    issuer_key_path,
+                    &result,
+                )),
+            }
         }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Err(error) => identity_grant_issue_error(
+            source,
+            public_key_path,
+            issuer,
+            issuer_key_path,
+            out,
+            &error,
+            1,
+            output,
+        ),
     }
 }
 
-pub(crate) fn grant_verify(path: &str) -> i32 {
+pub(crate) fn grant_verify(path: &str, output: CliOutput) -> i32 {
     let trust = match load_trust_at(&trust_path(), true) {
         Ok(Some(trust)) => trust,
         Ok(None) => {
-            eprintln!("identity trust registry required but not found");
-            return 2;
+            return identity_grant_verify_error(
+                path,
+                "identity trust registry required but not found",
+                2,
+                output,
+            );
         }
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_grant_verify_error(path, &error, 2, output);
         }
     };
     let grant = match load_grant(path) {
         Ok(grant) => grant,
         Err(error) => {
-            eprintln!("{error}");
-            return 2;
+            return identity_grant_verify_error(path, &error, 2, output);
         }
     };
     match verify_grant(&grant, &trust, now_millis()) {
         Ok(()) => {
-            println!(
-                "OK: grant for {} max={:?} issuer={}",
-                grant.grant.source, grant.grant.max_authority, grant.grant.issuer
-            );
-            0
+            let result = GrantVerifyOutput {
+                path: path.to_string(),
+                grant: grant.grant,
+            };
+            match output {
+                CliOutput::Text => {
+                    println!("{}", result.message());
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&identity_grant_verify_json(&result)),
+            }
         }
-        Err(error) => {
-            eprintln!("{error}");
-            1
+        Err(error) => identity_grant_verify_error(path, &error, 1, output),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn identity_grant_issue_error(
+    source: &str,
+    public_key_path: &str,
+    issuer: &str,
+    issuer_key_path: &str,
+    out: &str,
+    message: &str,
+    code: i32,
+    output: CliOutput,
+) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("{message}");
+            code
+        }
+        CliOutput::Json => print_json_stderr(
+            &identity_grant_issue_error_json(
+                source,
+                public_key_path,
+                issuer,
+                issuer_key_path,
+                out,
+                message,
+            ),
+            code,
+        ),
+    }
+}
+
+fn identity_grant_issue_json(
+    public_key_path: &str,
+    issuer_key_path: &str,
+    output: &GrantIssueOutput,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity grant-issue",
+        "out": output.out.as_str(),
+        "source": output.grant.source.as_str(),
+        "issuer": output.grant.issuer.as_str(),
+        "max_authority": output.grant.max_authority.name(),
+        "scope": output.grant.scope.as_deref(),
+        "expires_at_ms": output.grant.expires_at_ms,
+        "public_key": output.grant.public_key.as_str(),
+        "message": output.message(),
+        "requested": {
+            "source": output.grant.source.as_str(),
+            "public_key_path": public_key_path,
+            "issuer": output.grant.issuer.as_str(),
+            "issuer_key": issuer_key_path,
+            "out": output.out.as_str(),
+            "max_authority": output.grant.max_authority.name(),
+            "scope": output.grant.scope.as_deref(),
+            "expires_at_ms": output.grant.expires_at_ms,
+        },
+    })
+}
+
+fn identity_grant_issue_error_json(
+    source: &str,
+    public_key_path: &str,
+    issuer: &str,
+    issuer_key_path: &str,
+    out: &str,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity grant-issue",
+        "source": source,
+        "public_key_path": public_key_path,
+        "issuer": issuer,
+        "issuer_key": issuer_key_path,
+        "out": out,
+        "message": message,
+    })
+}
+
+fn identity_grant_verify_error(path: &str, message: &str, code: i32, output: CliOutput) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("{message}");
+            code
+        }
+        CliOutput::Json => {
+            print_json_stderr(&identity_grant_verify_error_json(path, message), code)
         }
     }
+}
+
+fn identity_grant_verify_json(output: &GrantVerifyOutput) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "tool": "identity grant-verify",
+        "path": output.path.as_str(),
+        "source": output.grant.source.as_str(),
+        "issuer": output.grant.issuer.as_str(),
+        "max_authority": output.grant.max_authority.name(),
+        "scope": output.grant.scope.as_deref(),
+        "expires_at_ms": output.grant.expires_at_ms,
+        "public_key": output.grant.public_key.as_str(),
+        "message": output.message(),
+    })
+}
+
+fn identity_grant_verify_error_json(path: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "identity grant-verify",
+        "path": path,
+        "message": message,
+    })
 }
 
 pub(crate) fn bootstrap_bundle(
@@ -2110,40 +2543,28 @@ fn preflight_bootstrap_plan(plan: &BootstrapPlan) -> Result<(), String> {
     preflight_issuer_key(&plan.issuer_key_path)
 }
 
-fn keygen(out: &str, label: &str) -> i32 {
+fn keygen_outcome(out: &str, label: &str) -> Result<KeygenOutput, String> {
     let out = Path::new(out);
     if out.exists() {
-        eprintln!(
+        return Err(format!(
             "{} already exists; refusing to overwrite a signing key",
             out.display()
-        );
-        return 1;
+        ));
     }
     let public = public_key_path(out);
     if public.exists() {
-        eprintln!(
+        return Err(format!(
             "{} already exists; refusing to overwrite a public key",
             public.display()
-        );
-        return 1;
+        ));
     }
-    let signing = match generate_signing_key() {
-        Ok(signing) => signing,
-        Err(error) => {
-            eprintln!("{error}");
-            return 1;
-        }
-    };
-    if let Err(error) = write_key_pair(out, &signing) {
-        eprintln!("{error}");
-        return 1;
-    }
-    println!(
-        "wrote {label} signing key to {}\nwrote public key to {}",
-        out.display(),
-        public.display()
-    );
-    0
+    let signing = generate_signing_key()?;
+    write_key_pair(out, &signing)?;
+    Ok(KeygenOutput {
+        label: label.to_string(),
+        private_key_path: out.to_path_buf(),
+        public_key_path: public,
+    })
 }
 
 fn generate_signing_key() -> Result<SigningKey, String> {

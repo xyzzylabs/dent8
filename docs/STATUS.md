@@ -237,8 +237,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   operator issuer key outside the project/agent bundle, then creates a source key, trust
   registry, active-grant registry, grant, and shell-loadable `.dent8/identity-<source>.env` for
   one source. `status` checks the bundle/trust/active-grant/grant/source key/issuer key and
-  reports expiry. `bootstrap`, `status`, `repair-env`, and `rotate-source` support `--output
-  json` with structured paths and follow-up commands. `repair-env` rewrites generated
+  reports expiry. All identity subcommands support `--output json` with structured paths,
+  artifact metadata, and follow-up commands where applicable. `repair-env` rewrites generated
   `.dent8/identity-<source>.env` and, when
   missing, restores the
   active-grant entry from the current signed grant after verifying trust, grant, and source key
@@ -295,9 +295,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
   data stays plain). The global `--output text|json` flag currently supports the write
   commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
-  `agent add`, `authority`, `identity bootstrap`, `identity status`, `identity repair-env`,
-  `identity rotate-source`, `doctor`, and `mcp install`; unsupported commands fail closed with a
-  targeted usage error rather than falling back to prose.
+  `agent add`, `authority`, `identity <subcommand>`, `doctor`, and `mcp install`; unsupported
+  commands fail closed with a targeted usage error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload
