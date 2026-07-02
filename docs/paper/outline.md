@@ -9,7 +9,7 @@ tested: `dent8-core` (model, lifecycle state machine, typed IDs, **authority arb
 event hashing, the **unbypassable write-path firewall** with anti-laundering, the
 **coding-agent predicate registry**, a **persistent file-backed CLI**
 (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`,
-plus `verify`/`conflicts`/`eval`), the **`dent8-evals`
+plus `facts list`/`verify`/`conflicts`/`eval`), the **`dent8-evals`
 adversarial corpus** (firewall vs recency-only baseline), an **external HMAC anchor** for
 tamper-resistance, and an **asymmetric (publicly-verifiable) signed-tree-head anchor**
 (Ed25519, feature-gated). The CLI/MCP run on the **operational Postgres adapter** (the

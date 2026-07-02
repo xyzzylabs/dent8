@@ -44,6 +44,99 @@ fn alice_fact_round_trips_with_subject_and_metadata_flags() {
 }
 
 #[test]
+fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert alice fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:dent8",
+                "database",
+                "sqlite",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &envs,
+        ),
+        "assert repo fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "diagnostic:doctor-test",
+                "dent8.write_check",
+                "ok",
+                "--authority",
+                "high",
+                "--source",
+                "source:dent8",
+            ],
+            &envs,
+        ),
+        "assert diagnostic fact",
+    );
+
+    let listed = run_dent8(&["facts", "list"], &envs);
+    assert_success(&listed, "facts list");
+    let listed_stdout = stdout(&listed);
+    assert!(
+        listed_stdout.contains("2 dent8 fact stream(s)"),
+        "{listed_stdout}"
+    );
+    assert!(listed_stdout.contains("dent8://person/alice/favorite_drink"));
+    assert!(listed_stdout.contains("dent8://repo/dent8/database"));
+    assert!(
+        listed_stdout.contains("1 diagnostic stream(s) hidden"),
+        "{listed_stdout}"
+    );
+    assert!(!listed_stdout.contains("diagnostic/doctor-test"));
+
+    let filtered = run_dent8(&["facts", "list", "--kind", "repo"], &envs);
+    assert_success(&filtered, "facts list --kind repo");
+    let filtered_stdout = stdout(&filtered);
+    assert!(filtered_stdout.contains("dent8://repo/dent8/database"));
+    assert!(!filtered_stdout.contains("dent8://person/alice/favorite_drink"));
+
+    let diagnostics = run_dent8(
+        &[
+            "facts",
+            "list",
+            "--kind",
+            "diagnostic",
+            "--include-diagnostics",
+        ],
+        &envs,
+    );
+    assert_success(&diagnostics, "facts list diagnostics");
+    let diagnostics_stdout = stdout(&diagnostics);
+    assert!(diagnostics_stdout.contains("1 dent8 fact stream(s)"));
+    assert!(diagnostics_stdout.contains("dent8://diagnostic/doctor-test/dent8.write_check"));
+    assert!(!diagnostics_stdout.contains("hidden"));
+}
+
+#[test]
 fn low_authority_supersede_is_rejected_and_original_fact_remains() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

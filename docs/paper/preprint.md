@@ -255,7 +255,8 @@ un-arbitrated write path *for those invariants*; the per-predicate authority flo
 uniqueness are an application policy the CLI applies before `append` (§6). A documented
 trusted-reload path (`from_trusted_events`) is the only way to rehydrate an
 already-admitted log without re-arbitration. A persistent, file-backed CLI exposes the
-full lifecycle — `assert`, `supersede`, `retract`, `contradict`, `explain`, `replay` —
+full lifecycle — `assert`, `supersede`, `retract`, `contradict`, `reinforce`, `expire`,
+`derive`, `explain`, `replay`, plus `facts list`, `verify`, `conflicts`, and `eval` —
 composing across process invocations and re-validating log integrity on load. We are
 explicit (§10) that the stock binary uses a single-writer **dev** store; the operational,
 transactional Postgres backend (`PostgresEventStore`) is built, **DB-verified**, and **driven

@@ -119,6 +119,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 replay <subject> <predicate>`** — prints the full ordered event history
   (every assertion, supersession, retraction, contradiction, with authority + source) and
   the current state — *why* the fact is what it is.
+- **`dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE]
+  [--include-diagnostics]`** — lists distinct fact streams known to dent8 as
+  `dent8://{kind}/{key}/{predicate}` resources for human browsing. It hides internal
+  doctor/write-check diagnostic streams by default, matching MCP `list_facts`; pass
+  `--include-diagnostics` when auditing setup noise.
 - **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
   global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
@@ -435,8 +440,9 @@ subject+predicate.
   needs key distribution/rotation and stronger secret storage.
 - **Persistent CLI/MCP remaining gaps — productization, not persistence.** The full surface — `assert` /
   `supersede` / `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` /
-  `replay` / `verify` / `conflicts` / `eval` — across invocations is **Runnable** (above) over
-  the file dev store, and over **Postgres** with `DENT8_STORE_URL` + a `--features postgres`
+  `replay` / `facts list` / `verify` / `conflicts` / `eval` — across invocations is
+  **Runnable** (above) over the file dev store, and over **Postgres** with
+  `DENT8_STORE_URL` + a `--features postgres`
   build (selected in `load_store`/`append_events` via `connect_backend`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
   as the file path) — **CI-verified** end-to-end against live Postgres (the `postgres` job runs

@@ -104,6 +104,9 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Contradict(args)) => cmd_contradict(&args),
         Some(CliCommand::Explain(args)) => cmd_explain(&args),
         Some(CliCommand::Replay(args)) => cmd_replay(&args),
+        Some(CliCommand::Facts(args)) => match args.command {
+            FactsCommand::List(args) => cmd_facts_list(&args),
+        },
         Some(CliCommand::Authority(args)) => match args.command {
             AuthorityCommand::List => cmd_authority_list(),
             AuthorityCommand::Add(args) => cmd_authority_add(
@@ -219,6 +222,8 @@ enum CliCommand {
     Explain(ReadFactArgs),
     /// Replay the full event history for a fact.
     Replay(ReadFactArgs),
+    /// Browse fact streams known to dent8.
+    Facts(FactsArgs),
     /// Check log integrity.
     Verify,
     /// List contested facts.
@@ -309,6 +314,34 @@ struct ReadFactArgs {
     /// Predicate within the subject's fact stream.
     #[arg(value_parser = parse_predicate)]
     predicate: String,
+}
+
+#[derive(Args, Debug)]
+struct FactsArgs {
+    #[command(subcommand)]
+    command: FactsCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum FactsCommand {
+    /// List fact streams, hiding internal diagnostic streams by default.
+    List(FactsListArgs),
+}
+
+#[derive(Args, Debug)]
+struct FactsListArgs {
+    /// Only show facts with this subject kind.
+    #[arg(long, value_name = "KIND", value_parser = parse_non_empty_filter)]
+    kind: Option<String>,
+    /// Only show facts with this subject key.
+    #[arg(long, value_name = "KEY", value_parser = parse_non_empty_filter)]
+    key: Option<String>,
+    /// Only show facts with this predicate.
+    #[arg(long, value_name = "PREDICATE", value_parser = parse_predicate)]
+    predicate: Option<String>,
+    /// Include dent8 internal diagnostic streams, such as doctor write-check facts.
+    #[arg(long)]
+    include_diagnostics: bool,
 }
 
 #[derive(Args, Debug)]
@@ -981,6 +1014,14 @@ impl FromStr for CliSubject {
 fn parse_predicate(raw: &str) -> Result<String, String> {
     Predicate::new(raw).map_err(|error| format!("invalid predicate '{raw}': {error}"))?;
     Ok(raw.to_string())
+}
+
+fn parse_non_empty_filter(raw: &str) -> Result<String, String> {
+    if raw.is_empty() {
+        Err("filter value must not be empty".to_string())
+    } else {
+        Ok(raw.to_string())
+    }
 }
 
 fn parse_source(raw: &str) -> Result<String, String> {
@@ -5794,6 +5835,77 @@ fn op_list_subjects(
 fn is_diagnostic_fact_stream(kind: &str, key: &str, predicate: &str) -> bool {
     (kind == "diagnostic" && predicate.starts_with("dent8."))
         || (kind == "person" && key.starts_with("alice-doctor-") && predicate == "favorite_drink")
+}
+
+fn fact_stream_matches(kind: &str, key: &str, predicate: &str, filters: &FactsListArgs) -> bool {
+    filters.kind.as_deref().is_none_or(|want| kind == want)
+        && filters.key.as_deref().is_none_or(|want| key == want)
+        && filters
+            .predicate
+            .as_deref()
+            .is_none_or(|want| predicate == want)
+}
+
+fn filters_are_empty(filters: &FactsListArgs) -> bool {
+    filters.kind.is_none() && filters.key.is_none() && filters.predicate.is_none()
+}
+
+/// List distinct fact streams in the durable store. This is the human CLI counterpart to
+/// MCP `list_facts`, with the same default hiding of internal doctor/write-check diagnostics.
+fn op_facts_list(path: &str, filters: &FactsListArgs) -> Result<String, OpError> {
+    let all_subjects = op_list_subjects(path, true)?;
+    let mut visible = Vec::new();
+    let mut hidden_diagnostics_count = 0usize;
+    for (kind, key, predicate) in all_subjects {
+        if !fact_stream_matches(&kind, &key, &predicate, filters) {
+            continue;
+        }
+        if !filters.include_diagnostics && is_diagnostic_fact_stream(&kind, &key, &predicate) {
+            hidden_diagnostics_count += 1;
+            continue;
+        }
+        visible.push((kind, key, predicate));
+    }
+
+    let hidden_note = if hidden_diagnostics_count == 0 {
+        String::new()
+    } else {
+        format!(
+            " ({hidden_diagnostics_count} diagnostic stream(s) hidden; pass --include-diagnostics to show)"
+        )
+    };
+
+    if visible.is_empty() {
+        let empty = if filters_are_empty(filters) {
+            "no dent8 facts recorded yet"
+        } else {
+            "no dent8 facts matched filters"
+        };
+        return Ok(format!("{empty}{hidden_note}"));
+    }
+
+    let lines = visible
+        .iter()
+        .map(|(kind, key, predicate)| {
+            format!(
+                "- {}  ({}:{} {})",
+                mcp::resource_uri(kind, key, predicate),
+                kind,
+                key,
+                predicate
+            )
+        })
+        .collect::<Vec<_>>();
+    Ok(format!(
+        "{} dent8 fact stream(s){}:\n{}",
+        visible.len(),
+        hidden_note,
+        lines.join("\n")
+    ))
+}
+
+fn cmd_facts_list(args: &FactsListArgs) -> i32 {
+    present(op_facts_list(&log_path(), args))
 }
 
 /// List every contested fact (a fact in dispute — `Contested` lifecycle) across all

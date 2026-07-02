@@ -45,14 +45,15 @@ selected by a `postgres://` `DENT8_STORE_URL`) and the Ed25519 **witness**
 ## Quickstart
 
 ```sh
-dent8 init                                                 # create .dent8/env + authority registry
+dent8 init --source user:alice                            # create .dent8/env + authority registry
 set -a; . .dent8/env; set +a
-dent8 doctor --write-check                                # verify setup + prove the firewall path
+dent8 doctor --source user:alice --write-check            # verify setup + prove the firewall path
 dent8 eval                                                 # why: 5/5 attacks blocked vs a recency baseline
 dent8 assert person:alice favorite_drink tea --authority high --source user:alice
-dent8 supersede person:alice favorite_drink coffee --authority low --source note:old  # REJECTED
+dent8 facts list                                           # browse known fact streams
+dent8 supersede person:alice favorite_drink coffee --authority low --source user:alice  # REJECTED
 dent8 explain person:alice favorite_drink                  # still "tea", with an integrity receipt
-dent8 derive person:alice shopping_item tea --from person:alice favorite_drink --authority medium --source assistant
+dent8 derive person:alice shopping_item tea --from person:alice favorite_drink --authority medium --source user:alice
 dent8 retract person:alice favorite_drink --authority high --source user:alice
 dent8 verify                                               # flags the now-tainted derivative
 dent8 completions zsh                                      # generate shell completions
@@ -115,7 +116,7 @@ projects.
 
 Facts persist to `./dent8-log.jsonl` by default (override with `DENT8_LOG`). `dent8 --help`
 lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/
-`derive`/`explain`/`replay`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
+`derive`/`explain`/`replay`/`facts`/`verify`/`conflicts`/`eval`/`export`/`authority`/`hook`/`witness`/
 `init`/`doctor`/`completions`/`mcp serve`/`mcp install`). Use the global `--color auto|always|never` flag to control
 colored help, errors, and verdict words in human-facing output.
 
@@ -131,7 +132,8 @@ source of truth for what is built.** In short:
 
 - **Runnable today:** `dent8 demo` (the firewall + replay/explain loop, registry-driven); the
   full lifecycle through the firewall — **`assert` / `supersede` / `retract` / `contradict` /
-  `reinforce` / `expire` / `derive` / `explain` / `replay`** — plus the operator surfaces
+  `reinforce` / `expire` / `derive` / `explain` / `replay`** — plus **`facts list`** for
+  browsing known fact streams and the operator surfaces
   **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
   self-demonstrating benchmark), and **`export`** (the whole log to Parquet for offline DuckDB
   forensics/audit, behind `--features export` — see [examples/duckdb/](examples/duckdb/)),
@@ -249,6 +251,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 explain <subject> <predicate>`: print the believed (or terminal) fact's receipt.
 - `dent8 replay <subject> <predicate>`: replay the full event history — *why* the fact
   is what it is.
+- `dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-diagnostics]`:
+  list known fact streams, hiding internal doctor/write-check diagnostics by default.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
   forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`: print a shell completion script.

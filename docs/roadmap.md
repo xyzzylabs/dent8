@@ -24,7 +24,7 @@ now runs end to end through the CLI and MCP surfaces:
   authority floor, default TTL, and uniqueness.
 - The full lifecycle is runnable and persistent:
   `assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/
-  `replay`/`verify`/`conflicts`/`eval`/`export`, plus MCP tools for the same belief
+  `replay`/`facts list`/`verify`/`conflicts`/`eval`/`export`, plus MCP tools for the same belief
   surface.
 - Persistence runs over the local file dev store by default, or over the transactional
   async backends selected by `DENT8_STORE_URL`: Postgres (`--features postgres`) and
@@ -148,8 +148,8 @@ rotation / external signers) are future product work.
 ## Replay / Explain CLI — Done
 
 **Why.** `dent8 replay`/`dent8 explain` are the demoable surface of the integrity thesis.
-**Both are built** (real commands, not stubs), alongside `verify` / `conflicts` / `derive` /
-`eval` and the full write lifecycle.
+**Both are built** (real commands, not stubs), alongside `facts list` / `verify` /
+`conflicts` / `derive` / `eval` and the full write lifecycle.
 
 **Invariant.** Deterministic replay and auditability.
 

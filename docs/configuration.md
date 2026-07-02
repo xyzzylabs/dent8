@@ -58,7 +58,7 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 
 | Feature | Adds | Default? |
 |---|---|---|
-| *(default)* | the full firewall + lifecycle over the **file dev store**, plus `eval`, `verify`, `conflicts`, `authority`, signed identity, MCP | yes |
+| *(default)* | the full firewall + lifecycle over the **file dev store**, plus `facts list`, `eval`, `verify`, `conflicts`, `authority`, signed identity, MCP | yes |
 | `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by a `postgres://` `DENT8_STORE_URL` | no |
 | `sqlite` | the embedded **SQLite backend** (sqlx + bundled libsqlite3, no server), selected by a `sqlite://` `DENT8_STORE_URL` | no |
 | `identity` | Ed25519 signed source identity commands and write-boundary grant verification | yes |

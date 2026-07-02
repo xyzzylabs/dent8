@@ -59,7 +59,8 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   claim→claim derivation; `dent8 verify` flags a believed claim deriving from a
   retracted/expired source ("poison does not survive in derivatives").
 - **Operator surfaces**: `dent8 verify` (integrity check — real stored-chain re-verification
-  on Postgres), `dent8 conflicts` (contested facts), and `dent8 eval` (the self-demonstrating
+  on Postgres), `dent8 facts list` (known fact streams, with diagnostic streams hidden by
+  default), `dent8 conflicts` (contested facts), and `dent8 eval` (the self-demonstrating
   adversarial benchmark: firewall vs a recency-only baseline).
 - **Adoption and CLI ergonomics**: `dent8 init` creates a project-local env file, authority
   registry, selected store profile, and optionally the signed identity bundle; `dent8 doctor

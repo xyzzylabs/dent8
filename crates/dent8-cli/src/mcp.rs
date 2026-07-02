@@ -284,7 +284,7 @@ fn handle_resources_read(id: &Value, params: Option<&Value>, path: &str) -> Valu
 /// Build the canonical resource uri for a fact stream, percent-encoding each segment so any
 /// admissible `kind`/`key`/`predicate` (which may contain `/`, `%`, spaces, or non-ASCII)
 /// round-trips back through [`parse_resource_uri`].
-fn resource_uri(kind: &str, key: &str, predicate: &str) -> String {
+pub(crate) fn resource_uri(kind: &str, key: &str, predicate: &str) -> String {
     format!(
         "dent8://{}/{}/{}",
         encode_segment(kind),
