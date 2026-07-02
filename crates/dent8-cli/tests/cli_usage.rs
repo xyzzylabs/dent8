@@ -529,6 +529,31 @@ fn witness_doctor_checks_writer_signer_separation() {
     );
 }
 
+#[cfg(all(feature = "witness", unix))]
+#[test]
+fn witness_operator_split_demo_runs_against_test_binary() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/witness/demo.sh");
+    let output = Command::new("bash")
+        .arg(script)
+        .env("DENT8", dent8_bin())
+        .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
+        .env_remove("DENT8_WITNESS_KEY")
+        .env_remove("DENT8_WITNESS_PUBKEY")
+        .env_remove("DENT8_WITNESS_LOG")
+        .output()
+        .expect("run witness demo");
+    assert_success(&output, "examples/witness/demo.sh");
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("witness writer env: DENT8_WITNESS_KEY is not set")
+            && stdout.contains("published witness head:")
+            && stdout.contains("OK: externally published head detects event-log rollback")
+            && stdout.contains("OK: witness demo complete"),
+        "{stdout}"
+    );
+}
+
 #[cfg(feature = "witness")]
 #[test]
 fn witness_doctor_reports_coverage_and_detects_rewritten_history() {

@@ -177,8 +177,8 @@ externally saved heads so a local witness-log rollback cannot erase retained evi
 remaining gap to a hardened multi-user product is operating those controls well: key
 distribution/rotation, stronger secret storage, managed head publication, and an **operated
 witness service** that signs on a cadence from separate infrastructure. See
-[docs/witness.md](docs/witness.md), the [Roadmap](docs/roadmap.md), and
-[docs/STATUS.md](docs/STATUS.md).
+[docs/witness.md](docs/witness.md), the runnable [witness example](examples/witness/), the
+[Roadmap](docs/roadmap.md), and [docs/STATUS.md](docs/STATUS.md).
 
 ## Initial Shape
 

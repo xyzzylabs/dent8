@@ -53,7 +53,8 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   the local witness log is rolled back. `publish` appends the latest head idempotently and
   refuses to publish behind an existing external sequence. `doctor <writer|signer|both>` role
   checks help operated setups verify that writer/agent/MCP envs have only verifier material
-  while the signer holds the private key.
+  while the signer holds the private key. `examples/witness/demo.sh` runs the writer/signer/
+  monitor split end to end and proves an externally published head rejects event-log rollback.
 - **Evidence-dependency edges + retraction taint** (ADR 0010): `dent8 derive` records a
   claim→claim derivation; `dent8 verify` flags a believed claim deriving from a
   retracted/expired source ("poison does not survive in derivatives").

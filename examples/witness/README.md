@@ -4,7 +4,22 @@ This example shows the intended split between an event writer and the witness si
 run on one machine for development, but the security value comes from keeping the private
 witness key out of the writer/agent/MCP environment.
 
-Build a witness-capable CLI:
+Run the end-to-end local demo from a clone:
+
+```sh
+DENT8="cargo run -q -p dent8-cli --features witness --" ./examples/witness/demo.sh
+```
+
+The demo creates three separate environments in a temporary directory:
+
+- **writer**: `DENT8_LOG`, `DENT8_WITNESS_LOG`, `DENT8_WITNESS_PUBKEY`.
+- **signer**: `DENT8_LOG`, `DENT8_WITNESS_LOG`, `DENT8_WITNESS_KEY`.
+- **monitor**: `DENT8_LOG`, `DENT8_WITNESS_PUBKEY`.
+
+It then writes one fact, signs the tree head, publishes that head to an external JSONL file,
+and proves that a rolled-back event log is rejected by `verify-published`.
+
+To wire the same shape manually, first build a witness-capable CLI:
 
 ```sh
 cargo build -p dent8-cli --features witness

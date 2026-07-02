@@ -244,9 +244,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   the log + public key and must not have the private key; signer env must have the private key
   and a matching public key). What is *built* is the mechanism (cadence signing + publishable
   heads + idempotent publication to an external JSONL file + verification of externally saved
-  heads + setup/doctor visibility + role readiness checks); what remains *operational* is
-  packaging/running it separately, key rotation, and managed head publication/monitoring. See
-  [witness.md](witness.md).
+  heads + setup/doctor visibility + role readiness checks + a checked
+  [`examples/witness/`](../examples/witness/) operator-split demo); what remains
+  *operational* is packaging/running it separately, key rotation, and managed head
+  publication/monitoring. See [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
   `completion` and `autocomplete` are accepted.

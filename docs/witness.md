@@ -44,6 +44,16 @@ inherit the signing key in an operated setup.
 
 Use this shape when the event writer and witness are different processes or hosts.
 
+For a runnable local version of this split, use the checked example:
+
+```sh
+DENT8="cargo run -q -p dent8-cli --features witness --" ./examples/witness/demo.sh
+```
+
+It creates separate writer, signer, and monitor environments in a temporary directory,
+publishes a signed head outside the local witness log, and confirms that a rolled-back event
+log is rejected by `verify-published`.
+
 On the writer:
 
 ```sh
