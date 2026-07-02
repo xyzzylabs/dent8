@@ -9,6 +9,8 @@
 # private source keys, local stores, and agent MCP config.
 .dent8/
 .codex/
+.cursor/
+/.mcp.json
 
 # The CLI's default file-backed event log (DENT8_LOG) and authority registry (DENT8_AUTHORITY).
 /dent8-log.jsonl

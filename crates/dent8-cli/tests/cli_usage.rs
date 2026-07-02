@@ -725,11 +725,11 @@ fn init_identity_bootstraps_a_usable_secure_local_setup() {
     assert_success(&init, "init --identity");
     let stdout = stdout(&init);
     assert!(stdout.contains("identity env:"));
-    assert!(stdout.contains(".dent8/identity.env"));
+    assert!(stdout.contains(".dent8/identity-codex.env"));
     assert!(stdout.contains("dent8 doctor --source source:codex --write-check"));
 
     let env_path = temp.file(".dent8/env");
-    let identity_env_path = temp.file(".dent8/identity.env");
+    let identity_env_path = temp.file(".dent8/identity-codex.env");
     let authority_path = temp.file(".dent8/authority.json");
     let trust_path = temp.file(".dent8/trust.json");
     let grant_path = temp.file(".dent8/grants/source_codex.grant.json");
@@ -737,7 +737,10 @@ fn init_identity_bootstraps_a_usable_secure_local_setup() {
     let log_path = temp.file(".dent8/memory.jsonl");
 
     assert!(env_path.exists(), "init should write env");
-    assert!(identity_env_path.exists(), "init should write identity.env");
+    assert!(
+        identity_env_path.exists(),
+        "init should write identity-codex.env"
+    );
     assert!(trust_path.exists(), "init should write trust registry");
     assert!(grant_path.exists(), "init should write source grant");
     assert!(key_path.exists(), "init should write source key");
@@ -802,7 +805,7 @@ fn init_agent_profile_selects_source_and_implies_identity() {
     let stdout = stdout(&init);
     assert!(stdout.contains("agent profile: examples/codex/"));
     assert!(stdout.contains("dent8 doctor --source source:codex --write-check"));
-    assert!(stdout.contains(".dent8/identity.env"));
+    assert!(stdout.contains(".dent8/identity-codex.env"));
 
     let authority = fs::read_to_string(temp.file(".dent8/authority.json"))
         .expect("authority registry from agent init");
@@ -814,7 +817,7 @@ fn init_agent_profile_selects_source_and_implies_identity() {
         !temp.file(".dent8/memory.jsonl").exists(),
         "agent profile should not initialize a second default log"
     );
-    assert!(temp.file(".dent8/identity.env").exists());
+    assert!(temp.file(".dent8/identity-codex.env").exists());
     assert!(temp.file(".dent8/grants/source_codex.grant.json").exists());
     assert!(temp.file(".dent8/identities/source_codex.key").exists());
 }
@@ -947,7 +950,7 @@ fn identity_repair_env_recovers_legacy_agent_bundle_active_grants() {
         "init --agent codex --install-mcp",
     );
 
-    let identity_env_path = temp.file(".dent8/identity.env");
+    let identity_env_path = temp.file(".dent8/identity-codex.env");
     let active_grants_path = temp.file(".dent8/active-grants.json");
     let legacy_env = fs::read_to_string(&identity_env_path)
         .expect("identity env")
@@ -1081,7 +1084,7 @@ fn doctor_agent_repair_refreshes_stale_env_and_mcp_config() {
         "init --agent codex --install-mcp",
     );
 
-    let identity_env_path = temp.file(".dent8/identity.env");
+    let identity_env_path = temp.file(".dent8/identity-codex.env");
     let active_grants_path = temp.file(".dent8/active-grants.json");
     let legacy_env = fs::read_to_string(&identity_env_path)
         .expect("identity env")
@@ -1231,6 +1234,186 @@ fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
             doctor_stdout
         );
     }
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_rejects_second_agent_on_another_agents_file_log() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp",
+    );
+    add_claude_code_identity(&temp, &dir, &issuer_key);
+
+    let install = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--command",
+            &mcp_command,
+        ],
+        &[],
+    );
+    assert_eq!(install.status.code(), Some(1));
+    let output = format!("{}{}", stdout(&install), stderr(&install));
+    assert!(
+        output.contains("expects claude-memory.jsonl") && output.contains("DENT8_STORE_URL"),
+        "file dev stores should stay per-agent unless a shared backend is configured; output:\n{output}"
+    );
+}
+
+#[cfg(all(feature = "identity", feature = "sqlite"))]
+#[test]
+fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --store sqlite --install-mcp",
+    );
+    add_claude_code_identity(&temp, &dir, &issuer_key);
+
+    assert_success(
+        &run_dent8(
+            &[
+                "mcp",
+                "install",
+                "--agent",
+                "claude-code",
+                "--dir",
+                &dir,
+                "--command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "mcp install --agent claude-code",
+    );
+
+    for agent in ["codex", "claude-code"] {
+        let doctor = run_dent8(
+            &["doctor", "--agent", agent, "--dir", &dir, "--write-check"],
+            &[],
+        );
+        assert_success(&doctor, &format!("doctor --agent {agent} in shared bundle"));
+        let doctor_stdout = stdout(&doctor);
+        assert!(
+            doctor_stdout.contains("agent mcp config: up to date")
+                && doctor_stdout.contains("mcp write-check: accepted trusted"),
+            "doctor should validate installed MCP env for {agent}; stdout:\n{doctor_stdout}"
+        );
+    }
+}
+
+#[cfg(feature = "identity")]
+fn add_claude_code_identity(temp: &TempDir, dir: &str, issuer_key: &str) {
+    let authority = temp
+        .file(".dent8/authority.json")
+        .to_string_lossy()
+        .into_owned();
+    assert_success(
+        &run_dent8(
+            &["authority", "add", "source:claude-code", "high"],
+            &[("DENT8_AUTHORITY", authority.as_str())],
+        ),
+        "authority add source:claude-code",
+    );
+    let claude_key = temp.file(".dent8/identities/source_claude-code.key");
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "agent-keygen",
+                "source:claude-code",
+                "--out",
+                claude_key.to_string_lossy().as_ref(),
+            ],
+            &[],
+        ),
+        "identity agent-keygen source:claude-code",
+    );
+    let claude_grant = temp.file(".dent8/grants/source_claude-code.grant.json");
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "grant-issue",
+                "source:claude-code",
+                "--public-key",
+                temp.file(".dent8/identities/source_claude-code.key.pub")
+                    .to_string_lossy()
+                    .as_ref(),
+                "--max",
+                "high",
+                "--issuer",
+                "owner",
+                "--issuer-key",
+                issuer_key,
+                "--out",
+                claude_grant.to_string_lossy().as_ref(),
+                "--scope",
+                "*",
+            ],
+            &[],
+        ),
+        "identity grant-issue source:claude-code",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "repair-env",
+                "--dir",
+                dir,
+                "--source",
+                "source:claude-code",
+            ],
+            &[],
+        ),
+        "identity repair-env source:claude-code",
+    );
 }
 
 #[cfg(feature = "identity")]
@@ -1680,7 +1863,7 @@ fn init_install_mcp_reports_partial_success_when_config_patch_fails() {
         temp.file(".dent8/env").exists(),
         "init should still complete"
     );
-    assert!(temp.file(".dent8/identity.env").exists());
+    assert!(temp.file(".dent8/identity-codex.env").exists());
     assert_eq!(
         fs::read_to_string(&config_path).expect("codex config after failed patch"),
         "not = [valid\n",
@@ -1814,7 +1997,7 @@ fn init_identity_preflights_existing_identity_before_writing_authority() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8");
     fs::create_dir_all(&dir).expect("create dent8 dir");
-    fs::write(dir.join("identity.env"), "already here\n").expect("seed identity env");
+    fs::write(dir.join("identity-codex.env"), "already here\n").expect("seed identity env");
     let dir_arg = dir.to_string_lossy().into_owned();
     let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
 
@@ -1947,8 +2130,8 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
         .join("identities/source_codex.key")
         .to_string_lossy()
         .into_owned();
-    let env = dir.join("identity.env");
-    assert!(env.exists(), "bootstrap should write identity.env");
+    let env = dir.join("identity-codex.env");
+    assert!(env.exists(), "bootstrap should write identity-codex.env");
     assert!(
         issuer_key.exists(),
         "bootstrap should write the issuer key outside the bundle"
@@ -2008,6 +2191,38 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
             &identity_env,
         ),
         "signed write from bootstrapped identity",
+    );
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn identity_env_filename_sanitizes_source_suffix() {
+    let temp = TempDir::new();
+    let dir = temp.file("dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    let bootstrapped = run_dent8(
+        &[
+            "identity",
+            "bootstrap",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:team/codex",
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_success(&bootstrapped, "identity bootstrap with source slash");
+    assert!(
+        dir.join("identity-team_codex.env").exists(),
+        "source suffix should be flattened into one env filename"
+    );
+    assert!(
+        !dir.join("identity-team").exists(),
+        "source suffix must not create nested env directories"
     );
 }
 
@@ -2151,11 +2366,11 @@ fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
     assert_no_backup(&dir.join("identities"), "source_codex.key.old.");
     let old_grant_backup = find_backup(&dir.join("grants"), "source_codex.grant.json.old.");
     assert!(
-        dir.join("identity.env").exists(),
-        "rotation should rewrite identity.env at the stable path"
+        dir.join("identity-codex.env").exists(),
+        "rotation should rewrite identity-codex.env at the stable path"
     );
     assert!(
-        fs::read_to_string(dir.join("identity.env"))
+        fs::read_to_string(dir.join("identity-codex.env"))
             .expect("rotated identity env")
             .contains("DENT8_IDENTITY_KEY="),
         "rotated env should still point at the active key path"

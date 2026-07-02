@@ -95,26 +95,27 @@ dent8 doctor --agent codex --write-check
 `dent8 init --identity` and `dent8 init --agent <profile>` create or reuse an operator issuer
 key outside the project bundle, then write the normal env plus `.dent8/trust.json`, a
 per-source key under `.dent8/identities/`, a grant under `.dent8/grants/`, and
-`.dent8/identity.env`. Agent profiles are `codex`, `claude-code`, `cursor`, `grok-build`,
-`gemini`, `cascade`, and `hecate`. Add `--install-mcp` to patch the selected agent's MCP
-config and print the resulting file; run `dent8 mcp install --agent <profile>` later to
-regenerate it from the existing `.dent8` bundle. The installer supports `--dry-run` to render
-without writing and `--check` to fail CI or setup scripts when the file is stale. `--mcp-command`
-on `init` and `--command` on `mcp install` override the command written into the config, for
-example `/usr/local/bin/dent8` when dent8 is installed globally but not on the agent host's
-`PATH`. If you use a bundle directory not named `.dent8`, pass `--mcp-config` / `--config`
-because dent8 cannot infer the project-local MCP config path safely. `dent8 doctor --agent
-<profile>` reads the installed MCP config back, so custom commands do not need to be repeated
-for the normal post-install check. `dent8 identity status --dir .dent8 --source <source>`
-checks the bundle, active-grant registry, grant, source key, issuer key when supplied, and
-expiry. `dent8 identity repair-env --dir .dent8 --source <source>` rewrites generated
-`.dent8/identity.env` from the current signed grant and restores a missing active-grant entry
-without rotating keys; it refuses to overwrite a different active grant. Use it when a legacy
-bundle predates `DENT8_ACTIVE_GRANTS` or doctor reports a repair hint. `dent8 identity
-rotate-source --dir .dent8 --source <source> --issuer-key <path>` generates a replacement
-source key, issues a replacement grant, updates `.dent8/active-grants.json`, rewrites
-`.dent8/identity.env` at the same stable path, rejects the previous grant at the write
-boundary, and removes the previous private source-key backup after a successful rotation. It
+`.dent8/identity-<source>.env` (for example `.dent8/identity-codex.env`). Agent profiles are
+`codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and `hecate`. Add
+`--install-mcp` to patch the selected agent's MCP config and print the resulting file; run
+`dent8 mcp install --agent <profile>` later to regenerate it from the existing `.dent8` bundle.
+The installer supports `--dry-run` to render without writing and `--check` to fail CI or setup
+scripts when the file is stale. `--mcp-command` on `init` and `--command` on `mcp install`
+override the command written into the config, for example `/usr/local/bin/dent8` when dent8 is
+installed globally but not on the agent host's `PATH`. If you use a bundle directory not named
+`.dent8`, pass `--mcp-config` / `--config` because dent8 cannot infer the project-local MCP
+config path safely. `dent8 doctor --agent <profile>` reads the installed MCP config back, so
+custom commands do not need to be repeated for the normal post-install check. The
+`dent8 identity status` command checks the bundle, active-grant registry, grant, source key,
+issuer key when supplied, and expiry.
+`dent8 identity repair-env --dir .dent8 --source <source>` rewrites generated
+`.dent8/identity-<source>.env` from the current signed grant and restores a missing active-grant
+entry without rotating keys; it refuses to overwrite a different active grant. Use it when a
+legacy bundle predates per-source envs / `DENT8_ACTIVE_GRANTS` or doctor reports a repair hint.
+`dent8 identity rotate-source` generates a replacement source key, issues a replacement grant,
+updates `.dent8/active-grants.json`, rewrites `.dent8/identity-<source>.env` at the same stable
+path, rejects the previous grant at the write boundary, and removes the previous private
+source-key backup after a successful rotation. It
 keeps non-secret audit backups such as the old grant/env/public key. `dent8 identity bootstrap`
 remains available for custom layouts. It creates or reuses an
 operator issuer key outside the project bundle

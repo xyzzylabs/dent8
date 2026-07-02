@@ -27,7 +27,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   shell-loadable env file (`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`, and either
   `DENT8_LOG` or `DENT8_STORE_URL`), and initializes the file dev log for the default file
   store (`--agent` profiles use the matching per-agent log name shown in `examples/`). With
-  `--identity`, it also creates a signed source identity bundle and `.dent8/identity.env`;
+  `--identity`, it also creates a signed source identity bundle and
+  `.dent8/identity-<source>.env`;
   `--agent` selects the source id for a known agent and implies `--identity`. With
   `--witness`, it adds witness verification paths (`DENT8_WITNESS_LOG` and
   `DENT8_WITNESS_PUBKEY`) to the env file and creates the local signed-head log, but
@@ -46,8 +47,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   signed-head count, latest witnessed event count, current event count, unwitnessed-tail
   warnings, and `FAIL` on tamper/rollback/corrupt heads. A non-witness build warns when no
   heads exist and fails if signed heads are configured but cannot be verified. With `--agent`,
-  it loads the generated `.dent8/env` +
-  `.dent8/identity.env` bundle without requiring the shell to source it, parses the selected
+  it loads the generated `.dent8/env` plus the selected source's identity env
+  (`.dent8/identity-<source>.env`, with legacy `.dent8/identity.env` fallback) without requiring
+  the shell to source it, parses the selected
   agent's installed MCP config, checks that it is up to date, then smokes the exact installed
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` and a bounded timeout.
   If `--mcp-command` is omitted,
@@ -157,8 +159,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   [--command COMMAND] [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.
   `--dry-run` renders the expected file without writing; `--check` does not write and exits
-  `0` only when the existing file already matches. It reads the generated `.dent8/env` + `.dent8/identity.env`
-  instead of asking the user to paste paths by hand. Built-in defaults cover Codex
+  `0` only when the existing file already matches. It reads the generated `.dent8/env` plus the
+  selected source's identity env instead of asking the user to paste paths by hand. Built-in
+  defaults cover Codex
   (`.codex/config.toml`), Claude Code/Grok Build (`.mcp.json`), Cursor
   (`.cursor/mcp.json`), Gemini (`.gemini/settings.json`), and Cascade
   (`.windsurf/mcp_config.json`); Hecate requires `--config` because its MCP servers live in a
@@ -199,9 +202,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   (authn)**, included in the default CLI build. `init --identity` / `init --agent <profile>`
   are the happy path; `bootstrap` remains the manual creation path: it creates or reuses an
   operator issuer key outside the project/agent bundle, then creates a source key, trust
-  registry, active-grant registry, grant, and shell-loadable `.dent8/identity.env` for one
-  source. `status` checks the bundle/trust/active-grant/grant/source key/issuer key and reports
-  expiry. `repair-env` rewrites generated `.dent8/identity.env` and, when missing, restores the
+  registry, active-grant registry, grant, and shell-loadable `.dent8/identity-<source>.env` for
+  one source. `status` checks the bundle/trust/active-grant/grant/source key/issuer key and
+  reports expiry. `repair-env` rewrites generated `.dent8/identity-<source>.env` and, when
+  missing, restores the
   active-grant entry from the current signed grant after verifying trust, grant, and source key
   consistency; it refuses to overwrite a different active grant. `rotate-source` replaces the
   active source key and grant at the same stable paths, updates `.dent8/active-grants.json`, and

@@ -43,7 +43,7 @@ Signed source identity is included in the default CLI build. The secure onboardi
 dent8 init --agent codex --install-mcp
 set -a
 . .dent8/env
-. .dent8/identity.env
+. .dent8/identity-codex.env
 set +a
 dent8 doctor --source source:codex --write-check
 ```
@@ -67,15 +67,16 @@ dent8 identity grant-verify .dent8/grants/source_codex.grant.json
 `bootstrap` creates or reuses an operator issuer key outside the project bundle
 (`--issuer-key`, `DENT8_ISSUER_KEY`, `$XDG_CONFIG_HOME/dent8/issuer.key`, or
 `$HOME/.config/dent8/issuer.key`), then writes the project-local trust registry, active-grant
-registry, source key, grant, and `.dent8/identity.env`. It refuses to place the issuer private
-key inside the project bundle. `status` reports bundle/trust/active-grant/grant/key/expiry
-health. `repair-env` rewrites generated `.dent8/identity.env` and restores a missing
-active-grant entry from the current signed grant after verifying trust, grant, and source key
-consistency; it does not rotate keys or issue a new grant. `rotate-source` generates a
-replacement source key and grant at the same active paths, updates `.dent8/active-grants.json`,
-and removes the previous private source-key backup after a successful rotation, so existing MCP
-config can keep pointing at `.dent8/identity.env` while old grant+key pairs are rejected at the
-write boundary. The lower-level `issuer-keygen`, `agent-keygen`, `trust-add`, and
+registry, source key, grant, and `.dent8/identity-<source>.env` (for example
+`.dent8/identity-codex.env`). It refuses to place the issuer private key inside the project
+bundle. `status` reports bundle/trust/active-grant/grant/key/expiry health. `repair-env`
+rewrites generated `.dent8/identity-<source>.env` and restores a missing active-grant entry
+from the current signed grant after verifying trust, grant, and source key consistency; it does
+not rotate keys or issue a new grant. `rotate-source` generates a replacement source key and
+grant at the same active paths, updates `.dent8/active-grants.json`, and removes the previous
+private source-key backup after a successful rotation, so existing MCP config can keep pointing
+at `.dent8/identity-<source>.env` while old grant+key pairs are rejected at the write boundary.
+The lower-level `issuer-keygen`, `agent-keygen`, `trust-add`, and
 `grant-issue` commands remain available for custom layouts.
 
 The default issuer key is scoped to the OS user, not the project: bootstrapping several

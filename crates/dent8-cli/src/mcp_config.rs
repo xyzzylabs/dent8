@@ -6,6 +6,9 @@ use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 use crate::{InitAgent, write_atomic};
 
+#[cfg(feature = "identity")]
+use crate::identity;
+
 pub(crate) struct InstallOptions {
     pub(crate) agent: InitAgent,
     pub(crate) dent8_dir: PathBuf,
@@ -213,19 +216,13 @@ pub(crate) fn load_agent_env(
     agent: InitAgent,
 ) -> Result<BTreeMap<String, String>, String> {
     let env_path = dir.join("env");
-    let identity_env_path = dir.join("identity.env");
     let mut env = read_env_file(&env_path).map_err(|error| {
         format!(
             "{error}; run `dent8 init --agent {}` before installing MCP config",
             agent.cli_name()
         )
     })?;
-    let identity_env = read_env_file(&identity_env_path).map_err(|error| {
-        format!(
-            "{error}; run `dent8 init --agent {}` before installing MCP config",
-            agent.cli_name()
-        )
-    })?;
+    let identity_env = load_agent_identity_env(dir, agent)?;
     env.extend(identity_env);
 
     for key in [
@@ -245,11 +242,12 @@ pub(crate) fn load_agent_env(
             env_path.display()
         ));
     }
-    if let Some(log) = env.get("DENT8_LOG")
+    if !env.contains_key("DENT8_STORE_URL")
+        && let Some(log) = env.get("DENT8_LOG")
         && !log.ends_with(agent.file_log_name())
     {
         return Err(format!(
-            "{} points at {log}, but --agent {} expects {}",
+            "{} points at {log}, but --agent {} expects {}; use DENT8_STORE_URL for a shared multi-agent store",
             env_path.display(),
             agent.cli_name(),
             agent.file_log_name()
@@ -275,6 +273,32 @@ pub(crate) fn load_agent_env(
     }
 
     Ok(env)
+}
+
+fn load_agent_identity_env(
+    dir: &Path,
+    agent: InitAgent,
+) -> Result<BTreeMap<String, String>, String> {
+    #[cfg(feature = "identity")]
+    {
+        let per_source = identity::identity_env_path_for_source(dir, agent.source())?;
+        if per_source.exists() {
+            return read_env_file(&per_source);
+        }
+    }
+    #[cfg(not(feature = "identity"))]
+    let _ = agent;
+
+    let legacy = dir.join("identity.env");
+    read_env_file(&legacy).map_err(|error| {
+        format!(
+            "{error}; run `dent8 init --agent {}` or \
+             `dent8 identity repair-env --dir {} --source {}` before installing MCP config",
+            agent.cli_name(),
+            dir.display(),
+            agent.source()
+        )
+    })
 }
 
 fn require_env_key<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Result<&'a String, String> {

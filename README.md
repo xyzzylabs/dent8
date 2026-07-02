@@ -71,8 +71,9 @@ Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP co
 If doctor reports a stale generated identity bundle or MCP env, `dent8 doctor --agent
 <profile> --repair` repairs the generated env and refreshes the installed MCP config before
 rerunning the normal checks.
-Source `.dent8/env` + `.dent8/identity.env` when you want to run CLI commands from the same
-shell. Use `dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
+Source `.dent8/env` + the source-specific identity env (for example
+`.dent8/identity-codex.env`) when you want to run CLI commands from the same shell. Use
+`dent8 init --identity --source <source>` for a custom source id. Agent shortcuts are
 available for `codex`, `claude-code`, `cursor`, `grok-build`, `gemini`, `cascade`, and
 `hecate`. The installer writes `command = "dent8"` by default, so Codex, Claude Code, Cursor,
 Gemini, Grok Build, Cascade, and Hecate can all use one globally installed binary; pass
@@ -86,7 +87,7 @@ HTTP is future transport work, not part of v0. `dent8 identity status` checks a 
 identity bundle; `dent8 identity repair-env` repairs legacy generated identity env /
 active-grants files from the current signed grant without rotating keys; and
 `dent8 identity rotate-source` replaces the active source key/grant while keeping the stable
-`.dent8/identity.env` paths that MCP configs use. Rotation updates `.dent8/active-grants.json`,
+`.dent8/identity-<source>.env` paths that MCP configs use. Rotation updates `.dent8/active-grants.json`,
 so the old grant/key pair is rejected even if someone manually points env vars at backed-up
 grant material. `identity bootstrap` remains available for custom layouts and keeps the issuer
 key outside `.dent8` by default (`$XDG_CONFIG_HOME/dent8/issuer.key` or
@@ -208,7 +209,8 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   the installed MCP server for agent profiles).
 - `dent8 identity bootstrap/status/repair-env/rotate-source`: create, inspect, repair generated
   env files for, and rotate a local signed source identity bundle (operator issuer key outside
-  the bundle, source key, trust registry, active-grant registry, grant, and `.dent8/identity.env`).
+  the bundle, source key, trust registry, active-grant registry, grant, and
+  `.dent8/identity-<source>.env`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`: revise the

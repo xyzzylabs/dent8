@@ -25,23 +25,27 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
 
 ## Dogfood
 
-- This repo may have ignored local dogfood state in `.dent8/` and `.codex/config.toml`.
-  Do not commit those files.
+- This repo may have ignored local dogfood state in `.dent8/`, `.codex/config.toml`, and
+  `.cursor/mcp.json`. Do not commit those files.
 - When dogfood state is present, consult dent8 for durable project facts before relying on
   remembered setup or preferences. Prefer MCP tools (`list_facts`, `explain`, `verify`) when
-  available; otherwise use the local CLI after loading `.dent8/env` and `.dent8/identity.env`.
+  available; otherwise use the local CLI after loading `.dent8/env` and the agent-specific
+  identity env (for example `.dent8/identity-codex.env` or `.dent8/identity-cursor.env`).
 - The local Codex MCP config should point at `.dent8/bin/dent8`, an ignored wrapper that runs
-  a SQLite + witness-enabled build from `.dent8/target-sqlite`. This avoids normal
-  `target/debug` rebuilds replacing the MCP binary with one that lacks SQLite or witness
-  support.
+  a SQLite + witness-enabled build from `.dent8/target-sqlite`. Claude Code uses `.mcp.json`;
+  Cursor uses `.cursor/mcp.json`. This avoids normal `target/debug` rebuilds replacing the MCP
+  binary with one that lacks SQLite or witness support.
 - The local dogfood store may be witness-backed with `.dent8/witness.jsonl` and
   `.dent8/witness.key.pub`. The private `.dent8/witness.key` stays out of `.dent8/env` and
   should only be passed explicitly when signing a head.
-- To validate the local Codex dogfood path, build the isolated SQLite+witness target and run:
+- To validate the local dogfood path, build the isolated SQLite+witness target and run:
 
 ```sh
 CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite,witness
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
+.dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
+.dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check
+set -a; . .dent8/env; set +a
 DENT8_WITNESS_KEY=.dent8/witness.key .dent8/bin/dent8 witness sign
 .dent8/bin/dent8 doctor --agent codex --dir .dent8
 ```

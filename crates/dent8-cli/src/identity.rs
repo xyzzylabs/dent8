@@ -858,6 +858,14 @@ fn rotate_source_bundle(
     Ok(lines.join("\n"))
 }
 
+pub(crate) fn identity_env_path_for_source(dir: &Path, source: &str) -> Result<PathBuf, String> {
+    parse_source(source)?;
+    let suffix = source
+        .strip_prefix("source:")
+        .ok_or_else(|| format!("source id must start with source:, got {source}"))?;
+    Ok(dir.join(format!("identity-{}.env", path_slug(suffix))))
+}
+
 fn identity_bundle_paths(
     dir: &str,
     expected_source: Option<&str>,
@@ -865,7 +873,6 @@ fn identity_bundle_paths(
     let dir = absolute_existing_dir(&PathBuf::from(dir))?;
     let trust_file = dir.join("trust.json");
     let active_grants_file = dir.join(ACTIVE_GRANTS_FILE);
-    let env_file = dir.join("identity.env");
     if let Some(source) = expected_source {
         parse_source(source)?;
         let slug = source_slug(source);
@@ -874,34 +881,67 @@ fn identity_bundle_paths(
             active_grants_file,
             grant_file: dir.join("grants").join(format!("{slug}.grant.json")),
             source_key_path: dir.join("identities").join(format!("{slug}.key")),
-            env_file,
+            env_file: identity_env_path_for_source(&dir, source)?,
             dir,
         });
     }
 
-    let env = read_identity_env_file(&env_file)?;
-    let grant_file = env
-        .get("DENT8_GRANT")
-        .ok_or_else(|| format!("{} is missing DENT8_GRANT", env_file.display()))
-        .map(|path| env_path_value(path, &dir))?;
-    let source_key_path = env
-        .get("DENT8_IDENTITY_KEY")
-        .ok_or_else(|| format!("{} is missing DENT8_IDENTITY_KEY", env_file.display()))
-        .map(|path| env_path_value(path, &dir))?;
-    let trust_file = env
-        .get("DENT8_TRUST")
-        .map_or(trust_file, |path| env_path_value(path, &dir));
-    let active_grants_file = env
-        .get("DENT8_ACTIVE_GRANTS")
-        .map_or(active_grants_file, |path| env_path_value(path, &dir));
-    Ok(IdentityBundlePaths {
-        dir,
-        trust_file,
-        active_grants_file,
-        grant_file,
-        source_key_path,
-        env_file,
-    })
+    let legacy_env = dir.join("identity.env");
+    if legacy_env.exists() {
+        let env = read_identity_env_file(&legacy_env)?;
+        let grant_file = env
+            .get("DENT8_GRANT")
+            .ok_or_else(|| format!("{} is missing DENT8_GRANT", legacy_env.display()))
+            .map(|path| env_path_value(path, &dir))?;
+        let source_key_path = env
+            .get("DENT8_IDENTITY_KEY")
+            .ok_or_else(|| format!("{} is missing DENT8_IDENTITY_KEY", legacy_env.display()))
+            .map(|path| env_path_value(path, &dir))?;
+        let trust_file = env
+            .get("DENT8_TRUST")
+            .map_or(trust_file, |path| env_path_value(path, &dir));
+        let active_grants_file = env
+            .get("DENT8_ACTIVE_GRANTS")
+            .map_or(active_grants_file, |path| env_path_value(path, &dir));
+        return Ok(IdentityBundlePaths {
+            dir,
+            trust_file,
+            active_grants_file,
+            grant_file,
+            source_key_path,
+            env_file: legacy_env,
+        });
+    }
+
+    if active_grants_file.exists() {
+        let active = load_active_grants_at(&active_grants_file, true)?
+            .ok_or_else(|| format!("{} is empty", active_grants_file.display()))?;
+        return match active.sources.len() {
+            0 => Err(format!(
+                "{} has no active source grants; pass --source or run `dent8 identity repair-env`",
+                active_grants_file.display()
+            )),
+            1 => {
+                let source = active
+                    .sources
+                    .keys()
+                    .next()
+                    .expect("checked len above")
+                    .clone();
+                identity_bundle_paths(&path_string(&dir), Some(&source))
+            }
+            _ => Err(
+                "multiple active source grants in this bundle; pass --source to select one"
+                    .to_string(),
+            ),
+        };
+    }
+
+    Err(format!(
+        "cannot read {}; run `dent8 identity repair-env --dir {} --source <source>`",
+        legacy_env.display(),
+        shell_quote(&path_string(&dir))
+    ))
 }
 
 fn env_path_value(raw: &str, bundle_dir: &Path) -> PathBuf {
@@ -1481,7 +1521,7 @@ fn bootstrap_plan(
     let trust_file = dir.join("trust.json");
     let active_grants_file = dir.join(ACTIVE_GRANTS_FILE);
     let grant_file = grants_dir.join(format!("{slug}.grant.json"));
-    let env_file = dir.join("identity.env");
+    let env_file = identity_env_path_for_source(&dir, source)?;
 
     Ok(BootstrapPlan {
         dir,
@@ -1871,7 +1911,11 @@ fn nonempty_env(name: &str) -> Option<String> {
 }
 
 fn source_slug(source: &str) -> String {
-    source
+    path_slug(source)
+}
+
+fn path_slug(value: &str) -> String {
+    value
         .chars()
         .map(|ch| {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
