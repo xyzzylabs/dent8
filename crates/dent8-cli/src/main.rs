@@ -1208,6 +1208,25 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
 /// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
 /// exists only to explain how to enable it.
 fn run_witness(args: &[String], output: CliOutput) -> i32 {
+    // `witness` takes raw args (clap's trailing catch-all), so a trailing `--output json` —
+    // the position every clap-native command accepts — would otherwise be swallowed as an
+    // unknown subcommand token and die with a usage error. Strip an embedded `--output` here
+    // and let it override the global flag.
+    let (args, output) = match extract_witness_output(args, output) {
+        Ok(extracted) => extracted,
+        Err(message) => {
+            eprintln!("{message}");
+            return 2;
+        }
+    };
+    let args = args.as_slice();
+    #[cfg(feature = "witness")]
+    if output == CliOutput::Json && !witness_args_support_json(args) {
+        eprintln!(
+            "`dent8 witness serve` does not support `--output json` yet (supported: {JSON_SUPPORTED_COMMANDS})"
+        );
+        return 2;
+    }
     #[cfg(not(feature = "witness"))]
     {
         let _ = args;
@@ -1243,6 +1262,45 @@ fn run_witness(args: &[String], output: CliOutput) -> i32 {
 
 fn witness_args_support_json(args: &[String]) -> bool {
     !matches!(args.first().map(String::as_str), Some("serve"))
+}
+
+/// Pull an embedded `--output <text|json>` / `--output=<text|json>` out of the raw witness
+/// args. Returns the remaining args and the effective output (embedded wins over the global
+/// flag); errors on a missing or invalid value, mirroring clap's own diagnostics.
+fn extract_witness_output(
+    args: &[String],
+    global: CliOutput,
+) -> Result<(Vec<String>, CliOutput), String> {
+    let mut remaining = Vec::with_capacity(args.len());
+    let mut output = global;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--output=") {
+            output = parse_witness_output_value(value)?;
+        } else if arg == "--output" {
+            let Some(value) = iter.next() else {
+                return Err(
+                    "error: a value is required for '--output <OUTPUT>' but none was supplied \
+                     [possible values: text, json]"
+                        .to_string(),
+                );
+            };
+            output = parse_witness_output_value(value)?;
+        } else {
+            remaining.push(arg.clone());
+        }
+    }
+    Ok((remaining, output))
+}
+
+fn parse_witness_output_value(value: &str) -> Result<CliOutput, String> {
+    match value {
+        "text" => Ok(CliOutput::Text),
+        "json" => Ok(CliOutput::Json),
+        other => Err(format!(
+            "error: invalid value '{other}' for '--output <OUTPUT>' [possible values: text, json]"
+        )),
+    }
 }
 
 #[cfg(feature = "witness")]

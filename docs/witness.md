@@ -137,8 +137,22 @@ dent8 --output json witness doctor writer
 
 The JSON includes stable `status`, `tool`, count/path fields, `coverage`
 (`complete` / `trailing` / `none` where relevant), and `level: "warn"` when a verification
-is valid but has unwitnessed tail events. `witness serve` is intentionally not JSON mode: it is
-a long-running signer loop that streams human-readable progress.
+is valid but has unwitnessed tail events. On failure, `status` carries the machine-readable
+verdict so a monitor never has to parse the prose `message`:
+
+- `tamper` — an already-witnessed prefix no longer verifies (history rewritten, or wrong
+  public key); exit 1.
+- `rollback` — the event log (or the witness/published sequence itself) went backwards below
+  a witnessed count; exit 1.
+- `conflict` — `publish` found a published head at the same count that does not match the
+  local head; exit 1.
+- `cannot_verify` — the check could not be performed (for example a corrupt head); exit 2.
+- `failed` — a setup/config failure (missing file, unreadable key); exit 1.
+
+`--output json` may be placed before or after the witness subcommand
+(`dent8 --output json witness verify` and `dent8 witness verify --output json` are
+equivalent). `witness serve` is intentionally not JSON mode: it is a long-running signer loop
+that streams human-readable progress.
 
 ## Doctor Checks
 

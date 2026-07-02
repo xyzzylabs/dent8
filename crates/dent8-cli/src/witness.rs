@@ -64,14 +64,6 @@ fn public_key_path(key: &str) -> String {
     format!("{key}.pub")
 }
 
-fn witness_error_json(tool: &str, message: &str) -> serde_json::Value {
-    serde_json::json!({
-        "status": "failed",
-        "tool": tool,
-        "message": message,
-    })
-}
-
 fn witness_error_with_paths_json(
     tool: &str,
     message: &str,
@@ -89,13 +81,35 @@ fn witness_error_with_paths_json(
     })
 }
 
+/// A setup/config failure (unreadable key, missing file, …): `status: "failed"`.
 fn print_witness_error(output: CliOutput, tool: &str, message: &str, code: i32) -> i32 {
+    print_witness_fault(output, tool, "failed", message, code)
+}
+
+/// A witness outcome with a machine-readable verdict. `status` distinguishes the security
+/// verdicts (`tamper` / `rollback` / `conflict`), an inconclusive check (`cannot_verify`),
+/// and a plain setup failure (`failed`) — a monitor must not have to parse the prose
+/// `message` to tell an alarm from a typo'd path.
+fn print_witness_fault(
+    output: CliOutput,
+    tool: &str,
+    status: &str,
+    message: &str,
+    code: i32,
+) -> i32 {
     match output {
         CliOutput::Text => {
             eprintln!("{message}");
             code
         }
-        CliOutput::Json => print_json_stderr(&witness_error_json(tool, message), code),
+        CliOutput::Json => print_json_stderr(
+            &serde_json::json!({
+                "status": status,
+                "tool": tool,
+                "message": message,
+            }),
+            code,
+        ),
     }
 }
 
@@ -469,7 +483,9 @@ pub fn publish(args: &[String], output: CliOutput) -> i32 {
     };
     let outcome = match publish_outcome(path) {
         Ok(outcome) => outcome,
-        Err((message, code)) => return print_witness_error(output, PUBLISH_TOOL, &message, code),
+        Err((status, message, code)) => {
+            return print_witness_fault(output, PUBLISH_TOOL, status, &message, code);
+        }
     };
     match output {
         CliOutput::Text => {
@@ -505,18 +521,18 @@ struct PublishOutcome {
     current_count: u64,
 }
 
-fn publish_outcome(path: &str) -> Result<PublishOutcome, (String, i32)> {
-    let events = load_events().map_err(|error| (error, 1))?;
-    let verifying = load_verifying_key().map_err(|error| (error, 1))?;
-    let local_heads = load_witness_log().map_err(|error| (error, 1))?;
+fn publish_outcome(path: &str) -> Result<PublishOutcome, WitnessFailure> {
+    let events = load_events().map_err(|error| ("failed", error, 1))?;
+    let verifying = load_verifying_key().map_err(|error| ("failed", error, 1))?;
+    let local_heads = load_witness_log().map_err(|error| ("failed", error, 1))?;
     let latest = local_heads
         .last()
         .cloned()
-        .ok_or_else(|| (empty_witness_log_message(), 1))?;
+        .ok_or_else(|| ("failed", empty_witness_log_message(), 1))?;
     verify_heads_for_publish(&events, &local_heads, &verifying, "local witness log")?;
 
     let mut published =
-        load_signed_heads(path, "published heads", true).map_err(|error| (error, 1))?;
+        load_signed_heads(path, "published heads", true).map_err(|error| ("failed", error, 1))?;
     let already_published = publication_state(path, &published, &latest)?;
     if !already_published {
         published.push(latest.clone());
@@ -532,7 +548,7 @@ fn publish_outcome(path: &str) -> Result<PublishOutcome, (String, i32)> {
             ),
         )
     } else {
-        append_head(path, &latest).map_err(|error| (error, 1))?;
+        append_head(path, &latest).map_err(|error| ("failed", error, 1))?;
         (
             "appended",
             format!(
@@ -565,24 +581,30 @@ fn verify_heads_for_publish(
     heads: &[SignedTreeHead],
     verifying: &VerifyingKey,
     label: &str,
-) -> Result<(), (String, i32)> {
+) -> Result<(), WitnessFailure> {
     match verify_heads(events, heads, verifying) {
         Ok(()) => Ok(()),
         Err(WitnessFault::CannotVerify(message)) => Err((
+            "cannot_verify",
             format!("{label} verification could not be performed: {message}"),
             2,
         )),
-        Err(WitnessFault::Detected(message)) => Err((message, 1)),
+        Err(WitnessFault::Detected(verdict, message)) => Err((verdict.status(), message, 1)),
     }
 }
+
+/// A failed witness outcome as `(status, message, exit_code)` — the `status` is the
+/// machine-readable verdict fed to [`print_witness_fault`].
+type WitnessFailure = (&'static str, String, i32);
 
 fn publication_state(
     path: &str,
     published: &[SignedTreeHead],
     latest: &SignedTreeHead,
-) -> Result<bool, (String, i32)> {
+) -> Result<bool, WitnessFailure> {
     match published.last() {
         Some(previous) if previous.event_count > latest.event_count => Err((
+            "rollback",
             format!(
                 "ROLLBACK: published heads in {path} are already at count {}, ahead of the \
                  local witness log's latest count {}",
@@ -592,6 +614,7 @@ fn publication_state(
         )),
         Some(previous) if previous.event_count == latest.event_count && previous != latest => {
             Err((
+                "conflict",
                 format!(
                     "CONFLICT: published head at count {} does not match the local witness head",
                     latest.event_count
@@ -681,10 +704,10 @@ pub fn verify(output: CliOutput) -> i32 {
         }
         Err(WitnessFault::CannotVerify(message)) => {
             let message = format!("verification could not be performed: {message}");
-            print_witness_error(output, VERIFY_TOOL, &message, 2)
+            print_witness_fault(output, VERIFY_TOOL, "cannot_verify", &message, 2)
         }
-        Err(WitnessFault::Detected(message)) => {
-            print_witness_error(output, VERIFY_TOOL, &message, 1)
+        Err(WitnessFault::Detected(verdict, message)) => {
+            print_witness_fault(output, VERIFY_TOOL, verdict.status(), &message, 1)
         }
     }
 }
@@ -771,10 +794,10 @@ pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
         }
         Err(WitnessFault::CannotVerify(message)) => {
             let message = format!("published-head verification could not be performed: {message}");
-            print_witness_error(output, VERIFY_PUBLISHED_TOOL, &message, 2)
+            print_witness_fault(output, VERIFY_PUBLISHED_TOOL, "cannot_verify", &message, 2)
         }
-        Err(WitnessFault::Detected(message)) => {
-            print_witness_error(output, VERIFY_PUBLISHED_TOOL, &message, 1)
+        Err(WitnessFault::Detected(verdict, message)) => {
+            print_witness_fault(output, VERIFY_PUBLISHED_TOOL, verdict.status(), &message, 1)
         }
     }
 }
@@ -1148,7 +1171,7 @@ pub(crate) fn doctor_status() -> Vec<DoctorLine> {
                 "witness verify: could not verify signed heads: {message}"
             )));
         }
-        Err(WitnessFault::Detected(message)) => {
+        Err(WitnessFault::Detected(_, message)) => {
             lines.push(DoctorLine::fail(format!("witness verify: {message}")));
         }
     }
@@ -1162,10 +1185,31 @@ fn witness_configured() -> bool {
         || std::path::Path::new(&witness_log_path()).exists()
 }
 
-/// A witness-verification outcome other than success: a detected inconsistency (the log was
-/// rewritten/rolled back, or the key is wrong) versus an inability to even perform the check.
+/// What a detected witness inconsistency *is*, as a machine-readable verdict: a monitor
+/// alerting on `dent8 --output json witness verify` must be able to distinguish "history was
+/// rewritten" from "the log was truncated/reordered" without parsing prose.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WitnessVerdict {
+    /// An already-witnessed prefix no longer verifies — history was rewritten (or the wrong
+    /// public key is configured).
+    Tamper,
+    /// The log (or the witness log itself) went backwards below a witnessed count.
+    Rollback,
+}
+
+impl WitnessVerdict {
+    fn status(self) -> &'static str {
+        match self {
+            Self::Tamper => "tamper",
+            Self::Rollback => "rollback",
+        }
+    }
+}
+
+/// A witness-verification outcome other than success: a detected inconsistency (typed by
+/// [`WitnessVerdict`]) versus an inability to even perform the check.
 enum WitnessFault {
-    Detected(String),
+    Detected(WitnessVerdict, String),
     CannotVerify(String),
 }
 
@@ -1182,34 +1226,43 @@ fn verify_heads(
     let mut previous_count = 0u64;
     for (index, sth) in heads.iter().enumerate() {
         if sth.event_count < previous_count {
-            return Err(WitnessFault::Detected(format!(
-                "ROLLBACK: witness head #{index} commits to count {} but an earlier head \
-                 committed to {previous_count} — the witness log went backwards (reordered or \
-                 rolled back)",
-                sth.event_count
-            )));
+            return Err(WitnessFault::Detected(
+                WitnessVerdict::Rollback,
+                format!(
+                    "ROLLBACK: witness head #{index} commits to count {} but an earlier head \
+                     committed to {previous_count} — the witness log went backwards (reordered \
+                     or rolled back)",
+                    sth.event_count
+                ),
+            ));
         }
         previous_count = sth.event_count;
         let count = usize::try_from(sth.event_count).map_err(|_| {
             WitnessFault::CannotVerify("witnessed count overflows usize".to_string())
         })?;
         if count > events.len() {
-            return Err(WitnessFault::Detected(format!(
-                "ROLLBACK: a tree head was witnessed at count {} but the current log has only {} \
-                 events — the log was truncated below a witnessed point",
-                sth.event_count,
-                events.len()
-            )));
+            return Err(WitnessFault::Detected(
+                WitnessVerdict::Rollback,
+                format!(
+                    "ROLLBACK: a tree head was witnessed at count {} but the current log has \
+                     only {} events — the log was truncated below a witnessed point",
+                    sth.event_count,
+                    events.len()
+                ),
+            ));
         }
         match verify_signed_head(&events[..count], sth, verifying) {
             Ok(true) => {}
             Ok(false) => {
-                return Err(WitnessFault::Detected(format!(
-                    "TAMPER: the head witnessed at count {} does not verify against the current \
-                     log's prefix — history at or before that point was rewritten (or this is \
-                     the wrong public key)",
-                    sth.event_count
-                )));
+                return Err(WitnessFault::Detected(
+                    WitnessVerdict::Tamper,
+                    format!(
+                        "TAMPER: the head witnessed at count {} does not verify against the \
+                         current log's prefix — history at or before that point was rewritten \
+                         (or this is the wrong public key)",
+                        sth.event_count
+                    ),
+                ));
             }
             Err(error) => {
                 return Err(WitnessFault::CannotVerify(format!(
@@ -1318,7 +1371,7 @@ fn write_secret(path: &str, contents: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{WitnessFault, verify_heads};
+    use super::{WitnessFault, WitnessVerdict, verify_heads};
     use dent8_core::{
         AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, SignedTreeHead, TimestampMillis,
         sign_head,
@@ -1369,28 +1422,28 @@ mod tests {
         rewritten[1] = event("event:1", "claim:b", "mysql");
         assert!(matches!(
             verify_heads(&rewritten, &heads, &verifying),
-            Err(WitnessFault::Detected(message)) if message.contains("TAMPER")
+            Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
         ));
 
         // ROLLBACK: the log was truncated below a witnessed count (only 2 events, but sth3
         // committed to 3).
         assert!(matches!(
             verify_heads(&log[..2], &heads, &verifying),
-            Err(WitnessFault::Detected(message)) if message.contains("ROLLBACK")
+            Err(WitnessFault::Detected(WitnessVerdict::Rollback, message)) if message.contains("ROLLBACK")
         ));
 
         // ROLLBACK: a witness log whose counts go backwards (3 then 1) is itself suspect.
         let reordered = vec![sth3, sth1];
         assert!(matches!(
             verify_heads(&log, &reordered, &verifying),
-            Err(WitnessFault::Detected(message)) if message.contains("ROLLBACK")
+            Err(WitnessFault::Detected(WitnessVerdict::Rollback, message)) if message.contains("ROLLBACK")
         ));
 
         // Wrong public key: an attacker's key does not verify the witness's heads.
         let attacker = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
         assert!(matches!(
             verify_heads(&log, &heads, &attacker),
-            Err(WitnessFault::Detected(message)) if message.contains("TAMPER")
+            Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
         ));
     }
 }

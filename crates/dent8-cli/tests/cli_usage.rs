@@ -1052,6 +1052,17 @@ fn witness_publish_is_idempotent_and_rejects_local_witness_rollback() {
         "{}",
         stderr(&broken_local)
     );
+    let broken_local_json = run_dent8(
+        &["--output", "json", "witness", "publish", &broken_published],
+        &publish_env,
+    );
+    assert_eq!(broken_local_json.status.code(), Some(1));
+    assert_eq!(
+        stderr_json(&broken_local_json)["status"],
+        "rollback",
+        "{}",
+        stderr(&broken_local_json)
+    );
     assert!(!std::path::Path::new(&broken_published).exists());
 
     fs::write(&witness_log, format!("{first_published_line}\n")).expect("rewind witness log");
@@ -1460,6 +1471,7 @@ fn witness_operator_split_demo_runs_against_test_binary() {
 
 #[cfg(feature = "witness")]
 #[test]
+#[allow(clippy::too_many_lines)] // one linear scenario: sign -> grow -> tamper -> verify/doctor
 fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
@@ -1548,6 +1560,35 @@ fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
     let verify = run_dent8(&["witness", "verify"], &verify_env);
     assert_eq!(verify.status.code(), Some(1));
     assert!(stderr(&verify).contains("TAMPER"), "{}", stderr(&verify));
+
+    // The JSON fault carries the machine-readable verdict (a monitor must distinguish a
+    // tamper alarm from a config failure without parsing prose), and `--output json` works in
+    // either position around the raw witness args.
+    for args in [
+        ["--output", "json", "witness", "verify"].as_slice(),
+        ["witness", "verify", "--output", "json"].as_slice(),
+    ] {
+        let verify_json = run_dent8(args, &verify_env);
+        assert_eq!(verify_json.status.code(), Some(1), "{args:?}");
+        let fault = stderr_json(&verify_json);
+        assert_eq!(fault["status"], "tamper", "{fault:#}");
+        assert_eq!(fault["tool"], "witness verify");
+    }
+
+    // A benign setup failure stays `failed` — distinct from the tamper verdict above.
+    let missing = run_dent8(
+        &[
+            "--output",
+            "json",
+            "witness",
+            "verify-published",
+            "/no/such/published-heads.jsonl",
+        ],
+        &verify_env,
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    let fault = stderr_json(&missing);
+    assert_eq!(fault["status"], "failed", "{fault:#}");
 
     let doctor = run_dent8(&["doctor"], &verify_env);
     assert_eq!(doctor.status.code(), Some(1));
