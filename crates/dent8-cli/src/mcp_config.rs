@@ -85,6 +85,30 @@ impl InstallResult {
     pub(crate) fn exit_code(&self) -> i32 {
         i32::from(self.mode == InstallMode::Check && self.action != ConfigAction::Unchanged)
     }
+
+    pub(crate) fn action_name(&self) -> &'static str {
+        self.action.name()
+    }
+
+    pub(crate) fn changed(&self) -> bool {
+        self.action != ConfigAction::Unchanged
+    }
+
+    pub(crate) fn contents(&self) -> &str {
+        &self.contents
+    }
+
+    pub(crate) fn mode_name(&self) -> &'static str {
+        self.mode.name()
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn written(&self) -> bool {
+        self.mode == InstallMode::Write && self.changed()
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -95,6 +119,14 @@ enum ConfigAction {
 }
 
 impl ConfigAction {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Unchanged => "unchanged",
+        }
+    }
+
     fn write_verb(self) -> &'static str {
         match self {
             Self::Created => "created",
@@ -108,6 +140,16 @@ impl ConfigAction {
             Self::Created => "would create",
             Self::Updated => "would update",
             Self::Unchanged => "would leave unchanged",
+        }
+    }
+}
+
+impl InstallMode {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::DryRun => "dry-run",
+            Self::Check => "check",
         }
     }
 }

@@ -32,7 +32,7 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, authority, identity status, doctor";
+                                      eval, authority, identity status, doctor, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -143,7 +143,7 @@ fn run_cli(cli: Cli) -> i32 {
         },
         Some(CliCommand::Mcp(args)) => match args.command {
             McpCommand::Serve => mcp::serve(),
-            McpCommand::Install(args) => cmd_mcp_install(&args),
+            McpCommand::Install(args) => cmd_mcp_install(&args, cli.output),
         },
         Some(CliCommand::Schema(args)) => match args.command {
             SchemaCommand::Postgres => {
@@ -300,6 +300,9 @@ impl CliCommand {
                     command: IdentityCommand::Status(_),
                 })
                 | Self::Doctor(_)
+                | Self::Mcp(McpArgs {
+                    command: McpCommand::Install(_),
+                })
         )
     }
 
@@ -2006,10 +2009,10 @@ fn cmd_init(args: &InitArgs) -> i32 {
     }
 }
 
-fn cmd_mcp_install(args: &McpInstallArgs) -> i32 {
+fn cmd_mcp_install(args: &McpInstallArgs, output: CliOutput) -> i32 {
     let dir = std::path::PathBuf::from(&args.dir);
     let mode = mcp_install_mode(args.dry_run, args.check);
-    match install_mcp_config_prepared(
+    match install_mcp_config_prepared_detail(
         args.agent,
         &dir,
         args.config.as_deref(),
@@ -2017,14 +2020,22 @@ fn cmd_mcp_install(args: &McpInstallArgs) -> i32 {
         args.local_bin,
         mode,
     ) {
-        Ok(outcome) => {
-            println!("{}", outcome.message);
-            outcome.exit_code
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Ok(outcome) => match output {
+            CliOutput::Text => {
+                println!("{}", outcome.message());
+                outcome.exit_code()
+            }
+            CliOutput::Json => {
+                print_json_stdout_with_code(&mcp_install_json(args, &outcome), outcome.exit_code())
+            }
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(&mcp_install_error_json(args, mode, &error), 1),
+        },
     }
 }
 
@@ -2409,27 +2420,6 @@ fn append_init_mcp_install(
     }
 }
 
-fn install_mcp_config(
-    agent: InitAgent,
-    dir: &std::path::Path,
-    config: Option<&str>,
-    command: &str,
-    mode: mcp_config::InstallMode,
-) -> Result<CommandOutcome, String> {
-    let dir = absolute_path(dir)?;
-    mcp_config::install(&mcp_config::InstallOptions {
-        agent,
-        dent8_dir: dir,
-        config_path: config.map(std::path::PathBuf::from),
-        command: command.to_string(),
-        mode,
-    })
-    .map(|result| CommandOutcome {
-        message: result.message(),
-        exit_code: result.exit_code(),
-    })
-}
-
 fn install_mcp_config_prepared(
     agent: InitAgent,
     dir: &std::path::Path,
@@ -2438,19 +2428,139 @@ fn install_mcp_config_prepared(
     local_bin: bool,
     mode: mcp_config::InstallMode,
 ) -> Result<CommandOutcome, String> {
+    install_mcp_config_prepared_detail(agent, dir, config, command, local_bin, mode)
+        .map(PreparedMcpInstall::command_outcome)
+}
+
+fn install_mcp_config_prepared_detail(
+    agent: InitAgent,
+    dir: &std::path::Path,
+    config: Option<&str>,
+    command: Option<&str>,
+    local_bin: bool,
+    mode: mcp_config::InstallMode,
+) -> Result<PreparedMcpInstall, String> {
     let prepared = prepare_mcp_command(dir, command, local_bin, mode)?;
-    let mut outcome = install_mcp_config(agent, dir, config, &prepared.command, mode)?;
-    if let Some(message) = prepared.message {
-        outcome.message = format!("{message}\n\n{}", outcome.message);
-        outcome.exit_code = outcome.exit_code.max(prepared.exit_code);
+    let dir = absolute_path(dir)?;
+    let config = mcp_config::install(&mcp_config::InstallOptions {
+        agent,
+        dent8_dir: dir,
+        config_path: config.map(std::path::PathBuf::from),
+        command: prepared.command.clone(),
+        mode,
+    })?;
+    Ok(PreparedMcpInstall { prepared, config })
+}
+
+struct PreparedMcpInstall {
+    prepared: PreparedMcpCommand,
+    config: mcp_config::InstallResult,
+}
+
+impl PreparedMcpInstall {
+    fn message(&self) -> String {
+        self.prepared.message.as_ref().map_or_else(
+            || self.config.message(),
+            |message| format!("{message}\n\n{}", self.config.message()),
+        )
     }
-    Ok(outcome)
+
+    fn exit_code(&self) -> i32 {
+        self.config.exit_code().max(self.prepared.exit_code)
+    }
+
+    fn command_outcome(self) -> CommandOutcome {
+        CommandOutcome {
+            message: self.message(),
+            exit_code: self.exit_code(),
+        }
+    }
 }
 
 struct PreparedMcpCommand {
     command: String,
     message: Option<String>,
     exit_code: i32,
+    local_bin: Option<PreparedLocalMcpBinary>,
+}
+
+struct PreparedLocalMcpBinary {
+    wrapper: std::path::PathBuf,
+    target: std::path::PathBuf,
+    repo: std::path::PathBuf,
+    action: &'static str,
+    changed: bool,
+    target_executable: bool,
+    build_command: String,
+}
+
+fn mcp_install_json(args: &McpInstallArgs, outcome: &PreparedMcpInstall) -> serde_json::Value {
+    serde_json::json!({
+        "status": mcp_install_status(outcome),
+        "tool": "mcp install",
+        "agent": args.agent.cli_name(),
+        "dir": args.dir.as_str(),
+        "mode": outcome.config.mode_name(),
+        "dry_run": args.dry_run,
+        "check": args.check,
+        "requested_command": args.command.as_deref(),
+        "command_written": outcome.prepared.command.as_str(),
+        "local_bin": args.local_bin,
+        "exit_code": outcome.exit_code(),
+        "config": {
+            "path": outcome.config.path().display().to_string(),
+            "action": outcome.config.action_name(),
+            "changed": outcome.config.changed(),
+            "written": outcome.config.written(),
+            "contents": outcome.config.contents(),
+        },
+        "local_binary": outcome
+            .prepared
+            .local_bin
+            .as_ref()
+            .map(local_mcp_binary_json),
+    })
+}
+
+fn mcp_install_status(outcome: &PreparedMcpInstall) -> &'static str {
+    if outcome.exit_code() == 0 {
+        "ok"
+    } else if outcome.config.mode_name() == "check" {
+        "needs_update"
+    } else {
+        "failed"
+    }
+}
+
+fn local_mcp_binary_json(local: &PreparedLocalMcpBinary) -> serde_json::Value {
+    serde_json::json!({
+        "wrapper": local.wrapper.display().to_string(),
+        "target": local.target.display().to_string(),
+        "repo": local.repo.display().to_string(),
+        "action": local.action,
+        "changed": local.changed,
+        "target_executable": local.target_executable,
+        "build_command": local.build_command.as_str(),
+    })
+}
+
+fn mcp_install_error_json(
+    args: &McpInstallArgs,
+    mode: mcp_config::InstallMode,
+    message: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "mcp install",
+        "agent": args.agent.cli_name(),
+        "dir": args.dir.as_str(),
+        "mode": mode.name(),
+        "dry_run": args.dry_run,
+        "check": args.check,
+        "requested_command": args.command.as_deref(),
+        "local_bin": args.local_bin,
+        "message": message,
+    })
 }
 
 struct LocalMcpBinary {
@@ -2474,6 +2584,7 @@ fn prepare_mcp_command(
             command: command.to_string(),
             message: None,
             exit_code: 0,
+            local_bin: None,
         });
     }
 
@@ -2486,9 +2597,9 @@ fn prepare_mcp_command(
     };
     let changed = existing.as_deref() != Some(expected.as_str());
     let action = match (existing.is_some(), changed) {
-        (false, _) => "create",
-        (true, true) => "update",
-        (true, false) => "leave unchanged",
+        (false, _) => "created",
+        (true, true) => "updated",
+        (true, false) => "unchanged",
     };
     let target_ok = is_executable_file(&local.target);
 
@@ -2507,16 +2618,13 @@ fn prepare_mcp_command(
 
     let (header, exit_code) = match mode {
         mcp_config::InstallMode::Write => (
-            format!(
-                "{} local MCP wrapper: {}",
-                past_tense(action),
-                local.wrapper.display()
-            ),
+            format!("{} local MCP wrapper: {}", action, local.wrapper.display()),
             0,
         ),
         mcp_config::InstallMode::DryRun => (
             format!(
-                "would {action} local MCP wrapper: {}",
+                "{} local MCP wrapper: {}",
+                dry_run_local_bin_action(action),
                 local.wrapper.display()
             ),
             0,
@@ -2533,10 +2641,11 @@ fn prepare_mcp_command(
             1,
         ),
     };
+    let build_command = local_mcp_build_command(&local);
     let mut message = format!(
         "{header}\n  target: {}\n  build: {}",
         local.target.display(),
-        local_mcp_build_command(&local)
+        build_command
     );
     if !target_ok {
         message.push_str("\n  status: target is missing or not executable");
@@ -2546,14 +2655,23 @@ fn prepare_mcp_command(
         command: local.wrapper.to_string_lossy().into_owned(),
         message: Some(message),
         exit_code,
+        local_bin: Some(PreparedLocalMcpBinary {
+            wrapper: local.wrapper,
+            target: local.target,
+            repo: local.repo,
+            action,
+            changed,
+            target_executable: target_ok,
+            build_command,
+        }),
     })
 }
 
-fn past_tense(action: &str) -> &'static str {
+fn dry_run_local_bin_action(action: &str) -> &'static str {
     match action {
-        "create" => "created",
-        "update" => "updated",
-        "leave unchanged" => "unchanged",
+        "created" => "would create",
+        "updated" => "would update",
+        "unchanged" => "would leave unchanged",
         _ => "prepared",
     }
 }

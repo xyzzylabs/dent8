@@ -1505,6 +1505,46 @@ fn mcp_install_local_bin_writes_wrapper_and_config() {
     );
     assert_success(&checked, "mcp install --local-bin --check");
     assert!(stdout(&checked).contains("local MCP wrapper up to date:"));
+
+    let checked_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--local-bin",
+            "--check",
+        ],
+        &[],
+    );
+    assert_success(
+        &checked_json,
+        "mcp install --local-bin --check --output json",
+    );
+    let checked_json = stdout_json(&checked_json);
+    assert_eq!(checked_json["status"], "ok");
+    assert_eq!(checked_json["tool"], "mcp install");
+    assert_eq!(checked_json["agent"], "codex");
+    assert_eq!(checked_json["mode"], "check");
+    assert_eq!(checked_json["local_bin"], true);
+    assert_eq!(
+        checked_json["command_written"],
+        temp.file(".dent8/bin/dent8").to_string_lossy().to_string()
+    );
+    assert_eq!(checked_json["local_binary"]["action"], "unchanged");
+    assert_eq!(checked_json["local_binary"]["changed"], false);
+    assert_eq!(checked_json["local_binary"]["target_executable"], true);
+    assert_eq!(
+        checked_json["local_binary"]["wrapper"],
+        temp.file(".dent8/bin/dent8").to_string_lossy().to_string()
+    );
+    assert_eq!(checked_json["config"]["action"], "unchanged");
+    assert_eq!(checked_json["config"]["changed"], false);
+    assert_eq!(checked_json["config"]["written"], false);
 }
 
 #[cfg(feature = "identity")]
@@ -2719,6 +2759,131 @@ fn mcp_install_dry_run_and_check_do_not_write() {
     );
     assert_success(&up_to_date_check, "mcp install --check after install");
     assert!(stdout(&up_to_date_check).contains("MCP config up to date:"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn mcp_install_json_reports_dry_run_and_check_state() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+    let config_path = temp.file(".codex/config.toml");
+
+    let dry_run_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--command",
+            "/usr/local/bin/dent8",
+            "--dry-run",
+        ],
+        &[],
+    );
+    assert_success(&dry_run_json, "mcp install --dry-run --output json");
+    assert_mcp_install_dry_run_json(&stdout_json(&dry_run_json), &config_path);
+    assert!(
+        !config_path.exists(),
+        "JSON dry-run should not create the MCP config file"
+    );
+
+    let stale_check_json = run_dent8(
+        &[
+            "--output", "json", "mcp", "install", "--agent", "codex", "--dir", &dir, "--check",
+        ],
+        &[],
+    );
+    assert_eq!(stale_check_json.status.code(), Some(1));
+    assert!(
+        stderr(&stale_check_json).is_empty(),
+        "{}",
+        stderr(&stale_check_json)
+    );
+    assert_mcp_install_needs_update_json(&stdout_json(&stale_check_json));
+    assert!(
+        !config_path.exists(),
+        "JSON check should not create the MCP config file"
+    );
+
+    assert_success(
+        &run_dent8(&["mcp", "install", "--agent", "codex", "--dir", &dir], &[]),
+        "mcp install --agent codex",
+    );
+
+    let up_to_date_json = run_dent8(
+        &[
+            "--output", "json", "mcp", "install", "--agent", "codex", "--dir", &dir, "--check",
+        ],
+        &[],
+    );
+    assert_success(&up_to_date_json, "mcp install --check --output json");
+    let up_to_date_json = stdout_json(&up_to_date_json);
+    assert_mcp_install_up_to_date_json(&up_to_date_json);
+}
+
+#[cfg(feature = "identity")]
+fn assert_mcp_install_dry_run_json(output: &Value, config_path: &Path) {
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["tool"], "mcp install");
+    assert_eq!(output["agent"], "codex");
+    assert_eq!(output["mode"], "dry-run");
+    assert_eq!(output["requested_command"], "/usr/local/bin/dent8");
+    assert_eq!(output["command_written"], "/usr/local/bin/dent8");
+    assert_eq!(
+        output["config"]["path"],
+        config_path.to_string_lossy().to_string()
+    );
+    assert_eq!(output["config"]["action"], "created");
+    assert_eq!(output["config"]["changed"], true);
+    assert_eq!(output["config"]["written"], false);
+    assert!(
+        output["config"]["contents"]
+            .as_str()
+            .expect("rendered config")
+            .contains("command = \"/usr/local/bin/dent8\"")
+    );
+    assert!(
+        output["local_binary"].is_null(),
+        "non-local-bin install should not report local binary metadata"
+    );
+}
+
+#[cfg(feature = "identity")]
+fn assert_mcp_install_needs_update_json(output: &Value) {
+    assert_eq!(output["status"], "needs_update");
+    assert_eq!(output["mode"], "check");
+    assert_eq!(output["exit_code"], 1);
+    assert_eq!(output["config"]["action"], "created");
+    assert_eq!(output["config"]["changed"], true);
+    assert_eq!(output["config"]["written"], false);
+}
+
+#[cfg(feature = "identity")]
+fn assert_mcp_install_up_to_date_json(output: &Value) {
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["config"]["action"], "unchanged");
+    assert_eq!(output["config"]["changed"], false);
+    assert_eq!(output["config"]["written"], false);
 }
 
 #[cfg(feature = "identity")]

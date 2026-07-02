@@ -181,9 +181,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   [--command COMMAND|--local-bin] [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.
   `--dry-run` renders the expected file without writing; `--check` does not write and exits
-  `0` only when the existing file already matches. It reads the generated `.dent8/env` plus the
-  selected source's identity env instead of asking the user to paste paths by hand. Built-in
-  defaults cover Codex
+  `0` only when the existing file already matches. Supports `--output json` with structured
+  config action, rendered contents, and local-bin wrapper metadata. It reads the generated
+  `.dent8/env` plus the selected source's identity env instead of asking the user to paste paths
+  by hand. Built-in defaults cover Codex
   (`.codex/config.toml`), Claude Code/Grok Build (`.mcp.json`), Cursor
   (`.cursor/mcp.json`), Gemini (`.gemini/settings.json`), and Cascade
   (`.windsurf/mcp_config.json`); Hecate requires `--config` because its MCP servers live in a
@@ -290,8 +291,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
   data stays plain). The global `--output text|json` flag currently supports the write
   commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `authority`,
-  `identity status`, and `doctor`; unsupported commands fail closed with a targeted usage
-  error rather than falling back to prose.
+  `identity status`, `doctor`, and `mcp install`; unsupported commands fail closed with a
+  targeted usage error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload
