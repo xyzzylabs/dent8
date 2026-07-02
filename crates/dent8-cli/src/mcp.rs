@@ -20,11 +20,12 @@ use dent8_core::{AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimLifecycle, Cla
 use dent8_store::{EventFilter, EventStore, IntegrityReceipt};
 use serde_json::{Value, json};
 
-use crate::{
-    OpError, display_value, load_store, log_path, op_assert, op_conflicts, op_contradict,
-    op_derive, op_expire, op_explain, op_explain_receipt, op_list_subjects, op_reinforce,
-    op_replay, op_retract, op_supersede, parse_authority, short, verify_log, with_write_retry,
+use crate::ops::{
+    OpError, op_assert, op_conflicts, op_contradict, op_derive, op_expire, op_explain,
+    op_explain_receipt, op_list_subjects, op_reinforce, op_replay, op_retract, op_supersede,
+    with_write_retry,
 };
+use crate::{display_value, load_store, log_path, parse_authority, short, verify_log};
 
 /// The latest MCP protocol revision this server prefers.
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";

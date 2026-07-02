@@ -1379,7 +1379,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     fn event(event_id: &str, claim_id: &str, value: &str) -> ClaimEvent {
-        crate::build_event(
+        crate::ops::build_event(
             event_id,
             claim_id,
             "repo",
