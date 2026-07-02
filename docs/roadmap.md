@@ -160,13 +160,13 @@ the write path, show provenance/authority/freshness/lifecycle information, and s
 same operation code as MCP. `verify` checks chain integrity, lineage issues, and retraction
 taint. The CLI parser is now `clap`, with generated shell completions and a global
 `--color auto|always|never` presentation flag. The write commands, `explain`, `replay`,
-`facts list`, `verify`, `conflicts`, `eval`, `authority`, `identity status`, `doctor`, and
-`mcp install` support `--output json` for scripts/agents; other commands fail closed when
+`facts list`, `verify`, `conflicts`, `eval`, `init`, `authority`, `identity status`, `doctor`,
+and `mcp install` support `--output json` for scripts/agents; other commands fail closed when
 JSON is requested until their structured contract is designed.
 
 **Remaining.** JSON contracts for setup/configuration commands beyond `authority`,
-`identity status`, and `mcp install`, `replay_runs` persistence, `--as-of` / `--valid-at`,
-`valid_to` intervals, and a richer lineage/debugger view are future work.
+`identity status`, `init`, and `mcp install`, `replay_runs` persistence, `--as-of` /
+`--valid-at`, `valid_to` intervals, and a richer lineage/debugger view are future work.
 
 **Crates.** `clap`, `clap_complete`, `serde_json`.
 

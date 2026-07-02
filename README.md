@@ -121,7 +121,7 @@ lists the full surface (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/
 `init`/`doctor`/`completions`/`mcp serve`/`mcp install`). Use the global `--color auto|always|never` flag to control
 colored help, errors, and verdict words in human-facing output. Use
 `--output json` for stable machine-readable output on the write commands, `explain`,
-`replay`, `facts list`, `verify`, `conflicts`, `eval`, `authority`, `identity status`,
+`replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`, `authority`, `identity status`,
 `doctor`, and `mcp install`; unsupported commands fail closed instead of silently returning
 prose.
 
@@ -258,7 +258,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   is what it is.
 - `dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-diagnostics]`:
   list known fact streams, hiding internal doctor/write-check diagnostics by default.
-- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|authority|identity status|doctor|mcp install`:
+- `dent8 --output json <write-command>|explain|replay|facts list|verify|conflicts|eval|init|authority|identity status|doctor|mcp install`:
   emit stable JSON for scripting and agent-side checks while preserving existing text output
   by default.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB

@@ -1380,6 +1380,155 @@ fn init_agent_profile_selects_source_and_implies_identity() {
     assert!(temp.file(".dent8/identities/source_codex.key").exists());
 }
 
+#[cfg(feature = "identity")]
+#[test]
+fn init_emits_machine_readable_json() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    let init = run_dent8(
+        &[
+            "--output",
+            "json",
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--issuer-key",
+            &issuer_key,
+            "--witness",
+        ],
+        &[],
+    );
+    assert_success(&init, "init --output json --agent codex --witness");
+    assert!(stderr(&init).is_empty(), "{}", stderr(&init));
+    let init = stdout_json(&init);
+    assert_eq!(init["status"], "ok");
+    assert_eq!(init["tool"], "init");
+    assert_eq!(init["dir"], dir);
+    assert_eq!(init["source"], "source:codex");
+    assert_eq!(init["agent"], "codex");
+    assert_eq!(init["store"]["kind"], "file");
+    assert_eq!(init["store"]["env_key"], "DENT8_LOG");
+    assert!(
+        init["store"]["env_value"]
+            .as_str()
+            .expect("store env value")
+            .ends_with(".dent8/codex-memory.jsonl")
+    );
+    assert_eq!(
+        init["authority"]["path"],
+        temp.file(".dent8/authority.json")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(
+        init["env"]["path"],
+        temp.file(".dent8/env").to_string_lossy().to_string()
+    );
+    assert_eq!(init["identity"]["source"], "source:codex");
+    assert_eq!(init["identity"]["issuer"], "owner");
+    assert_eq!(init["identity"]["max_authority"], "High");
+    assert_eq!(
+        init["identity"]["issuer_key_path"],
+        fs::canonicalize(&issuer_key)
+            .expect("issuer key")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(
+        init["identity"]["env_file"],
+        fs::canonicalize(temp.file(".dent8/identity-codex.env"))
+            .expect("identity env")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(
+        init["witness"]["log_path"],
+        temp.file(".dent8/witness.jsonl")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(init["witness"]["signing_key_configured"], false);
+    assert!(
+        init["mcp_install"].is_null(),
+        "plain init should not report MCP install"
+    );
+    assert!(temp.file(".dent8/env").exists());
+    assert!(temp.file(".dent8/identity-codex.env").exists());
+    assert!(temp.file(".dent8/witness.jsonl").exists());
+}
+
+#[cfg(feature = "identity")]
+#[test]
+fn init_json_reports_mcp_check_state() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let config_path = temp.file(".codex/config.toml");
+
+    let init = run_dent8(
+        &[
+            "--output",
+            "json",
+            "init",
+            "--dir",
+            &dir,
+            "--agent",
+            "codex",
+            "--issuer-key",
+            &issuer_key,
+            "--install-mcp",
+            "--mcp-check",
+        ],
+        &[],
+    );
+    assert_eq!(init.status.code(), Some(1));
+    assert!(stderr(&init).is_empty(), "{}", stderr(&init));
+    let init = stdout_json(&init);
+    assert_eq!(init["status"], "needs_update");
+    assert_eq!(init["exit_code"], 1);
+    assert_eq!(init["mcp_install"]["status"], "needs_update");
+    assert_eq!(init["mcp_install"]["mode"], "check");
+    assert_eq!(
+        init["mcp_install"]["config"]["path"],
+        config_path.to_string_lossy().to_string()
+    );
+    assert_eq!(init["mcp_install"]["config"]["action"], "created");
+    assert_eq!(init["mcp_install"]["config"]["changed"], true);
+    assert_eq!(init["mcp_install"]["config"]["written"], false);
+    assert!(
+        init["mcp_install"]["config"]["contents"]
+            .as_str()
+            .expect("rendered config")
+            .contains("[mcp_servers.dent8]")
+    );
+    assert!(temp.file(".dent8/env").exists());
+    assert!(
+        !config_path.exists(),
+        "init --mcp-check should not write the MCP config"
+    );
+}
+
+#[test]
+fn init_json_reports_errors() {
+    let init = run_dent8(&["--output", "json", "init", "--store", "postgres"], &[]);
+    assert_eq!(init.status.code(), Some(1));
+    assert!(stdout(&init).is_empty(), "{}", stdout(&init));
+    let init = stderr_json(&init);
+    assert_eq!(init["status"], "failed");
+    assert_eq!(init["tool"], "init");
+    assert_eq!(init["store"], "postgres");
+    assert!(
+        init["message"]
+            .as_str()
+            .expect("message")
+            .contains("--store-url postgres://")
+    );
+}
+
 #[test]
 fn init_rejects_mcp_command_without_install_mcp() {
     let output = run_dent8(&["init", "--mcp-command", "/usr/local/bin/dent8"], &[]);
@@ -4232,6 +4381,16 @@ fn stdout_json(output: &Output) -> Value {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn stderr_json(output: &Output) -> Value {
+    serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
+        panic!(
+            "stderr is not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
+            stdout(output),
+            stderr(output)
+        )
+    })
 }
 
 #[cfg(feature = "witness")]

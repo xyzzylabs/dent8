@@ -37,8 +37,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   file; the MCP install step can be rendered (`--mcp-dry-run`) or checked without writing
   (`--mcp-check`). If the MCP patch fails after init (for example invalid TOML/JSON), init
   reports the partial success and prints the follow-up `dent8 mcp install ...` command instead
-  of hiding the created `.dent8` bundle. It refuses to rewrite the env file unless `--force` is passed and refuses to overwrite
-  existing identity key/grant material.
+  of hiding the created `.dent8` bundle. Supports `--output json` with structured paths,
+  store/authority/identity/witness fields, and nested MCP install state. It refuses to rewrite
+  the env file unless `--force` is passed and refuses to overwrite existing identity key/grant
+  material.
 - **`dent8 agent add --agent <profile> [--dir .dent8] [--authority <level>]
   [--issuer ISSUER] [--issuer-key PATH] [--mcp-config PATH]
   [--mcp-command COMMAND|--mcp-local-bin]`** —
@@ -290,8 +292,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - `dent8 --version`, `dent8 --help`, and the global presentation flag
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
   data stays plain). The global `--output text|json` flag currently supports the write
-  commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `authority`,
-  `identity status`, `doctor`, and `mcp install`; unsupported commands fail closed with a
+  commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
+  `authority`, `identity status`, `doctor`, and `mcp install`; unsupported commands fail closed with a
   targeted usage error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**

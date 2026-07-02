@@ -32,7 +32,7 @@ mod witness;
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, authority, identity status, doctor, mcp install";
+                                      eval, init, authority, identity status, doctor, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -94,7 +94,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Verify) => cmd_verify(cli.output),
         Some(CliCommand::Conflicts) => cmd_conflicts(cli.output),
         Some(CliCommand::Eval) => cmd_eval(cli.output),
-        Some(CliCommand::Init(args)) => cmd_init(&args),
+        Some(CliCommand::Init(args)) => cmd_init(&args, cli.output),
         Some(CliCommand::Agent(args)) => match args.command {
             AgentCommand::Add(args) => cmd_agent_add(&args),
         },
@@ -295,6 +295,7 @@ impl CliCommand {
                 | Self::Verify
                 | Self::Conflicts
                 | Self::Eval
+                | Self::Init(_)
                 | Self::Authority(_)
                 | Self::Identity(IdentityArgs {
                     command: IdentityCommand::Status(_),
@@ -650,6 +651,16 @@ enum InitStore {
     File,
     Sqlite,
     Postgres,
+}
+
+impl InitStore {
+    fn name(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Sqlite => "sqlite",
+            Self::Postgres => "postgres",
+        }
+    }
 }
 
 #[derive(Args, Debug)]
@@ -1996,16 +2007,24 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
     }
 }
 
-fn cmd_init(args: &InitArgs) -> i32 {
+fn cmd_init(args: &InitArgs, output: CliOutput) -> i32 {
     match init_project(args) {
-        Ok(outcome) => {
-            println!("{}", outcome.message);
-            outcome.exit_code
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            1
-        }
+        Ok(outcome) => match output {
+            CliOutput::Text => {
+                println!("{}", outcome.message);
+                outcome.exit_code
+            }
+            CliOutput::Json => {
+                print_json_stdout_with_code(&init_json(args, &outcome), outcome.exit_code)
+            }
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(&init_error_json(args, &error), 1),
+        },
     }
 }
 
@@ -2285,7 +2304,65 @@ struct CommandOutcome {
     exit_code: i32,
 }
 
-fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
+struct InitOutcome {
+    message: String,
+    exit_code: i32,
+    dir: std::path::PathBuf,
+    source: String,
+    agent: Option<InitAgent>,
+    authority_path: std::path::PathBuf,
+    authority_level: AuthorityLevel,
+    env_path: std::path::PathBuf,
+    store: InitStoreOutput,
+    identity: InitIdentityOutput,
+    witness: InitWitnessOutput,
+    mcp_install: Option<InitMcpInstallOutcome>,
+}
+
+struct InitStoreOutput {
+    kind: InitStore,
+    env_key: &'static str,
+    env_value: String,
+    summary: String,
+}
+
+struct InitMcpInstallOutcome {
+    agent: InitAgent,
+    dir: std::path::PathBuf,
+    config: Option<String>,
+    command: Option<String>,
+    local_bin: bool,
+    mode: mcp_config::InstallMode,
+    result: Result<PreparedMcpInstall, String>,
+}
+
+impl InitMcpInstallOutcome {
+    fn message(&self) -> String {
+        match &self.result {
+            Ok(install) => install.message(),
+            Err(error) => {
+                let mut message = format!(
+                    "MCP install failed: {error}\nRun: dent8 mcp install --agent {} --dir {}",
+                    self.agent.cli_name(),
+                    shell_quote(&self.dir.to_string_lossy())
+                );
+                if let Some(config) = self.config.as_deref() {
+                    message.push_str(" --config ");
+                    message.push_str(&shell_quote(config));
+                }
+                message
+            }
+        }
+    }
+
+    fn exit_code(&self) -> i32 {
+        self.result
+            .as_ref()
+            .map_or(1, PreparedMcpInstall::exit_code)
+    }
+}
+
+fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
     let dir = std::path::PathBuf::from(&args.dir);
     let dir = absolute_path(&dir)?;
     let source = init_source(args);
@@ -2312,8 +2389,7 @@ fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
     std::fs::create_dir_all(&dir)
         .map_err(|error| format!("cannot create {}: {error}", dir.display()))?;
 
-    let (store_line, store_summary) =
-        init_store_line(args.store, args.store_url.as_deref(), &dir, args.agent)?;
+    let store = init_store_output(args.store, args.store_url.as_deref(), &dir, args.agent)?;
     if args.store == InitStore::File {
         let log_path = init_file_log_path(&dir, args.agent);
         std::fs::OpenOptions::new()
@@ -2337,32 +2413,89 @@ fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
 
     let identity = init_identity(args, &dir, &source, bootstrap_identity)?;
     let witness = init_witness(args, &dir)?;
-    let agent_summary = args.agent.map_or(String::new(), |agent| {
-        format!("\n  agent profile: {}", agent.example_path())
-    });
-    let agent_next = args.agent.map_or(String::new(), |agent| {
-        format!("\n\nAgent wiring:\n  see {}", agent.example_path())
-    });
+    let env_contents = init_env_contents(&env_path, &authority_path, &store, &witness);
+    write_atomic(&env_path.to_string_lossy(), &env_contents)?;
 
-    let env_contents = format!(
+    let mut message = init_base_message(
+        &dir,
+        &authority_path,
+        &source,
+        args.authority.level(),
+        &store,
+        &env_path,
+        &identity,
+        &witness,
+        args.agent,
+    );
+    let mcp_install = init_mcp_install(args, &dir)?;
+    let exit_code = mcp_install
+        .as_ref()
+        .map_or(0, InitMcpInstallOutcome::exit_code);
+    if let Some(install) = mcp_install.as_ref() {
+        message.push_str("\n\n");
+        message.push_str(&install.message());
+    }
+    Ok(InitOutcome {
+        message,
+        exit_code,
+        dir,
+        source,
+        agent: args.agent,
+        authority_path,
+        authority_level: args.authority.level(),
+        env_path,
+        store,
+        identity,
+        witness,
+        mcp_install,
+    })
+}
+
+fn init_env_contents(
+    env_path: &std::path::Path,
+    authority_path: &std::path::Path,
+    store: &InitStoreOutput,
+    witness: &InitWitnessOutput,
+) -> String {
+    format!(
         "# dent8 local environment\n\
          # Load with: set -a; . {}; set +a\n\
          DENT8_AUTHORITY={}\n\
          DENT8_REQUIRE_AUTHORITY=1\n\
-         {store_line}\n\
-         {witness_lines}",
+         {}\n\
+         {}",
         shell_quote(&env_path.to_string_lossy()),
         shell_quote(&authority_path.to_string_lossy()),
-        witness_lines = witness.env_lines,
-    );
-    write_atomic(&env_path.to_string_lossy(), &env_contents)?;
+        store.env_line(),
+        witness.env_lines,
+    )
+}
 
-    let mut message = format!(
-        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {store_summary}\n  env: {}{}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
+#[allow(clippy::too_many_arguments)]
+fn init_base_message(
+    dir: &std::path::Path,
+    authority_path: &std::path::Path,
+    source: &str,
+    authority: AuthorityLevel,
+    store: &InitStoreOutput,
+    env_path: &std::path::Path,
+    identity: &InitIdentityOutput,
+    witness: &InitWitnessOutput,
+    agent: Option<InitAgent>,
+) -> String {
+    let agent_summary = agent.map_or(String::new(), |agent| {
+        format!("\n  agent profile: {}", agent.example_path())
+    });
+    let agent_next = agent.map_or(String::new(), |agent| {
+        format!("\n\nAgent wiring:\n  see {}", agent.example_path())
+    });
+    format!(
+        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {}\n  env: {}{}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
         dir.display(),
         authority_path.display(),
         source,
-        args.authority.level(),
+        authority,
+        store.summary,
         env_path.display(),
         identity.summary,
         witness.summary,
@@ -2371,21 +2504,13 @@ fn init_project(args: &InitArgs) -> Result<CommandOutcome, String> {
         identity.env_load,
         source,
         agent_next,
-    );
-    if let Some(exit_code) = append_init_mcp_install(args, &dir, &mut message)? {
-        return Ok(CommandOutcome { message, exit_code });
-    }
-    Ok(CommandOutcome {
-        message,
-        exit_code: 0,
-    })
+    )
 }
 
-fn append_init_mcp_install(
+fn init_mcp_install(
     args: &InitArgs,
     dir: &std::path::Path,
-    message: &mut String,
-) -> Result<Option<i32>, String> {
+) -> Result<Option<InitMcpInstallOutcome>, String> {
     if !args.mcp.install_mcp {
         return Ok(None);
     }
@@ -2393,31 +2518,171 @@ fn append_init_mcp_install(
         .agent
         .ok_or_else(|| "`dent8 init --install-mcp` requires --agent".to_string())?;
     let mode = mcp_install_mode(args.mcp.mcp_dry_run, args.mcp.mcp_check);
-    match install_mcp_config_prepared(
+    let result = install_mcp_config_prepared_detail(
         agent,
         dir,
         args.mcp.mcp_config.as_deref(),
         args.mcp.mcp_command.as_deref(),
         args.mcp.mcp_local_bin,
         mode,
-    ) {
-        Ok(install) => {
-            message.push_str("\n\n");
-            message.push_str(&install.message);
-            Ok(Some(install.exit_code))
+    );
+    Ok(Some(InitMcpInstallOutcome {
+        agent,
+        dir: dir.to_path_buf(),
+        config: args.mcp.mcp_config.clone(),
+        command: args.mcp.mcp_command.clone(),
+        local_bin: args.mcp.mcp_local_bin,
+        mode,
+        result,
+    }))
+}
+
+fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "status": init_status(outcome),
+        "tool": "init",
+        "exit_code": outcome.exit_code,
+        "dir": path_string(&outcome.dir),
+        "source": outcome.source.as_str(),
+        "agent": outcome.agent.map(InitAgent::cli_name),
+        "authority": {
+            "path": path_string(&outcome.authority_path),
+            "source": outcome.source.as_str(),
+            "max_authority": outcome.authority_level.name(),
+        },
+        "store": {
+            "kind": outcome.store.kind.name(),
+            "env_key": outcome.store.env_key,
+            "env_value": outcome.store.env_value.as_str(),
+            "summary": outcome.store.summary.as_str(),
+        },
+        "env": {
+            "path": path_string(&outcome.env_path),
+            "load_command": format!("set -a; . {}; set +a", shell_quote(&outcome.env_path.to_string_lossy())),
+        },
+        "identity": init_identity_json(&outcome.identity),
+        "witness": init_witness_json(&outcome.witness),
+        "mcp_install": outcome.mcp_install.as_ref().map(init_mcp_install_json),
+        "next": {
+            "doctor_command": format!("dent8 doctor --source {} --write-check", outcome.source),
+            "agent_example": outcome.agent.map(InitAgent::example_path),
+        },
+        "message": outcome.message.as_str(),
+        "requested": {
+            "dir": args.dir.as_str(),
+            "store": args.store.name(),
+            "store_url": args.store_url.as_deref(),
+            "source": args.source.as_deref(),
+            "agent": args.agent.map(InitAgent::cli_name),
+            "identity": args.identity,
+            "install_mcp": args.mcp.install_mcp,
+        },
+    })
+}
+
+fn init_status(outcome: &InitOutcome) -> &'static str {
+    match outcome.mcp_install.as_ref() {
+        Some(install) if install.result.is_err() => "partial",
+        Some(install)
+            if install
+                .result
+                .as_ref()
+                .is_ok_and(|mcp| mcp_install_status(mcp) == "needs_update") =>
+        {
+            "needs_update"
         }
-        Err(error) => {
-            message.push_str("\n\nMCP install failed: ");
-            message.push_str(&error);
-            message.push_str("\nRun: dent8 mcp install --agent ");
-            message.push_str(agent.cli_name());
-            if let Some(config) = args.mcp.mcp_config.as_deref() {
-                message.push_str(" --config ");
-                message.push_str(&shell_quote(config));
-            }
-            Ok(Some(1))
-        }
+        _ => "ok",
     }
+}
+
+fn init_error_json(args: &InitArgs, message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "failed",
+        "tool": "init",
+        "dir": args.dir.as_str(),
+        "source": args.source.as_deref(),
+        "agent": args.agent.map(InitAgent::cli_name),
+        "store": args.store.name(),
+        "store_url": args.store_url.as_deref(),
+        "install_mcp": args.mcp.install_mcp,
+        "message": message,
+    })
+}
+
+fn init_identity_json(identity: &InitIdentityOutput) -> serde_json::Value {
+    if !identity.enabled {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "source": identity.source.as_deref(),
+        "issuer": identity.issuer.as_deref(),
+        "max_authority": identity.max_authority.map(AuthorityLevel::name),
+        "scope": identity.scope.as_deref(),
+        "issuer_key_path": identity.issuer_key_path.as_ref().map(|path| path_string(path)),
+        "trust_file": identity.trust_file.as_ref().map(|path| path_string(path)),
+        "active_grants_file": identity.active_grants_file.as_ref().map(|path| path_string(path)),
+        "grant_file": identity.grant_file.as_ref().map(|path| path_string(path)),
+        "source_key_path": identity.source_key_path.as_ref().map(|path| path_string(path)),
+        "env_file": identity.env_file.as_ref().map(|path| path_string(path)),
+    })
+}
+
+fn init_witness_json(witness: &InitWitnessOutput) -> serde_json::Value {
+    if !witness.enabled {
+        return serde_json::Value::Null;
+    }
+    serde_json::json!({
+        "log_path": witness.log_path.as_ref().map(|path| path_string(path)),
+        "pubkey_path": witness.pubkey_path.as_ref().map(|path| path_string(path)),
+        "signing_key_configured": false,
+    })
+}
+
+fn init_mcp_install_json(install: &InitMcpInstallOutcome) -> serde_json::Value {
+    match &install.result {
+        Ok(outcome) => serde_json::json!({
+            "status": mcp_install_status(outcome),
+            "tool": "mcp install",
+            "agent": install.agent.cli_name(),
+            "dir": path_string(&install.dir),
+            "mode": install.mode.name(),
+            "dry_run": install.mode == mcp_config::InstallMode::DryRun,
+            "check": install.mode == mcp_config::InstallMode::Check,
+            "requested_command": install.command.as_deref(),
+            "command_written": outcome.prepared.command.as_str(),
+            "local_bin": install.local_bin,
+            "exit_code": outcome.exit_code(),
+            "config": {
+                "path": outcome.config.path().display().to_string(),
+                "action": outcome.config.action_name(),
+                "changed": outcome.config.changed(),
+                "written": outcome.config.written(),
+                "contents": outcome.config.contents(),
+            },
+            "local_binary": outcome
+                .prepared
+                .local_bin
+                .as_ref()
+                .map(local_mcp_binary_json),
+        }),
+        Err(message) => serde_json::json!({
+            "status": "failed",
+            "tool": "mcp install",
+            "agent": install.agent.cli_name(),
+            "dir": path_string(&install.dir),
+            "mode": install.mode.name(),
+            "dry_run": install.mode == mcp_config::InstallMode::DryRun,
+            "check": install.mode == mcp_config::InstallMode::Check,
+            "requested_command": install.command.as_deref(),
+            "local_bin": install.local_bin,
+            "exit_code": 1,
+            "message": message.as_str(),
+        }),
+    }
+}
+
+fn path_string(path: &std::path::Path) -> String {
+    path.display().to_string()
 }
 
 fn install_mcp_config_prepared(
@@ -2798,8 +3063,19 @@ fn preflight_identity(
 }
 
 struct InitIdentityOutput {
+    enabled: bool,
     summary: String,
     env_load: String,
+    source: Option<String>,
+    issuer: Option<String>,
+    max_authority: Option<AuthorityLevel>,
+    scope: Option<String>,
+    issuer_key_path: Option<std::path::PathBuf>,
+    trust_file: Option<std::path::PathBuf>,
+    active_grants_file: Option<std::path::PathBuf>,
+    grant_file: Option<std::path::PathBuf>,
+    source_key_path: Option<std::path::PathBuf>,
+    env_file: Option<std::path::PathBuf>,
 }
 
 #[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
@@ -2813,8 +3089,19 @@ fn init_identity(
     {
         if !enabled {
             return Ok(InitIdentityOutput {
+                enabled: false,
                 summary: String::new(),
                 env_load: String::new(),
+                source: None,
+                issuer: None,
+                max_authority: None,
+                scope: None,
+                issuer_key_path: None,
+                trust_file: None,
+                active_grants_file: None,
+                grant_file: None,
+                source_key_path: None,
+                env_file: None,
             });
         }
         let identity = identity::bootstrap_bundle(
@@ -2826,40 +3113,70 @@ fn init_identity(
             &args.identity_scope,
             args.identity_expires_at_ms,
         )?;
+        let env_load = format!(
+            "\n  . {}",
+            shell_quote(&identity.env_file.to_string_lossy())
+        );
+        let summary = format!(
+            "\n  identity: {} (source key: {})\n  identity env: {}",
+            identity.grant_file.display(),
+            identity.source_key_path.display(),
+            identity.env_file.display(),
+        );
         Ok(InitIdentityOutput {
-            summary: format!(
-                "\n  identity: {} (source key: {})\n  identity env: {}",
-                identity.grant_file.display(),
-                identity.source_key_path.display(),
-                identity.env_file.display(),
-            ),
-            env_load: format!(
-                "\n  . {}",
-                shell_quote(&identity.env_file.to_string_lossy())
-            ),
+            enabled: true,
+            summary,
+            env_load,
+            source: Some(identity.source),
+            issuer: Some(identity.issuer),
+            max_authority: Some(identity.max_authority),
+            scope: Some(identity.scope),
+            issuer_key_path: Some(identity.issuer_key_path),
+            trust_file: Some(identity.trust_file),
+            active_grants_file: Some(identity.active_grants_file),
+            grant_file: Some(identity.grant_file),
+            source_key_path: Some(identity.source_key_path),
+            env_file: Some(identity.env_file),
         })
     }
     #[cfg(not(feature = "identity"))]
     {
         let _ = (args, dir, source, enabled);
         Ok(InitIdentityOutput {
+            enabled: false,
             summary: String::new(),
             env_load: String::new(),
+            source: None,
+            issuer: None,
+            max_authority: None,
+            scope: None,
+            issuer_key_path: None,
+            trust_file: None,
+            active_grants_file: None,
+            grant_file: None,
+            source_key_path: None,
+            env_file: None,
         })
     }
 }
 
 struct InitWitnessOutput {
+    enabled: bool,
     summary: String,
     env_lines: String,
+    log_path: Option<std::path::PathBuf>,
+    pubkey_path: Option<std::path::PathBuf>,
 }
 
 fn init_witness(args: &InitArgs, dir: &std::path::Path) -> Result<InitWitnessOutput, String> {
     let enabled = args.witness || args.witness_log.is_some() || args.witness_pubkey.is_some();
     if !enabled {
         return Ok(InitWitnessOutput {
+            enabled: false,
             summary: String::new(),
             env_lines: String::new(),
+            log_path: None,
+            pubkey_path: None,
         });
     }
 
@@ -2889,6 +3206,7 @@ fn init_witness(args: &InitArgs, dir: &std::path::Path) -> Result<InitWitnessOut
     }
 
     Ok(InitWitnessOutput {
+        enabled: true,
         summary: format!(
             "\n  witness: {} (public key: {}; verification config only)",
             log_path.display(),
@@ -2899,6 +3217,8 @@ fn init_witness(args: &InitArgs, dir: &std::path::Path) -> Result<InitWitnessOut
             shell_quote(&log_path.to_string_lossy()),
             shell_quote(&pubkey_path.to_string_lossy())
         ),
+        log_path: Some(log_path),
+        pubkey_path: Some(pubkey_path),
     })
 }
 
@@ -2919,30 +3239,40 @@ fn init_source(args: &InitArgs) -> String {
         .unwrap_or_else(|| "source:local".to_string())
 }
 
-fn init_store_line(
+impl InitStoreOutput {
+    fn env_line(&self) -> String {
+        format!("{}={}", self.env_key, shell_quote(&self.env_value))
+    }
+}
+
+fn init_store_output(
     store: InitStore,
     store_url: Option<&str>,
     dir: &std::path::Path,
     agent: Option<InitAgent>,
-) -> Result<(String, String), String> {
+) -> Result<InitStoreOutput, String> {
     match store {
         InitStore::File => {
             let log = init_file_log_path(dir, agent);
-            let value = log.to_string_lossy();
-            Ok((
-                format!("DENT8_LOG={}", shell_quote(&value)),
-                format!("file dev log at {}", log.display()),
-            ))
+            let env_value = log.to_string_lossy().into_owned();
+            Ok(InitStoreOutput {
+                kind: store,
+                env_key: "DENT8_LOG",
+                env_value,
+                summary: format!("file dev log at {}", log.display()),
+            })
         }
         InitStore::Sqlite => {
             let url = store_url.map_or_else(
                 || format!("sqlite://{}", dir.join("dent8.db").display()),
                 str::to_string,
             );
-            Ok((
-                format!("DENT8_STORE_URL={}", shell_quote(&url)),
-                format!("SQLite backend at {url} (requires `--features sqlite` build)"),
-            ))
+            Ok(InitStoreOutput {
+                kind: store,
+                env_key: "DENT8_STORE_URL",
+                env_value: url.clone(),
+                summary: format!("SQLite backend at {url} (requires `--features sqlite` build)"),
+            })
         }
         InitStore::Postgres => {
             let Some(url) = store_url else {
@@ -2950,10 +3280,14 @@ fn init_store_line(
                     "`dent8 init --store postgres` needs `--store-url postgres://...`".to_string(),
                 );
             };
-            Ok((
-                format!("DENT8_STORE_URL={}", shell_quote(url)),
-                format!("Postgres backend at {url} (requires `--features postgres` build)"),
-            ))
+            Ok(InitStoreOutput {
+                kind: store,
+                env_key: "DENT8_STORE_URL",
+                env_value: url.to_string(),
+                summary: format!(
+                    "Postgres backend at {url} (requires `--features postgres` build)"
+                ),
+            })
         }
     }
 }
