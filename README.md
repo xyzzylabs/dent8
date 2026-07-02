@@ -66,6 +66,15 @@ dent8 init --agent codex --install-mcp    # source:codex + signed identity + Cod
 dent8 doctor --agent codex --write-check  # installed MCP smoke + MCP firewall write-check
 ```
 
+For multiple agents in one belief base, initialize a shared backend first and then add each
+agent profile:
+
+```sh
+dent8 init --agent codex --store sqlite --install-mcp
+dent8 agent add --agent cursor
+dent8 agent add --agent claude-code
+```
+
 Use `dent8 mcp install --agent <profile>` to patch/show an existing agent MCP config later
 (`--dry-run` renders without writing; `--check` exits non-zero if the config would change).
 If doctor reports a stale generated identity bundle or MCP env, `dent8 doctor --agent
@@ -82,8 +91,11 @@ config back, smokes that exact command/args/cwd/env, and can run the write-check
 installed MCP server. Stdio MCP clients normally launch their own
 dent8 subprocess, but those processes can share the same operational belief base by using the
 same `DENT8_STORE_URL` (Postgres is the production-shaped multi-agent store) while keeping
-distinct per-agent grants/keys for provenance. A single long-lived local/remote MCP daemon over
-HTTP is future transport work, not part of v0. `dent8 identity status` checks a local
+distinct per-agent grants/keys for provenance. `dent8 agent add --agent <profile>` is the
+one-command path for that shared-backend case: it refuses file-dev bundles, adds/repairs the
+agent's identity, grants its source an authority ceiling, patches the MCP config, and prints
+the follow-up doctor command. A single long-lived local/remote MCP daemon over HTTP is future
+transport work, not part of v0. `dent8 identity status` checks a local
 identity bundle; `dent8 identity repair-env` repairs legacy generated identity env /
 active-grants files from the current signed grant without rotating keys; and
 `dent8 identity rotate-source` replaces the active source key/grant while keeping the stable
@@ -201,6 +213,9 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 - `dent8 init`: create a local `.dent8/` setup: env file, authority registry, and selected
   file/SQLite/Postgres store profile; optional `--witness` adds verifier-side signed-head
   paths without exposing the witness signing key to the writer env.
+- `dent8 agent add --agent <profile>`: add a second agent to an existing shared
+  SQLite/Postgres-backed `.dent8/` bundle, creating/reusing that agent's authority grant,
+  signed identity env, and MCP config.
 - `dent8 doctor [--agent <profile>] [--repair] [--write-check]`: inspect binary, store, authority,
   witness coverage when configured, verify, MCP availability; with `--agent`, validate the
   generated bundle/config and smoke `mcp serve` with `initialize` + `tools/list`;

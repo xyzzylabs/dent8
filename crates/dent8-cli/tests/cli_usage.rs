@@ -1285,6 +1285,54 @@ fn mcp_install_rejects_second_agent_on_another_agents_file_log() {
     );
 }
 
+#[cfg(feature = "identity")]
+#[test]
+fn agent_add_rejects_file_store_bundle() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+
+    let added = run_dent8(
+        &[
+            "agent",
+            "add",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--issuer-key",
+            &issuer_key,
+        ],
+        &[],
+    );
+    assert_eq!(added.status.code(), Some(1));
+    let output = format!("{}{}", stdout(&added), stderr(&added));
+    assert!(
+        output.contains("DENT8_STORE_URL") && output.contains("file-dev bundle"),
+        "agent add should require a shared backend; output:\n{output}"
+    );
+    assert!(
+        !temp.file(".dent8/identity-claude-code.env").exists(),
+        "agent add should fail before creating a second identity on a file-dev bundle"
+    );
+}
+
 #[cfg(all(feature = "identity", feature = "sqlite"))]
 #[test]
 fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
@@ -1313,23 +1361,49 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
         ),
         "init --agent codex --store sqlite --install-mcp",
     );
-    add_claude_code_identity(&temp, &dir, &issuer_key);
-
     assert_success(
         &run_dent8(
             &[
-                "mcp",
-                "install",
+                "agent",
+                "add",
                 "--agent",
                 "claude-code",
                 "--dir",
                 &dir,
-                "--command",
+                "--issuer-key",
+                &issuer_key,
+                "--mcp-command",
                 &mcp_command,
             ],
             &[],
         ),
-        "mcp install --agent claude-code",
+        "agent add --agent claude-code",
+    );
+    assert!(
+        temp.file(".dent8/identity-claude-code.env").exists(),
+        "agent add should create a per-source identity env"
+    );
+
+    let repeated = run_dent8(
+        &[
+            "agent",
+            "add",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--issuer-key",
+            &issuer_key,
+            "--mcp-command",
+            &mcp_command,
+        ],
+        &[],
+    );
+    assert_success(&repeated, "repeat agent add --agent claude-code");
+    assert!(
+        stdout(&repeated).contains("identity: reused grant"),
+        "repeat agent add should repair/reuse identity, not rotate it; stdout:\n{}",
+        stdout(&repeated)
     );
 
     for agent in ["codex", "claude-code"] {
@@ -1345,6 +1419,95 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
             "doctor should validate installed MCP env for {agent}; stdout:\n{doctor_stdout}"
         );
     }
+}
+
+#[cfg(all(feature = "identity", feature = "sqlite"))]
+#[test]
+fn agent_add_preserves_existing_authority_ceiling_when_reused() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex --store sqlite",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "agent",
+                "add",
+                "--agent",
+                "claude-code",
+                "--dir",
+                &dir,
+                "--issuer-key",
+                &issuer_key,
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "agent add --agent claude-code",
+    );
+
+    let authority = temp
+        .file(".dent8/authority.json")
+        .to_string_lossy()
+        .into_owned();
+    assert_success(
+        &run_dent8(
+            &["authority", "add", "source:claude-code", "medium"],
+            &[("DENT8_AUTHORITY", authority.as_str())],
+        ),
+        "lower claude-code authority ceiling",
+    );
+
+    let repeated = run_dent8(
+        &[
+            "agent",
+            "add",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--issuer-key",
+            &issuer_key,
+            "--mcp-command",
+            &mcp_command,
+        ],
+        &[],
+    );
+    assert_success(
+        &repeated,
+        "repeat agent add after manual authority lowering",
+    );
+    assert!(
+        stdout(&repeated).contains("authority ceiling=Medium"),
+        "agent add should preserve the existing lowered ceiling unless --authority is explicit; stdout:\n{}",
+        stdout(&repeated)
+    );
+    let registry: Value =
+        serde_json::from_str(&fs::read_to_string(&authority).expect("authority registry"))
+            .expect("authority registry json");
+    assert_eq!(
+        registry["sources"]["source:claude-code"]["max_authority"], "Medium",
+        "repeat agent add must not silently raise an existing authority ceiling"
+    );
 }
 
 #[cfg(feature = "identity")]

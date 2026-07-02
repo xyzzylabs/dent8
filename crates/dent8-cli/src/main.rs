@@ -76,6 +76,9 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Conflicts) => cmd_conflicts(),
         Some(CliCommand::Eval) => cmd_eval(),
         Some(CliCommand::Init(args)) => cmd_init(&args),
+        Some(CliCommand::Agent(args)) => match args.command {
+            AgentCommand::Add(args) => cmd_agent_add(&args),
+        },
         Some(CliCommand::Doctor(args)) => cmd_doctor(&args),
         Some(CliCommand::Completions(args)) => cmd_completions(args.shell),
         Some(CliCommand::Export(args)) => {
@@ -224,6 +227,8 @@ enum CliCommand {
     Eval,
     /// Bootstrap a local dent8 project configuration.
     Init(InitArgs),
+    /// Add an agent profile to an existing shared dent8 bundle.
+    Agent(AgentArgs),
     /// Diagnose the current dent8 setup.
     Doctor(DoctorArgs),
     /// Generate shell completion scripts.
@@ -388,6 +393,55 @@ struct InitMcpArgs {
     /// Check whether the MCP config is already installed after init without writing it.
     #[arg(long, requires = "install_mcp")]
     mcp_check: bool,
+}
+
+#[derive(Args, Debug)]
+struct AgentArgs {
+    #[command(subcommand)]
+    command: AgentCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum AgentCommand {
+    /// Add an agent to an existing shared dent8 bundle.
+    Add(AgentAddArgs),
+}
+
+#[derive(Args, Debug)]
+struct AgentAddArgs {
+    /// Agent profile to add.
+    #[arg(long, value_enum)]
+    agent: InitAgent,
+    /// Directory for dent8's local project config.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Maximum authority for this agent's source. New identities default to high; reused ones
+    /// default to the signed grant's max.
+    #[arg(long, value_enum)]
+    authority: Option<CliAuthority>,
+    /// Trusted issuer name to use. Omit when the bundle has exactly one trusted issuer.
+    #[arg(long, value_name = "ISSUER")]
+    issuer: Option<String>,
+    /// Operator issuer signing-key path. Defaults outside the project bundle.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
+    /// Signed identity subject scope: "*" or exact <kind>:<key>.
+    #[arg(long, default_value = "*", value_name = "SCOPE")]
+    identity_scope: String,
+    /// Optional signed identity expiration as Unix milliseconds.
+    #[arg(long, value_name = "MILLIS")]
+    identity_expires_at_ms: Option<i64>,
+    /// MCP config file to patch.
+    #[arg(long, visible_alias = "config", value_name = "PATH")]
+    mcp_config: Option<String>,
+    /// Command written into the installed MCP config.
+    #[arg(
+        long,
+        visible_alias = "command",
+        default_value = "dent8",
+        value_name = "COMMAND"
+    )]
+    mcp_command: String,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -1608,6 +1662,242 @@ fn cmd_mcp_install(args: &McpInstallArgs) -> i32 {
             eprintln!("{error}");
             1
         }
+    }
+}
+
+fn cmd_agent_add(args: &AgentAddArgs) -> i32 {
+    match agent_add(args) {
+        Ok(outcome) => {
+            println!("{}", outcome.message);
+            outcome.exit_code
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+#[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
+fn agent_add(args: &AgentAddArgs) -> Result<CommandOutcome, String> {
+    #[cfg(not(feature = "identity"))]
+    {
+        let _ = args;
+        return Err(
+            "`dent8 agent add` requires signed source identity; default builds include it, \
+             or rebuild this binary with `--features identity`"
+                .to_string(),
+        );
+    }
+
+    #[cfg(feature = "identity")]
+    agent_add_inner(args)
+}
+
+#[cfg(feature = "identity")]
+struct AgentAddBundle {
+    dir: std::path::PathBuf,
+    store_url: String,
+    authority_path: std::path::PathBuf,
+    registry: SourceRegistry,
+}
+
+#[cfg(feature = "identity")]
+fn agent_add_inner(args: &AgentAddArgs) -> Result<CommandOutcome, String> {
+    validate_agent_add_args(args)?;
+    let mut bundle = load_agent_add_bundle(args)?;
+    let source = args.agent.source();
+    let identity = identity::add_source_to_bundle(
+        &bundle.dir.to_string_lossy(),
+        source,
+        args.issuer.as_deref(),
+        args.issuer_key.as_deref(),
+        args.authority.unwrap_or(CliAuthority::High),
+        &args.identity_scope,
+        args.identity_expires_at_ms,
+    )?;
+    let existing_ceiling = bundle
+        .registry
+        .sources
+        .get(source)
+        .map(|grant| grant.max_authority);
+    let authority_ceiling = args
+        .authority
+        .map(CliAuthority::level)
+        .or(existing_ceiling)
+        .unwrap_or(identity.max_authority);
+    if authority_ceiling > identity.max_authority {
+        return Err(format!(
+            "existing signed identity for {source} has max={:?}, below requested authority \
+             ceiling {:?}; rotate or reissue the source grant before raising the authority \
+             ceiling",
+            identity.max_authority, authority_ceiling
+        ));
+    }
+
+    bundle.registry.sources.insert(
+        source.to_string(),
+        SourceGrant {
+            max_authority: authority_ceiling,
+            issuer: Some(identity.issuer.clone()),
+            scope: Some(identity.scope.clone()),
+        },
+    );
+    save_authority_registry_at(&bundle.authority_path.to_string_lossy(), &bundle.registry)?;
+
+    let message = agent_add_base_message(args, &bundle, &identity, authority_ceiling);
+    Ok(append_agent_add_mcp_install(args, &bundle.dir, message))
+}
+
+#[cfg(feature = "identity")]
+fn validate_agent_add_args(args: &AgentAddArgs) -> Result<(), String> {
+    if args.mcp_command.trim().is_empty() {
+        return Err("MCP command must not be empty".to_string());
+    }
+    if args.agent == InitAgent::Hecate && args.mcp_config.is_none() {
+        return Err(
+            "`dent8 agent add --agent hecate` needs --mcp-config PATH because Hecate task \
+             MCP config lives in a task/UI payload, not a stable project file"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "identity")]
+fn load_agent_add_bundle(args: &AgentAddArgs) -> Result<AgentAddBundle, String> {
+    let dir = absolute_path(&std::path::PathBuf::from(&args.dir))?;
+    let env_path = dir.join("env");
+    let env = mcp_config::read_env_file(&env_path).map_err(|error| {
+        format!(
+            "{error}; run `dent8 init --agent <profile> --store sqlite` or \
+             `dent8 init --agent <profile> --store postgres --store-url <url>` first"
+        )
+    })?;
+    let store_url = shared_store_url_from_bundle_env(&env, &env_path)?;
+    let authority_raw = bundle_env_required(&env, "DENT8_AUTHORITY")?;
+    let authority_path = bundle_env_path_value(authority_raw, &dir);
+    let registry =
+        load_authority_registry_at(&authority_path.to_string_lossy(), false)?.unwrap_or_default();
+    Ok(AgentAddBundle {
+        dir,
+        store_url,
+        authority_path,
+        registry,
+    })
+}
+
+#[cfg(feature = "identity")]
+fn shared_store_url_from_bundle_env(
+    env: &std::collections::BTreeMap<String, String>,
+    env_path: &std::path::Path,
+) -> Result<String, String> {
+    match bundle_env_required(env, "DENT8_STORE_URL") {
+        Ok(url) => Ok(url.to_string()),
+        Err(_)
+            if env
+                .get("DENT8_LOG")
+                .is_some_and(|value| !value.trim().is_empty()) =>
+        {
+            Err(format!(
+                "{} is a file-dev bundle (DENT8_LOG is set). `dent8 agent add` requires \
+                 DENT8_STORE_URL so multiple agents share one SQLite/Postgres backend while \
+                 keeping per-agent identity env values distinct. Re-run init with \
+                 `--store sqlite` or configure `--store postgres --store-url <url>`.",
+                env_path.display()
+            ))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(feature = "identity")]
+fn agent_add_base_message(
+    args: &AgentAddArgs,
+    bundle: &AgentAddBundle,
+    identity: &identity::SourceIdentityOutput,
+    authority_ceiling: AuthorityLevel,
+) -> String {
+    let identity_action = if identity.reused { "reused" } else { "created" };
+    format!(
+        "added dent8 agent {} in {}\n  source: {} authority ceiling={:?}\n  store: {}\n  authority: {}\n  identity: {identity_action} grant {} (max={:?}, source key: {}, env: {}, active grants: {})",
+        args.agent.cli_name(),
+        bundle.dir.display(),
+        identity.source,
+        authority_ceiling,
+        bundle.store_url,
+        bundle.authority_path.display(),
+        identity.grant_file.display(),
+        identity.max_authority,
+        identity.source_key_path.display(),
+        identity.env_file.display(),
+        identity.active_grants_file.display(),
+    )
+}
+
+#[cfg(feature = "identity")]
+fn append_agent_add_mcp_install(
+    args: &AgentAddArgs,
+    dir: &std::path::Path,
+    mut message: String,
+) -> CommandOutcome {
+    let install = match install_mcp_config(
+        args.agent,
+        dir,
+        args.mcp_config.as_deref(),
+        &args.mcp_command,
+        mcp_config::InstallMode::Write,
+    ) {
+        Ok(install) => install,
+        Err(error) => {
+            message.push_str("\n\nMCP install failed: ");
+            message.push_str(&error);
+            message.push_str("\nRun: dent8 mcp install --agent ");
+            message.push_str(args.agent.cli_name());
+            message.push_str(" --dir ");
+            message.push_str(&shell_quote(&dir.to_string_lossy()));
+            if let Some(config) = args.mcp_config.as_deref() {
+                message.push_str(" --config ");
+                message.push_str(&shell_quote(config));
+            }
+            return CommandOutcome {
+                message,
+                exit_code: 1,
+            };
+        }
+    };
+
+    message.push_str("\n\n");
+    message.push_str(&install.message);
+    message.push_str("\n\nNext:\n  dent8 doctor --agent ");
+    message.push_str(args.agent.cli_name());
+    message.push_str(" --dir ");
+    message.push_str(&shell_quote(&dir.to_string_lossy()));
+    message.push_str(" --write-check");
+    CommandOutcome {
+        message,
+        exit_code: install.exit_code,
+    }
+}
+
+#[cfg(feature = "identity")]
+fn bundle_env_required<'a>(
+    env: &'a std::collections::BTreeMap<String, String>,
+    key: &str,
+) -> Result<&'a str, String> {
+    env.get(key)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("generated dent8 env is missing {key}"))
+}
+
+#[cfg(feature = "identity")]
+fn bundle_env_path_value(raw: &str, bundle_dir: &std::path::Path) -> std::path::PathBuf {
+    let path = std::path::PathBuf::from(raw);
+    if path.is_absolute() {
+        path
+    } else {
+        bundle_dir.join(path)
     }
 }
 

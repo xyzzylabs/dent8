@@ -145,6 +145,16 @@ MCP process can only prove the single identity whose private key it holds; a fut
 daemon transport needs per-request source authentication rather than one process-wide env. See
 [ADR 0012](decisions/0012-signed-source-identity.md) for the security model and limits.
 
+For that shared-backend setup, `dent8 agent add` is the normal follow-up to the first
+`init`. It refuses file-dev bundles, then adds/repairs the selected profile's authority
+grant, source key/grant/env, and MCP config:
+
+```sh
+dent8 init --agent codex --store sqlite --install-mcp
+dent8 agent add --agent cursor
+dent8 agent add --agent claude-code
+```
+
 Use `dent8 doctor --agent <profile> --write-check` as the post-install green light. It reads
 the generated bundle directly, parses the selected agent's installed MCP config, smokes that
 exact command/args/cwd/env, and runs the trusted-fact / low-authority-rejection probe through

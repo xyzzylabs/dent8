@@ -121,6 +121,19 @@ impl BootstrapOutput {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct SourceIdentityOutput {
+    pub(crate) source: String,
+    pub(crate) issuer: String,
+    pub(crate) max_authority: AuthorityLevel,
+    pub(crate) scope: String,
+    pub(crate) active_grants_file: PathBuf,
+    pub(crate) grant_file: PathBuf,
+    pub(crate) source_key_path: PathBuf,
+    pub(crate) env_file: PathBuf,
+    pub(crate) reused: bool,
+}
+
+#[derive(Clone, Debug)]
 struct BootstrapPlan {
     dir: PathBuf,
     identities_dir: PathBuf,
@@ -736,6 +749,189 @@ pub(crate) fn repair_env_bundle(dir: &str, source: &str) -> Result<String, Strin
         shell_quote(&path_string(&paths.dir))
     ));
     Ok(lines.join("\n"))
+}
+
+pub(crate) fn add_source_to_bundle(
+    dir: &str,
+    source: &str,
+    requested_issuer: Option<&str>,
+    issuer_key: Option<&str>,
+    max_authority: CliAuthority,
+    scope: &str,
+    expires_at_ms: Option<i64>,
+) -> Result<SourceIdentityOutput, String> {
+    parse_source(source)?;
+    if scope.trim().is_empty() {
+        return Err("identity grant scope must not be empty; use `*` for all subjects".to_string());
+    }
+    let paths = identity_bundle_paths(dir, Some(source))?;
+    if let Some(existing) = reuse_or_reject_existing_source_identity(dir, source, &paths)? {
+        return Ok(existing);
+    }
+
+    issue_source_identity(
+        paths,
+        source,
+        requested_issuer,
+        issuer_key,
+        max_authority,
+        scope,
+        expires_at_ms,
+    )
+}
+
+fn reuse_or_reject_existing_source_identity(
+    dir: &str,
+    source: &str,
+    paths: &IdentityBundlePaths,
+) -> Result<Option<SourceIdentityOutput>, String> {
+    let source_public_path = public_key_path(&paths.source_key_path);
+    let grant_exists = paths.grant_file.exists();
+    let source_key_exists = paths.source_key_path.exists();
+    let source_public_exists = source_public_path.exists();
+    let env_exists = paths.env_file.exists();
+
+    if grant_exists && source_key_exists {
+        repair_env_bundle(dir, source)?;
+        let grant = load_grant(&path_string(&paths.grant_file))?;
+        return Ok(Some(SourceIdentityOutput {
+            source: grant.grant.source,
+            issuer: grant.grant.issuer,
+            max_authority: grant.grant.max_authority,
+            scope: grant.grant.scope.unwrap_or_else(|| "*".to_string()),
+            active_grants_file: paths.active_grants_file.clone(),
+            grant_file: paths.grant_file.clone(),
+            source_key_path: paths.source_key_path.clone(),
+            env_file: paths.env_file.clone(),
+            reused: true,
+        }));
+    }
+
+    if grant_exists || source_key_exists || source_public_exists || env_exists {
+        return Err(format!(
+            "partial signed identity material already exists for {source} in {}; refusing to \
+             guess or rotate. Expected either both {} and {}, or none of {}, {}, {}, {}.",
+            paths.dir.display(),
+            paths.grant_file.display(),
+            paths.source_key_path.display(),
+            paths.grant_file.display(),
+            paths.source_key_path.display(),
+            source_public_path.display(),
+            paths.env_file.display()
+        ));
+    }
+
+    Ok(None)
+}
+
+fn issue_source_identity(
+    paths: IdentityBundlePaths,
+    source: &str,
+    requested_issuer: Option<&str>,
+    issuer_key: Option<&str>,
+    max_authority: CliAuthority,
+    scope: &str,
+    expires_at_ms: Option<i64>,
+) -> Result<SourceIdentityOutput, String> {
+    let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {
+        format!(
+            "identity trust registry required at {}; run `dent8 init --agent <profile> \
+             --store sqlite` first",
+            paths.trust_file.display()
+        )
+    })?;
+    let issuer = select_issuer(requested_issuer, &trust)?;
+    let issuer_key_path = bootstrap_issuer_key_path(issuer_key, &paths.dir)?;
+    let issuer_signing = load_issuer_signing_key_matching_trust(&issuer_key_path, &issuer, &trust)?;
+    let mut active = load_active_grants_at(&paths.active_grants_file, false)?.unwrap_or_default();
+    if active.sources.contains_key(source) {
+        return Err(format!(
+            "{} already has an active grant entry for {source}, but the grant/key files are \
+             missing; refusing to create a mismatched replacement",
+            paths.active_grants_file.display()
+        ));
+    }
+
+    let mut rollback = BootstrapRollback::default();
+    if let Some(parent) = parent_dir(&paths.source_key_path) {
+        ensure_dir(parent, &mut rollback)?;
+    }
+    if let Some(parent) = parent_dir(&paths.grant_file) {
+        ensure_dir(parent, &mut rollback)?;
+    }
+
+    let source_key = generate_signing_key()?;
+    write_key_pair(&paths.source_key_path, &source_key)?;
+    rollback.record_key_pair(&paths.source_key_path);
+
+    let grant = SourceGrantPayload {
+        version: 1,
+        source: source.to_string(),
+        public_key: hex::encode(source_key.verifying_key().to_bytes()),
+        max_authority: max_authority.level(),
+        issuer: issuer.clone(),
+        scope: Some(scope.to_string()),
+        expires_at_ms,
+    };
+    let signature = hex::encode(
+        issuer_signing
+            .sign(&framed(GRANT_DOMAIN, &grant)?)
+            .to_bytes(),
+    );
+    let signed_grant = SignedSourceGrant { grant, signature };
+    write_json_path(&paths.grant_file, &signed_grant)?;
+    rollback.record_file(&paths.grant_file);
+    write_identity_env(&paths)?;
+    rollback.record_file(&paths.env_file);
+
+    let active_created = !paths.active_grants_file.exists();
+    active
+        .sources
+        .insert(source.to_string(), active_source_grant_for(&signed_grant));
+    write_active_grants_path(&paths.active_grants_file, &active)?;
+    if active_created {
+        rollback.record_file(&paths.active_grants_file);
+    }
+    rollback.commit();
+
+    Ok(SourceIdentityOutput {
+        source: signed_grant.grant.source,
+        issuer: signed_grant.grant.issuer,
+        max_authority: signed_grant.grant.max_authority,
+        scope: signed_grant.grant.scope.unwrap_or_else(|| "*".to_string()),
+        active_grants_file: paths.active_grants_file,
+        grant_file: paths.grant_file,
+        source_key_path: paths.source_key_path,
+        env_file: paths.env_file,
+        reused: false,
+    })
+}
+
+fn select_issuer(requested: Option<&str>, trust: &TrustedIssuers) -> Result<String, String> {
+    if let Some(issuer) = requested {
+        let issuer = issuer.trim();
+        if issuer.is_empty() {
+            return Err("identity issuer must not be empty".to_string());
+        }
+        if !trust.issuers.contains_key(issuer) {
+            return Err(format!("untrusted grant issuer {issuer}"));
+        }
+        return Ok(issuer.to_string());
+    }
+
+    match trust.issuers.len() {
+        0 => Err("identity trust registry has no trusted issuers".to_string()),
+        1 => Ok(trust
+            .issuers
+            .keys()
+            .next()
+            .expect("checked trusted issuer count")
+            .clone()),
+        _ => Err(
+            "identity trust registry has multiple trusted issuers; pass --issuer explicitly"
+                .to_string(),
+        ),
+    }
 }
 
 #[allow(clippy::too_many_lines)]

@@ -307,7 +307,7 @@ fn require_env_key<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Result<&
         .ok_or_else(|| format!("generated dent8 env is missing {key}"))
 }
 
-fn read_env_file(path: &Path) -> Result<BTreeMap<String, String>, String> {
+pub(crate) fn read_env_file(path: &Path) -> Result<BTreeMap<String, String>, String> {
     let contents = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     let mut env = BTreeMap::new();

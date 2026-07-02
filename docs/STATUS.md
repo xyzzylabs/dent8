@@ -39,6 +39,16 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   reports the partial success and prints the follow-up `dent8 mcp install ...` command instead
   of hiding the created `.dent8` bundle. It refuses to rewrite the env file unless `--force` is passed and refuses to overwrite
   existing identity key/grant material.
+- **`dent8 agent add --agent <profile> [--dir .dent8] [--authority <level>]
+  [--issuer ISSUER] [--issuer-key PATH] [--mcp-config PATH] [--mcp-command COMMAND]`** —
+  adds a known agent profile to an existing shared `.dent8/` bundle. It requires
+  `DENT8_STORE_URL` in the generated env, so a second agent cannot accidentally share another
+  agent's file-dev log. It creates or reuses/repairs the selected source's signed identity
+  material, adds/replaces that source's authority ceiling in the bundle authority registry,
+  patches the selected agent's MCP config, prints the resulting file, and prints the follow-up
+  `dent8 doctor --agent <profile> --dir <dir> --write-check` command. If a bundle has multiple
+  trusted issuers, pass `--issuer`; Hecate still needs `--mcp-config` because there is no
+  stable project-local config path to infer.
 - **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
