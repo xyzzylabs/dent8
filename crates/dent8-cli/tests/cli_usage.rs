@@ -321,6 +321,36 @@ fn eval_emits_machine_readable_json() {
 }
 
 #[test]
+fn firewall_demo_runs_against_test_binary() {
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/firewall/demo.sh");
+    let output = Command::new("bash")
+        .arg(script)
+        .env("DENT8", dent8_bin())
+        .env("DENT8_STORE_URL", "postgres://poisoned-parent-env")
+        .env("DENT8_LOG", "/poisoned/parent-memory.jsonl")
+        .env("DENT8_AUTHORITY", "/poisoned/authority.json")
+        .env("DENT8_REQUIRE_AUTHORITY", "1")
+        .env("DENT8_TRUST", "/poisoned/trust.json")
+        .env("DENT8_ACTIVE_GRANTS", "/poisoned/active-grants.json")
+        .env("DENT8_REQUIRE_IDENTITY", "1")
+        .env("DENT8_GRANT", "/poisoned/source.grant.json")
+        .env("DENT8_IDENTITY_KEY", "/poisoned/source.key")
+        .output()
+        .expect("run firewall demo");
+    assert_success(&output, "examples/firewall/demo.sh");
+    let stdout = stdout(&output);
+    let stderr = stderr(&output);
+    assert!(
+        stdout.contains("# 4. Try a low-authority override; dent8 rejects it")
+            && stdout.contains("person:alice favorite_drink")
+            && stdout.contains("value         : \"tea\"")
+            && stdout.contains("chain verified: true"),
+        "{stdout}"
+    );
+    assert!(stderr.contains("REJECTED"), "{stderr}");
+}
+
+#[test]
 fn write_commands_emit_machine_readable_json() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
@@ -590,7 +620,7 @@ fn json_output_fails_closed_for_unsupported_commands() {
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
 
-    let output = run_dent8(&["--output", "json", "demo"], &envs);
+    let output = run_dent8(&["--output", "json", "hook", "native-memory-guard"], &envs);
     assert_eq!(output.status.code(), Some(2));
     assert!(stdout(&output).is_empty());
     assert!(stderr(&output).contains("does not support `--output json` yet"));

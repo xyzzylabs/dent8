@@ -4,11 +4,12 @@
 facts from silently overriding trusted state, and can replay exactly *why* an agent
 believed something.
 
-![dent8 demo: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt.](demo.gif)
+![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt.](demo.gif)
 
-See it run: **`cargo run -p dent8-cli -- demo`** — a high-authority fact is asserted, a
-low-authority source is rejected when it tries to override it, and an integrity receipt
-explains the result with a verified hash chain.
+See it run through the real CLI path:
+**`DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh`** — a
+high-authority fact is asserted, a low-authority source is rejected when it tries to override
+it, and an integrity receipt explains the result with a verified hash chain.
 
 ## Why a firewall? (the one-command proof)
 
@@ -34,7 +35,7 @@ dependency-cascade integrity recency-only memory structurally cannot express.
 # From source (Rust 1.95+):
 cargo install --git https://github.com/xyzzylabs/dent8 dent8-cli   # installs the `dent8` binary
 # …or run from a clone without installing:
-cargo run -p dent8-cli -- demo
+cargo run -p dent8-cli -- eval
 ```
 
 The stock `dent8` binary uses a local file log, needs no services, and includes signed source
@@ -136,8 +137,8 @@ associated with pattern separation.)
 This is an early open-source project. **[docs/STATUS.md](docs/STATUS.md) is the single
 source of truth for what is built.** In short:
 
-- **Runnable today:** `dent8 demo` (the firewall + replay/explain loop, registry-driven); the
-  full lifecycle through the firewall — **`assert` / `supersede` / `retract` / `contradict` /
+- **Runnable today:** the full lifecycle through the firewall — **`assert` / `supersede` /
+  `retract` / `contradict` /
   `reinforce` / `expire` / `derive` / `explain` / `replay`** — plus **`facts list`** for
   browsing known fact streams and the operator surfaces
   **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
@@ -221,7 +222,8 @@ Workspace crates:
 
 Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 
-- `dent8 demo`: run the firewall + registry + replay/explain loop end to end (in-memory).
+- `dent8 eval`: run the adversarial corpus that proves the firewall blocks attacks a
+  recency-only baseline accepts.
 - `dent8 init`: create a local `.dent8/` setup: env file, authority registry, and selected
   file/SQLite/Postgres store profile; optional `--witness` adds verifier-side signed-head
   paths without exposing the witness signing key to the writer env.
@@ -314,7 +316,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-cargo run -q -p dent8-cli -- demo
+DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh
 
 # The DB-verified Postgres adapter is feature-gated; its integration tests are gated
 # on DATABASE_URL (they skip without one). Throwaway DB via Docker:

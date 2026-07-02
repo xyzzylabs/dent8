@@ -11,13 +11,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 
 ## Runnable today (the entire user-facing surface)
 
-- **`dent8 demo`** — runs the firewall + replay/explain loop end to end against the
-  in-memory backend, **driven by the coding-agent predicate registry**: a high-authority
-  `repo.database` fact is asserted; a low-authority source is **rejected by the
-  predicate's authority floor**; a competing assertion is **rejected by uniqueness**; a
-  `branch.status` fact goes stale on its **registered default TTL**; and `explain` returns
-  an integrity receipt (value, lifecycle, authority, freshness, evidence, supersession,
-  contradiction, replay position, `event_hash`, chain-verified).
+- **`dent8 eval`** — runs the adversarial corpus against the real firewall and a recency-only
+  baseline. It is the built-in proof that dent8 blocks the attack classes the baseline accepts;
+  use [`examples/firewall/demo.sh`](../examples/firewall/demo.sh) for a human-readable walkthrough
+  driven by real CLI writes, `explain`, and `verify`.
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
   [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
   [--witness] [--witness-log PATH] [--witness-pubkey PATH]
@@ -389,8 +386,9 @@ subject+predicate.
 - **The firewall** is `EventStore::append` itself (via `arbitrate`): every write is
   arbitrated and there is **no un-arbitrated write path**. It rejects a low-stated-authority
   supersession *and* a laundered one (over-stated event authority backed by a low-authority
-  claim). Reachable via `dent8 demo`.
-- `InMemoryEventStore` (test/demo + file-backed CLI backend, not operational) +
+  claim). Reachable via lifecycle CLI writes, `dent8 doctor --write-check`, `dent8 eval`, and
+  `dent8 mcp serve`.
+- `InMemoryEventStore` (test + file-backed CLI dev backend, not operational) +
   `IntegrityReceipt` / `explain` / `explain_subject` + global-chain `verify_chain`
   (internally consistent) + `anchor` / `verify_against_anchor` (external tamper-resistance).
 - `InMemoryEventStore::from_trusted_events` — the trusted-reload path (rehydrate an

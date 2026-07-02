@@ -88,10 +88,6 @@ fn run_cli(cli: Cli) -> i32 {
             println!();
             0
         }
-        Some(CliCommand::Demo) => {
-            demo();
-            0
-        }
         Some(CliCommand::Verify) => cmd_verify(cli.output),
         Some(CliCommand::Conflicts) => cmd_conflicts(cli.output),
         Some(CliCommand::Eval) => cmd_eval(cli.output),
@@ -195,8 +191,6 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum CliCommand {
-    /// Run the firewall + replay/explain loop in memory.
-    Demo,
     /// Assert a fact through the firewall, persisted to the log.
     #[command(
         override_usage = "dent8 assert <SUBJECT> <PREDICATE> <VALUE> --authority <AUTHORITY> --source <SOURCE>"
@@ -304,7 +298,6 @@ impl CliCommand {
 
     fn cli_name(&self) -> &'static str {
         match self {
-            Self::Demo => "demo",
             Self::Assert(_) => "assert",
             Self::Supersede(_) => "supersede",
             Self::Retract(_) => "retract",
@@ -1285,148 +1278,6 @@ fn cmd_schema_postgres(output: CliOutput) -> i32 {
             "schema": "postgres",
             "sql": sql,
         })),
-    }
-}
-
-/// A runnable, self-contained demonstration of the firewall + replay/explain loop,
-/// driven by the coding-agent predicate policy registry: a high-authority project fact
-/// is asserted; a low-authority source is rejected by the predicate's authority floor; a
-/// competing claim is rejected by uniqueness; and a `branch.status` fact goes stale on
-/// its registered default TTL.
-fn demo() {
-    let registry = PredicateRegistry::coding_agent();
-    let mut store = InMemoryEventStore::new();
-    let now = TimestampMillis::from_unix_millis(4_000_000);
-
-    println!("dent8 firewall demo — coding-agent policy registry (in-memory backend)\n");
-
-    // [1] A trusted, high-authority project fact. repo.database requires High authority.
-    match admit(
-        &mut store,
-        &registry,
-        assert_event(
-            "event:1",
-            "claim:database",
-            "repo",
-            "myproj",
-            "database",
-            "postgres",
-            "source:owner",
-            AuthorityLevel::High,
-        ),
-        now,
-    ) {
-        Ok(receipt) => println!(
-            "[1] assert    repo:myproj database = \"postgres\"  (authority=High, source=owner)\n    \
-             -> ACCEPTED  seq={}  hash={}",
-            receipt.global_sequence,
-            short(&receipt.event_hash),
-        ),
-        Err(error) => println!("[1] unexpected rejection: {error}"),
-    }
-
-    // [2] A low-authority source cannot even register the fact: repo.database's policy
-    // floor is High, so the assertion is rejected before it reaches the log.
-    match admit(
-        &mut store,
-        &registry,
-        assert_event(
-            "event:2",
-            "claim:attacker",
-            "repo",
-            "myproj",
-            "database",
-            "mysql",
-            "source:web-scrape",
-            AuthorityLevel::Low,
-        ),
-        now,
-    ) {
-        Ok(_) => println!("\n[2] low-authority assert unexpectedly ACCEPTED (bug)"),
-        Err(error) => println!(
-            "\n[2] assert    repo:myproj database = \"mysql\"     (authority=Low, source=web-scrape)\n    \
-             -> REJECTED: {error}"
-        ),
-    }
-
-    // [3] The trusted fact is unchanged and explainable.
-    println!("\n[3] explain   repo:myproj database");
-    print_receipt(&store, "claim:database", now);
-
-    // [4] Freshness comes from the predicate's policy: branch.status carries a default
-    // TTL, so a CI status goes stale on its own (no explicit TTL set on the assertion).
-    let _ = admit(
-        &mut store,
-        &registry,
-        assert_event(
-            "event:3",
-            "claim:branch",
-            "branch",
-            "main",
-            "status",
-            "ci-green",
-            "source:ci",
-            AuthorityLevel::Low,
-        ),
-        now,
-    );
-    println!(
-        "\n[4] assert    branch:main status = \"ci-green\"   (branch.status default TTL applied)\n    \
-         explain as-of now=4_000_000 (past the 1h TTL)"
-    );
-    print_receipt(&store, "claim:branch", now);
-
-    // [5] Uniqueness: even a high-authority *competing* assertion is rejected — there may
-    // be only one believed repo.database. Revise it with a supersession, don't duplicate.
-    match admit(
-        &mut store,
-        &registry,
-        assert_event(
-            "event:4",
-            "claim:rival",
-            "repo",
-            "myproj",
-            "database",
-            "mariadb",
-            "source:owner",
-            AuthorityLevel::High,
-        ),
-        now,
-    ) {
-        Ok(_) => println!("\n[5] competing assert unexpectedly ACCEPTED (bug)"),
-        Err(error) => println!(
-            "\n[5] assert    repo:myproj database = \"mariadb\"   (authority=High, source=owner)\n    \
-             -> REJECTED: {error}"
-        ),
-    }
-
-    println!(
-        "\nEvery decision above came from a registered predicate policy: repo.database\n\
-         requires High authority and is unique; branch.status carries a default freshness.\n\
-         Trusted facts cannot be silently overridden or duplicated, and volatile facts expire."
-    );
-}
-
-/// The registry-aware write path used by the demo: apply the predicate's default TTL,
-/// enforce its policy (authority floor + uniqueness, freshness-aware as of `now`), then
-/// write through the firewall.
-fn admit(
-    store: &mut InMemoryEventStore,
-    registry: &PredicateRegistry,
-    mut event: ClaimEvent,
-    now: TimestampMillis,
-) -> Result<AppendReceipt, StoreError> {
-    apply_policy_defaults(registry, &mut event);
-    enforce_policy(registry, store, &event, now)?;
-    store.append(event)
-}
-
-fn print_receipt(store: &InMemoryEventStore, claim_id: &str, now: TimestampMillis) {
-    let claim = ClaimId::new(claim_id).expect("claim id");
-    match store.explain(&claim, now) {
-        Ok(Some(r)) => println!("{}", format_receipt(&r)),
-        Ok(None) => println!("    (no such claim)"),
-        Err(error) => println!("    replay failed: {error}"),
     }
 }
 
@@ -5807,9 +5658,9 @@ fn backend_append(url: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
 }
 
 /// Build a validated `ClaimEvent` from CLI strings, returning a friendly error rather than
-/// panicking on malformed input (unlike the demo's fixed-string builder). The `kind` and
-/// `value` distinguish an assertion from a supersession; `claim_id` is the *subject* claim
-/// of the event (the new claim for an assertion, the incumbent for a supersession).
+/// panicking on malformed input. The `kind` and `value` distinguish an assertion from a
+/// supersession; `claim_id` is the *subject* claim of the event (the new claim for an
+/// assertion, the incumbent for a supersession).
 #[allow(clippy::too_many_arguments)]
 fn build_event(
     event_id: &str,
@@ -5889,6 +5740,20 @@ fn write_error_to_op(error: WriteError) -> OpError {
             OpError::Rejected(format!("could not commit the write: {message}"))
         }
     }
+}
+
+/// Apply registry defaults and predicate policy before the event reaches the store firewall.
+/// The file-backed CLI uses this against a fresh snapshot, then persists the same event bytes
+/// so the durable log agrees with the receipt hash.
+fn admit(
+    store: &mut InMemoryEventStore,
+    registry: &PredicateRegistry,
+    mut event: ClaimEvent,
+    now: TimestampMillis,
+) -> Result<AppendReceipt, StoreError> {
+    apply_policy_defaults(registry, &mut event);
+    enforce_policy(registry, store, &event, now)?;
+    store.append(event)
 }
 
 /// Run a write operation, retrying on a concurrent-writer conflict. Each attempt re-runs the
@@ -7533,6 +7398,7 @@ fn cmd_conflicts(output: CliOutput) -> i32 {
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn assert_event(
     event_id: &str,
@@ -7558,6 +7424,7 @@ fn assert_event(
     event
 }
 
+#[cfg(test)]
 fn base(
     event_id: &str,
     claim_id: &str,
@@ -7583,8 +7450,8 @@ fn base(
         ttl: Ttl::Never,
         provenance: Provenance {
             source: dent8_core::SourceId::new(source).expect("source"),
-            actor: ActorId::new("actor:demo").expect("actor"),
-            tool: Some("dent8-demo".to_string()),
+            actor: ActorId::new("actor:test").expect("actor"),
+            tool: Some("dent8-test".to_string()),
             run_id: None,
             input_digest: None,
             recorded_at: TimestampMillis::from_unix_millis(1),

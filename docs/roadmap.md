@@ -16,8 +16,8 @@ now runs end to end through the CLI and MCP surfaces:
 
 - **The firewall is enforced at the write boundary** (`EventStore::append` via
   `arbitrate`): authority-weighted supersession, the LFI canonical hard-alarm, and
-  entity-aware anti-laundering — runnable via `dent8 demo`, the lifecycle CLI commands,
-  and `dent8 mcp serve`.
+  entity-aware anti-laundering — runnable via the lifecycle CLI commands, `dent8 eval`,
+  `examples/firewall/demo.sh`, and `dent8 mcp serve`.
 - serde + `canonical_bytes` + `event_hash`/`hash_chain` are wired into append and
   verification; the Postgres adapter stores and re-verifies the global chain.
 - The **coding-agent predicate registry** drives the firewall: per-predicate
@@ -165,7 +165,7 @@ taint. The CLI parser is now `clap`, with generated shell completions and a glob
 support `--output json` for scripts/agents; other commands fail closed when
 JSON is requested until their structured contract is designed.
 
-**Remaining.** JSON contracts for interactive/passthrough commands (`demo`, `hook`, `witness`,
+**Remaining.** JSON contracts for interactive/passthrough commands (`hook`, `witness`,
 and `mcp serve`), `replay_runs` persistence, `--as-of` /
 `--valid-at`, `valid_to` intervals, and a richer lineage/debugger view are future work.
 

@@ -108,6 +108,13 @@ The runnable surface and library as they stand on `main` (no tagged release yet)
   harnesses (run manually), structured MCP schema tests, CI coverage for Postgres/SQLite and
   feature combinations, and the adversarial corpus.
 
+### Changed
+
+- Removed the top-level `dent8 demo` command. The built-in proof surface is `dent8 eval`;
+  the human-readable firewall walkthrough now lives in
+  [`examples/firewall/demo.sh`](examples/firewall/demo.sh) and drives real CLI writes,
+  `explain`, and `verify` against a temporary file-backed dev store.
+
 ### Fixed
 
 - `dent8 doctor --agent` and MCP smoke/write checks now scrub `DENT8_ACTIVE_GRANTS` from the
