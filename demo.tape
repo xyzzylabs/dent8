@@ -1,8 +1,6 @@
-# dent8 demo tape — a 25-second story for the README.
+# dent8 demo tape — a short README story.
 #
-# Prereq: build the CLI first so recording is snappy:
-#     cargo build -p dent8
-# Then record (https://github.com/charmbracelet/vhs):
+# Record with https://github.com/charmbracelet/vhs:
 #     vhs demo.tape        # -> demo.gif
 #
 # Tweak Theme / FontSize / Sleep timings to taste.
@@ -10,47 +8,31 @@
 Output demo.gif
 
 Set Shell "bash"
-Set FontSize 20
-Set Width 1180
-Set Height 700
+Set FontSize 16
+Set Width 1440
+Set Height 760
 Set Padding 20
 Set Theme "Dracula"
-Set TypingSpeed 35ms
+Set TypingSpeed 25ms
 
-# --- Setup (hidden): put the freshly-built CLI on PATH, use a throwaway log ---
+# --- Setup (hidden): build the CLI and make the maintained walkthrough use it. ---
 Hide
-Type "export PATH=$PWD/target/debug:$PATH; export DENT8_LOG=$(mktemp); clear" Enter
+Type "cargo build -q -p dent8; export DENT8=$PWD/target/debug/dent8; clear" Enter
 Show
 
-Type "# dent8 — a memory firewall for coding agents"
+Type "# dent8 — a memory firewall for agents"
 Sleep 900ms
 Enter
-Sleep 1s
+Sleep 700ms
 
-Type "# 1. The owner asserts a trusted project fact (high authority)"
+Type "# trusted fact in, low-authority overwrite out, receipt replayed"
 Enter
-Type "dent8 assert repo myproj database postgres high owner"
-Sleep 500ms
-Enter
-Sleep 2200ms
+Sleep 900ms
 
-Type "# 2. A low-authority web scrape tries to overwrite it..."
+Type "./examples/firewall/demo.sh"
 Enter
-Type "dent8 supersede repo myproj database mysql low web-scraper"
-Sleep 500ms
-Enter
-Sleep 2200ms
-Type "#    -> blocked by the firewall. Trust is not overwritten."
-Enter
-Sleep 1800ms
+Sleep 7s
 
-Type "# 3. Why do we believe what we believe? An auditable receipt."
+Type "# provenance + authority + replay + hash-chain verification"
 Enter
-Type "dent8 explain repo myproj database"
-Sleep 500ms
-Enter
-Sleep 3500ms
-
-Type "# Provenance, authority, freshness, contradictions -- replayable + hash-chained."
-Enter
-Sleep 3s
+Sleep 2s

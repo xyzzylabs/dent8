@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the firewall path through the real CLI and file-backed dev store: initialize a temporary
+# Runs the firewall path through the real CLI and stock SQLite backend: initialize a temporary
 # dent8 belief base, assert a trusted everyday fact, reject a low-authority override, then
 # explain and verify the retained fact.
 #
@@ -28,7 +28,7 @@ unset DENT8_STORE_URL \
   DENT8_WITNESS_LOG
 
 echo "# 1. Initialize a temporary dent8 belief base"
-$DENT8 init --dir "$WORK/.dent8" --source source:owner >/dev/null
+$DENT8 init --dir "$WORK/.dent8" --store sqlite --source source:owner >/dev/null
 set -a
 . "$WORK/.dent8/env"
 set +a
