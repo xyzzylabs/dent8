@@ -12,7 +12,12 @@ if [ -n "${DENT8_BIN:-}" ]; then
   BIN="$DENT8_BIN"
 else
   cargo build -p dent8
-  BIN="$ROOT/target/debug/dent8"
+  TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+  case "$TARGET_DIR" in
+    /*) ;;
+    *) TARGET_DIR="$ROOT/$TARGET_DIR" ;;
+  esac
+  BIN="$TARGET_DIR/debug/dent8"
 fi
 
 case "$BIN" in
