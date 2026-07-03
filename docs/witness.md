@@ -156,8 +156,22 @@ verdict so a monitor never has to parse the prose `message`:
 
 `--output json` may be placed before or after the witness subcommand
 (`dent8 --output json witness verify` and `dent8 witness verify --output json` are
-equivalent). `witness serve` is intentionally not JSON mode: it is a long-running signer loop
-that streams human-readable progress.
+equivalent).
+
+`witness serve` is a long-running loop, so its JSON mode streams **NDJSON** — one compact
+JSON object per line — instead of a single document. Signed heads go to **stdout**, so a
+collector tailing stdout sees exactly the signed-head record stream; lifecycle and
+diagnostics go to **stderr**:
+
+```json
+{"event":"head_signed","tool":"witness serve","lane":"events","head":{"event_count":12,"head":"…","signature":"…"},"signed_total":3}
+{"event":"head_signed","tool":"witness serve","lane":"grants","head":{"record_count":2,"head":"…","signature":"…"}}
+```
+
+Stderr events: `started` (with `interval_seconds`, `witness_log_path`, `max_heads`),
+`warning` (a prior witnessed head no longer matches — rewrite/rollback under the witness),
+`error` (a failed tick; serve keeps going), and `stopped` (with `reason:
+"max_heads_reached" | "consecutive_errors"`). Exit codes are unchanged from text mode.
 
 ## Grant-Log Coverage
 

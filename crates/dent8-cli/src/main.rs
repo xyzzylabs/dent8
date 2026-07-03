@@ -40,7 +40,7 @@ const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
                                       expire, explain, replay, facts list, verify, conflicts, \
                                       eval, init, agent add, authority, identity <subcommand>, \
-                                      doctor, completions, export, witness <one-shot>, schema \
+                                      doctor, completions, export, witness <subcommand>, schema \
                                       postgres, mcp install";
 
 fn main() {
@@ -274,7 +274,7 @@ enum CliCommand {
 impl CliCommand {
     fn supports_json_output(&self) -> bool {
         match self {
-            Self::Witness(args) => witness_args_support_json(&args.args),
+            Self::Witness(_) => true,
             _ => matches!(
                 self,
                 Self::Assert(_)
@@ -1262,13 +1262,6 @@ fn run_witness(args: &[String], output: CliOutput) -> i32 {
         }
     };
     let args = args.as_slice();
-    #[cfg(feature = "witness")]
-    if output == CliOutput::Json && !witness_args_support_json(args) {
-        eprintln!(
-            "`dent8 witness serve` does not support `--output json` yet (supported: {JSON_SUPPORTED_COMMANDS})"
-        );
-        return 2;
-    }
     #[cfg(not(feature = "witness"))]
     {
         let _ = args;
@@ -1296,14 +1289,10 @@ fn run_witness(args: &[String], output: CliOutput) -> i32 {
         [sub, rest @ ..] if sub == "verify-published" => witness::verify_published(rest, output),
         [sub] if sub == "head" => witness::head(output),
         [sub, rest @ ..] if sub == "publish" => witness::publish(rest, output),
-        [sub, rest @ ..] if sub == "serve" => witness::serve(rest),
+        [sub, rest @ ..] if sub == "serve" => witness::serve(rest, output),
         [sub, rest @ ..] if sub == "doctor" => witness::doctor(rest, output),
         _ => witness_usage_error(output),
     }
-}
-
-fn witness_args_support_json(args: &[String]) -> bool {
-    !matches!(args.first().map(String::as_str), Some("serve"))
 }
 
 /// Pull an embedded `--output <text|json>` / `--output=<text|json>` out of the raw witness

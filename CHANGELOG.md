@@ -35,6 +35,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   without `--grants` says so when a grants-witness log exists instead of silently
   half-covering; JSON output gains a `grants` object on both commands.
 
+- **`witness serve` NDJSON**: the cadence signer now supports `--output json`, streaming one
+  compact JSON line per event — signed heads on stdout (`event: "head_signed"`, `lane:
+  "events" | "grants"`), lifecycle on stderr (`started` / `warning` / `error` / `stopped`) —
+  so the operated signer's logs are machine-parseable. `witness sign --output json` gains a
+  structured `grant_log_head` field. Exit codes unchanged.
+
 ### Fixed
 
 - `witness serve` now actually covers the grant log as documented: the cadence signer signs

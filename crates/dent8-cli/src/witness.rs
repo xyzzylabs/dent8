@@ -42,6 +42,7 @@ const MAX_CONSECUTIVE_ERRORS: u32 = 10;
 
 const KEYGEN_TOOL: &str = "witness keygen";
 const SIGN_TOOL: &str = "witness sign";
+const SERVE_TOOL: &str = "witness serve";
 const HEAD_TOOL: &str = "witness head";
 const PUBLISH_TOOL: &str = "witness publish";
 const VERIFY_TOOL: &str = "witness verify";
@@ -298,9 +299,9 @@ pub fn sign(output: CliOutput) -> i32 {
         sth.event_count,
         sth.head.as_deref().unwrap_or("(empty log)"),
     );
-    if let Some(line) = &grant_lane {
+    if let Some(lane) = &grant_lane {
         message.push('\n');
-        message.push_str(line);
+        message.push_str(&lane.message());
     }
     match output {
         CliOutput::Text => {
@@ -313,6 +314,7 @@ pub fn sign(output: CliOutput) -> i32 {
             "witness_log_path": path,
             "current_event_count": events.len(),
             "signed_head": signed_head_json(&sth),
+            "grant_log_head": grant_lane.as_ref().map(|lane| grant_log_head_json(&lane.head)),
             "message": message,
         })),
     }
@@ -326,7 +328,13 @@ pub fn sign(output: CliOutput) -> i32 {
 /// second argument bounds the number of *event* heads signed (for a finite run); without it,
 /// it runs until interrupted. A later in-place rewrite is still caught by an *earlier* signed
 /// head failing `verify`, so signing only on growth loses no resistance.
-pub fn serve(args: &[String]) -> i32 {
+///
+/// With `--output json` the loop streams **NDJSON**: signed heads as one compact JSON line
+/// each on stdout (`event: "head_signed"`, `lane: "events" | "grants"`), lifecycle and
+/// diagnostics (`started` / `warning` / `error` / `stopped`) on stderr — so a collector
+/// tailing stdout sees exactly the signed-head record stream.
+#[allow(clippy::too_many_lines)] // one linear loop, two lanes, two output modes
+pub fn serve(args: &[String], output: CliOutput) -> i32 {
     // Floor the interval at 1s: a 0s interval whose head target is never reached on a static log
     // would busy-spin the CPU (and hammer the DB on the Postgres backend).
     let interval = args
@@ -335,19 +343,38 @@ pub fn serve(args: &[String]) -> i32 {
         .unwrap_or(5)
         .max(1);
     let max_heads = args.get(1).and_then(|value| value.parse::<u64>().ok());
+    let serve_error = |message: &str| match output {
+        CliOutput::Text => eprintln!("{message}"),
+        CliOutput::Json => eprintln!(
+            "{}",
+            serde_json::json!({"event": "error", "tool": SERVE_TOOL, "message": message})
+        ),
+    };
     let signing = match load_signing_key() {
         Ok(key) => key,
         Err(error) => {
-            eprintln!("{error}");
+            serve_error(&error);
             return 1;
         }
     };
     let verifying = signing.verifying_key();
     let path = witness_log_path();
-    eprintln!(
-        "witness: signing the head on growth every {interval}s -> {path}{} (interrupt to stop)",
-        max_heads.map_or_else(String::new, |max| format!(", up to {max} head(s)"))
-    );
+    match output {
+        CliOutput::Text => eprintln!(
+            "witness: signing the head on growth every {interval}s -> {path}{} (interrupt to stop)",
+            max_heads.map_or_else(String::new, |max| format!(", up to {max} head(s)"))
+        ),
+        CliOutput::Json => eprintln!(
+            "{}",
+            serde_json::json!({
+                "event": "started",
+                "tool": SERVE_TOOL,
+                "interval_seconds": interval,
+                "witness_log_path": path,
+                "max_heads": max_heads,
+            })
+        ),
+    }
     // Seed from any heads already on disk so growth is measured from the last witnessed point,
     // and a pre-existing head can flag a rewrite on the first growth tick.
     let mut last_signed: Option<SignedTreeHead> =
@@ -370,46 +397,107 @@ pub fn serve(args: &[String]) -> i32 {
             Ok(events) => {
                 let count = events.len() as u64;
                 if last_signed.as_ref().map(|sth| sth.event_count) != Some(count) {
-                    warn_if_prior_head_broken(last_signed.as_ref(), &events, &verifying);
+                    if let Some(warning) =
+                        prior_head_warning(last_signed.as_ref(), &events, &verifying)
+                    {
+                        match output {
+                            CliOutput::Text => eprintln!("{warning}"),
+                            CliOutput::Json => eprintln!(
+                                "{}",
+                                serde_json::json!({
+                                    "event": "warning",
+                                    "tool": SERVE_TOOL,
+                                    "message": warning,
+                                })
+                            ),
+                        }
+                    }
                     match sign_head(&events, &signing)
                         .map_err(|error| error.to_string())
                         .and_then(|sth| append_head(&path, &sth).map(|()| sth))
                     {
                         Ok(sth) => {
                             signed += 1;
-                            println!(
-                                "signed head: count={} head={}",
-                                sth.event_count,
-                                sth.head.as_deref().unwrap_or("(empty log)")
-                            );
+                            match output {
+                                CliOutput::Text => println!(
+                                    "signed head: count={} head={}",
+                                    sth.event_count,
+                                    sth.head.as_deref().unwrap_or("(empty log)")
+                                ),
+                                CliOutput::Json => println!(
+                                    "{}",
+                                    serde_json::json!({
+                                        "event": "head_signed",
+                                        "tool": SERVE_TOOL,
+                                        "lane": "events",
+                                        "head": signed_head_json(&sth),
+                                        "signed_total": signed,
+                                    })
+                                ),
+                            }
                             last_signed = Some(sth);
                         }
                         Err(error) => {
-                            eprintln!("witness: {error}");
+                            serve_error(&format!("witness: {error}"));
                             had_error = true;
                         }
                     }
                 }
             }
             Err(error) => {
-                eprintln!("witness: could not load the log: {error}");
+                serve_error(&format!("witness: could not load the log: {error}"));
                 had_error = true;
             }
         }
         match sign_grant_log_head_if_changed(&signing, &mut last_grant_state) {
-            Ok(Some(line)) => println!("{line}"),
+            Ok(Some(lane)) => match output {
+                CliOutput::Text => println!("{}", lane.message()),
+                CliOutput::Json => println!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "head_signed",
+                        "tool": SERVE_TOOL,
+                        "lane": "grants",
+                        "head": grant_log_head_json(&lane.head),
+                    })
+                ),
+            },
             Ok(None) => {}
             Err(error) => {
-                eprintln!("witness: {error}");
+                serve_error(&format!("witness: {error}"));
                 had_error = true;
             }
         }
         errors = if had_error { errors + 1 } else { 0 };
         if errors >= MAX_CONSECUTIVE_ERRORS {
-            eprintln!("witness: giving up after {errors} consecutive errors");
+            match output {
+                CliOutput::Text => {
+                    eprintln!("witness: giving up after {errors} consecutive errors");
+                }
+                CliOutput::Json => eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "stopped",
+                        "tool": SERVE_TOOL,
+                        "reason": "consecutive_errors",
+                        "message": format!("giving up after {errors} consecutive errors"),
+                    })
+                ),
+            }
             return 1;
         }
         if max_heads.is_some_and(|max| signed >= max) {
+            if output == CliOutput::Json {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({
+                        "event": "stopped",
+                        "tool": SERVE_TOOL,
+                        "reason": "max_heads_reached",
+                        "signed_heads": signed,
+                    })
+                );
+            }
             return 0;
         }
         std::thread::sleep(std::time::Duration::from_secs(interval));
@@ -419,31 +507,30 @@ pub fn serve(args: &[String]) -> i32 {
 /// Warn (loudly, non-fatally) if the most recent witnessed head no longer matches the current
 /// log's prefix — history was rewritten or rolled back under the witness. The witness still
 /// signs the new growth; the stale head remains the evidence at `verify` time.
-fn warn_if_prior_head_broken(
+fn prior_head_warning(
     previous: Option<&SignedTreeHead>,
     events: &[ClaimEvent],
     verifying: &VerifyingKey,
-) {
-    let Some(previous) = previous else { return };
+) -> Option<String> {
+    let previous = previous?;
     let Ok(count) = usize::try_from(previous.event_count) else {
-        return;
+        return None;
     };
     if count > events.len() {
-        eprintln!(
+        return Some(format!(
             "witness: WARNING — the log shrank below a previously witnessed count {} (ROLLBACK); \
              signing the new head anyway, the earlier head is the evidence",
             previous.event_count
-        );
-        return;
+        ));
     }
     match verify_signed_head(&events[..count], previous, verifying) {
-        Ok(true) => {}
-        Ok(false) => eprintln!(
+        Ok(true) => None,
+        Ok(false) => Some(format!(
             "witness: WARNING — the log no longer matches the head witnessed at count {} (history \
              was REWRITTEN); signing the new head anyway, the earlier head is the evidence",
             previous.event_count
-        ),
-        Err(error) => eprintln!("witness: could not check the prior head: {error}"),
+        )),
+        Err(error) => Some(format!("witness: could not check the prior head: {error}")),
     }
 }
 
@@ -1688,11 +1775,29 @@ fn grant_log_head_message(record_count: u64, head: Option<&str>) -> Result<Vec<u
     Ok(message)
 }
 
-/// Sign the current grant-log head, if a grant log is discoverable. Returns a human line for
-/// the sign/serve output, or `None` when there is no grant log (not an error — witness-only
-/// setups are legitimate).
+/// One grant-log head signing, structured for output shaping: the head itself plus the
+/// paths involved (for the human line and the JSON fields).
+struct GrantLaneSigned {
+    head: GrantLogHead,
+    grant_log: std::path::PathBuf,
+    lane_path: String,
+}
+
+impl GrantLaneSigned {
+    fn message(&self) -> String {
+        format!(
+            "signed grant-log head: count={} ({}) -> appended to {}",
+            self.head.record_count,
+            self.grant_log.display(),
+            self.lane_path
+        )
+    }
+}
+
+/// Sign the current grant-log head, if a grant log is discoverable. Returns `None` when
+/// there is no grant log (not an error — witness-only setups are legitimate).
 #[cfg(feature = "identity")]
-fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<String>, String> {
+fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<GrantLaneSigned>, String> {
     use ed25519_dalek::Signer as _;
     let Some((grant_log, hashes)) = crate::identity::grant_log_line_hashes()? else {
         return Ok(None);
@@ -1715,18 +1820,18 @@ fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<String>, String> {
         .map_err(|error| format!("cannot open {path}: {error}"))?;
     file.write_all(format!("{line}\n").as_bytes())
         .map_err(|error| format!("cannot append to {path}: {error}"))?;
-    Ok(Some(format!(
-        "signed grant-log head: count={} ({}) -> appended to {path}",
-        record_count,
-        grant_log.display(),
-    )))
+    Ok(Some(GrantLaneSigned {
+        head: signed,
+        grant_log,
+        lane_path: path,
+    }))
 }
 
 // The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
 // errors are real.
 #[cfg(not(feature = "identity"))]
 #[allow(clippy::unnecessary_wraps)]
-fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<String>, String> {
+fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<GrantLaneSigned>, String> {
     Ok(None)
 }
 
@@ -1738,7 +1843,7 @@ fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<String>, String> 
 fn sign_grant_log_head_if_changed(
     signing: &SigningKey,
     last: &mut Option<(u64, Option<String>)>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<GrantLaneSigned>, String> {
     let Some((_, hashes)) = crate::identity::grant_log_line_hashes()? else {
         return Ok(None);
     };
@@ -1746,9 +1851,9 @@ fn sign_grant_log_head_if_changed(
     if last.as_ref() == Some(&state) {
         return Ok(None);
     }
-    let line = sign_grant_log_head(signing)?;
+    let lane = sign_grant_log_head(signing)?;
     *last = Some(state);
-    Ok(line)
+    Ok(lane)
 }
 
 // The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
@@ -1758,7 +1863,7 @@ fn sign_grant_log_head_if_changed(
 fn sign_grant_log_head_if_changed(
     _signing: &SigningKey,
     _last: &mut Option<(u64, Option<String>)>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<GrantLaneSigned>, String> {
     Ok(None)
 }
 

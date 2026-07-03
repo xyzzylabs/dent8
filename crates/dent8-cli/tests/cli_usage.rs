@@ -675,10 +675,18 @@ fn json_output_fails_closed_for_unsupported_commands() {
     assert!(stdout(&output).is_empty());
     assert!(stderr(&output).contains("does not support `--output json` yet"));
 
-    let witness_serve = run_dent8(&["--output", "json", "witness", "serve"], &envs);
-    assert_eq!(witness_serve.status.code(), Some(2));
-    assert!(stdout(&witness_serve).is_empty());
-    assert!(stderr(&witness_serve).contains("does not support `--output json` yet"));
+    // `witness serve` DOES stream NDJSON now; even its setup failure (no signing key here)
+    // is a machine-readable line on stderr, not prose.
+    #[cfg(feature = "witness")]
+    {
+        let witness_serve = run_dent8(&["--output", "json", "witness", "serve"], &envs);
+        assert_eq!(witness_serve.status.code(), Some(1));
+        assert!(stdout(&witness_serve).is_empty());
+        let error: Value = serde_json::from_str(stderr(&witness_serve).trim())
+            .expect("serve setup failure should be one JSON line");
+        assert_eq!(error["event"], "error", "{}", stderr(&witness_serve));
+        assert_eq!(error["tool"], "witness serve");
+    }
 }
 
 #[test]
@@ -5534,6 +5542,77 @@ fn witness_serve_covers_the_grant_log_and_signs_only_on_change() {
         "{}",
         stdout(&verify)
     );
+}
+
+#[cfg(all(feature = "identity", feature = "witness"))]
+#[test]
+fn witness_serve_streams_ndjson() {
+    let temp = TempDir::new();
+    let bundle = temp.file("bundle").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let wkey = temp.file("witness.key").to_string_lossy().into_owned();
+    let wlog = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    let gwlog = temp
+        .file("witness-grants.jsonl")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &bundle,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "bootstrap",
+    );
+    let trust = format!("{bundle}/trust.json");
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_WITNESS_KEY", wkey.as_str()),
+        ("DENT8_WITNESS_LOG", wlog.as_str()),
+        ("DENT8_WITNESS_GRANTS_LOG", gwlog.as_str()),
+    ];
+    assert_success(&run_dent8(&["witness", "keygen"], &envs), "witness keygen");
+
+    // One bounded tick, both lanes: stdout is the signed-head record stream (one compact
+    // JSON line per head), lifecycle lines go to stderr.
+    let run = run_dent8(&["witness", "serve", "1", "1", "--output", "json"], &envs);
+    assert_success(&run, "serve ndjson");
+    let heads: Vec<Value> = stdout(&run)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("stdout should be NDJSON"))
+        .collect();
+    assert_eq!(heads.len(), 2, "{}", stdout(&run));
+    assert_eq!(heads[0]["event"], "head_signed");
+    assert_eq!(heads[0]["tool"], "witness serve");
+    assert_eq!(heads[0]["lane"], "events");
+    assert_eq!(heads[0]["head"]["event_count"], 0);
+    assert_eq!(heads[0]["signed_total"], 1);
+    assert_eq!(heads[1]["event"], "head_signed");
+    assert_eq!(heads[1]["lane"], "grants");
+    assert_eq!(heads[1]["head"]["record_count"], 1);
+    let lifecycle: Vec<Value> = stderr(&run)
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("stderr should be NDJSON"))
+        .collect();
+    let first = lifecycle.first().expect("started line");
+    assert_eq!(first["event"], "started", "{}", stderr(&run));
+    assert_eq!(first["interval_seconds"], 1);
+    assert_eq!(first["max_heads"], 1);
+    let last = lifecycle.last().expect("stopped line");
+    assert_eq!(last["event"], "stopped");
+    assert_eq!(last["reason"], "max_heads_reached");
+    assert_eq!(last["signed_heads"], 1);
 }
 
 #[cfg(feature = "identity")]
