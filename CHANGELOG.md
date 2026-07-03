@@ -1,15 +1,19 @@
 # Changelog
 
 All notable changes to dent8 are recorded here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reaches a tagged release.
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-dent8 is pre-1.0: the event format, hash-chain encoding, and APIs may change. See
-[docs/STATUS.md](docs/STATUS.md) for what is built versus designed.
+dent8 is pre-1.0: the event format, hash-chain encoding, and APIs may change between
+minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus designed.
 
 ## [Unreleased]
 
-The runnable surface and library as they stand on `main` (no tagged release yet).
+Nothing yet.
+
+## [0.1.0] - 2026-07-03
+
+The first release: the complete v0 surface as developed on `main`.
 
 ### Added
 
