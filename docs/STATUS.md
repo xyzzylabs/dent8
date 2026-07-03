@@ -130,9 +130,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 explain <subject> <predicate> [--as-of MILLIS] [--valid-at MILLIS]`** — replays
   the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
-  a still-`Active` fact past its TTL *or its asserted `valid_to`* is headline-flagged stale,
-  and the receipt carries `fresh` + the `expires_at` instant (the earliest bound) plus the
-  fact's survived-challenge count (ADR 0015). **Time-travel (ADR 0016):** `--as-of` folds
+  a still-`Active` fact past its TTL *or its asserted `valid_to`* is headline-flagged
+  `[stale — no longer valid]`, and one whose `valid_from` is still in the future
+  `[not yet valid]`; the receipt carries `fresh` + `not_yet_valid` + the
+  `valid_from`/`expires_at` window plus the fact's survived-challenge count (ADR 0015/0016).
+  **Time-travel (ADR 0016):** `--as-of` folds
   only events recorded at or before an instant (the store as it stood then) and `--valid-at`
   judges freshness at an instant instead of now. Composes with
   `assert`/`supersede`/`retract` across processes (and the same receipt backs the MCP
@@ -157,8 +159,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   (`TAINTED: X derives from Y`). On identity builds it also re-verifies every persisted
   **write attestation** (ADR 0013) and, when a grant log is present, resolves each attested
   event's **entitlement at write time** — entitled / unentitled (an integrity failure) /
-  unknown, reported honestly (ADR 0014). Supports `--output json`; integrity findings still
-  return a nonzero exit code, with the structured report on stdout.
+  unknown, reported honestly (ADR 0014). It also surfaces **unearned-supersession
+  advisories** (ADR 0017: a replacement that did not out-entrench what it displaced) — these
+  are *advisory*, not failures (the base firewall admitted them; enable
+  `DENT8_ENTRENCHMENT_GATE` to reject at write time), so `verify` stays `OK`. Supports
+  `--output json` (with a structured `advisories` array); integrity findings still return a
+  nonzero exit code, with the structured report on stdout.
 - **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
   contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
   the self-demonstrating "why dent8" benchmark. Supports `--output json`.

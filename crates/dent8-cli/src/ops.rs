@@ -1687,7 +1687,7 @@ pub(crate) fn op_explain(
     clock: ReadClock,
 ) -> Result<String, OpError> {
     let receipt = op_explain_receipt(path, subject_kind, subject_key, predicate, clock)?;
-    let annotation = read_annotation(receipt.lifecycle, receipt.fresh);
+    let annotation = read_annotation(receipt.lifecycle, receipt.fresh, receipt.not_yet_valid);
     Ok(format!(
         "explain {subject_kind}:{subject_key} {predicate}{annotation}\n{}",
         format_receipt(&receipt)

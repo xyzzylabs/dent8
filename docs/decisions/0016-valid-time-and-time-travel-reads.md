@@ -28,15 +28,24 @@ now-only:
 ### 1. `valid_to` — the asserted end of validity
 
 `ClaimEvent.valid_to: Option<TimestampMillis>`, folded into
-`ClaimState.valid_to` at assertion (like `ttl`). Read-time freshness treats an elapsed
-`valid_to` exactly like an elapsed TTL: `ClaimState::expires_at()` becomes the *earliest*
-of the TTL bound and `valid_to`, and `is_expired_at(now)` (and therefore `explain`'s
-`fresh` / `expires_at` receipt fields, the stale headline, and MCP) follow. Lifecycle is
-untouched — an out-of-validity fact is stale to read, not terminally closed; explicit
-`expire` remains the authority-gated close (ADR 0011).
+`ClaimState.valid_to` at assertion (like `ttl`). Read-time freshness bounds the full
+validity window `[valid_from, expires_at)`: `ClaimState::expires_at()` is the *earliest* of
+the TTL bound and `valid_to` (the upper bound), and `ClaimState::is_fresh_at(now)` also
+requires `now >= valid_from` — a fact whose `valid_from` is in the future is **not yet
+valid** (`is_not_yet_valid_at`), read as not-fresh with a distinct `[not yet valid]` headline
+rather than `[stale]`. `explain`'s receipt carries `fresh`, `not_yet_valid`, and the
+`valid_from` / `expires_at` window (the CLI, the MCP `explain` tool, and `resources/read`
+mirror them). Lifecycle is untouched — an out-of-window fact is not-fresh to read, not
+terminally closed; explicit `expire` remains the authority-gated close (ADR 0011).
 
 Validation rejects `valid_to <= valid_from` when both are set. Expiry is inclusive at the
-boundary (`expires_at <= now` is stale), matching the existing TTL comparison.
+upper boundary (`expires_at <= now` is stale) and the lower bound is inclusive too
+(`now >= valid_from` is valid), matching the existing TTL comparison.
+
+`ClaimState` stores `valid_from` distinctly from `freshness_anchor` (which still falls back
+to `observed_at`/`recorded_at` for the TTL anchor): only an asserted `valid_from` gates the
+lower bound, so a future TTL anchor from `observed_at` does not accidentally read as
+not-yet-valid.
 
 ### 2. The write surface completes the interval
 
@@ -75,5 +84,7 @@ predate the rule and serialize as explicit `null`s, absence is omitted.)
 - Auditing gains the missing tense: a poisoning investigation can ask what the agent
   believed at decision time (`--as-of` at the decision's timestamp) instead of inferring
   it from the current fold.
-- MCP time-travel parameters ride the same `op_*` signatures; exposing them as tool
-  arguments is follow-up surface work, not a new mechanism.
+- MCP time-travel and validity parameters ride the same `op_*` signatures and are now
+  exposed as tool arguments: `assert`/`supersede`/`contradict` take optional
+  `valid_from`/`valid_to` and `explain`/`replay` take optional `as_of`/`valid_at`, advertised
+  in their input schemas — surface plumbing over the existing signatures, not a new mechanism.

@@ -21,7 +21,7 @@ use dent8_core::{
 use dent8_store::StoreError;
 use dent8_store::{
     EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt, LineageIssue, PredicateRegistry,
-    replay_entity, tainted_claims,
+    UnearnedSupersession, replay_entity, tainted_claims,
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
@@ -1431,14 +1431,17 @@ fn display_value(value: &ClaimValue) -> String {
 }
 
 /// The read-time headline verdict for an explained fact: a terminal fact is no longer
-/// believed; a still-`Active` fact past its TTL is **stale** (threat-model T4) — an agent
-/// must not act on it as current. Fresh `Active` facts get no annotation. The receipt body
-/// (value, `expires_at`) is always shown for the audit trail.
-fn read_annotation(lifecycle: ClaimLifecycle, fresh: bool) -> String {
+/// believed; a fact whose asserted `valid_from` is still in the future is **not yet valid**;
+/// a fact past its TTL or `valid_to` is **stale** (threat-model T4) — an agent must not act
+/// on either as current. Fresh `Active` facts get no annotation. The receipt body (value,
+/// `valid_from`, `expires_at`) is always shown for the audit trail.
+fn read_annotation(lifecycle: ClaimLifecycle, fresh: bool, not_yet_valid: bool) -> String {
     if lifecycle.is_terminal() {
         format!("  [no longer believed — {lifecycle:?}]")
+    } else if not_yet_valid {
+        "  [not yet valid — valid_from is in the future]".to_string()
     } else if !fresh {
-        "  [stale — TTL elapsed]".to_string()
+        "  [stale — no longer valid]".to_string()
     } else {
         String::new()
     }
@@ -1453,11 +1456,23 @@ fn format_receipt(r: &IntegrityReceipt) -> String {
     let expires_at = r
         .expires_at
         .map_or_else(|| "never".to_string(), |at| at.as_unix_millis().to_string());
+    let valid_from = r.valid_from.map_or_else(
+        || "-".to_string(),
+        |at| {
+            let suffix = if r.not_yet_valid {
+                " (not yet valid)"
+            } else {
+                ""
+            };
+            format!("{}{suffix}", at.as_unix_millis())
+        },
+    );
     format!(
         "    value         : {value}\n    \
          lifecycle     : {:?}\n    \
          authority     : {:?}\n    \
          fresh         : {}\n    \
+         valid_from    : {valid_from}\n    \
          expires_at    : {expires_at}\n    \
          evidence      : {}\n    \
          corroboration : {}\n    \
@@ -1511,6 +1526,8 @@ fn receipt_fields_json(receipt: &IntegrityReceipt) -> serde_json::Value {
         "lifecycle": format!("{:?}", receipt.lifecycle),
         "authority": receipt.authority.name(),
         "fresh": receipt.fresh,
+        "not_yet_valid": receipt.not_yet_valid,
+        "valid_from": receipt.valid_from.map(TimestampMillis::as_unix_millis),
         "expires_at": receipt.expires_at.map(TimestampMillis::as_unix_millis),
         "evidence_count": receipt.evidence_count,
         "corroboration": receipt.corroboration,
@@ -2280,6 +2297,74 @@ fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
     }
 }
 
+/// Unearned-supersession **advisories** (ADR 0007/0015/0017), grouped from a flat event set
+/// by claim stream. Unlike lineage breaks, retraction taint, or a broken attestation, these
+/// are **not** integrity failures — the base firewall admitted the supersession (the
+/// earned-supersession gate is opt-in and off by default). They surface a replacement that
+/// did not out-*entrench* what it displaced (a downgraded authority, or weaker earned
+/// entrenchment = corroboration + survived challenges at equal authority), so `verify` reports
+/// them as advisories and stays `OK`. Turn on `DENT8_ENTRENCHMENT_GATE` to reject them at
+/// write time instead.
+fn unearned_supersession_advisories(events: &[ClaimEvent]) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut streams: BTreeMap<(String, String, String), Vec<ClaimEvent>> = BTreeMap::new();
+    for event in events {
+        streams
+            .entry((
+                event.subject.kind().to_string(),
+                event.subject.key().to_string(),
+                event.predicate.as_str().to_string(),
+            ))
+            .or_default()
+            .push(event.clone());
+    }
+    let mut out = Vec::new();
+    for ((kind, key, predicate), stream) in streams {
+        let Ok(projection) = replay_entity(&stream) else {
+            continue;
+        };
+        for unearned in projection.unearned_supersessions() {
+            let detail = match unearned {
+                UnearnedSupersession::AuthorityDowngrade {
+                    superseded,
+                    by,
+                    incumbent,
+                    challenger,
+                } => format!(
+                    "{superseded} replaced by {by} at lower authority ({incumbent:?} -> {challenger:?})",
+                ),
+                UnearnedSupersession::WeakerEntrenchment {
+                    superseded,
+                    by,
+                    incumbent_entrenchment,
+                    challenger_entrenchment,
+                } => format!(
+                    "{superseded} replaced by {by} with weaker earned entrenchment \
+                     ({challenger_entrenchment} < {incumbent_entrenchment})",
+                ),
+            };
+            out.push(format!(
+                "ADVISORY: {kind}:{key} {predicate} — unearned supersession: {detail}"
+            ));
+        }
+    }
+    out
+}
+
+/// Append an unearned-supersession advisory block to an OK `verify` report, if any. Kept
+/// out of the failure path: advisories never flip `verify` to non-zero.
+fn append_advisories(report: String, advisories: &[String]) -> String {
+    if advisories.is_empty() {
+        return report;
+    }
+    format!(
+        "{report}\n{} unearned-supersession advisory(ies) (admitted; enable \
+         DENT8_ENTRENCHMENT_GATE to reject at write time):\n  {}",
+        advisories.len(),
+        advisories.join("\n  ")
+    )
+}
+
 fn verify_log(path: &str) -> Result<String, String> {
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
@@ -2353,7 +2438,7 @@ fn verify_log(path: &str) -> Result<String, String> {
             issues.join("\n  ")
         ));
     }
-    Ok(format!(
+    let report = format!(
         "OK: {} event(s) across {} entit(ies) — STRUCTURAL integrity holds (uniqueness + \
          lineage intact, no retraction taint, all events canonicalize){}. This does NOT \
          detect a content edit to *unattested* events: the file dev store keeps no stored \
@@ -2362,6 +2447,10 @@ fn verify_log(path: &str) -> Result<String, String> {
         store.len(),
         subjects.len(),
         attestations.ok_clause()
+    );
+    Ok(append_advisories(
+        report,
+        &unearned_supersession_advisories(&all_events),
     ))
 }
 
@@ -2412,11 +2501,15 @@ fn backend_verify(url: &str) -> Result<String, String> {
                 lines.join("\n  ")
             ));
         }
-        Ok(format!(
+        let report = format!(
             "OK: {} event(s) — the stored global hash chain re-verifies, no retraction taint{}. \
              (Tamper-resistance needs an external operated witness.)",
             events.len(),
             attestations.ok_clause()
+        );
+        Ok(append_advisories(
+            report,
+            &unearned_supersession_advisories(&events),
         ))
     })
 }
@@ -2433,6 +2526,14 @@ fn verify_json(ok: bool, report: &str) -> serde_json::Value {
             .map(str::to_string)
             .collect::<Vec<_>>()
     };
+    // Unearned-supersession advisories ride the OK report (they never fail verify); surface
+    // them as a structured array so a monitor need not parse prose.
+    let advisories = report
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| line.strip_prefix("ADVISORY: "))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
     serde_json::json!({
         "status": if ok { "ok" } else { "failed" },
         "tool": "verify",
@@ -2440,6 +2541,7 @@ fn verify_json(ok: bool, report: &str) -> serde_json::Value {
         "summary": first_line(report),
         "report": report,
         "findings": findings,
+        "advisories": advisories,
     })
 }
 
@@ -3088,13 +3190,18 @@ mod tests {
     #[test]
     fn the_read_annotation_flags_stale_and_terminal_facts() {
         // A fresh, believed fact gets no annotation.
-        assert!(read_annotation(ClaimLifecycle::Active, true).is_empty());
+        assert!(read_annotation(ClaimLifecycle::Active, true, false).is_empty());
         // An Active fact past its TTL is flagged stale (the T4 read-surface verdict).
-        assert!(read_annotation(ClaimLifecycle::Active, false).contains("stale"));
+        assert!(read_annotation(ClaimLifecycle::Active, false, false).contains("stale"));
+        assert!(read_annotation(ClaimLifecycle::Active, false, true).contains("not yet valid"));
         // A terminal fact is flagged no-longer-believed...
-        assert!(read_annotation(ClaimLifecycle::Superseded, true).contains("no longer believed"));
+        assert!(
+            read_annotation(ClaimLifecycle::Superseded, true, false).contains("no longer believed")
+        );
         // ...and that verdict wins even if it is also stale.
-        assert!(read_annotation(ClaimLifecycle::Retracted, false).contains("no longer believed"));
+        assert!(
+            read_annotation(ClaimLifecycle::Retracted, false, false).contains("no longer believed")
+        );
     }
 
     /// A durable log with a hole at `event:2` — a line lost to a torn write or to manual /

@@ -10,6 +10,22 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Unearned-supersession advisories in `verify`**
+  ([ADR 0017](docs/decisions/0017-survived-challenges-in-arbitration.md)): `dent8 verify`
+  now surfaces `EntityProjection::unearned_supersessions` (previously computed but wired into
+  nothing) as **advisories** — a supersession admitted by the base firewall whose replacement
+  did not out-entrench the incumbent. Advisory, not a failure (enable
+  `DENT8_ENTRENCHMENT_GATE` to reject at write time); `verify` stays `OK`, and `--output
+  json` gains an `advisories` array.
+- **MCP validity + time-travel arguments** (ADR 0016): the `assert`/`supersede`/`contradict`
+  MCP tools take optional `valid_from`/`valid_to`, and `explain`/`replay` take optional
+  `as_of`/`valid_at` — the same valid-time interval and time-travel reads the CLI has, now
+  through the tool surface (schemas advertise them; a non-integer value is a tool error).
+- **Not-yet-valid `valid_from`** (ADR 0016): read-time freshness now bounds the full window
+  `[valid_from, expires_at)`. A fact whose `valid_from` is in the future reads **not yet
+  valid** (`fresh=false`, `not_yet_valid=true`, headline `[not yet valid]`) rather than fresh;
+  the receipt gains `not_yet_valid` + `valid_from`, and an elapsed `valid_to`/TTL now reads
+  `[stale — no longer valid]` (accurate — no longer the misleading "TTL elapsed").
 
 - **Survived challenges feed arbitration**
   ([ADR 0017](docs/decisions/0017-survived-challenges-in-arbitration.md)): the opt-in

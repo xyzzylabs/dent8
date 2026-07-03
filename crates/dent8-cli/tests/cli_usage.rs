@@ -875,6 +875,102 @@ fn valid_time_intervals_bound_freshness_and_validate() {
 }
 
 #[test]
+fn a_future_valid_from_reads_not_yet_valid() {
+    // ADR 0016 lower bound: a fact whose valid_from is in the future is not-yet-valid, so it
+    // reads as not-fresh (distinct from stale) until then.
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:proj",
+                "feature",
+                "enabled",
+                "--authority=high",
+                "--source=user:owner",
+                "--valid-from=5000",
+            ],
+            &envs,
+        ),
+        "assert with a future valid_from",
+    );
+
+    // Read before valid_from: not yet valid, not fresh — and NOT the stale wording.
+    let before = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "repo:proj",
+            "feature",
+            "--valid-at",
+            "1000",
+        ],
+        &envs,
+    );
+    assert_success(&before, "explain before valid_from");
+    let receipt = stdout_json(&before);
+    assert_eq!(receipt["fresh"], false, "{}", stdout(&before));
+    assert_eq!(receipt["not_yet_valid"], true);
+    assert_eq!(receipt["valid_from"], 5000);
+    let before_text = run_dent8(
+        &["explain", "repo:proj", "feature", "--valid-at", "1000"],
+        &envs,
+    );
+    assert!(
+        stdout(&before_text).contains("not yet valid") && !stdout(&before_text).contains("stale"),
+        "{}",
+        stdout(&before_text)
+    );
+
+    // Read at/after valid_from: fresh again.
+    let after = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "repo:proj",
+            "feature",
+            "--valid-at",
+            "5000",
+        ],
+        &envs,
+    );
+    assert_eq!(stdout_json(&after)["fresh"], true, "{}", stdout(&after));
+    assert_eq!(stdout_json(&after)["not_yet_valid"], false);
+
+    // A valid_to expiry now reads "no longer valid" (accurate), not the old "TTL elapsed".
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:proj",
+                "window",
+                "open",
+                "--authority=high",
+                "--source=user:owner",
+                "--valid-from=1000",
+                "--valid-to=2000",
+            ],
+            &envs,
+        ),
+        "assert a bounded window",
+    );
+    let expired = run_dent8(
+        &["explain", "repo:proj", "window", "--valid-at", "5000"],
+        &envs,
+    );
+    assert!(
+        stdout(&expired).contains("no longer valid") && !stdout(&expired).contains("TTL elapsed"),
+        "{}",
+        stdout(&expired)
+    );
+}
+
+#[test]
 fn as_of_reads_travel_to_the_store_as_it_stood() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

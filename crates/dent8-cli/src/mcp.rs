@@ -398,6 +398,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
+            let validity = arg_validity(arguments)?;
             run_write_tool(
                 "assert",
                 "accepted",
@@ -412,14 +413,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 },
                 || {
                     op_assert(
-                        path,
-                        &kind,
-                        &key,
-                        &predicate,
-                        &value,
-                        authority,
-                        &source,
-                        crate::ops::Validity::default(),
+                        path, &kind, &key, &predicate, &value, authority, &source, validity,
                     )
                 },
             )
@@ -433,6 +427,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
+            let validity = arg_validity(arguments)?;
             run_write_tool(
                 "supersede",
                 "accepted",
@@ -447,14 +442,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 },
                 || {
                     op_supersede(
-                        path,
-                        &kind,
-                        &key,
-                        &predicate,
-                        &value,
-                        authority,
-                        &source,
-                        crate::ops::Validity::default(),
+                        path, &kind, &key, &predicate, &value, authority, &source, validity,
                     )
                 },
             )
@@ -589,6 +577,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
+            let validity = arg_validity(arguments)?;
             run_write_tool(
                 "contradict",
                 "contested",
@@ -603,36 +592,17 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 },
                 || {
                     op_contradict(
-                        path,
-                        &kind,
-                        &key,
-                        &predicate,
-                        &value,
-                        authority,
-                        &source,
-                        crate::ops::Validity::default(),
+                        path, &kind, &key, &predicate, &value, authority, &source, validity,
                     )
                 },
             )
         }
         "explain" => {
             let (kind, key, predicate) = (kind()?, key()?, predicate()?);
-            let text = op_explain(
-                path,
-                &kind,
-                &key,
-                &predicate,
-                crate::ops::ReadClock::default(),
-            )
-            .map_err(into_tool_error)?;
-            let receipt = op_explain_receipt(
-                path,
-                &kind,
-                &key,
-                &predicate,
-                crate::ops::ReadClock::default(),
-            )
-            .map_err(into_tool_error)?;
+            let clock = arg_read_clock(arguments)?;
+            let text = op_explain(path, &kind, &key, &predicate, clock).map_err(into_tool_error)?;
+            let receipt = op_explain_receipt(path, &kind, &key, &predicate, clock)
+                .map_err(into_tool_error)?;
             Ok(ToolOutput::new(
                 text,
                 explain_structured("explain", &receipt),
@@ -640,21 +610,9 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
         }
         "replay" => {
             let (kind, key, predicate) = (kind()?, key()?, predicate()?);
-            let text = op_replay(
-                path,
-                &kind,
-                &key,
-                &predicate,
-                crate::ops::ReadClock::default(),
-            )
-            .map_err(into_tool_error)?;
-            let structured = match op_explain_receipt(
-                path,
-                &kind,
-                &key,
-                &predicate,
-                crate::ops::ReadClock::default(),
-            ) {
+            let clock = arg_read_clock(arguments)?;
+            let text = op_replay(path, &kind, &key, &predicate, clock).map_err(into_tool_error)?;
+            let structured = match op_explain_receipt(path, &kind, &key, &predicate, clock) {
                 Ok(receipt) => explain_structured("replay", &receipt),
                 Err(_) => json!({
                     "status": "ok",
@@ -972,6 +930,8 @@ fn receipt_structured(receipt: &IntegrityReceipt) -> Value {
         "lifecycle": lifecycle_name(receipt.lifecycle),
         "authority": receipt.authority.name(),
         "fresh": receipt.fresh,
+        "not_yet_valid": receipt.not_yet_valid,
+        "valid_from": receipt.valid_from.map(dent8_core::TimestampMillis::as_unix_millis),
         "expires_at": receipt.expires_at.map(dent8_core::TimestampMillis::as_unix_millis),
         "evidence_count": receipt.evidence_count,
         "corroboration": receipt.corroboration,
@@ -1052,6 +1012,35 @@ fn optional_bool(arguments: &Value, name: &str) -> Result<bool, ToolError> {
     }
 }
 
+/// An optional integer (unix millis) argument — `None` when absent, an error when present but
+/// not an integer. Powers the valid-time / time-travel arguments (ADR 0016).
+fn optional_i64(arguments: &Value, name: &str) -> Result<Option<i64>, ToolError> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value.as_i64().map(Some).ok_or_else(|| {
+            ToolError::Invalid(format!(
+                "optional argument {name} must be an integer (unix millis)"
+            ))
+        }),
+    }
+}
+
+/// The valid-time interval carried by the write tools (ADR 0016).
+fn arg_validity(arguments: &Value) -> Result<crate::ops::Validity, ToolError> {
+    Ok(crate::ops::Validity {
+        from: optional_i64(arguments, "valid_from")?,
+        to: optional_i64(arguments, "valid_to")?,
+    })
+}
+
+/// The time-travel read clock carried by explain/replay (ADR 0016).
+fn arg_read_clock(arguments: &Value) -> Result<crate::ops::ReadClock, ToolError> {
+    Ok(crate::ops::ReadClock {
+        as_of: optional_i64(arguments, "as_of")?,
+        valid_at: optional_i64(arguments, "valid_at")?,
+    })
+}
+
 /// The required `authority` argument, parsed to a level.
 fn arg_authority(arguments: &Value) -> Result<dent8_core::AuthorityLevel, ToolError> {
     let raw = arg(arguments, "authority")?;
@@ -1092,7 +1081,21 @@ fn tool_list() -> Vec<Value> {
         "source": { "type": "string", "description": "the writing source id" },
     });
     let value = json!({ "value": { "type": "string", "description": "the fact's value" } });
+    // Valid-time interval (ADR 0016), on the assertion a write creates. Optional; unix millis.
+    let validity = json!({
+        "valid_from": { "type": "integer", "description": "valid-time lower bound (unix millis): when the fact starts holding; also anchors TTL freshness" },
+        "valid_to": { "type": "integer", "description": "valid-time upper bound (unix millis): when the fact stops holding; past it the fact reads stale like an elapsed TTL" },
+    });
+    // Time-travel read clock (ADR 0016). Optional; unix millis.
+    let clock = json!({
+        "as_of": { "type": "integer", "description": "fold only events recorded at or before this instant (unix millis) — the store as it stood then" },
+        "valid_at": { "type": "integer", "description": "evaluate freshness/validity at this instant (unix millis) instead of now" },
+    });
     let valued = merge(&subject, &merge(&value, &write));
+    // assert/supersede/contradict create an assertion, so they take the validity interval;
+    // derive (also valued) does not, matching the CLI.
+    let valued_vt = merge(&valued, &validity);
+    let read_props = merge(&subject, &clock);
     let write_only = merge(&subject, &write);
     let from = json!({
         "from_kind": { "type": "string", "description": "source fact's entity kind" },
@@ -1148,14 +1151,14 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "assert",
-            "Assert a project fact through the dent8 firewall (provenance + authority + freshness). Rejected if it cannot clear the predicate's policy.",
-            &valued,
+            "Assert a project fact through the dent8 firewall (provenance + authority + freshness). Rejected if it cannot clear the predicate's policy. Optional valid_from/valid_to set the fact's validity interval.",
+            &valued_vt,
             &valued_req,
         ),
         tool(
             "supersede",
-            "Revise the believed fact: assert a replacement that must out-rank every believed incumbent (a lower-authority revision is rejected).",
-            &valued,
+            "Revise the believed fact: assert a replacement that must out-rank every believed incumbent (a lower-authority revision is rejected). Optional valid_from/valid_to set the replacement's validity interval.",
+            &valued_vt,
             &valued_req,
         ),
         tool(
@@ -1166,8 +1169,8 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "contradict",
-            "Flag a conflict (dissent): contest the believed fact, keeping both. Not authority-gated, except a canonical fact hard-alarms.",
-            &valued,
+            "Flag a conflict (dissent): contest the believed fact, keeping both. Not authority-gated, except a canonical fact hard-alarms. Optional valid_from/valid_to set the opposing claim's validity interval.",
+            &valued_vt,
             &valued_req,
         ),
         tool(
@@ -1190,14 +1193,14 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "explain",
-            "Explain the currently believed (or terminal) fact for a subject+predicate, with its integrity receipt.",
-            &subject,
+            "Explain the currently believed (or terminal) fact for a subject+predicate, with its integrity receipt. Optional as_of/valid_at time-travel the read.",
+            &read_props,
             &read,
         ),
         tool(
             "replay",
-            "Replay the full event history for a subject+predicate — why the fact is what it is.",
-            &subject,
+            "Replay the full event history for a subject+predicate — why the fact is what it is. Optional as_of/valid_at time-travel the read.",
+            &read_props,
             &read,
         ),
     ]
@@ -1448,6 +1451,13 @@ fn receipt_output_schema() -> Value {
             },
             "authority": authority_schema(),
             "fresh": { "type": "boolean" },
+            "not_yet_valid": { "type": "boolean" },
+            "valid_from": {
+                "anyOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                ]
+            },
             "expires_at": {
                 "anyOf": [
                     { "type": "integer" },
@@ -1475,6 +1485,8 @@ fn receipt_output_schema() -> Value {
             "lifecycle",
             "authority",
             "fresh",
+            "not_yet_valid",
+            "valid_from",
             "expires_at",
             "evidence_count",
             "corroboration",
@@ -1834,6 +1846,72 @@ mod tests {
 
     /// Issue a tools/call and return `(isError, first text line)`.
     #[allow(clippy::needless_pass_by_value)]
+    #[test]
+    fn write_tools_advertise_validity_and_read_tools_advertise_the_clock() {
+        let list = json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/list" });
+        let tools = handle(&list, "/tmp/unused.jsonl").expect("response")["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .clone();
+        let props = |name: &str| {
+            tools
+                .iter()
+                .find(|t| t["name"] == name)
+                .unwrap_or_else(|| panic!("missing {name}"))["inputSchema"]["properties"]
+                .clone()
+        };
+        for w in ["assert", "supersede", "contradict"] {
+            assert!(props(w)["valid_from"].is_object(), "{w} lacks valid_from");
+            assert!(props(w)["valid_to"].is_object(), "{w} lacks valid_to");
+        }
+        // derive creates an assertion but the CLI does not stamp it, so neither does MCP.
+        assert!(props("derive")["valid_from"].is_null());
+        for r in ["explain", "replay"] {
+            assert!(props(r)["as_of"].is_object(), "{r} lacks as_of");
+            assert!(props(r)["valid_at"].is_object(), "{r} lacks valid_at");
+        }
+        // Writes do not advertise the read clock, reads do not advertise validity.
+        assert!(props("assert")["as_of"].is_null());
+        assert!(props("explain")["valid_from"].is_null());
+    }
+
+    #[test]
+    fn mcp_validity_interval_and_time_travel_reads_work() {
+        let (_dir, path) = temp_log();
+        let (err, _) = call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject_kind": "repo", "subject_key": "p", "predicate": "db",
+                "value": "postgres", "authority": "high", "source": "user:o",
+                "valid_from": 1000, "valid_to": 2000,
+            }),
+        );
+        assert!(!err, "assert with validity should be accepted");
+
+        // valid_at inside the window reads fresh; at/after the (inclusive) valid_to it is stale.
+        let (_, inside) = call_tool_text(
+            &path,
+            "explain",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "valid_at": 1500 }),
+        );
+        assert!(!inside.contains("stale"), "{inside}");
+        let (_, after) = call_tool_text(
+            &path,
+            "explain",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "valid_at": 2000 }),
+        );
+        assert!(after.contains("stale"), "{after}");
+
+        // A non-integer valid_at is a tool error, not a silent default.
+        let bad = call_tool_result(
+            &path,
+            "explain",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "valid_at": "soon" }),
+        );
+        assert_eq!(bad["isError"], true);
+    }
+
     fn call_tool(path: &str, name: &str, arguments: Value) -> (bool, String) {
         let (is_error, text) = call_tool_text(path, name, arguments);
         (is_error, text.lines().next().unwrap_or("").to_string())

@@ -193,7 +193,9 @@ impl InMemoryEventStore {
             value: state.value.clone(),
             lifecycle: state.lifecycle,
             authority: state.authority.level,
-            fresh: !state.is_expired_at(now),
+            fresh: state.is_fresh_at(now),
+            not_yet_valid: state.is_not_yet_valid_at(now),
+            valid_from: state.valid_from,
             expires_at: state.expires_at(),
             evidence_count: state.evidence_count,
             corroboration: state.corroboration(),
@@ -343,11 +345,18 @@ pub struct IntegrityReceipt {
     pub value: ClaimValue,
     pub lifecycle: ClaimLifecycle,
     pub authority: AuthorityLevel,
-    /// Whether the claim is fresh at the query time (its TTL has not elapsed).
+    /// Whether the claim is fresh at the query time: within its validity window — at or
+    /// after `valid_from` and before its TTL / `valid_to` upper bound (ADR 0016).
     pub fresh: bool,
-    /// The instant the claim's TTL elapses (its freshness anchor + TTL), or `None` for a
-    /// non-expiring (`Ttl::Never`) claim. Pairs with `fresh` to explain *why* a read is
-    /// stale and *when* it lapsed.
+    /// Whether the claim is **not yet valid** at the query time (its asserted `valid_from`
+    /// is in the future) — a distinct reason for `fresh == false` from having expired.
+    pub not_yet_valid: bool,
+    /// The asserted valid-time lower bound, or `None`. Pairs with `expires_at` to bound the
+    /// validity window and, with `not_yet_valid`, to explain a not-yet-in-effect read.
+    pub valid_from: Option<TimestampMillis>,
+    /// The instant the claim stops being fresh — the earliest of its TTL bound and asserted
+    /// `valid_to`, or `None` if it never expires. Pairs with `fresh` to explain *why* a read
+    /// is stale and *when* it lapsed.
     pub expires_at: Option<TimestampMillis>,
     pub evidence_count: usize,
     pub corroboration: usize,

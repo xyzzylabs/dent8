@@ -42,6 +42,12 @@ pub struct ClaimState {
     /// Valid-time anchor for TTL freshness: `valid_from`, else `observed_at`, else
     /// the assertion's `recorded_at`.
     pub freshness_anchor: TimestampMillis,
+    /// The asserted valid-time **lower** bound (ADR 0016), kept distinct from
+    /// `freshness_anchor` (which falls back to `observed_at`/`recorded_at`): a fact whose
+    /// `valid_from` is in the future is **not yet valid**, so read-time freshness treats it
+    /// as not-fresh until then. `#[serde(default)]` for projections materialized before it.
+    #[serde(default)]
+    pub valid_from: Option<TimestampMillis>,
     /// Valid-time upper bound captured at assertion (ADR 0016): the instant the fact is
     /// asserted to stop holding. Read-time freshness treats an elapsed `valid_to` exactly
     /// like an elapsed TTL; lifecycle is untouched. `#[serde(default)]` so projections
@@ -130,10 +136,27 @@ impl ClaimState {
         }
     }
 
+    /// Whether the claim is **not yet valid** at `now` (ADR 0016): its asserted `valid_from`
+    /// is in the future. Distinct from expiry — a not-yet-valid fact reads as not-fresh
+    /// because it has not started holding, not because it has stopped.
+    #[must_use]
+    pub fn is_not_yet_valid_at(&self, now: TimestampMillis) -> bool {
+        self.valid_from.is_some_and(|from| now < from)
+    }
+
+    /// Whether the claim is **fresh** at `now`: within its validity window — at or after
+    /// `valid_from` (if set) and not past its TTL / `valid_to` upper bound. This is the
+    /// read-time freshness predicate the receipt's `fresh` flag reports; it does not consult
+    /// lifecycle (a `superseded` claim can still be within its window).
+    #[must_use]
+    pub fn is_fresh_at(&self, now: TimestampMillis) -> bool {
+        !self.is_not_yet_valid_at(now) && !self.is_expired_at(now)
+    }
+
     /// Whether the claim's freshness has elapsed at `now` — its TTL ran out **or** its
     /// asserted validity ended. A claim with `Ttl::Never` and no `valid_to` is never
-    /// expired. This is the read-time freshness predicate; it does not consult lifecycle
-    /// (a `superseded` claim can still be "unexpired" by TTL).
+    /// expired. Purely the **upper** bound; the lower bound is [`Self::is_not_yet_valid_at`].
+    /// It does not consult lifecycle (a `superseded` claim can still be "unexpired" by TTL).
     #[must_use]
     pub fn is_expired_at(&self, now: TimestampMillis) -> bool {
         self.expires_at()
@@ -176,6 +199,7 @@ fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError
         authority: event.authority.clone(),
         ttl: event.ttl.clone(),
         freshness_anchor,
+        valid_from: event.valid_from,
         valid_to: event.valid_to,
         lifecycle: ClaimLifecycle::Active,
         created_at: event.provenance.recorded_at,
@@ -630,6 +654,27 @@ mod tests {
             Some(TimestampMillis::from_unix_millis(1_200)),
             "an earlier valid_to beats a longer TTL"
         );
+    }
+
+    #[test]
+    fn a_future_valid_from_reads_not_yet_valid_not_fresh() {
+        let mut event = asserted(AuthorityLevel::High);
+        event.valid_from = Some(TimestampMillis::from_unix_millis(2_000));
+        let state = apply_event(None, &event).expect("asserted");
+
+        // Before valid_from: not yet valid, therefore not fresh (ADR 0016 lower bound).
+        assert!(state.is_not_yet_valid_at(TimestampMillis::from_unix_millis(1_000)));
+        assert!(!state.is_fresh_at(TimestampMillis::from_unix_millis(1_000)));
+        // Not *expired* — the upper bound is untouched; the reason is the lower bound.
+        assert!(!state.is_expired_at(TimestampMillis::from_unix_millis(1_000)));
+        // At/after valid_from (no upper bound here): fresh.
+        assert!(!state.is_not_yet_valid_at(TimestampMillis::from_unix_millis(2_000)));
+        assert!(state.is_fresh_at(TimestampMillis::from_unix_millis(2_000)));
+
+        // No valid_from set: never not-yet-valid (unchanged for the common case).
+        let plain = apply_event(None, &asserted(AuthorityLevel::High)).expect("asserted");
+        assert!(!plain.is_not_yet_valid_at(TimestampMillis::from_unix_millis(0)));
+        assert!(plain.is_fresh_at(TimestampMillis::from_unix_millis(0)));
     }
 
     #[test]

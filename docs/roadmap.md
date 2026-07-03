@@ -96,11 +96,13 @@ mechanisms are built; the remaining bullets here are refinements, not blockers.
   claim; ordinary contradictions still localize to `Contested`. Future: uniqueness-
   constrained predicates (no such flag in the model yet).
   *([belief-revision.md](belief-revision.md) §Adopt-3.)*
-- **[DONE] Read-time freshness evaluator + read surface.** `ClaimState::is_expired_at(now)`
-  evaluates TTL against the claim's `freshness_anchor` (`valid_from` → `observed_at` →
-  `recorded_at`), kept separate from the lifecycle, and `explain` (CLI + the MCP `explain`
-  tool + `resources/read`) now **applies** it: a still-`Active` fact past its TTL is
-  headline-flagged `[stale — TTL elapsed]` and the receipt carries `fresh` + `expires_at`.
+- **[DONE] Read-time freshness evaluator + read surface.** `ClaimState::is_fresh_at(now)`
+  bounds the full validity window `[valid_from, expires_at)` — TTL and the asserted
+  `valid_to`/`valid_from` (ADR 0016) — kept separate from the lifecycle, and `explain` (CLI +
+  the MCP `explain` tool + `resources/read`) now **applies** it: a still-`Active` fact past
+  its TTL or `valid_to` is headline-flagged `[stale — no longer valid]`, one whose
+  `valid_from` is still in the future `[not yet valid]`, and the receipt carries `fresh` +
+  `not_yet_valid` + the `valid_from`/`expires_at` window.
   *(Invariant T4 in [threat-model.md](threat-model.md); remaining residuals tracked there.)*
 - **[DONE] Policy-counterfactual replay (novelty rank 2).** `EpistemicPolicy`
   (distrusted sources, authority floor, confidence floor) + `replay_claim_with_policy`
