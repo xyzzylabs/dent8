@@ -27,6 +27,13 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   truncated revocation as ROLLBACK — closing the ADR's named residual. The low-level
   `grant-issue` appends to the history only when `DENT8_GRANT_LOG` is configured and prints
   an explicit note otherwise.
+- **Published grant-log heads**: `witness publish`/`verify-published` take
+  `--grants <published-grants.jsonl>` to retain signed grant-log heads outside the writer's
+  control, with the event lane's exact semantics (idempotent republish, ROLLBACK/CONFLICT on
+  a regressed or mismatched external sequence) — a writer who scrubs a revocation *and*
+  deletes the local grants-witness file is still caught by the published copy. `publish`
+  without `--grants` says so when a grants-witness log exists instead of silently
+  half-covering; JSON output gains a `grants` object on both commands.
 
 ## [0.1.0] - 2026-07-03
 

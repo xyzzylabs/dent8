@@ -166,8 +166,25 @@ With signed identity in use, the witness also covers the **grant log** (ADR 0014
 `DENT8_WITNESS_GRANTS_LOG` whenever one is discoverable, and `witness verify` re-checks every
 signed head against the current grant log. Grant history is issuer-signed and hash-chained,
 but a truncated *tail* (hiding a fresh revocation) is a valid-looking prefix — only the
-witnessed head betrays it, surfacing as `ROLLBACK`. Retain the grants-witness file outside
-the writer's control, exactly like published event heads.
+witnessed head betrays it, surfacing as `ROLLBACK`.
+
+The grants-witness file itself is still local state, so publish it too:
+
+```sh
+dent8 witness publish /external/heads.jsonl --grants /external/grant-heads.jsonl
+dent8 witness verify-published /external/heads.jsonl --grants /external/grant-heads.jsonl
+```
+
+`--grants` idempotently appends the latest signed grant-log head to its own external
+sequence with the event lane's exact semantics: republishing the same count is a no-op, a
+published sequence ahead of the local one is `ROLLBACK`, a mismatched head at the same count
+is `CONFLICT`. `verify-published --grants` re-checks every published grant-log head against
+the *current* grant log — a writer who scrubs a revocation and deletes the local
+grants-witness file is still caught by the published copy. When a grants-witness log exists
+locally and `publish` runs without `--grants`, it says so (a text note and an
+`unpublished_grants_witness_log` JSON field) rather than silently half-covering. In JSON
+output both commands gain a `grants` object with the published/current record counts and
+coverage.
 
 ## Doctor Checks
 

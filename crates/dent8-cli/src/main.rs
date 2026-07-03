@@ -1348,7 +1348,8 @@ fn parse_witness_output_value(value: &str) -> Result<CliOutput, String> {
 #[cfg(feature = "witness")]
 fn witness_usage_error(output: CliOutput) -> i32 {
     let usage = "dent8 witness <keygen | sign | verify | verify-published \
-                 <published-heads.jsonl> | head | publish <published-heads.jsonl> | serve \
+                 <published-heads.jsonl> [--grants <published-grants.jsonl>] | head | publish \
+                 <published-heads.jsonl> [--grants <published-grants.jsonl>] | serve \
                  [interval-seconds] [max-heads] | doctor <writer|signer|both>>";
     match output {
         CliOutput::Text => {

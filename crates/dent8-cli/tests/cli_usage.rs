@@ -5230,6 +5230,219 @@ fn witness_covers_the_grant_log_and_detects_truncated_revocations() {
     );
 }
 
+#[cfg(all(feature = "identity", feature = "witness"))]
+#[test]
+#[allow(clippy::too_many_lines)] // one linear lifecycle: publish -> revoke -> scrub -> catch
+fn witness_publishes_grant_log_heads_and_detects_scrubbed_history() {
+    let temp = TempDir::new();
+    let bundle = temp.file("bundle").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let wkey = temp.file("witness.key").to_string_lossy().into_owned();
+    let pubkey = format!("{wkey}.pub");
+    let wlog = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    let gwlog = temp
+        .file("witness-grants.jsonl")
+        .to_string_lossy()
+        .into_owned();
+    let published = temp.file("published.jsonl").to_string_lossy().into_owned();
+    let published_grants = temp
+        .file("published-grants.jsonl")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &bundle,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "bootstrap",
+    );
+    let trust = format!("{bundle}/trust.json");
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_WITNESS_KEY", wkey.as_str()),
+        ("DENT8_WITNESS_PUBKEY", pubkey.as_str()),
+        ("DENT8_WITNESS_LOG", wlog.as_str()),
+        ("DENT8_WITNESS_GRANTS_LOG", gwlog.as_str()),
+    ];
+    assert_success(&run_dent8(&["witness", "keygen"], &envs), "witness keygen");
+    assert_success(&run_dent8(&["witness", "sign"], &envs), "witness sign");
+
+    // Publishing only the event lane says so out loud — silent half-coverage is the failure
+    // mode the lane exists to end.
+    let event_only = run_dent8(&["witness", "publish", &published], &envs);
+    assert_success(&event_only, "event-only publish");
+    assert!(
+        stdout(&event_only).contains("not being published"),
+        "{}",
+        stdout(&event_only)
+    );
+
+    // Publish both lanes; a second run is idempotent.
+    let both = run_dent8(
+        &[
+            "witness",
+            "publish",
+            &published,
+            "--grants",
+            &published_grants,
+        ],
+        &envs,
+    );
+    assert_success(&both, "publish with --grants");
+    assert!(
+        stdout(&both).contains("published grant-log head: count=1"),
+        "{}",
+        stdout(&both)
+    );
+    let again = run_dent8(
+        &[
+            "witness",
+            "publish",
+            &published,
+            "--grants",
+            &published_grants,
+        ],
+        &envs,
+    );
+    assert_success(&again, "republish with --grants");
+    assert!(
+        stdout(&again).contains("grant-log head at count 1 is already published"),
+        "{}",
+        stdout(&again)
+    );
+    assert_eq!(line_count(&published_grants), 1);
+
+    let checked = run_dent8(
+        &[
+            "witness",
+            "verify-published",
+            &published,
+            "--grants",
+            &published_grants,
+            "--output",
+            "json",
+        ],
+        &envs,
+    );
+    assert_success(&checked, "verify-published with --grants");
+    let checked_json = stdout_json(&checked);
+    assert_eq!(checked_json["status"], "ok", "{}", stdout(&checked));
+    assert_eq!(checked_json["grants"]["latest_published_record_count"], 1);
+    assert_eq!(checked_json["grants"]["coverage"], "complete");
+
+    // Revoke (record #2), witness it, publish it.
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "revoke",
+                "--source",
+                "source:codex",
+                "--dir",
+                &bundle,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "revoke",
+    );
+    assert_success(&run_dent8(&["witness", "sign"], &envs), "sign #2");
+    let second = run_dent8(
+        &[
+            "witness",
+            "publish",
+            &published,
+            "--grants",
+            &published_grants,
+        ],
+        &envs,
+    );
+    assert_success(&second, "publish revocation head");
+    assert!(
+        stdout(&second).contains("published grant-log head: count=2"),
+        "{}",
+        stdout(&second)
+    );
+
+    // The attack the published sequence exists for: the writer scrubs the revocation from
+    // the grant log AND deletes the local grants-witness file. Only the published copy —
+    // retained outside the writer's control — still knows history reached 2 records.
+    let grant_log = format!("{bundle}/grant-log.jsonl");
+    let contents = fs::read_to_string(&grant_log).expect("grant log");
+    let first_line = contents.lines().next().expect("first record");
+    fs::write(&grant_log, format!("{first_line}\n")).expect("truncate grant log");
+    fs::remove_file(&gwlog).expect("scrub local grants-witness log");
+
+    let caught = run_dent8(
+        &[
+            "witness",
+            "verify-published",
+            &published,
+            "--grants",
+            &published_grants,
+        ],
+        &envs,
+    );
+    assert_eq!(caught.status.code(), Some(1), "{}", stderr(&caught));
+    assert!(
+        stderr(&caught).contains("ROLLBACK") && stderr(&caught).contains("truncated away"),
+        "{}",
+        stderr(&caught)
+    );
+    let caught_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "witness",
+            "verify-published",
+            &published,
+            "--grants",
+            &published_grants,
+        ],
+        &envs,
+    );
+    assert_eq!(caught_json.status.code(), Some(1));
+    assert_eq!(
+        stderr_json(&caught_json)["status"],
+        "rollback",
+        "{}",
+        stderr(&caught_json)
+    );
+
+    // Publish refuses to regress the external sequence too: re-signing the scrubbed state
+    // yields a head at count 1, behind the published count 2.
+    assert_success(&run_dent8(&["witness", "sign"], &envs), "sign scrubbed");
+    let regress = run_dent8(
+        &[
+            "witness",
+            "publish",
+            &published,
+            "--grants",
+            &published_grants,
+        ],
+        &envs,
+    );
+    assert_eq!(regress.status.code(), Some(1), "{}", stderr(&regress));
+    assert!(
+        stderr(&regress).contains("ROLLBACK: published grant-log heads"),
+        "{}",
+        stderr(&regress)
+    );
+}
+
 #[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear lifecycle: issue -> rotate -> revoke -> backfill

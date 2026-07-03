@@ -72,3 +72,7 @@ long-running service (`dent8-witness-signer.service`, key provisioned once with
 - **The store is shared, not trusted.** The signer/monitor read the same Postgres the writer
   writes — that's the point: they verify its *history* against signatures the writer cannot
   forge. Give them read-only credentials.
+- **Grant history.** If the deployment also uses signed identity (ADR 0014), the signer
+  covers the grant log automatically; extend the publisher/monitor with
+  `--grants <published-grants.jsonl>` on `publish`/`verify-published` so revocation history
+  is retained off-host too (see docs/witness.md, "Grant-Log Coverage").

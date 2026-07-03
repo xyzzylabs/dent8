@@ -115,8 +115,10 @@ The verify summary and JSON gain the three counts.
   hash)` into their own appended sequence (`DENT8_WITNESS_GRANTS_LOG`, a separate file so
   the frozen `SignedTreeHead` format is untouched), and `witness verify` re-checks every
   signed head against the current grant log — a truncated revocation surfaces as ROLLBACK.
-  The one-level-up residual mirrors the event lane: retain the grants-witness file outside
-  the writer's control, exactly like published heads.
+  The one-level-up residual mirrors the event lane and closes the same way:
+  `witness publish --grants <path>` idempotently appends the latest grant-log head to an
+  external sequence and `verify-published --grants` re-checks it, so scrubbing the local
+  grants-witness file no longer hides the truncation.
 - Existing stores have attested events but no history. `dent8 identity backfill-grant-log`
   seeds `issued` records from the *current* grant/active-grants with `at_ms = now` — making
   the limitation explicit (entitlement before the backfill stays **unknown**; we do not

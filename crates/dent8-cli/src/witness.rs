@@ -487,12 +487,16 @@ pub fn head(output: CliOutput) -> i32 {
 /// as idempotent, and verifies the resulting published sequence against the current log before
 /// writing.
 pub fn publish(args: &[String], output: CliOutput) -> i32 {
-    let [path] = args else {
-        return print_witness_usage(
-            output,
-            PUBLISH_TOOL,
-            "dent8 witness publish <published-heads.jsonl>",
-        );
+    let (path, grants_path) = match args {
+        [path] => (path, None),
+        [path, flag, grants] if flag == "--grants" => (path, Some(grants)),
+        _ => {
+            return print_witness_usage(
+                output,
+                PUBLISH_TOOL,
+                "dent8 witness publish <published-heads.jsonl> [--grants <published-grants.jsonl>]",
+            );
+        }
     };
     let outcome = match publish_outcome(path) {
         Ok(outcome) => outcome,
@@ -500,28 +504,73 @@ pub fn publish(args: &[String], output: CliOutput) -> i32 {
             return print_witness_fault(output, PUBLISH_TOOL, status, &message, code);
         }
     };
+    let grants = match grants_path {
+        Some(grants_path) => match publish_grants_outcome(grants_path) {
+            Ok(grants_outcome) => Some((grants_path.as_str(), grants_outcome)),
+            Err((status, message, code)) => {
+                return print_witness_fault(output, PUBLISH_TOOL, status, &message, code);
+            }
+        },
+        None => None,
+    };
+    // Publishing only the event lane while a grants-witness log exists locally would leave
+    // grant history truncatable — say so instead of silently half-covering.
+    let unpublished_grants_log = (grants.is_none()
+        && std::path::Path::new(&grants_witness_log_path()).exists())
+    .then(grants_witness_log_path);
+    let mut level = coverage_level(outcome.latest.event_count, outcome.current_count);
+    if let Some((_, grants_outcome)) = &grants
+        && coverage_level(
+            grants_outcome.latest.record_count,
+            grants_outcome.current_record_count,
+        ) == "warn"
+    {
+        level = "warn";
+    }
     match output {
         CliOutput::Text => {
             println!("{}", outcome.message);
             warn_if_published_head_trails(outcome.latest.event_count, outcome.current_count);
+            if let Some((_, grants_outcome)) = &grants {
+                println!("{}", grants_outcome.message);
+                warn_if_published_grants_trail(
+                    grants_outcome.latest.record_count,
+                    grants_outcome.current_record_count,
+                );
+            }
+            if let Some(local) = &unpublished_grants_log {
+                println!(
+                    "note: a grants-witness log exists at {local} but is not being published — \
+                     pass --grants <published-grants.jsonl> to retain grant history off-host"
+                );
+            }
             0
         }
-        CliOutput::Json => print_json_stdout(&serde_json::json!({
-            "status": "ok",
-            "level": coverage_level(outcome.latest.event_count, outcome.current_count),
-            "tool": PUBLISH_TOOL,
-            "action": outcome.action,
-            "published_heads_path": path,
-            "local_witness_log_path": witness_log_path(),
-            "local_signed_head_count": outcome.local_head_count,
-            "published_signed_head_count": outcome.published_head_count,
-            "latest_published_count": outcome.latest.event_count,
-            "current_event_count": outcome.current_count,
-            "unwitnessed_events": unwitnessed_events(outcome.latest.event_count, outcome.current_count),
-            "coverage": coverage_status(outcome.latest.event_count, outcome.current_count),
-            "latest_head": signed_head_json(&outcome.latest),
-            "message": outcome.message,
-        })),
+        CliOutput::Json => {
+            let mut value = serde_json::json!({
+                "status": "ok",
+                "level": level,
+                "tool": PUBLISH_TOOL,
+                "action": outcome.action,
+                "published_heads_path": path,
+                "local_witness_log_path": witness_log_path(),
+                "local_signed_head_count": outcome.local_head_count,
+                "published_signed_head_count": outcome.published_head_count,
+                "latest_published_count": outcome.latest.event_count,
+                "current_event_count": outcome.current_count,
+                "unwitnessed_events": unwitnessed_events(outcome.latest.event_count, outcome.current_count),
+                "coverage": coverage_status(outcome.latest.event_count, outcome.current_count),
+                "latest_head": signed_head_json(&outcome.latest),
+                "message": outcome.message,
+            });
+            if let Some((grants_path, grants_outcome)) = &grants {
+                value["grants"] = grants_publish_json(grants_path, grants_outcome);
+            }
+            if let Some(local) = &unpublished_grants_log {
+                value["unpublished_grants_witness_log"] = serde_json::json!(local);
+            }
+            print_json_stdout(&value)
+        }
     }
 }
 
@@ -752,13 +801,18 @@ pub fn verify(output: CliOutput) -> i32 {
 /// published-heads file is expected to live somewhere outside that control boundary (CI
 /// artifact, Git history, object storage, another host) and contain JSON lines printed by
 /// `dent8 witness head`.
+#[allow(clippy::too_many_lines)] // two lanes (event heads + grant-log heads) in one linear pass
 pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
-    let [path] = args else {
-        return print_witness_usage(
-            output,
-            VERIFY_PUBLISHED_TOOL,
-            "dent8 witness verify-published <published-heads.jsonl>",
-        );
+    let (path, grants_path) = match args {
+        [path] => (path, None),
+        [path, flag, grants] if flag == "--grants" => (path, Some(grants)),
+        _ => {
+            return print_witness_usage(
+                output,
+                VERIFY_PUBLISHED_TOOL,
+                "dent8 witness verify-published <published-heads.jsonl> [--grants <published-grants.jsonl>]",
+            );
+        }
     };
     let events = match load_events() {
         Ok(events) => events,
@@ -786,12 +840,33 @@ pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
     }
     match verify_heads(&events, &heads, &verifying) {
         Ok(()) => {
+            let grants = match grants_path {
+                Some(grants_path) => match verify_published_grants(grants_path, &verifying) {
+                    Ok(summary) => Some(summary),
+                    Err((status, message, code)) => {
+                        return print_witness_fault(
+                            output,
+                            VERIFY_PUBLISHED_TOOL,
+                            status,
+                            &message,
+                            code,
+                        );
+                    }
+                },
+                None => None,
+            };
             let head_count = heads.last().map_or(0, |sth| sth.event_count);
             let current = events.len() as u64;
-            let level = coverage_level(head_count, current);
-            let message = if head_count == current {
+            let mut level = coverage_level(head_count, current);
+            if let Some(summary) = &grants
+                && coverage_level(summary.latest_record_count, summary.current_record_count)
+                    == "warn"
+            {
+                level = "warn";
+            }
+            let event_body = if head_count == current {
                 format!(
-                    "OK: {} published signed tree head(s) verify from {path} — latest published \
+                    "{} published signed tree head(s) verify from {path} — latest published \
                      count {head_count}, current log {current} events",
                     heads.len()
                 )
@@ -799,30 +874,62 @@ pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
                 let published_heads = heads.len();
                 let unwitnessed = current.saturating_sub(head_count);
                 format!(
-                    "WARN: {published_heads} published signed tree head(s) verify from {path}, but latest \
+                    "{published_heads} published signed tree head(s) verify from {path}, but latest \
                      published count {head_count} trails current log {current} by {unwitnessed} \
                      unwitnessed event(s)"
                 )
             };
+            let grants_body = grants.as_ref().map_or_else(String::new, |summary| {
+                if summary.latest_record_count == summary.current_record_count {
+                    format!(
+                        "; {} published grant-log head(s) verify from {} (latest record count \
+                         {}, current grant log {})",
+                        summary.head_count,
+                        summary.path,
+                        summary.latest_record_count,
+                        summary.current_record_count
+                    )
+                } else {
+                    format!(
+                        "; {} published grant-log head(s) verify from {}, but latest published \
+                         record count {} trails current grant log {} by {} record(s)",
+                        summary.head_count,
+                        summary.path,
+                        summary.latest_record_count,
+                        summary.current_record_count,
+                        summary
+                            .current_record_count
+                            .saturating_sub(summary.latest_record_count)
+                    )
+                }
+            });
+            let prefix = if level == "warn" { "WARN" } else { "OK" };
+            let message = format!("{prefix}: {event_body}{grants_body}");
             match output {
                 CliOutput::Text => {
                     println!("{message}");
                     0
                 }
-                CliOutput::Json => print_json_stdout(&serde_json::json!({
-                    "status": "ok",
-                    "level": level,
-                    "tool": VERIFY_PUBLISHED_TOOL,
-                    "published_heads_path": path,
-                    "public_key_path": verifying_key_path(),
-                    "published_signed_head_count": heads.len(),
-                    "latest_published_count": head_count,
-                    "current_event_count": current,
-                    "unwitnessed_events": unwitnessed_events(head_count, current),
-                    "coverage": coverage_status(head_count, current),
-                    "latest_head": heads.last().map(signed_head_json),
-                    "message": message,
-                })),
+                CliOutput::Json => {
+                    let mut value = serde_json::json!({
+                        "status": "ok",
+                        "level": level,
+                        "tool": VERIFY_PUBLISHED_TOOL,
+                        "published_heads_path": path,
+                        "public_key_path": verifying_key_path(),
+                        "published_signed_head_count": heads.len(),
+                        "latest_published_count": head_count,
+                        "current_event_count": current,
+                        "unwitnessed_events": unwitnessed_events(head_count, current),
+                        "coverage": coverage_status(head_count, current),
+                        "latest_head": heads.last().map(signed_head_json),
+                        "message": message,
+                    });
+                    if let Some(summary) = &grants {
+                        value["grants"] = published_grants_json(summary);
+                    }
+                    print_json_stdout(&value)
+                }
             }
         }
         Err(WitnessFault::CannotVerify(message)) => {
@@ -835,11 +942,80 @@ pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
     }
 }
 
+/// The verified state of an external published-grants sequence, for output shaping.
+struct PublishedGrantsSummary {
+    path: String,
+    head_count: usize,
+    latest_record_count: u64,
+    current_record_count: u64,
+    latest: GrantLogHead,
+}
+
+fn verify_published_grants(
+    path: &str,
+    verifying: &VerifyingKey,
+) -> Result<PublishedGrantsSummary, WitnessFailure> {
+    let current = current_grant_log_hashes().map_err(|error| ("failed", error, 1))?;
+    let heads = load_grant_log_heads(path, "published grant-log heads", false)
+        .map_err(|error| ("failed", error, 1))?;
+    if heads.is_empty() {
+        return Err((
+            "failed",
+            format!(
+                "no published grant-log heads in {path} — cannot prove external coverage of \
+                 grant history"
+            ),
+            1,
+        ));
+    }
+    match verify_grant_heads(&heads, &current, verifying) {
+        Ok(head_count) => {
+            let latest = heads.last().cloned().expect("checked non-empty above");
+            Ok(PublishedGrantsSummary {
+                path: path.to_string(),
+                head_count,
+                latest_record_count: latest.record_count,
+                current_record_count: current.len() as u64,
+                latest,
+            })
+        }
+        Err(WitnessFault::CannotVerify(message)) => Err((
+            "cannot_verify",
+            format!("published grant-log head verification could not be performed: {message}"),
+            2,
+        )),
+        Err(WitnessFault::Detected(verdict, message)) => Err((verdict.status(), message, 1)),
+    }
+}
+
+fn published_grants_json(summary: &PublishedGrantsSummary) -> serde_json::Value {
+    serde_json::json!({
+        "published_grants_path": summary.path,
+        "published_signed_head_count": summary.head_count,
+        "latest_published_record_count": summary.latest_record_count,
+        "current_grant_record_count": summary.current_record_count,
+        "unwitnessed_records":
+            summary.current_record_count.saturating_sub(summary.latest_record_count),
+        "coverage": coverage_status(summary.latest_record_count, summary.current_record_count),
+        "latest_head": grant_log_head_json(&summary.latest),
+    })
+}
+
 fn warn_if_published_head_trails(published_count: u64, current_count: u64) {
     if published_count < current_count {
         println!(
             "WARN: published count {published_count} trails current log {current_count} by {} \
              unwitnessed event(s)",
+            current_count - published_count
+        );
+    }
+}
+
+fn warn_if_published_grants_trail(published_count: u64, current_count: u64) {
+    if published_count < current_count {
+        println!(
+            "WARN: published grant-log count {published_count} trails current grant log \
+             {current_count} by {} record(s)",
             current_count - published_count
         );
     }
@@ -1412,8 +1588,9 @@ fn write_secret(path: &str, contents: &str) -> Result<(), String> {
 // (the grant log lives there); builds without `identity` skip the lane.
 
 /// One signed grant-log head: `(record_count, hash of the last record line)` under the
-/// witness key. Strict deserialization — a security artifact.
-#[cfg(feature = "identity")]
+/// witness key. Strict deserialization — a security artifact. The head *machinery* is
+/// feature-independent (publishing and re-checking an external sequence needs no identity
+/// bundle); only reading the local grant log itself requires the `identity` feature.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GrantLogHead {
@@ -1424,25 +1601,66 @@ struct GrantLogHead {
     signature: String,
 }
 
-#[cfg(feature = "identity")]
 #[derive(serde::Serialize)]
 struct GrantLogHeadPayload<'a> {
     record_count: u64,
     head: Option<&'a str>,
 }
 
-#[cfg(feature = "identity")]
 const GRANT_LOG_HEAD_DOMAIN: &[u8] = b"dent8.grant-log-head.v1\0";
-#[cfg(feature = "identity")]
 const DEFAULT_GRANTS_WITNESS_LOG: &str = "dent8-witness-grants.jsonl";
 
-#[cfg(feature = "identity")]
 fn grants_witness_log_path() -> String {
     std::env::var("DENT8_WITNESS_GRANTS_LOG")
         .unwrap_or_else(|_| DEFAULT_GRANTS_WITNESS_LOG.to_string())
 }
 
+fn grant_log_head_json(head: &GrantLogHead) -> serde_json::Value {
+    serde_json::to_value(head).expect("grant-log head should serialize")
+}
+
+fn load_grant_log_heads(
+    path: &str,
+    label: &str,
+    missing_is_empty: bool,
+) -> Result<Vec<GrantLogHead>, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if missing_is_empty && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(error) => return Err(format!("cannot read {label} {path}: {error}")),
+    };
+    contents
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .map(|(number, line)| {
+            serde_json::from_str(line)
+                .map_err(|error| format!("{path}:{}: corrupt grant-log head: {error}", number + 1))
+        })
+        .collect()
+}
+
+/// The line hashes of the *current* grant log — the ground truth every signed grant-log head
+/// is re-checked against. Explicit-lane callers (`--grants`) go through this: a build without
+/// the identity feature cannot see grant logs, and an explicit request must fail closed
+/// rather than silently verify nothing.
 #[cfg(feature = "identity")]
+fn current_grant_log_hashes() -> Result<Vec<String>, String> {
+    Ok(crate::identity::grant_log_line_hashes()?
+        .map(|(_, hashes)| hashes)
+        .unwrap_or_default())
+}
+
+#[cfg(not(feature = "identity"))]
+fn current_grant_log_hashes() -> Result<Vec<String>, String> {
+    Err(
+        "the grant-log lane needs the identity feature — this build was compiled without it"
+            .to_string(),
+    )
+}
+
 fn grant_log_head_message(record_count: u64, head: Option<&str>) -> Result<Vec<u8>, String> {
     let body = serde_json::to_vec(&GrantLogHeadPayload { record_count, head })
         .map_err(|error| format!("canonicalize grant-log head: {error}"))?;
@@ -1495,54 +1713,30 @@ fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<String>, String> 
     Ok(None)
 }
 
-/// Verify every signed grant-log head against the CURRENT grant log: signatures under the
-/// witness public key, non-decreasing counts, and each witnessed prefix hash still matching.
-/// Returns `Ok(None)` when the lane is unused, `Ok(Some(count))` with the number of verified
-/// heads, or the same fault taxonomy as the event lane.
-#[cfg(feature = "identity")]
-fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
+/// Verify a sequence of signed grant-log heads against the current grant log's line hashes:
+/// signatures under the witness public key, non-decreasing counts, and each witnessed prefix
+/// hash still matching. Returns the number of verified heads. Shared by the implicit lane in
+/// `verify` and the explicit published-sequence lane (`publish`/`verify-published --grants`).
+fn verify_grant_heads(
+    heads: &[GrantLogHead],
+    current: &[String],
+    verifying: &VerifyingKey,
+) -> Result<usize, WitnessFault> {
     use ed25519_dalek::Verifier as _;
-    let path = grants_witness_log_path();
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(WitnessFault::CannotVerify(format!(
-                "cannot read {path}: {error}"
-            )));
-        }
-    };
-    let current = crate::identity::grant_log_line_hashes()
-        .map_err(WitnessFault::CannotVerify)?
-        .map(|(_, hashes)| hashes)
-        .unwrap_or_default();
-    let mut verified = 0usize;
     let mut previous_count = 0u64;
-    for (index, line) in contents.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let head: GrantLogHead = serde_json::from_str(line).map_err(|error| {
-            WitnessFault::CannotVerify(format!(
-                "{path}:{}: corrupt grant-log head: {error}",
-                index + 1
-            ))
-        })?;
+    for (index, head) in heads.iter().enumerate() {
         let message = grant_log_head_message(head.record_count, head.head.as_deref())
             .map_err(WitnessFault::CannotVerify)?;
         let signature = ed25519_dalek::Signature::from_slice(
             &hex::decode(&head.signature).map_err(|error| {
                 WitnessFault::CannotVerify(format!(
-                    "{path}:{}: grant-log head signature hex: {error}",
+                    "grant-log head #{}: signature hex: {error}",
                     index + 1
                 ))
             })?,
         )
         .map_err(|error| {
-            WitnessFault::CannotVerify(format!(
-                "{path}:{}: grant-log head signature: {error}",
-                index + 1
-            ))
+            WitnessFault::CannotVerify(format!("grant-log head #{}: signature: {error}", index + 1))
         })?;
         verifying.verify(&message, &signature).map_err(|_| {
             WitnessFault::Detected(
@@ -1587,13 +1781,24 @@ fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, Wit
                 ),
             ));
         }
-        verified += 1;
     }
-    if verified == 0 {
-        Ok(None)
-    } else {
-        Ok(Some(verified))
+    Ok(heads.len())
+}
+
+/// Verify every signed grant-log head against the CURRENT grant log: signatures under the
+/// witness public key, non-decreasing counts, and each witnessed prefix hash still matching.
+/// Returns `Ok(None)` when the lane is unused, `Ok(Some(count))` with the number of verified
+/// heads, or the same fault taxonomy as the event lane.
+#[cfg(feature = "identity")]
+fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
+    let path = grants_witness_log_path();
+    let heads = load_grant_log_heads(&path, "grants-witness log", true)
+        .map_err(WitnessFault::CannotVerify)?;
+    if heads.is_empty() {
+        return Ok(None);
     }
+    let current = current_grant_log_hashes().map_err(WitnessFault::CannotVerify)?;
+    verify_grant_heads(&heads, &current, verifying).map(Some)
 }
 
 // The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
@@ -1602,6 +1807,148 @@ fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, Wit
 #[allow(clippy::unnecessary_wraps)]
 fn verify_grant_log_heads(_verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
     Ok(None)
+}
+
+struct GrantsPublishOutcome {
+    action: &'static str,
+    message: String,
+    latest: GrantLogHead,
+    local_head_count: usize,
+    published_head_count: usize,
+    current_record_count: u64,
+}
+
+fn empty_grants_witness_log_message() -> String {
+    format!(
+        "no signed grant-log heads in {} yet (run `dent8 witness sign` or `serve` with a grant \
+         log configured)",
+        grants_witness_log_path()
+    )
+}
+
+fn verify_grant_heads_for_publish(
+    heads: &[GrantLogHead],
+    current: &[String],
+    verifying: &VerifyingKey,
+    label: &str,
+) -> Result<(), WitnessFailure> {
+    match verify_grant_heads(heads, current, verifying) {
+        Ok(_) => Ok(()),
+        Err(WitnessFault::CannotVerify(message)) => Err((
+            "cannot_verify",
+            format!("{label} verification could not be performed: {message}"),
+            2,
+        )),
+        Err(WitnessFault::Detected(verdict, message)) => Err((verdict.status(), message, 1)),
+    }
+}
+
+fn grants_publication_state(
+    path: &str,
+    published: &[GrantLogHead],
+    latest: &GrantLogHead,
+) -> Result<bool, WitnessFailure> {
+    match published.last() {
+        Some(previous) if previous.record_count > latest.record_count => Err((
+            "rollback",
+            format!(
+                "ROLLBACK: published grant-log heads in {path} are already at count {}, ahead \
+                 of the local grants-witness log's latest count {}",
+                previous.record_count, latest.record_count
+            ),
+            1,
+        )),
+        Some(previous) if previous.record_count == latest.record_count && previous != latest => {
+            Err((
+                "conflict",
+                format!(
+                    "CONFLICT: published grant-log head at count {} does not match the local \
+                     grants-witness head",
+                    latest.record_count
+                ),
+                1,
+            ))
+        }
+        Some(previous) if previous.record_count == latest.record_count => Ok(true),
+        Some(_) | None => Ok(false),
+    }
+}
+
+/// Idempotently publish the latest signed grant-log head to an external sequence — the same
+/// off-host retention that closes the event lane's "drop the newest head" residual, applied
+/// to grant history (ADR 0014): a writer who truncates a revocation *and* the local
+/// grants-witness file still cannot shrink the published sequence.
+fn publish_grants_outcome(path: &str) -> Result<GrantsPublishOutcome, WitnessFailure> {
+    let current = current_grant_log_hashes().map_err(|error| ("failed", error, 1))?;
+    let verifying = load_verifying_key().map_err(|error| ("failed", error, 1))?;
+    let local_path = grants_witness_log_path();
+    let local_heads = load_grant_log_heads(&local_path, "grants-witness log", true)
+        .map_err(|error| ("failed", error, 1))?;
+    let latest = local_heads
+        .last()
+        .cloned()
+        .ok_or_else(|| ("failed", empty_grants_witness_log_message(), 1))?;
+    verify_grant_heads_for_publish(
+        &local_heads,
+        &current,
+        &verifying,
+        "local grants-witness log",
+    )?;
+
+    let mut published = load_grant_log_heads(path, "published grant-log heads", true)
+        .map_err(|error| ("failed", error, 1))?;
+    let already_published = grants_publication_state(path, &published, &latest)?;
+    if !already_published {
+        published.push(latest.clone());
+    }
+    verify_grant_heads_for_publish(&published, &current, &verifying, "published grant-log head")?;
+
+    let (action, message) = if already_published {
+        (
+            "already_published",
+            format!(
+                "OK: latest grant-log head at count {} is already published in {path}",
+                latest.record_count
+            ),
+        )
+    } else {
+        let line = serde_json::to_string(&latest)
+            .map_err(|error| ("failed", format!("serialize grant-log head: {error}"), 1))?;
+        append_line(path, &line).map_err(|error| ("failed", error, 1))?;
+        (
+            "appended",
+            format!(
+                "published grant-log head: count={} -> appended to {path}",
+                latest.record_count
+            ),
+        )
+    };
+
+    Ok(GrantsPublishOutcome {
+        action,
+        message,
+        latest,
+        local_head_count: local_heads.len(),
+        published_head_count: published.len(),
+        current_record_count: current.len() as u64,
+    })
+}
+
+fn grants_publish_json(path: &str, outcome: &GrantsPublishOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "action": outcome.action,
+        "published_grants_path": path,
+        "local_grants_witness_log_path": grants_witness_log_path(),
+        "local_signed_head_count": outcome.local_head_count,
+        "published_signed_head_count": outcome.published_head_count,
+        "latest_published_record_count": outcome.latest.record_count,
+        "current_grant_record_count": outcome.current_record_count,
+        "unwitnessed_records":
+            outcome.current_record_count.saturating_sub(outcome.latest.record_count),
+        "coverage": coverage_status(outcome.latest.record_count, outcome.current_record_count),
+        "latest_head": grant_log_head_json(&outcome.latest),
+        "message": outcome.message,
+    })
 }
 
 #[cfg(test)]
