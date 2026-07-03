@@ -60,8 +60,9 @@ Negative:
   (`AuthorityDowngrade`, `WeakerCorroboration`; Sybil-resistant), tested.
 - Enforce the arbitration *transactionally* in the store layer once the Postgres
   adapter exists (load incumbent, lock, arbitrate, append atomically).
-- Record *rejected* supersession attempts so the "survived-challenge" half of earned
-  entrenchment ([research/novelty.md](../research/novelty.md) rank 3) becomes possible,
-  and add uniqueness-constrained-predicate flags for the LFI tier.
+- [DONE] Record *rejected* supersession attempts — the "survived-challenge" half of
+  earned entrenchment ([research/novelty.md](../research/novelty.md) rank 3) is built as
+  [ADR 0015](0015-survived-challenge-recording.md). Still open here:
+  uniqueness-constrained-predicate flags for the LFI tier.
 - Grounded in [belief-revision.md](../belief-revision.md) and
   [ADR 0005](0005-belief-base-revision-semantics.md).

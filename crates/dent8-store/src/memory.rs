@@ -197,6 +197,7 @@ impl InMemoryEventStore {
             expires_at: state.expires_at(),
             evidence_count: state.evidence_count,
             corroboration: state.corroboration(),
+            survived_challenges: state.survived_challenge_count(),
             superseded_by: state.superseded_by.clone(),
             contradicted_by: state.contradicted_by.clone(),
             replay_position: last.global_sequence,
@@ -350,6 +351,9 @@ pub struct IntegrityReceipt {
     pub expires_at: Option<TimestampMillis>,
     pub evidence_count: usize,
     pub corroboration: usize,
+    /// Distinct sources whose challenge against this claim the firewall rejected
+    /// (ADR 0015) — the "attacked and stood" half of earned entrenchment.
+    pub survived_challenges: usize,
     pub superseded_by: Option<ClaimId>,
     pub contradicted_by: Vec<ClaimId>,
     /// Global sequence of the claim's most recent event of *any* kind (including audit

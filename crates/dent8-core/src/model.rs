@@ -323,6 +323,33 @@ pub enum RetractionReason {
     PolicyViolation,
 }
 
+/// What kind of write the incumbent was challenged by (ADR 0015). Only challenges that
+/// were real contests lost on strength are recorded — see [`ChallengeRejection`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ChallengeKind {
+    Supersession,
+    Contradiction,
+    Retraction,
+    Expiration,
+}
+
+/// Why the firewall rejected the challenge (ADR 0015). These are the strength-based
+/// rejections; malformed writes, duplicates, and terminal-state mutations are not
+/// "survived" challenges and are never recorded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ChallengeRejection {
+    /// The challenge's stated authority was below the incumbent's.
+    InsufficientAuthority,
+    /// The supersession stated enough authority, but its backing claim was actually
+    /// weaker (the entity-aware anti-laundering check).
+    LaunderedAuthority,
+    /// A contradiction against a canonical incumbent (the LFI hard-alarm).
+    CanonicalContradiction,
+    /// An equal-authority supersession whose backing claim had strictly weaker
+    /// authority-weighted corroboration (the earned-supersession gate, opt-in).
+    WeakerCorroboration,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ClaimEventKind {
     Asserted,
@@ -349,6 +376,17 @@ pub enum ClaimEventKind {
     UsedInDecision {
         decision_id: String,
     },
+    /// A challenge against this claim was rejected by the firewall (ADR 0015). Written to
+    /// the **incumbent's** stream with the **challenger's** provenance and *effective*
+    /// authority, so surviving it is replayable, attributed entrenchment evidence.
+    ChallengeRejected {
+        challenge: ChallengeKind,
+        /// The challenging claim, when the challenge named one (a supersession's
+        /// replacement, a contradiction's contradictor).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<ClaimId>,
+        rejection: ChallengeRejection,
+    },
 }
 
 impl ClaimEventKind {
@@ -363,6 +401,7 @@ impl ClaimEventKind {
             Self::Retracted { .. } => "claim.retracted",
             Self::Retrieved { .. } => "claim.retrieved",
             Self::UsedInDecision { .. } => "claim.used_in_decision",
+            Self::ChallengeRejected { .. } => "claim.challenge_rejected",
         }
     }
 

@@ -909,6 +909,7 @@ fn receipt_structured(receipt: &IntegrityReceipt) -> Value {
         "expires_at": receipt.expires_at.map(dent8_core::TimestampMillis::as_unix_millis),
         "evidence_count": receipt.evidence_count,
         "corroboration": receipt.corroboration,
+        "survived_challenges": receipt.survived_challenges,
         "superseded_by": receipt.superseded_by.as_ref().map(dent8_core::ClaimId::as_str),
         "contradicted_by": receipt
             .contradicted_by
@@ -942,6 +943,7 @@ fn event_kind_name(kind: &ClaimEventKind) -> &'static str {
         ClaimEventKind::Reinforced { .. } => "Reinforced",
         ClaimEventKind::Retrieved { .. } => "Retrieved",
         ClaimEventKind::UsedInDecision { .. } => "UsedInDecision",
+        ClaimEventKind::ChallengeRejected { .. } => "ChallengeRejected",
     }
 }
 
@@ -1388,6 +1390,7 @@ fn receipt_output_schema() -> Value {
             },
             "evidence_count": { "type": "integer", "minimum": 0 },
             "corroboration": { "type": "integer", "minimum": 0 },
+            "survived_challenges": { "type": "integer", "minimum": 0 },
             "superseded_by": nullable_string_schema(),
             "contradicted_by": {
                 "type": "array",
@@ -1409,6 +1412,7 @@ fn receipt_output_schema() -> Value {
             "expires_at",
             "evidence_count",
             "corroboration",
+            "survived_challenges",
             "superseded_by",
             "contradicted_by",
             "replay_position",

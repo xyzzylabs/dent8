@@ -6,14 +6,15 @@
 //! `append_events`, attestation) and the write-boundary auth gate stay in the crate root.
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-    ClaimLifecycle, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId,
-    EvidenceKind, Predicate, Provenance, RetractionReason, SupersessionReason, TimestampMillis,
-    Ttl,
+    ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, ClaimEvent,
+    ClaimEventId, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimValue, Confidence,
+    ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind, Predicate, Provenance,
+    RetractionReason, SupersessionReason, TimestampMillis, Ttl,
 };
 use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt,
-    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_entity,
+    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_claim,
+    replay_entity,
 };
 
 use std::str::FromStr;
@@ -124,6 +125,175 @@ pub(crate) fn admit(
     apply_policy_defaults(registry, &mut event);
     enforce_policy(registry, store, &event, now)?;
     store.append(event)
+}
+
+/// ADR 0015: survived-challenge recording is on unless `DENT8_RECORD_CHALLENGES` is
+/// explicitly falsy. A malformed value keeps recording — the safe direction is more
+/// evidence, and a typo must not silently erase the attack audit.
+fn challenge_recording_enabled() -> bool {
+    match std::env::var("DENT8_RECORD_CHALLENGES") {
+        Err(_) => true,
+        Ok(value) if value.trim().is_empty() => true,
+        Ok(_) => crate::env_flag("DENT8_RECORD_CHALLENGES").unwrap_or(true),
+    }
+}
+
+/// ADR 0015: the earned-supersession gate is opt-in (`DENT8_ENTRENCHMENT_GATE=1`). A
+/// malformed value fails toward enforcement — the project convention for security flags:
+/// a typo must not silently disable a gate the operator tried to set.
+fn entrenchment_gate_enabled() -> bool {
+    match std::env::var("DENT8_ENTRENCHMENT_GATE") {
+        Err(_) => false,
+        Ok(value) if value.trim().is_empty() => false,
+        Ok(_) => crate::env_flag("DENT8_ENTRENCHMENT_GATE").unwrap_or(true),
+    }
+}
+
+/// Classify a firewall rejection as a survivable challenge (ADR 0015): only a real contest
+/// lost **on strength** counts — insufficient stated authority, a laundered supersession,
+/// or the canonical hard-alarm. Malformed writes, duplicates, and terminal-state mutations
+/// are never recorded. Returns the challenge shape and the challenger's *effective*
+/// authority (for a laundered supersession, the backing claim's actual level — "survived a
+/// High challenge" must mean the challenge was actually High).
+fn classify_challenge(
+    candidate: &ClaimEvent,
+    error: &StoreError,
+) -> Option<(
+    ChallengeKind,
+    Option<ClaimId>,
+    ChallengeRejection,
+    AuthorityLevel,
+)> {
+    use dent8_core::TransitionError as T;
+    let stated = candidate.authority.level;
+    match (&candidate.kind, error) {
+        (
+            ClaimEventKind::Superseded { by, .. },
+            StoreError::Rejected(T::InsufficientAuthority { .. }),
+        ) => Some((
+            ChallengeKind::Supersession,
+            Some(by.clone()),
+            ChallengeRejection::InsufficientAuthority,
+            stated,
+        )),
+        (
+            ClaimEventKind::Superseded { by, .. },
+            StoreError::LaunderedAuthority { challenger, .. },
+        ) => Some((
+            ChallengeKind::Supersession,
+            Some(by.clone()),
+            ChallengeRejection::LaunderedAuthority,
+            *challenger,
+        )),
+        (
+            ClaimEventKind::Contradicted { by, .. },
+            StoreError::Rejected(T::CanonicalContradiction),
+        ) => Some((
+            ChallengeKind::Contradiction,
+            Some(by.clone()),
+            ChallengeRejection::CanonicalContradiction,
+            stated,
+        )),
+        (
+            ClaimEventKind::Retracted { .. },
+            StoreError::Rejected(T::InsufficientAuthority { .. }),
+        ) => Some((
+            ChallengeKind::Retraction,
+            None,
+            ChallengeRejection::InsufficientAuthority,
+            stated,
+        )),
+        (ClaimEventKind::Expired { .. }, StoreError::Rejected(T::InsufficientAuthority { .. })) => {
+            Some((
+                ChallengeKind::Expiration,
+                None,
+                ChallengeRejection::InsufficientAuthority,
+                stated,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// ADR 0015 — persist one `ChallengeRejected` bookkeeping event on the incumbent's stream.
+/// Arbitrated and appended against a **fresh** snapshot: the caller's in-memory store may
+/// hold admitted-but-never-persisted siblings of the rejected write (e.g. a supersession's
+/// replacement assertion), and the record must take the next *durable* event id.
+#[allow(clippy::too_many_arguments)]
+fn persist_challenge_record(
+    path: &str,
+    incumbent: &ClaimId,
+    subject: &EntityRef,
+    predicate: &Predicate,
+    challenge: ChallengeKind,
+    by: Option<ClaimId>,
+    rejection: ChallengeRejection,
+    source: &str,
+    effective: AuthorityLevel,
+) -> bool {
+    let Ok(mut store) = load_store(path) else {
+        return false;
+    };
+    let Ok(record) = build_event(
+        &format!("event:{}", next_seq(&store)),
+        incumbent.as_str(),
+        subject.kind(),
+        subject.key(),
+        predicate.as_str(),
+        ClaimEventKind::ChallengeRejected {
+            challenge,
+            by,
+            rejection,
+        },
+        None,
+        source,
+        effective,
+        now_millis(),
+    ) else {
+        return false;
+    };
+    if store.append(record.clone()).is_err() {
+        return false;
+    }
+    let mut batch = [record];
+    append_events(path, &mut batch).is_ok()
+}
+
+/// The note appended to a rejection message when the survived challenge was recorded.
+const CHALLENGE_RECORDED_NOTE: &str =
+    "\n  the incumbent recorded the survived challenge (claim.challenge_rejected)";
+
+/// ADR 0015 — when a rejected write was a real challenge lost on strength, record the
+/// survival on the incumbent's stream with the **challenger's** provenance (so identity
+/// attestation binds the attempt to the challenger's key). Best-effort: a recording
+/// failure never masks the original rejection; the returned note is appended to the
+/// caller's error message when a record was persisted.
+fn record_survived_challenge(
+    path: &str,
+    candidate: &ClaimEvent,
+    error: &StoreError,
+) -> &'static str {
+    if !challenge_recording_enabled() {
+        return "";
+    }
+    let Some((challenge, by, rejection, effective)) = classify_challenge(candidate, error) else {
+        return "";
+    };
+    if persist_challenge_record(
+        path,
+        &candidate.claim_id,
+        &candidate.subject,
+        &candidate.predicate,
+        challenge,
+        by,
+        rejection,
+        candidate.provenance.source.as_str(),
+        effective,
+    ) {
+        CHALLENGE_RECORDED_NOTE
+    } else {
+        ""
+    }
 }
 
 /// Run a write operation, retrying on a concurrent-writer conflict. Each attempt re-runs the
@@ -684,12 +854,54 @@ pub(crate) fn op_supersede(
     // default freshness as `assert` (e.g. a revised `branch.status` still goes stale).
     apply_policy_defaults(&registry, &mut events[0]);
 
+    // ADR 0015 (opt-in): the earned-supersession gate. At *equal* authority, a replacement
+    // may not displace an incumbent with strictly stronger authority-weighted corroboration
+    // — and a fresh replacement's corroboration is exactly 1 (its asserter). The lost
+    // challenge is recorded like any other. Authority downgrades need no gate here: the
+    // anti-laundering check already rejects them at write time.
+    if entrenchment_gate_enabled() {
+        for incumbent in &incumbents {
+            let state = store
+                .load_claim_events(incumbent)
+                .ok()
+                .and_then(|stream| replay_claim(&stream).ok().flatten());
+            let Some(state) = state else { continue };
+            let backing = state.corroboration_at_or_above(state.authority.level);
+            if state.authority.level == authority && backing > 1 {
+                let note = if challenge_recording_enabled()
+                    && persist_challenge_record(
+                        path,
+                        incumbent,
+                        &subject,
+                        &predicate_parsed,
+                        ChallengeKind::Supersession,
+                        Some(events[0].claim_id.clone()),
+                        ChallengeRejection::WeakerCorroboration,
+                        source,
+                        authority,
+                    ) {
+                    CHALLENGE_RECORDED_NOTE
+                } else {
+                    ""
+                };
+                return Err(OpError::Rejected(format!(
+                    "REJECTED: unearned supersession: incumbent {incumbent} has {backing} \
+                     corroborating source(s) at {:?}, and a fresh single-source replacement \
+                     may not displace it (earned-supersession gate, \
+                     DENT8_ENTRENCHMENT_GATE){note}",
+                    state.authority.level
+                )));
+            }
+        }
+    }
+
     // Apply all in memory first (replacement, then each supersession); persist only if
     // every one is admitted, so a rejected revision leaves no orphan in the durable log.
     for event in &events {
-        store
-            .append(event.clone())
-            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+        if let Err(error) = store.append(event.clone()) {
+            let note = record_survived_challenge(path, event, &error);
+            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+        }
     }
     append_events(path, &mut events).map_err(write_error_to_op)?;
 
@@ -803,9 +1015,10 @@ pub(crate) fn op_retract(
     .map_err(|error| OpError::Invalid(format!("invalid retraction: {error}")))?;
     // Apply all in memory first (each authority-gated); persist only if all are admitted.
     for event in &events {
-        store
-            .append(event.clone())
-            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+        if let Err(error) = store.append(event.clone()) {
+            let note = record_survived_challenge(path, event, &error);
+            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+        }
     }
     append_events(path, &mut events).map_err(write_error_to_op)?;
     let count = incumbents.len();
@@ -949,9 +1162,10 @@ pub(crate) fn build_per_incumbent(
         events.push(event);
     }
     for event in &events {
-        store
-            .append(event.clone())
-            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+        if let Err(error) = store.append(event.clone()) {
+            let note = record_survived_challenge(path, event, &error);
+            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+        }
     }
     append_events(path, &mut events).map_err(write_error_to_op)?;
     Ok(events)
@@ -1088,9 +1302,10 @@ pub(crate) fn op_contradict(
     // Apply both in memory first; persist only if both admit (a Canonical incumbent makes
     // the contradiction hard-alarm, rejecting the whole operation with nothing persisted).
     for event in &events {
-        store
-            .append(event.clone())
-            .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+        if let Err(error) = store.append(event.clone()) {
+            let note = record_survived_challenge(path, event, &error);
+            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+        }
     }
     append_events(path, &mut events).map_err(write_error_to_op)?;
     Ok(format!(
@@ -1140,6 +1355,16 @@ pub(crate) fn format_history_line(event: &ClaimEvent) -> String {
         ClaimEventKind::Reinforced { .. } => "reinforced".to_string(),
         ClaimEventKind::Retrieved { .. } => "retrieved".to_string(),
         ClaimEventKind::UsedInDecision { .. } => "used-in-decision".to_string(),
+        ClaimEventKind::ChallengeRejected {
+            challenge,
+            by,
+            rejection,
+        } => {
+            let who = by
+                .as_ref()
+                .map_or_else(String::new, |claim| format!(" by {claim}"));
+            format!("survived     {challenge:?} challenge{who} ({rejection:?})")
+        }
     };
     format!(
         "  {:<9} {:<34} {what}  ({:?}, {})",
@@ -1271,6 +1496,15 @@ pub(crate) fn event_kind_details_json(kind: &ClaimEventKind) -> serde_json::Valu
         }),
         ClaimEventKind::UsedInDecision { decision_id } => serde_json::json!({
             "decision_id": decision_id,
+        }),
+        ClaimEventKind::ChallengeRejected {
+            challenge,
+            by,
+            rejection,
+        } => serde_json::json!({
+            "challenge": enum_name_json(challenge),
+            "by": by.as_ref().map(dent8_core::ClaimId::as_str),
+            "rejection": enum_name_json(rejection),
         }),
     }
 }

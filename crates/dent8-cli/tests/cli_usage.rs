@@ -791,6 +791,228 @@ fn low_authority_supersede_is_rejected_and_original_fact_remains() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // one linear lifecycle: reject -> record -> dedup -> opt out
+fn rejected_challenges_entrench_the_incumbent_and_are_replayable() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority=high",
+                "--source=user:alice",
+            ],
+            &envs,
+        ),
+        "assert",
+    );
+
+    // A low-authority supersession is rejected — and the loss is now evidence (ADR 0015).
+    let rejected = run_dent8(
+        &[
+            "supersede",
+            "person:alice",
+            "favorite_drink",
+            "coffee",
+            "--authority",
+            "low",
+            "--source",
+            "note:old",
+        ],
+        &envs,
+    );
+    assert_eq!(rejected.status.code(), Some(1));
+    assert!(
+        stderr(&rejected).contains("recorded the survived challenge"),
+        "{}",
+        stderr(&rejected)
+    );
+
+    let replayed = run_dent8(&["replay", "person:alice", "favorite_drink"], &envs);
+    assert_success(&replayed, "replay");
+    assert!(
+        stdout(&replayed).contains("survived") && stdout(&replayed).contains("Supersession"),
+        "{}",
+        stdout(&replayed)
+    );
+
+    // The same challenger losing again does not double-count; a second challenger does.
+    let again = run_dent8(
+        &[
+            "retract",
+            "person:alice",
+            "favorite_drink",
+            "--authority",
+            "low",
+            "--source",
+            "note:old",
+        ],
+        &envs,
+    );
+    assert_eq!(again.status.code(), Some(1));
+    let second = run_dent8(
+        &[
+            "retract",
+            "person:alice",
+            "favorite_drink",
+            "--authority",
+            "low",
+            "--source",
+            "note:other",
+        ],
+        &envs,
+    );
+    assert_eq!(second.status.code(), Some(1));
+
+    let explained = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_success(&explained, "explain json");
+    let receipt = stdout_json(&explained);
+    assert_eq!(receipt["survived_challenges"], 2, "{}", stdout(&explained));
+    assert_eq!(receipt["value"]["text"], "tea");
+
+    // The record stream still verifies, and opting out stops recording.
+    assert_success(&run_dent8(&["verify"], &envs), "verify");
+    let muted = run_dent8(
+        &[
+            "retract",
+            "person:alice",
+            "favorite_drink",
+            "--authority",
+            "low",
+            "--source",
+            "note:third",
+        ],
+        &[
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_RECORD_CHALLENGES", "0"),
+        ],
+    );
+    assert_eq!(muted.status.code(), Some(1));
+    assert!(
+        !stderr(&muted).contains("recorded the survived challenge"),
+        "{}",
+        stderr(&muted)
+    );
+    let recount = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_eq!(stdout_json(&recount)["survived_challenges"], 2);
+}
+
+#[test]
+fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+    let gated = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_ENTRENCHMENT_GATE", "1"),
+    ];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority=high",
+                "--source=user:alice",
+            ],
+            &envs,
+        ),
+        "assert",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "reinforce",
+                "person:alice",
+                "favorite_drink",
+                "--authority=high",
+                "--source=user:bob",
+            ],
+            &envs,
+        ),
+        "reinforce",
+    );
+
+    // Two High backers vs a fresh single-source equal-authority replacement: under the
+    // gate that is an unearned supersession — rejected and recorded.
+    let rejected = run_dent8(
+        &[
+            "supersede",
+            "person:alice",
+            "favorite_drink",
+            "coffee",
+            "--authority",
+            "high",
+            "--source",
+            "source:web",
+        ],
+        &gated,
+    );
+    assert_eq!(rejected.status.code(), Some(1), "{}", stderr(&rejected));
+    assert!(
+        stderr(&rejected).contains("unearned supersession")
+            && stderr(&rejected).contains("recorded the survived challenge"),
+        "{}",
+        stderr(&rejected)
+    );
+    let explained = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_eq!(stdout_json(&explained)["value"]["text"], "tea");
+    assert_eq!(stdout_json(&explained)["survived_challenges"], 1);
+
+    // Without the gate the same equal-authority revision is admitted (default semantics).
+    assert_success(
+        &run_dent8(
+            &[
+                "supersede",
+                "person:alice",
+                "favorite_drink",
+                "coffee",
+                "--authority",
+                "high",
+                "--source",
+                "source:web",
+            ],
+            &envs,
+        ),
+        "ungated supersede",
+    );
+}
+
+#[test]
 fn missing_write_metadata_gets_targeted_usage() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

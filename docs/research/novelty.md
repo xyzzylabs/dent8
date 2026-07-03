@@ -125,12 +125,14 @@ Sybil-resistant `corroboration_at_or_above(level)`; `EntityProjection::unearned_
 audits each supersession against the replacing claim's *actual* state, flagging
 `AuthorityDowngrade` (replacement is really lower-authority than its stated event) and
 `WeakerCorroboration` (less authority-weighted backing at equal authority). The Sybil
-flood is defeated in code (qualified count, not raw) and tested. **Not built:** the
-"survived supersession attempts" half — rejected attempts are not in the accept-only
-log, so it needs the firewall to *record refusals* at write time (a write-path
-feature). And this is an **audit that detects** unearned supersessions, not a write
-gate that *prevents* them (the challenger lives in another stream; prevention belongs
-in the future entity-aware firewall).
+flood is defeated in code (qualified count, not raw) and tested. **The
+"survived supersession attempts" half is built too** ([ADR 0015](../decisions/0015-survived-challenge-recording.md)):
+the op boundary records a rejected challenge as a `claim.challenge_rejected` event on the
+incumbent's stream — challenger provenance, effective authority, Sybil-resistant
+`survived_challenges_at_or_above` on `ClaimState` — and the `WeakerCorroboration` audit is
+enforceable at write time via the opt-in earned-supersession gate
+(`DENT8_ENTRENCHMENT_GATE=1`). Feeding survived challenges *into* arbitration (a claim
+that survived N strong challenges demands more to displace) remains open.
 
 **Why defensible (medium).** Truth-discovery (TruthFinder, Knowledge Vault) turns
 corroboration into a probability of truth, never a *raised revision threshold*.

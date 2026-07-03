@@ -45,6 +45,20 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   the stdout-always-empty invariant (providers interpret hook stdout), the bypass flag, and
   the audit/session verify paths.
 
+- **Survived-challenge recording + earned-supersession gate**
+  ([ADR 0015](docs/decisions/0015-survived-challenge-recording.md)): a challenge the
+  firewall rejects on strength (insufficient/laundered authority, the canonical
+  hard-alarm) is now recorded on the incumbent's stream as a `claim.challenge_rejected`
+  event — with the *challenger's* provenance and effective authority, so under signed
+  identity the attack attempt carries the attacker's own attestation. `ClaimState` gains
+  Sybil-resistant `survived_challenges` (the "attacked and stood" half of earned
+  entrenchment); `explain`/MCP receipts report the count; `replay` shows each survival.
+  Recording is on by default (`DENT8_RECORD_CHALLENGES=0` opts out). The
+  `WeakerCorroboration` audit is now enforceable at write time via the opt-in
+  earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`). Logs containing the new event
+  kind need this version to read; existing events, hashes, and golden fixtures are
+  unchanged (no canon bump).
+
 ### Fixed
 
 - `witness serve` now actually covers the grant log as documented: the cadence signer signs

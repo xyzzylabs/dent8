@@ -51,11 +51,16 @@ pub struct ClaimState {
     pub evidence_count: usize,
     /// The distinct provenance sources that have *asserted or reinforced this exact
     /// value*, each mapped to the highest authority it backed at. This measures
-    /// same-value corroboration only — surviving a contradiction or a rejected
-    /// supersession is deliberately *not* counted here (that would require recording
-    /// rejected attempts; see `docs/research/novelty.md` rank 3). The asserter is the
-    /// first entry.
+    /// same-value corroboration only — surviving a challenge is the *separate*
+    /// entrenchment signal tracked in [`ClaimState::survived_challenges`] (ADR 0015).
+    /// The asserter is the first entry.
     pub corroborating_sources: BTreeMap<SourceId, AuthorityLevel>,
+    /// The distinct sources whose challenge against this claim the firewall rejected,
+    /// each mapped to the highest *effective* authority it challenged at (ADR 0015) —
+    /// the "attacked and stood" half of earned entrenchment. `#[serde(default)]` so
+    /// projections materialized before the field existed still deserialize.
+    #[serde(default)]
+    pub survived_challenges: BTreeMap<SourceId, AuthorityLevel>,
 }
 
 impl ClaimState {
@@ -74,6 +79,25 @@ impl ClaimState {
     #[must_use]
     pub fn corroboration_at_or_above(&self, min: AuthorityLevel) -> usize {
         self.corroborating_sources
+            .values()
+            .filter(|&&level| level >= min)
+            .count()
+    }
+
+    /// Raw survived-challenge degree: distinct sources whose challenge this claim
+    /// survived. **Sybil-inflatable** like [`ClaimState::corroboration`]; security
+    /// decisions should use [`ClaimState::survived_challenges_at_or_above`].
+    #[must_use]
+    pub fn survived_challenge_count(&self) -> usize {
+        self.survived_challenges.len()
+    }
+
+    /// Authority-weighted survived challenges: distinct challengers whose *effective*
+    /// authority was at least `min` when they challenged and lost. Minting low-authority
+    /// challengers cannot simulate surviving strong attacks.
+    #[must_use]
+    pub fn survived_challenges_at_or_above(&self, min: AuthorityLevel) -> usize {
+        self.survived_challenges
             .values()
             .filter(|&&level| level >= min)
             .count()
@@ -140,6 +164,7 @@ fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError
             event.provenance.source.clone(),
             event.authority.level,
         )]),
+        survived_challenges: BTreeMap::new(),
     })
 }
 
@@ -237,6 +262,18 @@ fn apply_next_event(
             state.lifecycle = ClaimLifecycle::Retracted;
         }
         ClaimEventKind::Retrieved { .. } | ClaimEventKind::UsedInDecision { .. } => {}
+        ClaimEventKind::ChallengeRejected { .. } => {
+            // Surviving a challenge is earned entrenchment (ADR 0015): record the
+            // challenger at the highest effective authority it ever challenged and lost
+            // at. Bookkeeping only — lifecycle, value, and authority are untouched, and
+            // there is deliberately no authority gate here (the record carries the
+            // *challenger's* authority, which by construction lost to the incumbent's).
+            state
+                .survived_challenges
+                .entry(event.provenance.source.clone())
+                .and_modify(|level| *level = (*level).max(event.authority.level))
+                .or_insert(event.authority.level);
+        }
     }
 
     state.updated_at = event.provenance.recorded_at;
@@ -418,6 +455,98 @@ mod tests {
             observed_at: None,
             valid_from: None,
         }
+    }
+
+    fn challenge_rejected(event_id: &str, source: &str, level: AuthorityLevel) -> ClaimEvent {
+        let mut event = with_authority(
+            base_event(
+                ClaimEventKind::ChallengeRejected {
+                    challenge: crate::model::ChallengeKind::Supersession,
+                    by: Some(claim_id("claim:2")),
+                    rejection: crate::model::ChallengeRejection::InsufficientAuthority,
+                },
+                event_id,
+                None,
+            ),
+            level,
+        );
+        event.provenance.source = SourceId::new(source).expect("valid source");
+        event
+    }
+
+    #[test]
+    fn surviving_challenges_accumulates_challengers_at_their_strongest() {
+        let state = apply_event(None, &asserted(AuthorityLevel::High)).expect("asserted");
+        // Two challenges from the same source at rising strength, one from another.
+        let state = apply_event(
+            Some(state),
+            &challenge_rejected("event:2", "source:attacker", AuthorityLevel::Low),
+        )
+        .expect("recorded");
+        let state = apply_event(
+            Some(state),
+            &challenge_rejected("event:3", "source:attacker", AuthorityLevel::Medium),
+        )
+        .expect("recorded");
+        let state = apply_event(
+            Some(state),
+            &challenge_rejected("event:4", "source:other", AuthorityLevel::Low),
+        )
+        .expect("recorded");
+
+        // Bookkeeping only: the incumbent's belief state is untouched.
+        assert_eq!(state.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(state.authority.level, AuthorityLevel::High);
+        // Distinct challengers, each at the strongest level they lost at.
+        assert_eq!(state.survived_challenge_count(), 2);
+        assert_eq!(
+            state.survived_challenges_at_or_above(AuthorityLevel::Medium),
+            1,
+            "a Sybil flood of low-authority challenges cannot simulate surviving strong ones"
+        );
+        assert_eq!(
+            state.survived_challenges_at_or_above(AuthorityLevel::Low),
+            2
+        );
+    }
+
+    #[test]
+    fn a_challenge_record_is_not_an_initial_event_and_not_a_terminal_mutation() {
+        // Cannot open a stream.
+        assert!(matches!(
+            apply_event(
+                None,
+                &challenge_rejected("event:1", "source:attacker", AuthorityLevel::Low)
+            ),
+            Err(TransitionError::MissingInitialAssertion)
+        ));
+        // Cannot land on a fallen incumbent: a challenge against a terminal claim was not
+        // "survived" — the claim already fell.
+        let state = apply_event(None, &asserted(AuthorityLevel::Low)).expect("asserted");
+        let state = apply_event(Some(state), &supersede("event:2", AuthorityLevel::Low))
+            .expect("superseded");
+        assert!(matches!(
+            apply_event(
+                Some(state),
+                &challenge_rejected("event:3", "source:attacker", AuthorityLevel::Low)
+            ),
+            Err(TransitionError::TerminalStateMutation(
+                ClaimLifecycle::Superseded
+            ))
+        ));
+    }
+
+    #[test]
+    fn claim_state_without_survived_challenges_field_still_deserializes() {
+        // Projections materialized before ADR 0015 lack the field; serde(default) admits them.
+        let state = apply_event(None, &asserted(AuthorityLevel::High)).expect("asserted");
+        let mut json = serde_json::to_value(&state).expect("serialize");
+        json.as_object_mut()
+            .expect("object")
+            .remove("survived_challenges")
+            .expect("field present in new serialization");
+        let old: super::ClaimState = serde_json::from_value(json).expect("old shape deserializes");
+        assert_eq!(old.survived_challenge_count(), 0);
     }
 
     #[test]

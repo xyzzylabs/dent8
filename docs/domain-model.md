@@ -35,6 +35,9 @@ user:project_owner + prefers_eval_style + formal fixtures and invariants
 - `claim.retracted`: removes trust in a claim because the source, policy, or evidence failed.
 - `claim.retrieved`: audits that a claim was returned as context.
 - `claim.used_in_decision`: audits that a claim influenced an agent decision.
+- `claim.challenge_rejected`: records that the firewall rejected a challenge against this
+  claim on strength (ADR 0015) — written with the *challenger's* provenance and effective
+  authority, so surviving an attack is replayable, attributed entrenchment evidence.
 
 Use past-tense event names because events are immutable facts.
 

@@ -107,9 +107,10 @@ formally separate from evidential strength [1].
 > harness. A v0 of **earned entrenchment** (item 2's refinement) is also built —
 > authority-weighted corroboration on `ClaimState` plus an entity-level
 > unearned-supersession audit. Still *design intent*: item 4 (JTMS-vs-ATMS), the
-> freshness *read surface* (item 5's evaluator exists), the "survived-challenge" half
-> of earned entrenchment (needs recorded refusals), and transactional enforcement at
-> the store layer. See [roadmap.md](roadmap.md), [threat-model.md](threat-model.md),
+> freshness *read surface* (item 5's evaluator exists), and transactional enforcement at
+> the store layer. The "survived-challenge" half of earned entrenchment is **built**:
+> the firewall records rejected challenges on the incumbent's stream
+> ([ADR 0015](decisions/0015-survived-challenge-recording.md)). See [roadmap.md](roadmap.md), [threat-model.md](threat-model.md),
 > and [research/novelty.md](research/novelty.md).
 
 1. **Name belief-base revision (Hansson) and paraconsistency/LFI as the backbone**

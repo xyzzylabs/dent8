@@ -81,9 +81,12 @@ mechanisms are built; the remaining bullets here are refinements, not blockers.
   authority-weighted `corroborating_sources` (`corroboration_at_or_above`, Sybil-
   resistant); `EntityProjection::unearned_supersessions` audits each supersession
   against the replacing claim's *actual* authority/corroboration, flagging
-  `AuthorityDowngrade` and `WeakerCorroboration`. Still future: recording *rejected*
-  supersession attempts (the "survived-challenge" half, a write-path feature) and
-  turning the audit into a write-time gate.
+  `AuthorityDowngrade` and `WeakerCorroboration`. The "survived-challenge" half is
+  **built too** ([ADR 0015](decisions/0015-survived-challenge-recording.md)): a rejected
+  challenge is recorded on the incumbent's stream as `claim.challenge_rejected` (with the
+  challenger's provenance and effective authority; Sybil-resistant
+  `survived_challenges_at_or_above`), and the `WeakerCorroboration` audit is enforceable at
+  write time via the opt-in earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`).
   *([research/novelty.md](research/novelty.md) rank 3.)*
 - **[DONE] LFI "gentle-explosion" tier.** `apply_event`'s `Contradicted` arm returns
   `CanonicalContradiction` for a contradiction against an `AuthorityLevel::Canonical`
@@ -170,9 +173,10 @@ taint. The CLI parser is now `clap`, with generated shell completions and a glob
 support `--output json` for scripts/agents; other commands fail closed when
 JSON is requested until their structured contract is designed.
 
-**Remaining.** JSON contracts for interactive/passthrough commands (`hook`, `witness`,
-and `mcp serve`), `replay_runs` persistence, `--as-of` /
-`--valid-at`, `valid_to` intervals, and a richer lineage/debugger view are future work.
+**Remaining.** `replay_runs` persistence, `--as-of` / `--valid-at`, `valid_to` intervals,
+and a richer lineage/debugger view are future work. (The `hook` exit-code contract and the
+`witness` JSON surface — including NDJSON streaming from `serve` — are documented and
+pinned by tests; MCP is JSON-RPC by construction.)
 
 **Crates.** `clap`, `clap_complete`, `serde_json`.
 

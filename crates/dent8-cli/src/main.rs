@@ -1446,6 +1446,7 @@ fn format_receipt(r: &IntegrityReceipt) -> String {
          expires_at    : {expires_at}\n    \
          evidence      : {}\n    \
          corroboration : {}\n    \
+         survived      : {} challenge(s)\n    \
          superseded_by : {superseded}\n    \
          contradicted  : {}\n    \
          replay pos    : {}\n    \
@@ -1456,6 +1457,7 @@ fn format_receipt(r: &IntegrityReceipt) -> String {
         r.fresh,
         r.evidence_count,
         r.corroboration,
+        r.survived_challenges,
         r.contradicted_by.len(),
         r.replay_position,
         short(&r.event_hash),
@@ -1497,6 +1499,7 @@ fn receipt_fields_json(receipt: &IntegrityReceipt) -> serde_json::Value {
         "expires_at": receipt.expires_at.map(TimestampMillis::as_unix_millis),
         "evidence_count": receipt.evidence_count,
         "corroboration": receipt.corroboration,
+        "survived_challenges": receipt.survived_challenges,
         "superseded_by": receipt.superseded_by.as_ref().map(ClaimId::as_str),
         "contradicted_by": receipt
             .contradicted_by
