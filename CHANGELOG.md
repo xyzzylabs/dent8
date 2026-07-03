@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-03
+
 ### Added
 
 - **Grant history + revocation** ([ADR 0014](docs/decisions/0014-grant-history-and-revocation.md)):
