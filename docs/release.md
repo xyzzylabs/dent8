@@ -19,7 +19,7 @@ cargo install dent8 --features witness
 cargo install dent8 --features postgres
 ```
 
-Before the first crates.io release, use the Git source:
+To test unreleased `main` ahead of a release, use the Git source:
 
 ```sh
 cargo install --git https://github.com/xyzzylabs/dent8 dent8

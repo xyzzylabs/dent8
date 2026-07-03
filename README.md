@@ -34,8 +34,6 @@ dependency-cascade integrity recency-only memory structurally cannot express.
 ```sh
 # Install with Cargo (Rust 1.95+):
 cargo install dent8
-# …or from Git before the first crates.io release:
-cargo install --git https://github.com/xyzzylabs/dent8 dent8
 # …or run from a clone without installing:
 cargo run -p dent8 -- eval
 ```
