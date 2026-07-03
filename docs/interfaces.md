@@ -9,15 +9,15 @@ The CLI is the first operator and developer surface.
 Initial command groups:
 
 - `dent8 schema postgres`
-- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`
+- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
 - `dent8 reinforce <subject> <predicate> --authority <level> --source <source>`
-- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`
-- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`
+- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
 - `dent8 expire <subject> <predicate> --authority <level> --source <source>`
 - `dent8 retract <subject> <predicate> --authority <level> --source <source>`
 - `dent8 derive <subject> <predicate> <value> --from <subject> <predicate> --authority <level> --source <source>`
-- `dent8 replay <subject> <predicate>`
-- `dent8 explain <subject> <predicate>`
+- `dent8 replay <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
+- `dent8 explain <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 conflicts`
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`
 - `dent8 mcp serve`
@@ -26,7 +26,11 @@ Initial command groups:
 Authority and source are explicit flags so provenance metadata is not confused with the
 fact's subject/predicate/value.
 
-The CLI should show integrity metadata by default: lifecycle, freshness, authority, evidence count, contradiction count, supersession lineage, and replay position.
+The CLI should show integrity metadata by default: lifecycle, freshness (TTL *and* asserted
+`valid_to`), authority, evidence count, contradiction count, survived-challenge count,
+supersession lineage, and replay position. Reads accept `--as-of` (fold the log as of a
+transaction-time instant) and `--valid-at` (evaluate freshness/validity at a valid-time
+instant) — [ADR 0016](decisions/0016-valid-time-and-time-travel-reads.md).
 Human-facing output supports `--color auto|always|never`; structured adapter surfaces
 should keep using plain data fields rather than ANSI formatting.
 

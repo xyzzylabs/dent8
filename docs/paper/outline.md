@@ -17,11 +17,14 @@ adapter — incl. the materialized projection/edge graph — is DB-verified agai
 and with `DENT8_STORE_URL` the runnable surface uses it, each multi-event operation
 committed transactionally; the stock binary keeps the file dev store). Still gated on
 implementation: **identity operations** (the signed identity primitive and secure init path are
-built as `dent8 init --identity`, `dent8 init --agent <profile>`, and `dent8 identity`;
-remaining work is key distribution/rotation and external signers), the
+built as `dent8 init --identity`, `dent8 init --agent <profile>`, and `dent8 identity`,
+with source-key rotation (`rotate-source`), revocation (`revoke`), and issuer-signed
+grant-log history (ADR 0014) shipped; remaining work is fleet key distribution and
+external/hardware signers), the
 official **`rmcp` SDK** (the v0 stdio server already does tools, resources, and JSON-RPC
-batches, and reads apply freshness), and a **published anchor cadence** (a witness that
-signs/publishes the head on its own infra).
+batches, and reads apply freshness), and a **hosted witness service** (the cadence signer
+`witness serve` and publication `witness publish`/`verify-published` ship with a packaged
+operated signer/publisher/monitor split — only *hosting* it as a managed service remains).
 The plan separates what is *claimable now* from what is *gated on
 implementation*, and is explicit about the weakest novelty claims. Prior art and the
 fact-checked basis are in [related-work.md](../related-work.md) and
@@ -93,8 +96,8 @@ verifiable invariants.
 > built** — serde canonicalization + SHA-256 + injective leaf + a witness-keyed
 > `(count, head)` commitment, with both a **symmetric (HMAC)** and an **asymmetric
 > (Ed25519 signed tree head)** variant — and the **integrity evaluation is built** (the
-> `dent8-evals` corpus, bullet 5). Still plans: TTL-expiry evaluation, a published anchor
-> cadence (operational witness), and the transactional Postgres store-layer enforcement.
+> `dent8-evals` corpus, bullet 5). Still plans: TTL-expiry evaluation, a hosted/managed witness
+> service, and the transactional Postgres store-layer enforcement.
 
 ### Novelty positioning (read [research/novelty.md](../research/novelty.md))
 
@@ -148,8 +151,8 @@ as "first to unify/transplant," never "first to invent"):
    single-writer dev store; Postgres concurrency is DB-verified but still needs
    DB-assigned ids for heavy fan-out; the witness primitive is not an operated service;
    overlap with Zep [7].
-8. **Limitations & future work** — ATMS-style assumption-environment replay; valid-
-   time intervals (`valid_to`); predicate-level volatility policy; DB-assigned ids;
+8. **Limitations & future work** — ATMS-style assumption-environment replay;
+   predicate-level volatility policy; DB-assigned ids;
    `cargo-fuzz`; append/projection model checking; operated witness; HTTP/SDK/debugger
    surfaces.
 
@@ -194,8 +197,11 @@ as "first to unify/transplant," never "first to invent"):
   external anchor that catches a re-hashed-forward rewrite (witness-keyed `(count, head)`),
   in both a symmetric (HMAC) and an asymmetric (Ed25519 signed tree head) variant. Caveats:
   **not** RFC 8785/JCS; the anchor *primitives* are built (the Postgres append path is
-  DB-verified) but the operational witness that signs/publishes the head on a cadence is
-  unbuilt. *Claim tamper-resistance only with the off-writer witness-key assumption.*
+  DB-verified) and the operational witness that signs/publishes the head on a cadence is
+  built too — `witness serve` is the cadence signer and `witness publish`/`verify-published`
+  retain signed heads off-host, with a packaged operated split (Docker Compose + systemd,
+  `examples/witness-operated/`); only a hosted/managed witness service remains future.
+  *Claim tamper-resistance only with the off-writer witness-key assumption.*
 - **"Pattern separation" framing.** A loose neuroscience analogy; CA3 pattern
   *completion* does not map at all. *Strengthen* by defining pattern separation as a
   testable invariant (distinct subject+predicate streams never merge; near-duplicate

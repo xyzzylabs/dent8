@@ -74,29 +74,41 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   and `verify` passes. Diagnostic streams are hidden from normal MCP fact/resource browsing by
   default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections.
-- **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`** — asserts a
+- **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>
+  [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and
-  **never reaches the log**. Subjects are written as `<kind>:<key>` (for example,
+  **never reaches the log**. `--valid-from`/`--valid-to` stamp the fact's asserted validity
+  interval (ADR 0016): reads treat an elapsed `valid_to` exactly like an elapsed TTL, and an
+  inverted interval is rejected. Subjects are written as `<kind>:<key>` (for example,
   `person:alice` or `repo:dent8`); authority/source are explicit flags because they are
   provenance metadata, not part of the fact.
-- **`dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`** — revises
-  the believed fact via the sanctioned supersession path: it asserts a replacement and
+- **`dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>
+  [--valid-from MILLIS] [--valid-to MILLIS]`** — revises
+  the believed fact via the sanctioned supersession path: it asserts a replacement (stamped
+  with the validity interval when given) and
   marks **every** believed incumbent superseded by it, persisted as one write. The base
   firewall's **anti-laundering rejects a revision that cannot out-rank each incumbent**;
-  the end state is unique because all incumbents become terminal. Reload re-validates
+  the end state is unique because all incumbents become terminal. A rejection lost on
+  strength is **recorded on the incumbent's stream** as a survived challenge
+  (`claim.challenge_rejected`, ADR 0015; `DENT8_RECORD_CHALLENGES=0` opts out), and the
+  opt-in `DENT8_ENTRENCHMENT_GATE=1` additionally rejects an equal-authority replacement
+  with strictly weaker authority-weighted corroboration than its incumbent. Reload re-validates
   integrity: a torn write or external edit that leaves two fresh believed claims **or** a
   broken supersession lineage (dangling/cyclic) is rejected, not silently masked.
 - **`dent8 retract <subject> <predicate> --authority <level> --source <source>`** — terminally removes
   every believed claim for the subject+predicate. Unlike a contradiction (dissent), it is
   **authority-gated** ([ADR 0008](decisions/0008-retraction-authority.md)): a retraction
-  that under-ranks its incumbent is rejected, so a low-authority actor cannot delete a
-  trusted fact.
+  that under-ranks its incumbent is rejected — and recorded on the incumbent's stream as a
+  survived challenge (ADR 0015) — so a low-authority actor cannot delete a
+  trusted fact, and the attempt itself becomes attributed evidence.
 - **`dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`** —
   flags a conflict: asserts an opposing claim and moves the incumbent to `Contested`,
   keeping **both** (paraconsistency, [ADR 0009](decisions/0009-uniqueness-and-contestation.md)).
   This is **dissent** — *not* authority-gated, so a low-authority source can flag a wrong
-  fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms.
+  fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms
+  (and records the rejected challenge on the incumbent, ADR 0015). Takes
+  `--valid-from`/`--valid-to` for the opposing claim like `assert`.
 - **`dent8 reinforce <subject> <predicate> --authority <level> --source <source>`** — corroborates the
   believed fact: records an additional source/authority backing the same value, raising
   **earned entrenchment** without restating the value (no value-mismatch).
@@ -113,16 +125,23 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - The write commands above support `--output json` for agent wrappers/scripts. Accepted writes
   return structured command metadata plus the human message; rejected writes return structured
   `invalid`/`rejected` errors on stderr with nonzero exit codes.
-- **`dent8 explain <subject> <predicate>`** — replays the persisted log and prints the
+- **`dent8 explain <subject> <predicate> [--as-of MILLIS] [--valid-at MILLIS]`** — replays
+  the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
-  a still-`Active` fact past its TTL is headline-flagged `[stale — TTL elapsed]`, and the
-  receipt carries `fresh` + the `expires_at` instant. Composes with
+  a still-`Active` fact past its TTL *or its asserted `valid_to`* is headline-flagged stale,
+  and the receipt carries `fresh` + the `expires_at` instant (the earliest bound) plus the
+  fact's survived-challenge count (ADR 0015). **Time-travel (ADR 0016):** `--as-of` folds
+  only events recorded at or before an instant (the store as it stood then) and `--valid-at`
+  judges freshness at an instant instead of now. Composes with
   `assert`/`supersede`/`retract` across processes (and the same receipt backs the MCP
   `explain` tool and `resources/read`). Supports `--output json` for the current-state
   receipt.
-- **`dent8 replay <subject> <predicate>`** — prints the full ordered event history
-  (every assertion, supersession, retraction, contradiction, with authority + source) and
-  the current state — *why* the fact is what it is. Supports `--output json`.
+- **`dent8 replay <subject> <predicate> [--as-of MILLIS] [--valid-at MILLIS]`** — prints
+  the full ordered event history
+  (every assertion, supersession, retraction, contradiction, and survived challenge, with
+  authority + source) and
+  the current state — *why* the fact is what it is. `--as-of`/`--valid-at` time-travel like
+  `explain`. Supports `--output json`.
 - **`dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE]
   [--include-diagnostics]`** — lists distinct fact streams known to dent8 as
   `dent8://{kind}/{key}/{predicate}` resources for human browsing. It hides internal
@@ -133,8 +152,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
   that content-edit tamper-detection there is `dent8 witness verify`'s job. On **both** it also
   reports **retraction taint** — a still-believed claim deriving from a retracted/expired source
-  (`TAINTED: X derives from Y`). Supports `--output json`; integrity findings still return a
-  nonzero exit code, with the structured report on stdout.
+  (`TAINTED: X derives from Y`). On identity builds it also re-verifies every persisted
+  **write attestation** (ADR 0013) and, when a grant log is present, resolves each attested
+  event's **entitlement at write time** — entitled / unentitled (an integrity failure) /
+  unknown, reported honestly (ADR 0014). Supports `--output json`; integrity findings still
+  return a nonzero exit code, with the structured report on stdout.
 - **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
   contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
   the self-demonstrating "why dent8" benchmark. Supports `--output json`.
@@ -227,7 +249,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   boundary. The ceiling caps *what a source may claim*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary. Supports `--output json`
   for `list`/`add`/`remove`.
-- **`dent8 identity bootstrap | status | repair-env | rotate-source | issuer-keygen |
+- **`dent8 identity bootstrap | status | repair-env | rotate-source | revoke |
+  backfill-grant-log | issuer-keygen |
   agent-keygen | trust-add | trust-list | grant-issue | grant-verify`** — the **signed source identity layer
   (authn)**, included in the default CLI build. `init --identity` / `init --agent <profile>`
   are the happy path; `bootstrap` remains the manual creation path: it creates or reuses an
@@ -241,7 +264,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   active-grant entry from the current signed grant after verifying trust, grant, and source key
   consistency; it refuses to overwrite a different active grant. `rotate-source` replaces the
   active source key and grant at the same stable paths, updates `.dent8/active-grants.json`, and
-  removes the old private source-key backup after a successful rotation. The old
+  removes the old private source-key backup after a successful rotation. The grant lifecycle
+  also maintains an append-only, issuer-signed, hash-chained **grant log**
+  (`grant-log.jsonl` / `DENT8_GRANT_LOG`, ADR 0014): `issued`/`revoked` records per action
+  (a rotation lands both as one write), so rotation stops destroying evidence. **`revoke
+  --source <s>`** ends trust in a source *without* a replacement — the compromise response;
+  the write path then fails closed for that source. **`backfill-grant-log`** seeds records
+  for grants that predate the log (stamped *now*, never backdated — pre-history entitlement
+  stays honestly unknown). `status`/`doctor` gain a grant-log consistency line, and `verify`
+  uses the history to decide each attested event's entitlement at write time. The old
   grant/env/public-key backups remain for audit, but the old grant+key pair is rejected at the
   write boundary once a bundle has an active-grant registry. The lower level commands remain
   available for custom paths, expiration, and exact
@@ -276,20 +307,29 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   **`verify-published <heads.jsonl>`** verifies externally saved JSONL heads against the current
   log and public key without reading `DENT8_WITNESS_LOG`, so a local witness-log rollback
   cannot erase a later head retained by a monitor. It exits successfully but warns if the
-  latest published count trails the current log. `dent8 init --witness` configures
+  latest published count trails the current log. With signed identity in use, the witness
+  also covers the **grant log** (ADR 0014): `sign`/`serve` append signed grant-log heads
+  (`DENT8_WITNESS_GRANTS_LOG`), `verify` detects a truncated revocation as `ROLLBACK`, and
+  `publish`/`verify-published` take **`--grants <published-grants.jsonl>`** to retain and
+  re-check those heads outside the writer's control — a writer who scrubs a revocation *and*
+  the local grants-witness file is still caught by the published copy (`publish` without
+  `--grants` says so when a grants-witness log exists, instead of silently half-covering). `dent8 init --witness` configures
   verifier-side paths, `dent8 doctor` reports witness coverage, and
   **`doctor <writer|signer|both>`** validates the operator split (writer/verifier env must have
   the log + public key and must not have the private key; signer env must have the private key
   and a matching public key). What is *built* is the mechanism (cadence signing + publishable
   heads + idempotent publication to an external JSONL file + verification of externally saved
   heads + setup/doctor visibility + role readiness checks + a checked
-  [`examples/witness/`](../examples/witness/) operator-split demo). The finite subcommands
+  [`examples/witness/`](../examples/witness/) operator-split demo). All subcommands
   support `--output json` for CI/monitoring (`keygen`, `sign`, `head`, `publish`, `verify`,
-  `verify-published`, `doctor`); `serve` is a streaming cadence signer and remains text-only.
+  `verify-published`, `doctor`); `serve` streams **NDJSON** in JSON mode — signed heads on
+  stdout (`event: "head_signed"`, `lane: "events" | "grants"`), lifecycle on stderr.
   `witness doctor --output json` groups checks into stable `ok` / `warn` / `fail` sections.
-  What remains
-  *operational* is packaging/running it separately, key rotation, and managed head
-  publication/monitoring. See [witness.md](witness.md).
+  The *operated* deployment is **packaged** in
+  [`examples/witness-operated/`](../examples/witness-operated/) (Docker Compose
+  signer/publisher/monitor split + systemd units, with key-rotation and
+  publication-channel guidance); what remains is *hosting* it as a managed service. See
+  [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
   `completion` and `autocomplete` are accepted. Supports `--output json` with the generated
@@ -301,8 +341,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   data stays plain). The global `--output text|json` flag currently supports the write
   commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
   `agent add`, `authority`, `identity <subcommand>`, `doctor`, `completions`, `export`,
-  `witness <one-shot>`, `schema postgres`, and `mcp install`; unsupported commands fail closed
-  with a targeted usage error rather than falling back to prose.
+  `witness <subcommand>`, `schema postgres`, and `mcp install`; unsupported commands fail
+  closed with a targeted usage error rather than falling back to prose.
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload
@@ -489,14 +529,17 @@ subject+predicate.
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
   surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
-- **A published anchor cadence / *operated* witness service.** Both anchor primitives —
+- **A *hosted* / operated witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now
   runnable end-to-end as **`dent8 witness keygen | sign | verify | publish | verify-published |
   serve | doctor`** (Runnable, above), with `init --witness`, coverage checks, writer/signer
-  role readiness checks, idempotent JSONL publication, and verification of externally saved
-  heads. What is still design-only is the *operated* piece: packaging/running the witness on
-  **separate infrastructure**, managed publication/monitoring of heads, and key rotation.
+  role readiness checks, idempotent JSONL publication (both lanes — event heads and, with
+  `--grants`, grant-log heads), and verification of externally saved
+  heads. The operated deployment is **packaged**
+  ([`examples/witness-operated/`](../examples/witness-operated/): compose + systemd, with
+  key-rotation and publication-channel guidance); what is still design-only is *hosting* it —
+  a managed signer/publication service instead of your own second host.
 
 ## How to keep this honest
 

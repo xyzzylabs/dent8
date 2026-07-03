@@ -146,7 +146,12 @@ source of truth for what is built.** In short:
   forensics/audit, behind `--features export` — see [examples/duckdb/](https://github.com/xyzzylabs/dent8/tree/main/examples/duckdb/)),
   `dent8 init` / `dent8 doctor`, `dent8 authority`, `dent8 identity`, `dent8 witness`
   (behind `--features witness`), and
-  `dent8 schema postgres`. State persists to a local file log and
+  `dent8 schema postgres`. Writes can carry an asserted **validity interval**
+  (`--valid-from`/`--valid-to`, treated by reads like TTL), reads can **time-travel**
+  (`explain`/`replay --as-of`/`--valid-at` — what did we believe, and was it fresh, at an
+  instant), and a challenge the firewall rejects on strength is **recorded on the incumbent
+  as survived-challenge evidence** (`claim.challenge_rejected`, with the challenger's own
+  provenance). State persists to a local file log and
   **composes across separate invocations**; the file log is a **dev store** (single-writer,
   non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
   SQLite**, selected by `DENT8_STORE_URL`. `dent8 mcp serve` exposes
@@ -164,7 +169,9 @@ source of truth for what is built.** In short:
   arbitration + retraction, an anti-laundering challenger check, and the
   canonical-contradiction hard-alarm; the coding-agent predicate registry; the integrity
   receipt; a freshness evaluator; policy-counterfactual and entity-level replay with
-  lineage and earned-entrenchment audits; and serde canonicalization + a SHA-256 hash chain.
+  lineage and earned-entrenchment audits (both halves: authority-weighted corroboration
+  *and* Sybil-resistant survived challenges); and serde canonicalization + a SHA-256 hash
+  chain.
 - **Validated by an adversarial corpus** (`dent8 eval`, or `cargo test -p dent8-evals`): MINJA
   injection, authority laundering, canonical contradiction, Sybil corroboration, and
   **poisoned-source retraction** all **fail against the firewall (0/5)** while **compromising a
@@ -192,19 +199,25 @@ Postgres backend** (each multi-event operation committed as one transaction). An
 write above its registered ceiling. Signed source identity — **`dent8 identity`**
 — included in the default CLI build — binds a source id to a source public key via an
 issuer-signed grant and verifies source-key possession on every CLI/MCP write when a trust
-root is configured.
+root is configured; every accepted write persists a **signed attestation** that `verify`
+re-checks offline. Grant lifecycle actions append to an issuer-signed, hash-chained **grant
+log**, so rotation stops destroying evidence, `dent8 identity revoke` ends trust in a
+compromised source without a replacement, and `verify` resolves each attested event's
+**entitlement at write time**.
 The witness is runnable as a *primitive* — **`dent8 witness`** (`--features witness`) emits
 Ed25519 signed tree heads and detects a history rewrite or rollback that an internal chain
 re-verify cannot. `dent8 init --witness` configures verifier-side paths and `dent8 doctor`
 reports signed-head coverage; `dent8 witness doctor <writer|signer|both>` checks the
 operator split so writer/agent/MCP processes do not inherit the private witness key; and
 `dent8 witness publish <heads.jsonl>` / `verify-published <heads.jsonl>` append and check
-externally saved heads so a local witness-log rollback cannot erase retained evidence. The
-finite witness commands support `--output json` for monitors and CI; `witness serve` remains
-a streaming text command.
+externally saved heads so a local witness-log rollback cannot erase retained evidence — and
+with signed identity, the same machinery covers the **grant log** (`--grants`), so a
+scrubbed revocation is still caught by the published copy. All witness commands support
+`--output json` for monitors and CI; `witness serve` streams NDJSON in JSON mode. The
+operated deployment (signer/publisher/monitor on separate infrastructure) is **packaged**
+in [examples/witness-operated/](https://github.com/xyzzylabs/dent8/tree/main/examples/witness-operated/); the
 remaining gap to a hardened multi-user product is operating those controls well: key
-distribution/rotation, stronger secret storage, managed head publication, and an **operated
-witness service** that signs on a cadence from separate infrastructure. See
+distribution/rotation, stronger secret storage, and a *hosted* witness service. See
 [docs/witness.md](https://github.com/xyzzylabs/dent8/blob/main/docs/witness.md), the runnable [witness example](https://github.com/xyzzylabs/dent8/tree/main/examples/witness/), the
 [Roadmap](https://github.com/xyzzylabs/dent8/blob/main/docs/roadmap.md), and [docs/STATUS.md](https://github.com/xyzzylabs/dent8/blob/main/docs/STATUS.md).
 
@@ -238,9 +251,11 @@ Commands (see [docs/STATUS.md](https://github.com/xyzzylabs/dent8/blob/main/docs
   with `--repair`, refresh stale generated identity env and installed MCP config;
   with `--write-check`, run an internal diagnostic trusted-write / low-authority-rejection
   flow (through the installed MCP server for agent profiles).
-- `dent8 identity bootstrap/status/repair-env/rotate-source`: create, inspect, repair generated
-  env files for, and rotate a local signed source identity bundle (operator issuer key outside
-  the bundle, source key, trust registry, active-grant registry, grant, and
+- `dent8 identity bootstrap/status/repair-env/rotate-source/revoke/backfill-grant-log`: create,
+  inspect, repair generated env files for, rotate, revoke (end trust in a compromised source
+  without a replacement — the write path then fails closed for that source), and backfill
+  grant-log history for a local signed source identity bundle (operator issuer key outside
+  the bundle, source key, trust registry, active-grant registry, grant, grant log, and
   `.dent8/identity-<source>.env`).
 - `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`: assert a fact
   through the firewall, persisted to a file-backed log (`DENT8_LOG`).

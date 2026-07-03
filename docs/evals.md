@@ -65,7 +65,7 @@ Initial invariants:
 - Terminal states cannot be mutated by lifecycle events.
 - Contradicted claims become `contested` unless already terminal.
 - Superseded claims must point at the replacing claim.
-- Expired claims must not be returned as fresh context — the freshness evaluator `ClaimState::is_expired_at` is built and tested **and applied on reads**: `explain` headline-flags a stale fact and the receipt carries `fresh`/`expires_at`; the remaining target is a `valid_to` interval (see [threat-model.md](threat-model.md) T4).
+- Expired claims must not be returned as fresh context — the freshness evaluator `ClaimState::is_expired_at` is built and tested **and applied on reads**: `explain` headline-flags a stale fact and the receipt carries `fresh`/`expires_at`; closed `valid_to` validity intervals are applied on reads too — an elapsed asserted `valid_to` reads stale exactly like an elapsed TTL, since `ClaimState::expires_at()` is the earliest of the TTL bound and `valid_to` ([ADR 0016](decisions/0016-valid-time-and-time-travel-reads.md); see [threat-model.md](threat-model.md) T4).
 - Retrieval events must not alter claim lifecycle.
 - Replaying the same ordered event stream must produce the same projection.
 - Projection rows must be derivable from the event log.

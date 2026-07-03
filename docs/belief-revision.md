@@ -124,8 +124,13 @@ formally separate from evidential strength [1].
    lattice. *Earned entrenchment v0 built:* `ClaimState` tracks authority-weighted
    corroboration (`corroboration_at_or_above`), and `EntityProjection::unearned_supersessions`
    audits supersessions against the replacing claim's real authority/corroboration
-   (`AuthorityDowngrade`, `WeakerCorroboration`; Sybil-resistant). *Still future:* the
-   challenge-survival half (needs recorded refusals) and a write-time gate
+   (`AuthorityDowngrade`, `WeakerCorroboration`; Sybil-resistant). *Challenge-survival
+   half now built (ADR 0015):* a rejected challenge is recorded on the incumbent's stream
+   (`ClaimEventKind::ChallengeRejected`, carrying the challenger's provenance and effective
+   authority) and accumulated into `ClaimState.survived_challenges`, read Sybil-resistantly
+   via `survived_challenges_at_or_above` — on by default (`DENT8_RECORD_CHALLENGES=0` opts
+   out) — plus an opt-in write-time earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`).
+   Feeding survived challenges *into* arbitration is the remaining piece
    ([research/novelty.md](research/novelty.md) rank 3).
 3. **The LFI "gentle explosion" tier.** *Implemented:* `apply_event`'s `Contradicted`
    arm returns `TransitionError::CanonicalContradiction` for a contradiction against
@@ -142,8 +147,11 @@ formally separate from evidential strength [1].
    deserves its own decision record [3].
 5. **Frame TTL/expiry as principled non-monotonic defeat.** The read-time freshness
    evaluator and CLI/MCP receipt surface are built; explicit `claim.expired` is a
-   separate authority-gated terminal close (ADR 0011). Remaining work is a richer
-   `valid_to` interval and freshness on every summary surface [5].
+   separate authority-gated terminal close (ADR 0011). `valid_to` closed valid-time intervals
+   are built (ADR 0016): `assert`/`supersede`/`contradict` take `--valid-from`/`--valid-to`,
+   reads fold `valid_to` into `expires_at` (the earliest of the TTL bound and `valid_to`),
+   and `explain`/`replay` take `--as-of`/`--valid-at`. Remaining work is freshness on every
+   summary surface [5].
 
 **Deliberately do NOT:**
 

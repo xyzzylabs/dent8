@@ -49,7 +49,7 @@ Later crates should be added only when they own a real boundary:
 
 The primitive is `ClaimEvent`.
 
-Each event belongs to a claim stream identified by `claim_id`. A claim stream starts with `claim.asserted`; later events can reinforce, contradict, supersede, expire, retract, retrieve, or use the claim in a decision.
+Each event belongs to a claim stream identified by `claim_id`. A claim stream starts with `claim.asserted`; later events can reinforce, contradict, supersede, expire, retract, retrieve, use the claim in a decision, or record a rejected challenge (`claim.challenge_rejected`, ADR 0015).
 
 Core fields:
 
@@ -66,6 +66,7 @@ Core fields:
 - `evidence`
 - `observed_at`
 - `valid_from`
+- `valid_to`
 - `recorded_at`
 - `causation_event_id`
 - `correlation_id`

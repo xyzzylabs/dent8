@@ -35,8 +35,11 @@ What remains to make it a hardened multi-user product:
 - **Signed identity operations.** The stock CLI now includes the authn primitive:
   `dent8 init --identity` / `dent8 init --agent <profile>` create issuer-signed grants binding
   source ids to source public keys, and every configured write checks source-key possession at
-  the CLI/MCP boundary. Product hardening remains: key distribution/rotation, hardware or
-  secret-store-backed keys, and team policy workflows.
+  the CLI/MCP boundary. Product hardening remains: key distribution, hardware or
+  secret-store-backed keys, and team policy workflows. Signed key rotation/revocation and
+  issuer-signed, hash-chained grant-log history
+  ([ADR 0014](decisions/0014-grant-history-and-revocation.md)) are now shipped
+  (`dent8 identity rotate-source` / `revoke` / `backfill-grant-log`).
 - **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
   role doctor checks validate writer/signer separation, `publish` idempotently appends heads to
   an external JSONL sequence, and `verify-published` verifies externally saved heads so local
@@ -151,7 +154,9 @@ adapter, not the architecture.
 
 **Remaining.** DB-assigned ids for heavy fan-out, richer per-column event tables /
 `uses_as_evidence` edges, operational tuning, and identity operations (key distribution /
-rotation / external signers) are future product work.
+external signers) are future product work. (Source-key rotation (`dent8 identity
+rotate-source`), revocation (`dent8 identity revoke`), and append-only grant-log history —
+[ADR 0014](decisions/0014-grant-history-and-revocation.md) — are built.)
 
 ## Replay / Explain CLI — Done
 
@@ -275,5 +280,7 @@ predicate-level volatility policy · HTTP API · **client SDKs** (`pip install d
 `npm i dent8` with first-class in-process framework adapters — LangChain, LlamaIndex, Vercel AI
 SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/) and
 [examples/vercel-ai-sdk](../examples/vercel-ai-sdk/)) ·
-adapters for existing memory providers · an external witness (published signed tree head) for
-non-repudiation.
+adapters for existing memory providers · a managed/hosted witness service (publication
+channel, monitoring, key-rotation automation) for non-repudiation — the
+published-signed-tree-head primitive itself (`witness publish` / `verify-published`, plus
+the grant-log `--grants` lane) already ships.

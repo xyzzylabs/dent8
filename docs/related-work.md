@@ -83,15 +83,18 @@ not prior art that implements integrity [7].
 | A-MEM | ✗ | ✗ | ✗ | ✗ (rewrites) | ✗ | ✗ | ✗ |
 | Cognee | ◐ | ◐ | ◐ | ✗ | ✗ | ✗ | ✗ |
 | MCP memory | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| **dent8** | ✓ (mandatory) | ✓ (typed event) | ◐ (open `valid_from` + TTL; freshness applied on reads — `explain` flags stale, receipt carries `fresh`/`expires_at`; **no `valid_to`**) | ✓ (lineage-preserving) | ✓ (append-only) | ✓ (fold) | ✓ (authority-weighted, core fold) |
+| **dent8** | ✓ (mandatory) | ✓ (typed event) | ◐ (closed `valid_from`/`valid_to` interval + TTL — ADR 0016; freshness applied on reads, an elapsed `valid_to` treated like an elapsed TTL and `expires_at()` = earliest of TTL and `valid_to`; `explain` flags stale, receipt carries `fresh`/`expires_at`; time-travel via `--as-of`/`--valid-at`) | ✓ (lineage-preserving) | ✓ (append-only) | ✓ (fold) | ✓ (authority-weighted, core fold) |
 
 Two cells deserve blunt honesty:
 
-- **Temporal validity.** dent8 has `observed_at` + `valid_from` and **applies TTL
-  freshness on reads** — `ClaimState::is_expired_at` drives the `fresh` flag and
-  `explain`'s stale annotation — but has **no `valid_to` interval**. On the full
-  bitemporal axis dent8 is still *behind* Zep (which has both `t_valid` and `t_invalid`
-  plus an edge-invalidation mechanism that actually runs), not at parity. Marked ◐, not ✓.
+- **Temporal validity.** dent8 now has `observed_at` + `valid_from` + `valid_to`
+  (ADR 0016) and **applies freshness on reads** — `ClaimState::is_expired_at` drives the
+  `fresh` flag and `explain`'s stale annotation, with `expires_at()` taking the *earliest* of
+  the TTL bound and the asserted `valid_to`; `--as-of`/`--valid-at` add time-travel reads.
+  The closed `valid_from`/`valid_to` interval is the analog of Zep's `t_valid`/`t_invalid`;
+  what still differs is mechanism — Zep runs graph edge-invalidation, whereas dent8's
+  `valid_to` bounds read-time freshness rather than driving an invalidation pass. Marked ◐
+  for that reason, not for a missing interval.
 - **Authority/confidence.** The typed fields exist (`AuthorityLevel`, `Confidence`),
   and arbitration is **implemented in the `dent8-core` fold**: `apply_event` rejects a
   strictly-lower-authority supersession and hard-alarms a canonical contradiction —
@@ -122,7 +125,8 @@ is why dent8's hash leaf mixes a canonicalization version from day one. ADR 0004
 decides the v1 shape: `schema_version` is the out-of-band `CANON_VERSION` constant
 for now, and a future v2 must add a per-event version plus an upcasting path without
 rehashing existing v1 events.
-dent8's three time fields are an instance of bitemporal modeling (valid vs
+dent8's time fields — transaction-time `recorded_at` plus valid-time
+`observed_at`/`valid_from`/`valid_to` — are an instance of bitemporal modeling (valid vs
 transaction time, standardized in SQL:2011), but PostgreSQL does not implement
 SQL:2011 temporal tables natively, so freshness and "replay as-of T" must be
 enforced in the `replay_claim` fold, not delegated to the database [9].

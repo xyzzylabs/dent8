@@ -57,8 +57,11 @@ pass are folded into the topical docs and noted below.
    rank 1 (verified non-resurrection, exhaustive + Kani harness), rank 2
    (policy-counterfactual replay: `EpistemicPolicy` + `replay_*_with_policy` +
    `diff_states`), and rank 3 (earned entrenchment: authority-weighted corroboration +
-   `unearned_supersessions` audit). Remaining for rank 3: the challenge-survival half
-   (recorded refusals) and a write-time gate. → [novelty.md](novelty.md)
+   `unearned_supersessions` audit + the challenge-survival half — ADR 0015: rejected
+   challenges recorded as `claim.challenge_rejected` feeding `ClaimState.survived_challenges`,
+   on by default, plus the opt-in earned-supersession gate `DENT8_ENTRENCHMENT_GATE`).
+   Remaining for rank 3: feeding survived challenges *into* arbitration.
+   → [novelty.md](novelty.md)
 
 ## What's useful for the project (concrete adoptions)
 
@@ -87,7 +90,9 @@ pass are folded into the topical docs and noted below.
 - **Critic corrections folded in:** confidence float hazard was overstated
   (`Confidence` is `u16`; only `ClaimValue::Json` was at risk, now canonicalized via the
   `CanonicalJson` newtype); the temporal-validity
-  matrix cell downgraded ✓→◐ (no `valid_to`; freshness evaluator has since been built); TTL/authority
+  matrix cell downgraded ✓→◐ (at the time: no `valid_to`, freshness-only; the freshness
+  evaluator, and in v0.2.0 `valid_to` intervals plus `--as-of`/`--valid-at` time-travel reads
+  per ADR 0016, have since shipped); TTL/authority
   arbitration flagged as design-only everywhere they are claimed; "AWS originated the
   P language" reworded (P: Microsoft/UC Berkeley); LOC corrected to ~470 non-test.
 
@@ -98,8 +103,9 @@ These are the reviewer objections the project must pre-empt, not hide:
 1. **Authority-weighted supersession is THE differentiator vs Graphiti's recency-only
    arbitration — now implemented, enforced at the write boundary, and runnable through
    CLI/MCP over file, SQLite, and DB-verified Postgres stores** (no longer "zero code").
-   The remaining honesty caveat is product hardening: the *earned*-entrenchment
-   challenge-survival half still needs recorded refusals, and production deployments
+   The remaining honesty caveat is product hardening: survived challenges are now
+   *recorded* (the `claim.challenge_rejected` event feeding `ClaimState::survived_challenges`,
+   on by default) but not yet consulted by the supersession gate, and production deployments
    still need operated witness and source-key workflows.
 2. **Three of four "combination" ingredients are individually prior art** (replay =
    event sourcing; hash-chain = transparency logs; bitemporal/provenance = SQL:2011/
@@ -108,9 +114,13 @@ These are the reviewer objections the project must pre-empt, not hide:
 3. **Belief-base framing is vocabulary, not a novel mechanism** — bitemporal DBs
    already give "history matters, retract doesn't resurrect." Claim it as principled
    grounding, not as a contribution.
-4. **On the temporal axis dent8 is currently *behind* Zep** (no `valid_to` interval;
-   TTL freshness runs on reads but full bitemporal validity does not). The matrix must
-   not overclaim parity.
+4. **On the temporal axis dent8 now has closed valid-time intervals** (ADR 0016):
+   `valid_to` via `--valid-from`/`--valid-to`, an elapsed `valid_to` bounds read-time
+   freshness like a TTL (`expires_at` is the earliest bound), plus `--as-of`/`--valid-at`
+   time-travel reads — so it is no longer *behind* Zep on the missing-`valid_to` axis. Frame
+   the remaining difference precisely: dent8 treats `valid_to` as an asserted read-time
+   freshness/validity bound, not a running lifecycle edge-invalidation — so state the exact
+   bitemporal gap rather than claiming either a missing interval or full parity.
 5. **Deterministic replay alone is not unique** — Zep/Graphiti reconstruct from
    episodes too. The precise differentiator is the *typed, hash-verified,
    single-source-of-truth* log.

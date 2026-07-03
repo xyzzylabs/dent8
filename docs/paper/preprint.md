@@ -131,9 +131,9 @@ kind+key), a predicate, an optional value, a `Confidence` (probabilistic, `u16`
 milliprobability), an `Authority` (an ordered epistemic level `Unknown < Low < Medium <
 High < Canonical`, with optional issuer/scope), a `Ttl`, mandatory provenance (source,
 actor, tool, run, input digest, `recorded_at`), evidence references, and the bitemporal
-`observed_at`/`valid_from` axes. Its `kind` is one of `Asserted`, `Reinforced`,
+`observed_at`/`valid_from`/`valid_to` axes. Its `kind` is one of `Asserted`, `Reinforced`,
 `Superseded{by, reason}`, `Contradicted{by, basis}`, `Retracted{reason}`, `Expired`,
-`Retrieved`, or `UsedInDecision`.
+`Retrieved`, `UsedInDecision`, or `ChallengeRejected{challenge, by, rejection}`.
 
 The believed state of a claim is `fold(apply_event, events)` over its ordered stream.
 `apply_event` is a total function from `(Option<ClaimState>, &ClaimEvent)` to
@@ -314,8 +314,11 @@ concurrency.
 - **The witness is a primitive, not yet an operated service.** Resistance requires an
   off-writer witness to issue and publish monotonic heads. The symmetric HMAC anchor and
   Ed25519 signed-tree-head form are built, but a writer who holds the signing key, never
-  anchors, or replays a stale anchor gets no resistance. Packaging, monitoring, and key
-  rotation remain product work.
+  anchors, or replays a stale anchor gets no resistance. The operated split
+  (signer/publisher/monitor) is packaged (`examples/witness-operated/`: Docker Compose +
+  systemd, with monitoring and key-rotation guidance) and the grant/source-key lifecycle
+  (rotation + revocation, ADR 0014) is built; hosting it as a managed service remains
+  product work.
 - **Operational persistence exists, but production operations are not done.** The file
   backend is single-writer and non-transactional; SQLite is an embedded backend; Postgres
   is DB-verified with transactional append and projection materialization. Remaining
@@ -353,10 +356,10 @@ external-witness deployment (§6, §10). The honest frontier is the operational 
 **caller authentication operations** — the source→authority *ceiling* authz is built
 (`dent8 authority` rejects an over-ceiling write at the write boundary), and the feature-gated
 signed identity primitive is built (`dent8 identity` issuer-signed grants + per-write
-source-key possession), but key distribution/rotation and external signers remain operational
-work — a published anchor cadence (the asymmetric signed-tree-head primitive is built and
-runnable as `dent8 witness`; the operated signing/publishing witness is not), a `valid_to` validity interval
-(reads already apply TTL freshness — `explain` flags stale facts), the official `rmcp` SDK
+source-key possession, with rotation/revocation and grant-log history shipped — ADR 0014),
+but fleet key distribution and external/hardware signers remain operational
+work — a hosted/managed witness service (the cadence signer `witness serve` and
+`witness publish`/`verify-published` ship with a packaged operated split), the official `rmcp` SDK
 (the v0 server already does tools, resources, and batches), and a broader
 property/fixture suite.
 A short workshop paper on the model and belief-revision semantics is claimable now; the

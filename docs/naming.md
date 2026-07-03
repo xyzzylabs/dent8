@@ -58,6 +58,7 @@ Event type strings use dotted names:
 - `claim.retracted`
 - `claim.retrieved`
 - `claim.used_in_decision`
+- `claim.challenge_rejected`
 
 Use past-tense event names because events are immutable facts. Commands can be imperative; events should describe what happened.
 

@@ -5,10 +5,12 @@ Date: 2026-06-26
 ## Status
 
 Accepted; **implemented in `dent8-core`** (supersession arbitration + canonical
-hard-alarm + non-resurrection proof) and **earned entrenchment v0** (authority-weighted
-corroboration + the `unearned_supersessions` entity-level audit). Remaining future: the
-challenge-survival half of earned entrenchment (needs recorded refusals), uniqueness-
-constrained predicates, and transactional store-layer enforcement.
+hard-alarm + non-resurrection proof), **earned entrenchment v0** (authority-weighted
+corroboration + the `unearned_supersessions` entity-level audit), and **survived-challenge
+recording** ([ADR 0015](0015-survived-challenge-recording.md): `ChallengeRejected` events +
+Sybil-resistant `ClaimState.survived_challenges`, plus the opt-in earned-supersession gate).
+Remaining future: uniqueness-constrained predicates and transactional store-layer
+enforcement.
 
 ## Context
 

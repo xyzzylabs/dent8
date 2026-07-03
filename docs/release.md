@@ -1,6 +1,6 @@
 # Release checklist
 
-This is the v0.1.x release gate. Keep it small and mechanical: the goal is to ship a
+This is the release gate. Keep it small and mechanical: the goal is to ship a
 correct, installable memory-integrity tool, not to add new mechanisms during release prep.
 
 ## Package shape
@@ -56,8 +56,9 @@ verify-published`.
 
 ## Packaging
 
-All workspace crates that depend on another dent8 crate must specify both `path` and
-`version = "0.1.0"` so crates.io packaging can replace local paths with published versions.
+All workspace crates that depend on another dent8 crate must specify both `path` and a
+`version` matching the current workspace version (currently `0.2.0`) so crates.io packaging
+can replace local paths with published versions.
 
 Fast manifest/package check:
 
@@ -97,12 +98,14 @@ dent8 --version
 
 ## Operated witness boundary
 
-Do not block v0.1.0 on a hosted witness service. The release includes the operated recipe:
+Do not block a release on a hosted witness service. The release includes the operated recipe:
 
 - [`docs/witness.md`](witness.md) explains writer/signer/monitor roles and JSON monitor output.
 - [`examples/witness-operated/`](../examples/witness-operated/) packages the split with Docker
   Compose and systemd examples.
 
-The v0.1.0 claim is: dent8 ships the witness primitive and an operated deployment recipe. The
-remaining product work is managed infrastructure, publication retention, monitoring, and key
-rotation automation.
+The claim is: dent8 ships the witness primitive (covering both the event log and, as of
+v0.2.0, the grant log), retains event- and grant-log heads off-host via
+`witness publish`/`verify-published` (`--grants` for the grant lane), and an operated
+deployment recipe. The remaining product work is managed infrastructure, monitoring, and
+key-rotation automation.
