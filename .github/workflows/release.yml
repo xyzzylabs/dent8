@@ -85,6 +85,10 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
+        # shell: bash is load-bearing — without it the Windows runner uses PowerShell, which
+        # parses `>/dev/null` as a redirect to `D:\dev\null` and fails. (The Upload step below
+        # already pins bash; this step was missed.)
+        shell: bash
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --title "dent8 ${GITHUB_REF_NAME}" --generate-notes
