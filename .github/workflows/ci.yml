@@ -40,6 +40,11 @@ jobs:
       # The CLI's witness commands (Ed25519 signed tree heads) are feature-gated; lint + test.
       - name: Clippy CLI witness feature
         run: cargo clippy -p dent8 --features witness --all-targets -- -D warnings
+      # Witness *without* identity: the grant-log lane's `#[cfg(not(feature = "identity"))]`
+      # no-op arms compile only here — neither the default-witness nor the plain
+      # no-default-features step reaches them.
+      - name: Clippy CLI witness feature (no default features)
+        run: cargo clippy -p dent8 --no-default-features --features witness --all-targets -- -D warnings
       # The asymmetric (signed) anchor is feature-gated; lint + test it too.
       - name: Clippy signed-anchor feature
         run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
@@ -73,6 +78,10 @@ jobs:
         run: cargo test -p dent8-core --features signed-anchor
       - name: Test CLI witness feature
         run: cargo test -p dent8 --features witness
+      # Witness log signing/verification must keep working when the grant-log lane is
+      # compiled out (the no-op fallback arms).
+      - name: Test CLI witness feature (no default features)
+        run: cargo test -p dent8 --no-default-features --features witness
       - name: Test export crate
         run: cargo test -p dent8-export
 

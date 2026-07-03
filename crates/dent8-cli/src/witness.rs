@@ -1402,85 +1402,6 @@ fn write_secret(path: &str, contents: &str) -> Result<(), String> {
     writeln!(file, "{contents}").map_err(|error| format!("cannot write {path}: {error}"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{WitnessFault, WitnessVerdict, verify_heads};
-    use dent8_core::{
-        AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, SignedTreeHead, TimestampMillis,
-        sign_head,
-    };
-    use ed25519_dalek::SigningKey;
-
-    fn event(event_id: &str, claim_id: &str, value: &str) -> ClaimEvent {
-        crate::ops::build_event(
-            event_id,
-            claim_id,
-            "repo",
-            "myproj",
-            "database",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text(value.to_string())),
-            "source:owner",
-            AuthorityLevel::High,
-            TimestampMillis::from_unix_millis(1),
-        )
-        .expect("event")
-    }
-
-    fn signed(events: &[ClaimEvent], key: &SigningKey) -> SignedTreeHead {
-        sign_head(events, key).expect("sign")
-    }
-
-    #[test]
-    fn a_witnessed_append_only_log_verifies_and_a_rewrite_or_rollback_is_caught() {
-        let key = SigningKey::from_bytes(&[7u8; 32]);
-        let verifying = key.verifying_key();
-        let log = vec![
-            event("event:0", "claim:a", "postgres"),
-            event("event:1", "claim:b", "redis"),
-            event("event:2", "claim:c", "kafka"),
-        ];
-
-        // A witness signs at count 1, then again at count 3 (the log grew, append-only).
-        let sth1 = signed(&log[..1], &key);
-        let sth3 = signed(&log[..3], &key);
-        let heads = vec![sth1.clone(), sth3.clone()];
-
-        // Past + present heads both verify against the grown log's matching prefixes.
-        assert!(verify_heads(&log, &heads, &verifying).is_ok());
-
-        // TAMPER: rewrite an already-witnessed event (event:1 redis -> mysql). The prefix at
-        // count 3 no longer matches sth3's signature.
-        let mut rewritten = log.clone();
-        rewritten[1] = event("event:1", "claim:b", "mysql");
-        assert!(matches!(
-            verify_heads(&rewritten, &heads, &verifying),
-            Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
-        ));
-
-        // ROLLBACK: the log was truncated below a witnessed count (only 2 events, but sth3
-        // committed to 3).
-        assert!(matches!(
-            verify_heads(&log[..2], &heads, &verifying),
-            Err(WitnessFault::Detected(WitnessVerdict::Rollback, message)) if message.contains("ROLLBACK")
-        ));
-
-        // ROLLBACK: a witness log whose counts go backwards (3 then 1) is itself suspect.
-        let reordered = vec![sth3, sth1];
-        assert!(matches!(
-            verify_heads(&log, &reordered, &verifying),
-            Err(WitnessFault::Detected(WitnessVerdict::Rollback, message)) if message.contains("ROLLBACK")
-        ));
-
-        // Wrong public key: an attacker's key does not verify the witness's heads.
-        let attacker = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
-        assert!(matches!(
-            verify_heads(&log, &heads, &attacker),
-            Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
-        ));
-    }
-}
-
 // ---- grant-log witness lane (ADR 0014 follow-up) --------------------------------------
 //
 // The grant log is issuer-signed and hash-chained, but its TAIL can be truncated (hiding a
@@ -1566,7 +1487,10 @@ fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<String>, String> {
     )))
 }
 
+// The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
+// errors are real.
 #[cfg(not(feature = "identity"))]
+#[allow(clippy::unnecessary_wraps)]
 fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<String>, String> {
     Ok(None)
 }
@@ -1672,7 +1596,89 @@ fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, Wit
     }
 }
 
+// The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
+// faults are real.
 #[cfg(not(feature = "identity"))]
+#[allow(clippy::unnecessary_wraps)]
 fn verify_grant_log_heads(_verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WitnessFault, WitnessVerdict, verify_heads};
+    use dent8_core::{
+        AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, SignedTreeHead, TimestampMillis,
+        sign_head,
+    };
+    use ed25519_dalek::SigningKey;
+
+    fn event(event_id: &str, claim_id: &str, value: &str) -> ClaimEvent {
+        crate::ops::build_event(
+            event_id,
+            claim_id,
+            "repo",
+            "myproj",
+            "database",
+            ClaimEventKind::Asserted,
+            Some(ClaimValue::Text(value.to_string())),
+            "source:owner",
+            AuthorityLevel::High,
+            TimestampMillis::from_unix_millis(1),
+        )
+        .expect("event")
+    }
+
+    fn signed(events: &[ClaimEvent], key: &SigningKey) -> SignedTreeHead {
+        sign_head(events, key).expect("sign")
+    }
+
+    #[test]
+    fn a_witnessed_append_only_log_verifies_and_a_rewrite_or_rollback_is_caught() {
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let verifying = key.verifying_key();
+        let log = vec![
+            event("event:0", "claim:a", "postgres"),
+            event("event:1", "claim:b", "redis"),
+            event("event:2", "claim:c", "kafka"),
+        ];
+
+        // A witness signs at count 1, then again at count 3 (the log grew, append-only).
+        let sth1 = signed(&log[..1], &key);
+        let sth3 = signed(&log[..3], &key);
+        let heads = vec![sth1.clone(), sth3.clone()];
+
+        // Past + present heads both verify against the grown log's matching prefixes.
+        assert!(verify_heads(&log, &heads, &verifying).is_ok());
+
+        // TAMPER: rewrite an already-witnessed event (event:1 redis -> mysql). The prefix at
+        // count 3 no longer matches sth3's signature.
+        let mut rewritten = log.clone();
+        rewritten[1] = event("event:1", "claim:b", "mysql");
+        assert!(matches!(
+            verify_heads(&rewritten, &heads, &verifying),
+            Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
+        ));
+
+        // ROLLBACK: the log was truncated below a witnessed count (only 2 events, but sth3
+        // committed to 3).
+        assert!(matches!(
+            verify_heads(&log[..2], &heads, &verifying),
+            Err(WitnessFault::Detected(WitnessVerdict::Rollback, message)) if message.contains("ROLLBACK")
+        ));
+
+        // ROLLBACK: a witness log whose counts go backwards (3 then 1) is itself suspect.
+        let reordered = vec![sth3, sth1];
+        assert!(matches!(
+            verify_heads(&log, &reordered, &verifying),
+            Err(WitnessFault::Detected(WitnessVerdict::Rollback, message)) if message.contains("ROLLBACK")
+        ));
+
+        // Wrong public key: an attacker's key does not verify the witness's heads.
+        let attacker = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
+        assert!(matches!(
+            verify_heads(&log, &heads, &attacker),
+            Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
+        ));
+    }
 }
