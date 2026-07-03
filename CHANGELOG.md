@@ -9,7 +9,20 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Grant history + revocation** ([ADR 0014](docs/decisions/0014-grant-history-and-revocation.md)):
+  an append-only, issuer-signed, hash-chained grant log in the identity bundle
+  (`grant-log.jsonl`, `DENT8_GRANT_LOG`). Grant lifecycle commands (`init --identity`,
+  `bootstrap`, `rotate-source`, `agent add`) record `issued`/`revoked` history (a rotation
+  lands revoked+issued as one write); the new `dent8 identity revoke` ends trust in a source
+  **without** a replacement (the missing compromise response — the write path then fails
+  closed for that source), and `dent8 identity backfill-grant-log` seeds records for grants
+  that predate the log (explicitly stamped *now*, never backdated). `dent8 verify` now
+  resolves each attested event's **entitlement at write time** — entitled / unentitled
+  (an integrity failure) / unknown (no history, reported honestly) — so rotation no longer
+  destroys the evidence needed to audit old writes. `identity status`/`doctor` gain a
+  grant-log consistency line.
 
 ## [0.1.0] - 2026-07-03
 

@@ -55,6 +55,309 @@ struct ActiveSourceGrant {
     public_key: String,
 }
 
+/// One line of the append-only grant log (ADR 0014): the issuer-signed history that lets
+/// `verify` decide *entitlement at write time* for attested events. `record_signature` is the
+/// issuer's Ed25519 over the domain-framed payload (everything except the signature and the
+/// chain link); `previous_record_hash` chains the log so deletion/reordering is
+/// tamper-evident. Strict deserialization: this is a security artifact.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GrantRecord {
+    action: GrantAction,
+    /// The `SignedSourceGrant.signature` this record is about — the grant's stable id.
+    grant_signature: String,
+    source: String,
+    public_key: String,
+    max_authority: AuthorityLevel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_at_ms: Option<i64>,
+    at_ms: i64,
+    issuer: String,
+    record_signature: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous_record_hash: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum GrantAction {
+    #[serde(rename = "issued")]
+    Issued,
+    #[serde(rename = "revoked")]
+    Revoked,
+}
+
+/// The exact bytes a grant record's issuer signature covers: the record minus the signature
+/// and chain link, domain-framed like every other dent8 signing context.
+#[derive(Serialize)]
+struct GrantRecordPayload<'a> {
+    action: GrantAction,
+    grant_signature: &'a str,
+    source: &'a str,
+    public_key: &'a str,
+    max_authority: AuthorityLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at_ms: Option<i64>,
+    at_ms: i64,
+    issuer: &'a str,
+}
+
+const GRANT_LOG_FILE: &str = "grant-log.jsonl";
+const GRANT_RECORD_DOMAIN: &[u8] = b"dent8.grant-record.v1\0";
+
+fn grant_record_payload(record: &GrantRecord) -> GrantRecordPayload<'_> {
+    GrantRecordPayload {
+        action: record.action,
+        grant_signature: &record.grant_signature,
+        source: &record.source,
+        public_key: &record.public_key,
+        max_authority: record.max_authority,
+        scope: record.scope.as_deref(),
+        expires_at_ms: record.expires_at_ms,
+        at_ms: record.at_ms,
+        issuer: &record.issuer,
+    }
+}
+
+fn grant_record_line_hash(line: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(line.as_bytes()))
+}
+
+fn grant_log_path_in(dir: &Path) -> PathBuf {
+    dir.join(GRANT_LOG_FILE)
+}
+
+/// The grant log a verifier should consult: `DENT8_GRANT_LOG`, or the sibling of the trust
+/// registry when one exists (the same discovery shape as the active-grant registry).
+fn grant_log_path_for_verify() -> Option<PathBuf> {
+    if let Some(path) = nonempty_env("DENT8_GRANT_LOG") {
+        return Some(PathBuf::from(path));
+    }
+    let candidate = Path::new(&trust_path()).parent().map_or_else(
+        || PathBuf::from(GRANT_LOG_FILE),
+        |parent| parent.join(GRANT_LOG_FILE),
+    );
+    candidate.exists().then_some(candidate)
+}
+
+/// Load the grant log, verifying line-to-line chain continuity. Signature verification
+/// against the trust registry is [`verify_grant_records`] (a verifier may hold the log
+/// before it holds trust).
+fn load_grant_records(path: &Path) -> Result<Vec<GrantRecord>, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let mut records = Vec::new();
+    let mut previous_hash: Option<String> = None;
+    for (index, line) in contents.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: GrantRecord = serde_json::from_str(line).map_err(|error| {
+            format!(
+                "{}:{}: corrupt grant record: {error}",
+                path.display(),
+                index + 1
+            )
+        })?;
+        if record.previous_record_hash != previous_hash {
+            return Err(format!(
+                "{}:{}: grant log chain break (a record was removed, reordered, or edited)",
+                path.display(),
+                index + 1
+            ));
+        }
+        previous_hash = Some(grant_record_line_hash(line));
+        records.push(record);
+    }
+    Ok(records)
+}
+
+/// Verify every record's issuer signature against the trust registry.
+fn verify_grant_records(records: &[GrantRecord], trust: &TrustedIssuers) -> Result<(), String> {
+    for record in records {
+        let issuer = trust
+            .issuers
+            .get(&record.issuer)
+            .ok_or_else(|| format!("grant log: untrusted record issuer {}", record.issuer))?;
+        let key = verifying_key_from_hex(&issuer.public_key)?;
+        let signature = signature_from_hex(&record.record_signature)?;
+        key.verify(
+            &framed(GRANT_RECORD_DOMAIN, &grant_record_payload(record))?,
+            &signature,
+        )
+        .map_err(|error| {
+            format!(
+                "grant log: record for {} ({:?} at {}) does not verify: {error}",
+                record.source, record.action, record.at_ms
+            )
+        })?;
+    }
+    Ok(())
+}
+
+/// Append issuer-signed lifecycle records as **one write** (a rotation's revoked+issued pair
+/// must land together or not at all). Chain-checks the existing log first, so a tampered log
+/// refuses further appends rather than papering over the break.
+fn append_grant_records(
+    path: &Path,
+    issuer: &str,
+    issuer_key: &SigningKey,
+    entries: &[(GrantAction, &SignedSourceGrant)],
+    at_ms: i64,
+) -> Result<(), String> {
+    load_grant_records(path)?;
+    let mut previous_record_hash = match std::fs::read_to_string(path) {
+        Ok(contents) => contents
+            .lines()
+            .rfind(|line| !line.trim().is_empty())
+            .map(grant_record_line_hash),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    let mut buffer = String::new();
+    for (action, grant) in entries {
+        let mut record = GrantRecord {
+            action: *action,
+            grant_signature: grant.signature.clone(),
+            source: grant.grant.source.clone(),
+            public_key: grant.grant.public_key.clone(),
+            max_authority: grant.grant.max_authority,
+            scope: grant.grant.scope.clone(),
+            expires_at_ms: grant.grant.expires_at_ms,
+            at_ms,
+            issuer: issuer.to_string(),
+            record_signature: String::new(),
+            previous_record_hash: previous_record_hash.take(),
+        };
+        let signature = issuer_key.sign(&framed(
+            GRANT_RECORD_DOMAIN,
+            &grant_record_payload(&record),
+        )?);
+        record.record_signature = hex::encode(signature.to_bytes());
+        let line = serde_json::to_string(&record)
+            .map_err(|error| format!("serialize grant record: {error}"))?;
+        previous_record_hash = Some(grant_record_line_hash(&line));
+        buffer.push_str(&line);
+        buffer.push('\n');
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    file.write_all(buffer.as_bytes())
+        .map_err(|error| format!("cannot append to {}: {error}", path.display()))
+}
+
+/// Whether the log already has an `issued` record for this exact grant (used to keep reuse
+/// paths like `agent add` idempotent).
+fn has_issued_record(path: &Path, grant_signature: &str) -> Result<bool, String> {
+    Ok(load_grant_records(path)?.iter().any(|record| {
+        record.action == GrantAction::Issued && record.grant_signature == grant_signature
+    }))
+}
+
+/// The verifier-side verdict for one attested event (ADR 0014).
+pub(crate) enum Entitlement {
+    Entitled,
+    Unentitled(String),
+    /// No history for this (source, key) — pre-history writes or a foreign bundle. Reported
+    /// honestly, never failed: absence of history is not evidence of a violation.
+    Unknown,
+}
+
+/// Resolve entitlement of (`source`, `public_key`) for a write at `at_ms` against the grant
+/// history: the latest issuance at or before the write must not be revoked before it, not
+/// expired at it, and must cover the claimed authority and subject scope.
+pub(crate) fn entitlement_at(
+    records: &[GrantRecord],
+    source: &str,
+    public_key: &str,
+    authority: AuthorityLevel,
+    subject: &str,
+    at_ms: i64,
+) -> Entitlement {
+    let mut active: Option<&GrantRecord> = None;
+    let mut revoked_before = false;
+    for record in records {
+        if record.source != source || record.public_key != public_key || record.at_ms > at_ms {
+            continue;
+        }
+        match record.action {
+            GrantAction::Issued => {
+                active = Some(record);
+                revoked_before = false;
+            }
+            GrantAction::Revoked => {
+                if active.is_some_and(|current| current.grant_signature == record.grant_signature) {
+                    active = None;
+                    revoked_before = true;
+                }
+            }
+        }
+    }
+    let Some(grant) = active else {
+        // Only an issuance that was explicitly ENDED before the write positively excludes it.
+        // "No issuance at or before T" is indistinguishable from "history started later"
+        // (e.g. a backfilled log), so it stays honest Unknown — never a fabricated violation.
+        if revoked_before {
+            return Entitlement::Unentitled(format!(
+                "the grant for {source} had been revoked before {at_ms}"
+            ));
+        }
+        return Entitlement::Unknown;
+    };
+    if let Some(expires_at) = grant.expires_at_ms
+        && at_ms > expires_at
+    {
+        return Entitlement::Unentitled(format!(
+            "the grant active for {source} had expired at {expires_at}"
+        ));
+    }
+    if authority > grant.max_authority {
+        return Entitlement::Unentitled(format!(
+            "the write claims {authority:?} but the active grant for {source} caps at {:?}",
+            grant.max_authority
+        ));
+    }
+    if let Some(scope) = grant.scope.as_deref()
+        && scope != "*"
+        && scope != subject
+    {
+        return Entitlement::Unentitled(format!(
+            "the active grant for {source} is scoped to {scope:?}, not {subject}"
+        ));
+    }
+    Entitlement::Entitled
+}
+
+/// Everything `verify` needs from the grant history, loaded and integrity-checked (chain +
+/// issuer signatures). `Ok(None)` = no grant log configured/present or an empty one.
+pub(crate) fn load_grant_history_for_verify() -> Result<Option<Vec<GrantRecord>>, String> {
+    let Some(path) = grant_log_path_for_verify() else {
+        return Ok(None);
+    };
+    let records = load_grant_records(&path)?;
+    if records.is_empty() {
+        return Ok(None);
+    }
+    let Some(trust) = load_trust_at(&trust_path(), false)? else {
+        return Err(format!(
+            "grant log {} is present but there is no trust registry to verify its records",
+            path.display()
+        ));
+    };
+    verify_grant_records(&records, &trust)?;
+    Ok(Some(records))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SourceGrantPayload {
@@ -1200,6 +1503,7 @@ fn identity_status(
         Err(error) => lines.push(DoctorLine::fail(format!("grant: {error}"))),
     }
     lines.extend(active_grant_status(&paths.active_grants_file, &grant));
+    lines.extend(grant_log_status(&paths.dir, &grant));
     lines.extend(expiration_lines(&grant.grant, expires_warning_days));
     lines.extend(identity_key_status(&paths.source_key_path, &grant));
     lines.extend(issuer_key_status(
@@ -1589,6 +1893,19 @@ fn issue_source_identity(
     if active_created {
         rollback.record_file(&paths.active_grants_file);
     }
+    // Grant history (ADR 0014): record the issuance.
+    let grant_log = grant_log_path_in(&paths.dir);
+    let grant_log_created = !grant_log.exists();
+    append_grant_records(
+        &grant_log,
+        &signed_grant.grant.issuer,
+        &issuer_signing,
+        &[(GrantAction::Issued, &signed_grant)],
+        now_millis().as_unix_millis(),
+    )?;
+    if grant_log_created {
+        rollback.record_file(&grant_log);
+    }
     rollback.commit();
 
     Ok(SourceIdentityOutput {
@@ -1715,6 +2032,18 @@ fn rotate_source_bundle(
     rollback.record_file(&paths.active_grants_file);
     write_identity_env(&paths)?;
     rollback.record_file(&paths.env_file);
+    // Grant history (ADR 0014): a rotation is a revocation of the old grant plus an issuance
+    // of the replacement, landed as one write. A failed append fails the rotation.
+    append_grant_records(
+        &grant_log_path_in(&paths.dir),
+        &old_grant.grant.issuer,
+        &issuer_key,
+        &[
+            (GrantAction::Revoked, &old_grant),
+            (GrantAction::Issued, &signed),
+        ],
+        now_millis().as_unix_millis(),
+    )?;
     remove_rotated_private_key_backup(&key_backup)?;
     rollback.commit();
 
@@ -2432,6 +2761,19 @@ pub(crate) fn bootstrap_bundle(
         .insert(source.to_string(), active_source_grant_for(&signed_grant));
     write_active_grants_path(&plan.active_grants_file, &active)?;
     rollback.record_file(&plan.active_grants_file);
+    // Grant history (ADR 0014): record the issuance.
+    let grant_log = grant_log_path_in(&plan.dir);
+    let grant_log_created = !grant_log.exists();
+    append_grant_records(
+        &grant_log,
+        issuer,
+        &issuer_key,
+        &[(GrantAction::Issued, &signed_grant)],
+        now_millis().as_unix_millis(),
+    )?;
+    if grant_log_created {
+        rollback.record_file(&grant_log);
+    }
 
     let env_contents = format!(
         "# dent8 signed source identity environment\n\
@@ -3123,4 +3465,262 @@ fn check_secret_permissions(path: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+// ---- grant revocation + history backfill (ADR 0014) ----------------------------------
+
+pub(crate) struct RevokeOutput {
+    source: String,
+    grant_log: PathBuf,
+    active_grants_file: PathBuf,
+}
+
+impl RevokeOutput {
+    fn message(&self) -> String {
+        format!(
+            "revoked signed identity for {}\n  grant log: {}\n  active grants: {} (entry removed — writes as {} now fail closed)\n\nThe revoked key material stays on disk as evidence; issue a replacement with\n`dent8 identity rotate-source` or `dent8 agent add` when the source should write again.",
+            self.source,
+            self.grant_log.display(),
+            self.active_grants_file.display(),
+            self.source,
+        )
+    }
+}
+
+/// `dent8 identity revoke`: end trust in a source's current grant **without** issuing a
+/// replacement — the compromise response rotation cannot express. Appends an issuer-signed
+/// `revoked` record and removes the source from the active-grant registry (the write path
+/// then fails closed for that source).
+pub(crate) fn revoke(
+    dir: &str,
+    source: &str,
+    raw_issuer_key: Option<&str>,
+    output: CliOutput,
+) -> i32 {
+    match revoke_bundle(dir, source, raw_issuer_key) {
+        Ok(result) => match output {
+            CliOutput::Text => {
+                println!("{}", result.message());
+                0
+            }
+            CliOutput::Json => print_json_stdout(&serde_json::json!({
+                "status": "ok",
+                "tool": "identity revoke",
+                "source": result.source,
+                "grant_log": path_string(&result.grant_log),
+                "active_grants_file": path_string(&result.active_grants_file),
+                "message": result.message(),
+            })),
+        },
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &serde_json::json!({
+                    "status": "failed",
+                    "tool": "identity revoke",
+                    "source": source,
+                    "message": error,
+                }),
+                1,
+            ),
+        },
+    }
+}
+
+fn revoke_bundle(
+    dir: &str,
+    source: &str,
+    raw_issuer_key: Option<&str>,
+) -> Result<RevokeOutput, String> {
+    parse_source(source)?;
+    let paths = identity_bundle_paths(dir, Some(source))?;
+    let trust = load_trust_at(&path_string(&paths.trust_file), true)?.ok_or_else(|| {
+        format!(
+            "identity trust registry required at {}",
+            paths.trust_file.display()
+        )
+    })?;
+    let grant = load_grant(&path_string(&paths.grant_file))?;
+    verify_grant_signature(&grant, &trust)?;
+    if grant.grant.source != source {
+        return Err(format!(
+            "active grant is for {}, not {source}",
+            grant.grant.source
+        ));
+    }
+    let issuer_key_path = bootstrap_issuer_key_path(raw_issuer_key, &paths.dir)?;
+    if !issuer_key_path.exists() {
+        return Err(format!(
+            "identity issuer key {} does not exist; pass --issuer-key for the trusted issuer",
+            issuer_key_path.display()
+        ));
+    }
+    let issuer_key =
+        load_issuer_signing_key_matching_trust(&issuer_key_path, &grant.grant.issuer, &trust)?;
+
+    let grant_log = grant_log_path_in(&paths.dir);
+    append_grant_records(
+        &grant_log,
+        &grant.grant.issuer,
+        &issuer_key,
+        &[(GrantAction::Revoked, &grant)],
+        now_millis().as_unix_millis(),
+    )?;
+    let mut active = load_active_grants_at(&paths.active_grants_file, false)?.unwrap_or_default();
+    active.sources.remove(source);
+    write_active_grants_path(&paths.active_grants_file, &active)?;
+    Ok(RevokeOutput {
+        source: source.to_string(),
+        grant_log,
+        active_grants_file: paths.active_grants_file,
+    })
+}
+
+/// `dent8 identity backfill-grant-log`: seed `issued` records (at **now**) for the bundle's
+/// current grants that predate the grant log. Deliberately does not invent history —
+/// entitlement before the backfill stays *unknown* (ADR 0014).
+pub(crate) fn backfill_grant_log(
+    dir: &str,
+    raw_issuer_key: Option<&str>,
+    output: CliOutput,
+) -> i32 {
+    match backfill_grant_log_inner(dir, raw_issuer_key) {
+        Ok((appended, skipped, grant_log)) => {
+            let message = format!(
+                "grant log {}: backfilled {appended} grant(s), {skipped} already recorded\n\
+                 Entitlement before this backfill remains UNKNOWN by design — records are\n\
+                 stamped now, not backdated.",
+                grant_log.display()
+            );
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "tool": "identity backfill-grant-log",
+                    "grant_log": path_string(&grant_log),
+                    "appended": appended,
+                    "already_recorded": skipped,
+                    "message": message,
+                })),
+            }
+        }
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => print_json_stderr(
+                &serde_json::json!({
+                    "status": "failed",
+                    "tool": "identity backfill-grant-log",
+                    "message": error,
+                }),
+                1,
+            ),
+        },
+    }
+}
+
+fn backfill_grant_log_inner(
+    dir: &str,
+    raw_issuer_key: Option<&str>,
+) -> Result<(usize, usize, PathBuf), String> {
+    let bundle = absolute_existing_dir(&PathBuf::from(dir))?;
+    let trust_file = bundle.join("trust.json");
+    let trust = load_trust_at(&path_string(&trust_file), true)?.ok_or_else(|| {
+        format!(
+            "identity trust registry required at {}",
+            trust_file.display()
+        )
+    })?;
+    let grants_dir = bundle.join("grants");
+    let mut entries: Vec<SignedSourceGrant> = Vec::new();
+    let read_dir = std::fs::read_dir(&grants_dir)
+        .map_err(|error| format!("cannot read {}: {error}", grants_dir.display()))?;
+    for entry in read_dir {
+        let entry = entry.map_err(|error| format!("cannot read grants dir: {error}"))?;
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            let grant = load_grant(&path_string(&path))?;
+            verify_grant_signature(&grant, &trust)?;
+            entries.push(grant);
+        }
+    }
+    if entries.is_empty() {
+        return Err(format!("no grants found under {}", grants_dir.display()));
+    }
+    let issuer_key_path = bootstrap_issuer_key_path(raw_issuer_key, &bundle)?;
+    if !issuer_key_path.exists() {
+        return Err(format!(
+            "identity issuer key {} does not exist; pass --issuer-key for the trusted issuer",
+            issuer_key_path.display()
+        ));
+    }
+    let grant_log = grant_log_path_in(&bundle);
+    let mut appended = 0usize;
+    let mut skipped = 0usize;
+    for grant in &entries {
+        if has_issued_record(&grant_log, &grant.signature)? {
+            skipped += 1;
+            continue;
+        }
+        let issuer_key =
+            load_issuer_signing_key_matching_trust(&issuer_key_path, &grant.grant.issuer, &trust)?;
+        append_grant_records(
+            &grant_log,
+            &grant.grant.issuer,
+            &issuer_key,
+            &[(GrantAction::Issued, grant)],
+            now_millis().as_unix_millis(),
+        )?;
+        appended += 1;
+    }
+    Ok((appended, skipped, grant_log))
+}
+
+/// ADR 0014 consistency line for `identity status`/`doctor`: is there a grant log, and does
+/// it cover the *current* grant with an unrevoked issuance?
+fn grant_log_status(dir: &Path, grant: &SignedSourceGrant) -> Vec<DoctorLine> {
+    let path = grant_log_path_in(dir);
+    if !path.exists() {
+        return vec![DoctorLine::warn(format!(
+            "grant log: none at {} — entitlement-at-write-time is unverifiable; run `dent8 \
+             identity backfill-grant-log`",
+            path.display()
+        ))];
+    }
+    match load_grant_records(&path) {
+        Err(message) => vec![DoctorLine::fail(format!("grant log: {message}"))],
+        Ok(records) => {
+            let mut active_issued = false;
+            for record in &records {
+                if record.grant_signature == grant.signature {
+                    match record.action {
+                        GrantAction::Issued => active_issued = true,
+                        GrantAction::Revoked => active_issued = false,
+                    }
+                }
+            }
+            if active_issued {
+                vec![DoctorLine::ok(format!(
+                    "grant log: {} ({} record(s); current grant issued and not revoked)",
+                    path.display(),
+                    records.len()
+                ))]
+            } else {
+                vec![DoctorLine::fail(format!(
+                    "grant log: {} has no unrevoked issuance for the current grant — run \
+                     `dent8 identity backfill-grant-log` (or the grant was revoked; rotate \
+                     before writing)",
+                    path.display()
+                ))]
+            }
+        }
+    }
 }

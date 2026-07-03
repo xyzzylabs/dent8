@@ -35,6 +35,7 @@ tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
 # Default: Ed25519 source identity is part of the stock CLI because the secure onboarding
 # path should not require a custom build. The witness command remains opt-in below.
 ed25519-dalek = { version = "2", optional = true }
+sha2 = { version = "0.10", optional = true }
 getrandom = { version = "0.2", optional = true }
 hex = { version = "0.4", optional = true }
 # Opt-in: the `dent8 export` analytical lane (Parquet for DuckDB). Off by default so the stock
@@ -49,7 +50,7 @@ default = ["identity", "sqlite"]
 async-store = ["dent8-store/async-store", "dep:tokio"]
 postgres = ["dent8-store-postgres/adapter", "async-store"]
 sqlite = ["dep:dent8-store-sqlite", "async-store"]
-identity = ["dep:ed25519-dalek", "dep:getrandom", "dep:hex"]
+identity = ["dep:ed25519-dalek", "dep:getrandom", "dep:hex", "dep:sha2"]
 witness = ["dent8-core/signed-anchor", "dep:ed25519-dalek", "dep:getrandom", "dep:hex"]
 export = ["dep:dent8-export"]
 

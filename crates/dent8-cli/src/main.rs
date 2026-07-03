@@ -753,6 +753,10 @@ enum IdentityCommand {
     TrustList,
     /// Issue a signed source grant.
     GrantIssue(IdentityGrantIssueArgs),
+    /// Revoke a source's current grant without a replacement (ADR 0014).
+    Revoke(IdentityRevokeArgs),
+    /// Seed grant-log `issued` records for grants that predate the log (ADR 0014).
+    BackfillGrantLog(IdentityBackfillGrantLogArgs),
     /// Verify a signed source grant against the local trust registry.
     GrantVerify(IdentityGrantVerifyArgs),
 }
@@ -828,6 +832,29 @@ struct IdentityRotateSourceArgs {
     /// Replacement grant expiration as Unix milliseconds. Defaults to the current grant's expiration.
     #[arg(long, value_name = "MILLIS")]
     expires_at_ms: Option<i64>,
+}
+
+#[derive(Args, Debug)]
+struct IdentityRevokeArgs {
+    /// Source id whose current grant should be revoked, e.g. source:codex.
+    #[arg(long, value_name = "SOURCE")]
+    source: String,
+    /// Identity bundle directory.
+    #[arg(long, default_value = ".dent8")]
+    dir: String,
+    /// Operator issuer signing-key path. Defaults outside the project bundle.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct IdentityBackfillGrantLogArgs {
+    /// Identity bundle directory.
+    #[arg(long, default_value = ".dent8")]
+    dir: String,
+    /// Operator issuer signing-key path. Defaults outside the project bundle.
+    #[arg(long, value_name = "PATH")]
+    issuer_key: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -1148,6 +1175,8 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
                     IdentityCommand::TrustList => "identity trust-list",
                     IdentityCommand::GrantIssue(_) => "identity grant-issue",
                     IdentityCommand::GrantVerify(_) => "identity grant-verify",
+                    IdentityCommand::Revoke(_) => "identity revoke",
+                    IdentityCommand::BackfillGrantLog(_) => "identity backfill-grant-log",
                 };
                 print_json_stderr(
                     &serde_json::json!({
@@ -1209,6 +1238,12 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
             output,
         ),
         IdentityCommand::GrantVerify(args) => identity::grant_verify(&args.grant, output),
+        IdentityCommand::Revoke(args) => {
+            identity::revoke(&args.dir, &args.source, args.issuer_key.as_deref(), output)
+        }
+        IdentityCommand::BackfillGrantLog(args) => {
+            identity::backfill_grant_log(&args.dir, args.issuer_key.as_deref(), output)
+        }
     }
 }
 
@@ -2125,41 +2160,91 @@ struct AttestationSummary {
     attested: usize,
     /// Whether this build can actually verify them (`identity` feature).
     verifiable: bool,
-    /// One line per invalid attestation (empty when everything verifies or nothing is attested).
+    /// Whether a grant log was present, enabling entitlement verdicts (ADR 0014).
+    history: bool,
+    /// Attested events whose (source, key) had an active covering grant at write time.
+    entitled: usize,
+    /// Attested events with no grant history for their key — honest, not a failure.
+    unknown_entitlement: usize,
+    /// One line per invalid attestation or entitlement violation.
     issues: Vec<String>,
 }
 
 impl AttestationSummary {
     /// The clause appended to a verify OK line: silent when nothing is attested, counts when
-    /// attestations verify, and an honest "present but unverifiable" note on a
-    /// `--no-default-features` build.
+    /// attestations verify (with entitlement counts when a grant log is present), and an
+    /// honest "present but unverifiable" note on a `--no-default-features` build.
     fn ok_clause(&self) -> String {
         if self.attested == 0 {
             String::new()
-        } else if self.verifiable {
-            format!(", {} write attestation(s) verify", self.attested)
-        } else {
+        } else if !self.verifiable {
             format!(
                 ", {} write attestation(s) present but NOT verifiable in this build (rebuild \
                  with the identity feature)",
                 self.attested
             )
+        } else if self.history {
+            format!(
+                ", {} write attestation(s) verify ({} entitled at write time, {} unknown — no \
+                 grant history)",
+                self.attested, self.entitled, self.unknown_entitlement
+            )
+        } else {
+            format!(", {} write attestation(s) verify", self.attested)
         }
     }
 }
 
-/// Re-verify every persisted write attestation: recompute each attested event's message and
-/// check the embedded signature against the embedded public key.
+/// Re-verify every persisted write attestation (signature over the event content), and —
+/// when a grant log is present (ADR 0014) — resolve each attested event's **entitlement at
+/// write time** against the issuer-signed grant history.
 #[cfg(feature = "identity")]
 fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
     let mut summary = AttestationSummary {
         attested: 0,
         verifiable: true,
+        history: false,
+        entitled: 0,
+        unknown_entitlement: 0,
         issues: Vec::new(),
+    };
+    let history = match identity::load_grant_history_for_verify() {
+        Ok(history) => {
+            summary.history = history.is_some();
+            history
+        }
+        Err(message) => {
+            summary.issues.push(format!("GRANT LOG: {message}"));
+            None
+        }
     };
     for event in events {
         match identity::verify_event_attestation(event) {
-            Ok(true) => summary.attested += 1,
+            Ok(true) => {
+                summary.attested += 1;
+                if let (Some(records), Some(attestation)) =
+                    (history.as_deref(), event.provenance.attestation.as_ref())
+                {
+                    let subject = format!("{}:{}", event.subject.kind(), event.subject.key());
+                    match identity::entitlement_at(
+                        records,
+                        event.provenance.source.as_str(),
+                        &attestation.public_key,
+                        event.authority.level,
+                        &subject,
+                        event.provenance.recorded_at.as_unix_millis(),
+                    ) {
+                        identity::Entitlement::Entitled => summary.entitled += 1,
+                        identity::Entitlement::Unknown => summary.unknown_entitlement += 1,
+                        identity::Entitlement::Unentitled(reason) => {
+                            summary.issues.push(format!(
+                                "ENTITLEMENT: {}: {reason}",
+                                event.event_id.as_str()
+                            ));
+                        }
+                    }
+                }
+            }
             Ok(false) => {}
             Err(message) => {
                 summary.attested += 1;
@@ -2180,6 +2265,9 @@ fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
             .filter(|event| event.provenance.attestation.is_some())
             .count(),
         verifiable: false,
+        history: false,
+        entitled: 0,
+        unknown_entitlement: 0,
         issues: Vec::new(),
     }
 }
