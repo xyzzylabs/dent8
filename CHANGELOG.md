@@ -35,6 +35,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   without `--grants` says so when a grants-witness log exists instead of silently
   half-covering; JSON output gains a `grants` object on both commands.
 
+### Fixed
+
+- `witness serve` now actually covers the grant log as documented: the cadence signer signs
+  a grant-log head whenever the grant log's `(count, head)` changes (previously only the
+  one-shot `witness sign` did, so an operated deployment never witnessed revocations).
+
 ## [0.1.0] - 2026-07-03
 
 The first release: the complete v0 surface as developed on `main`.

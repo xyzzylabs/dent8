@@ -320,9 +320,10 @@ pub fn sign(output: CliOutput) -> i32 {
 
 /// Run as a **cadence signer** — the *operated* witness loop. Every `interval` seconds, sign
 /// the head **if the log has grown** (an append-only log's head changes only when its count
-/// does) and append it to the witness log. Run this on a host **separate** from the writer,
-/// holding the key, so the accumulated signatures are evidence the writer cannot forge. The
-/// optional second argument bounds the number of heads signed (for a finite run); without it,
+/// does) and append it to the witness log; when a grant log is discoverable (ADR 0014), sign
+/// its head on change the same way. Run this on a host **separate** from the writer, holding
+/// the key, so the accumulated signatures are evidence the writer cannot forge. The optional
+/// second argument bounds the number of *event* heads signed (for a finite run); without it,
 /// it runs until interrupted. A later in-place rewrite is still caught by an *earlier* signed
 /// head failing `verify`, so signing only on growth loses no resistance.
 pub fn serve(args: &[String]) -> i32 {
@@ -351,6 +352,14 @@ pub fn serve(args: &[String]) -> i32 {
     // and a pre-existing head can flag a rewrite on the first growth tick.
     let mut last_signed: Option<SignedTreeHead> =
         load_witness_log().ok().and_then(|mut heads| heads.pop());
+    // The grant-log lane (ADR 0014), same shape: seed from the grants-witness log's tail and
+    // sign only when the grant log's (count, head) changes, so a 5s cadence does not bloat
+    // the lane with identical heads.
+    let mut last_grant_state: Option<(u64, Option<String>)> =
+        load_grant_log_heads(&grants_witness_log_path(), "grants-witness log", true)
+            .ok()
+            .and_then(|mut heads| heads.pop())
+            .map(|head| (head.record_count, head.head));
     let mut signed: u64 = 0;
     // Bail out after a run of consecutive failures (a deleted key, a full disk) rather than
     // logging forever in a tight loop.
@@ -384,6 +393,14 @@ pub fn serve(args: &[String]) -> i32 {
             }
             Err(error) => {
                 eprintln!("witness: could not load the log: {error}");
+                had_error = true;
+            }
+        }
+        match sign_grant_log_head_if_changed(&signing, &mut last_grant_state) {
+            Ok(Some(line)) => println!("{line}"),
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("witness: {error}");
                 had_error = true;
             }
         }
@@ -1710,6 +1727,38 @@ fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<String>, String> {
 #[cfg(not(feature = "identity"))]
 #[allow(clippy::unnecessary_wraps)]
 fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+/// `serve`'s growth-triggered wrapper for the grant-log lane: sign a new head only when the
+/// grant log's `(record_count, last-line hash)` differs from the last state this process
+/// signed (or was seeded with). A count that goes *down* still gets signed — the regressed
+/// head in the lane's own sequence is exactly the ROLLBACK evidence `verify` renders.
+#[cfg(feature = "identity")]
+fn sign_grant_log_head_if_changed(
+    signing: &SigningKey,
+    last: &mut Option<(u64, Option<String>)>,
+) -> Result<Option<String>, String> {
+    let Some((_, hashes)) = crate::identity::grant_log_line_hashes()? else {
+        return Ok(None);
+    };
+    let state = (hashes.len() as u64, hashes.last().cloned());
+    if last.as_ref() == Some(&state) {
+        return Ok(None);
+    }
+    let line = sign_grant_log_head(signing)?;
+    *last = Some(state);
+    Ok(line)
+}
+
+// The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
+// errors are real.
+#[cfg(not(feature = "identity"))]
+#[allow(clippy::unnecessary_wraps)]
+fn sign_grant_log_head_if_changed(
+    _signing: &SigningKey,
+    _last: &mut Option<(u64, Option<String>)>,
+) -> Result<Option<String>, String> {
     Ok(None)
 }
 

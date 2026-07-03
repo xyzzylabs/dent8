@@ -5443,6 +5443,99 @@ fn witness_publishes_grant_log_heads_and_detects_scrubbed_history() {
     );
 }
 
+#[cfg(all(feature = "identity", feature = "witness"))]
+#[test]
+fn witness_serve_covers_the_grant_log_and_signs_only_on_change() {
+    let temp = TempDir::new();
+    let bundle = temp.file("bundle").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let wkey = temp.file("witness.key").to_string_lossy().into_owned();
+    let wlog = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    let gwlog = temp
+        .file("witness-grants.jsonl")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &bundle,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "bootstrap",
+    );
+    let trust = format!("{bundle}/trust.json");
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_WITNESS_KEY", wkey.as_str()),
+        ("DENT8_WITNESS_LOG", wlog.as_str()),
+        ("DENT8_WITNESS_GRANTS_LOG", gwlog.as_str()),
+    ];
+    assert_success(&run_dent8(&["witness", "keygen"], &envs), "witness keygen");
+
+    // The cadence signer covers BOTH lanes on its first tick (a bounded run: 1 head).
+    let first = run_dent8(&["witness", "serve", "1", "1"], &envs);
+    assert_success(&first, "serve #1");
+    assert!(
+        stdout(&first).contains("signed head: count=0")
+            && stdout(&first).contains("signed grant-log head: count=1"),
+        "{}",
+        stdout(&first)
+    );
+
+    // Both lanes grow; the next bounded run witnesses both.
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "revoke",
+                "--source",
+                "source:codex",
+                "--dir",
+                &bundle,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "revoke",
+    );
+    assert_alice_fact(&log, "favorite_drink", "tea", "grow the event log");
+    let second = run_dent8(&["witness", "serve", "1", "1"], &envs);
+    assert_success(&second, "serve #2");
+    assert!(
+        stdout(&second).contains("signed grant-log head: count=2"),
+        "{}",
+        stdout(&second)
+    );
+
+    // Event growth WITHOUT grant-log change: the lane is seeded from disk and stays quiet —
+    // a 5s cadence must not bloat the grants-witness file with identical heads.
+    assert_alice_fact(&log, "favorite_snack", "apple", "grow the event log again");
+    let third = run_dent8(&["witness", "serve", "1", "1"], &envs);
+    assert_success(&third, "serve #3");
+    assert!(!stdout(&third).contains("grant-log"), "{}", stdout(&third));
+    assert_eq!(line_count(&gwlog), 2);
+
+    let verify = run_dent8(&["witness", "verify"], &envs);
+    assert_success(&verify, "verify");
+    assert!(
+        stdout(&verify).contains("2 grant-log head(s) verify"),
+        "{}",
+        stdout(&verify)
+    );
+}
+
 #[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear lifecycle: issue -> rotate -> revoke -> backfill
