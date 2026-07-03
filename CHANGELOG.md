@@ -194,28 +194,13 @@ The first release: the complete v0 surface as developed on `main`.
   deserialize→fold→canonicalize path and `CanonicalJson` idempotency (`fuzz/`, with a bounded
   CI smoke), a committed SQLite concurrent-writers regression test, CI coverage for
   Postgres/SQLite and feature combinations, and the adversarial corpus.
+- **Format stability**: security artifacts — signed grants, the trust / active-grant /
+  authority registries, and witness signed tree heads — **reject unknown fields**
+  (`deny_unknown_fields`), so an unknown key in a security file fails loudly as corrupt
+  rather than being silently ignored (unsigned noise at best, tampering at worst). The event
+  model deliberately stays lenient under the
+  [ADR 0013](docs/decisions/0013-signed-write-attestation.md) optional-field rule (a later
+  `valid_to`-style field is a free, hash-stable addition), and event ids stay opaque validated
+  strings (a future DB-assigned id scheme needs no format change) — so the event format is
+  frozen for the first release.
 
-### Changed
-
-- Removed the top-level `dent8 demo` command. The built-in proof surface is `dent8 eval`;
-  the human-readable firewall walkthrough now lives in
-  [`examples/firewall/demo.sh`](examples/firewall/demo.sh) and drives real CLI writes,
-  `explain`, and `verify` against a temporary file-backed dev store.
-- Removed the old `.dent8/identity.env` fallback for agent MCP installs/status. Agent setup now
-  requires the source-specific `.dent8/identity-<source>.env`; run `dent8 identity repair-env`
-  or `dent8 init --agent <profile>` to recreate it from current signed identity material.
-- **Pre-release format review** (format changes are free while unreleased, so they were made
-  deliberately now): security artifacts — signed grants, the trust / active-grant / authority
-  registries, and witness signed tree heads — **reject unknown fields** at load
-  (`deny_unknown_fields`): an unknown key in a security file is unsigned noise at best and
-  tampering at worst, so it fails loudly as corrupt instead of being silently ignored. The
-  *event model* deliberately stays lenient under the ADR 0013 optional-field rule (a later
-  `valid_to`-style field is a free, hash-stable addition), and event ids remain an opaque
-  validated string (a future DB-assigned id scheme needs no format change) — so the event
-  format is considered frozen for a first release.
-
-### Fixed
-
-- `dent8 doctor --agent` and MCP smoke/write checks now scrub `DENT8_ACTIVE_GRANTS` from the
-  parent environment before applying the generated agent bundle, preventing stale active-grant
-  registries from leaking into subprocess diagnostics.
