@@ -3,6 +3,7 @@ name = "dent8-export"
 description = "Parquet export of the dent8 event log for DuckDB-based replay analysis, forensics, and audit queries."
 edition.workspace = true
 license.workspace = true
+readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true

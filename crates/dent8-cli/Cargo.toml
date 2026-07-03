@@ -3,6 +3,7 @@ name = "dent8"
 description = "Command-line interface for dent8."
 edition.workspace = true
 license.workspace = true
+readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
