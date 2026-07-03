@@ -4,9 +4,9 @@
 facts from silently overriding trusted state, and can replay exactly *why* an agent
 believed something.
 
-![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt.](demo.gif)
+![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt.](https://raw.githubusercontent.com/xyzzylabs/dent8/main/demo.gif)
 
-See it run through the real CLI path:
+From a clone, see it run through the real CLI path:
 **`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`** — a
 high-authority fact is asserted, a low-authority source is rejected when it tries to override
 it, and an integrity receipt explains the result with a verified hash chain.
@@ -136,7 +136,7 @@ associated with pattern separation.)
 
 ## Status
 
-This is an early open-source project. **[docs/STATUS.md](docs/STATUS.md) is the single
+This is an early open-source project. **[docs/STATUS.md](https://github.com/xyzzylabs/dent8/blob/main/docs/STATUS.md) is the single
 source of truth for what is built.** In short:
 
 - **Runnable today:** the full lifecycle through the firewall — **`assert` / `supersede` /
@@ -145,7 +145,7 @@ source of truth for what is built.** In short:
   browsing known fact streams and the operator surfaces
   **`verify`** (integrity + retraction-taint check), **`conflicts`**, **`eval`** (the
   self-demonstrating benchmark), and **`export`** (the whole log to Parquet for offline DuckDB
-  forensics/audit, behind `--features export` — see [examples/duckdb/](examples/duckdb/)),
+  forensics/audit, behind `--features export` — see [examples/duckdb/](https://github.com/xyzzylabs/dent8/tree/main/examples/duckdb/)),
   `dent8 init` / `dent8 doctor`, `dent8 authority`, `dent8 identity`, `dent8 witness`
   (behind `--features witness`), and
   `dent8 schema postgres`. State persists to a local file log and
@@ -153,14 +153,14 @@ source of truth for what is built.** In short:
   non-transactional) — the *operational* backends are **Postgres** (server) and **embedded
   SQLite**, selected by `DENT8_STORE_URL`. `dent8 mcp serve` exposes
   the full belief surface plus read/audit tools to agents over MCP (stdio JSON-RPC), through
-  the same firewall — see [examples/mcp/](examples/mcp/), [examples/codex/](examples/codex/),
-  [examples/claude-code/](examples/claude-code/), [examples/gemini/](examples/gemini/),
-  [examples/cascade/](examples/cascade/), [examples/cursor/](examples/cursor/),
-  [examples/grok-build/](examples/grok-build/), [examples/hecate/](examples/hecate/), and
-  [examples/vercel-ai-sdk/](examples/vercel-ai-sdk/) for agent-client wiring. Optional native
+  the same firewall — see [examples/mcp/](https://github.com/xyzzylabs/dent8/tree/main/examples/mcp/), [examples/codex/](https://github.com/xyzzylabs/dent8/tree/main/examples/codex/),
+  [examples/claude-code/](https://github.com/xyzzylabs/dent8/tree/main/examples/claude-code/), [examples/gemini/](https://github.com/xyzzylabs/dent8/tree/main/examples/gemini/),
+  [examples/cascade/](https://github.com/xyzzylabs/dent8/tree/main/examples/cascade/), [examples/cursor/](https://github.com/xyzzylabs/dent8/tree/main/examples/cursor/),
+  [examples/grok-build/](https://github.com/xyzzylabs/dent8/tree/main/examples/grok-build/), [examples/hecate/](https://github.com/xyzzylabs/dent8/tree/main/examples/hecate/), and
+  [examples/vercel-ai-sdk/](https://github.com/xyzzylabs/dent8/tree/main/examples/vercel-ai-sdk/) for agent-client wiring. Optional native
   memory/rules hook guards use the built-in
   `dent8 hook native-memory-guard`; provider profiles live in
-  [examples/agent-hooks/](examples/agent-hooks/).
+  [examples/agent-hooks/](https://github.com/xyzzylabs/dent8/tree/main/examples/agent-hooks/).
 - **Implemented as a tested library:** the `ClaimEvent` model and replay fold; the
   unbypassable write-path firewall (`EventStore::append`) with authority-weighted
   arbitration + retraction, an anti-laundering challenger check, and the
@@ -170,7 +170,7 @@ source of truth for what is built.** In short:
 - **Validated by an adversarial corpus** (`dent8 eval`, or `cargo test -p dent8-evals`): MINJA
   injection, authority laundering, canonical contradiction, Sybil corroboration, and
   **poisoned-source retraction** all **fail against the firewall (0/5)** while **compromising a
-  recency-only baseline (5/5)** — see [docs/evals.md](docs/evals.md).
+  recency-only baseline (5/5)** — see [docs/evals.md](https://github.com/xyzzylabs/dent8/blob/main/docs/evals.md).
 - **DB-verified:** the v0 Postgres adapter (`PostgresEventStore`, behind the store crate's
   `adapter` feature; CLI users enable it with `--features postgres`) — transactional append,
   firewall via the shared `arbitrate_events`,
@@ -207,8 +207,8 @@ a streaming text command.
 remaining gap to a hardened multi-user product is operating those controls well: key
 distribution/rotation, stronger secret storage, managed head publication, and an **operated
 witness service** that signs on a cadence from separate infrastructure. See
-[docs/witness.md](docs/witness.md), the runnable [witness example](examples/witness/), the
-[Roadmap](docs/roadmap.md), and [docs/STATUS.md](docs/STATUS.md).
+[docs/witness.md](https://github.com/xyzzylabs/dent8/blob/main/docs/witness.md), the runnable [witness example](https://github.com/xyzzylabs/dent8/tree/main/examples/witness/), the
+[Roadmap](https://github.com/xyzzylabs/dent8/blob/main/docs/roadmap.md), and [docs/STATUS.md](https://github.com/xyzzylabs/dent8/blob/main/docs/STATUS.md).
 
 ## Initial Shape
 
@@ -224,7 +224,7 @@ Workspace crates:
 - `dent8-evals`: adversarial corpus behind the self-demonstrating `dent8 eval`.
 - `dent8-export`: Parquet export for offline DuckDB analysis (opt-in, `--features export`).
 
-Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
+Commands (see [docs/STATUS.md](https://github.com/xyzzylabs/dent8/blob/main/docs/STATUS.md) for what runs today):
 
 - `dent8 eval`: run the adversarial corpus that proves the firewall blocks attacks a
   recency-only baseline accepts.
@@ -270,7 +270,7 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
   by default. `doctor --output json` groups checks into stable `ok`, `warn`, `fail`, and `skip`
   sections.
 - `dent8 export [out.parquet]`: export the whole log to Parquet for offline DuckDB
-  forensics/audit (needs `--features export`; see [examples/duckdb/](examples/duckdb/)).
+  forensics/audit (needs `--features export`; see [examples/duckdb/](https://github.com/xyzzylabs/dent8/tree/main/examples/duckdb/)).
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`: print a shell completion script.
 - `dent8 hook native-memory-guard`: provider hook helper for session verification and
   native memory/rules write guards.
@@ -285,36 +285,36 @@ Commands (see [docs/STATUS.md](docs/STATUS.md) for what runs today):
 
 **Status**
 
-- [Implementation Status](docs/STATUS.md) — single source of truth for what is built
-- [Configuration](docs/configuration.md) — env vars + Cargo features in one place
-- [Changelog](CHANGELOG.md)
+- [Implementation Status](https://github.com/xyzzylabs/dent8/blob/main/docs/STATUS.md) — single source of truth for what is built
+- [Configuration](https://github.com/xyzzylabs/dent8/blob/main/docs/configuration.md) — env vars + Cargo features in one place
+- [Changelog](https://github.com/xyzzylabs/dent8/blob/main/CHANGELOG.md)
 
 **Design**
 
-- [Project Brief](docs/project-brief.md)
-- [Architecture](docs/architecture.md)
-- [Domain Model](docs/domain-model.md)
-- [Belief Revision](docs/belief-revision.md) — dent8's formal identity (the lead lens)
-- [Storage & the Event Log](docs/storage.md)
-- [Interfaces](docs/interfaces.md)
-- [Naming](docs/naming.md)
+- [Project Brief](https://github.com/xyzzylabs/dent8/blob/main/docs/project-brief.md)
+- [Architecture](https://github.com/xyzzylabs/dent8/blob/main/docs/architecture.md)
+- [Domain Model](https://github.com/xyzzylabs/dent8/blob/main/docs/domain-model.md)
+- [Belief Revision](https://github.com/xyzzylabs/dent8/blob/main/docs/belief-revision.md) — dent8's formal identity (the lead lens)
+- [Storage & the Event Log](https://github.com/xyzzylabs/dent8/blob/main/docs/storage.md)
+- [Interfaces](https://github.com/xyzzylabs/dent8/blob/main/docs/interfaces.md)
+- [Naming](https://github.com/xyzzylabs/dent8/blob/main/docs/naming.md)
 
 **Correctness & security**
 
-- [Formal Verification](docs/formal-verification.md)
-- [Evaluation Strategy](docs/evals.md)
-- [Threat Model](docs/threat-model.md)
+- [Formal Verification](https://github.com/xyzzylabs/dent8/blob/main/docs/formal-verification.md)
+- [Evaluation Strategy](https://github.com/xyzzylabs/dent8/blob/main/docs/evals.md)
+- [Threat Model](https://github.com/xyzzylabs/dent8/blob/main/docs/threat-model.md)
 
 **Planning & research**
 
-- [Release Checklist](docs/release.md)
-- [Roadmap](docs/roadmap.md)
-- [Related Work](docs/related-work.md)
-- [Research Dossier](docs/research/dossier.md)
-- [Open Research Directions](docs/research/novelty.md)
-- [Training Substrate](docs/research/training-substrate.md)
-- [Paper Outline](docs/paper/outline.md) · [Preprint Draft](docs/paper/preprint.md)
-- [Decision Records](docs/decisions)
+- [Release Checklist](https://github.com/xyzzylabs/dent8/blob/main/docs/release.md)
+- [Roadmap](https://github.com/xyzzylabs/dent8/blob/main/docs/roadmap.md)
+- [Related Work](https://github.com/xyzzylabs/dent8/blob/main/docs/related-work.md)
+- [Research Dossier](https://github.com/xyzzylabs/dent8/blob/main/docs/research/dossier.md)
+- [Open Research Directions](https://github.com/xyzzylabs/dent8/blob/main/docs/research/novelty.md)
+- [Training Substrate](https://github.com/xyzzylabs/dent8/blob/main/docs/research/training-substrate.md)
+- [Paper Outline](https://github.com/xyzzylabs/dent8/blob/main/docs/paper/outline.md) · [Preprint Draft](https://github.com/xyzzylabs/dent8/blob/main/docs/paper/preprint.md)
+- [Decision Records](https://github.com/xyzzylabs/dent8/tree/main/docs/decisions)
 
 ## Development
 
@@ -333,24 +333,24 @@ DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \
 docker compose down
 ```
 
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the workspace
+CI ([`.github/workflows/ci.yml`](https://github.com/xyzzylabs/dent8/blob/main/.github/workflows/ci.yml)) runs the workspace
 fmt/clippy/test gate and the adapter against a Postgres service container.
 
 ## Status
 
 dent8 is **pre-1.0 (v0.x)** and experimental — the API, the on-disk event encoding, and the
-storage schema may change between minor versions. [`docs/STATUS.md`](docs/STATUS.md) is the
+storage schema may change between minor versions. [`docs/STATUS.md`](https://github.com/xyzzylabs/dent8/blob/main/docs/STATUS.md) is the
 single source of truth for what is runnable vs. library-only vs. design-only, and
-[`docs/threat-model.md`](docs/threat-model.md) states precisely what the firewall does and
-does not defend against. Security reports: see [`SECURITY.md`](SECURITY.md).
+[`docs/threat-model.md`](https://github.com/xyzzylabs/dent8/blob/main/docs/threat-model.md) states precisely what the firewall does and
+does not defend against. Security reports: see [`SECURITY.md`](https://github.com/xyzzylabs/dent8/blob/main/SECURITY.md).
 
 ## License
 
 Licensed under either of
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+- Apache License, Version 2.0 ([LICENSE-APACHE](https://github.com/xyzzylabs/dent8/blob/main/LICENSE-APACHE) or
   <http://www.apache.org/licenses/LICENSE-2.0>)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+- MIT license ([LICENSE-MIT](https://github.com/xyzzylabs/dent8/blob/main/LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
 
