@@ -76,6 +76,7 @@ pub(crate) fn build_event(
         }],
         observed_at: None,
         valid_from: None,
+        valid_to: None,
     })
 }
 
@@ -110,6 +111,60 @@ pub(crate) fn write_error_to_op(error: WriteError) -> OpError {
         WriteError::Other(message) => {
             OpError::Rejected(format!("could not commit the write: {message}"))
         }
+    }
+}
+
+/// The valid-time interval for a written assertion (ADR 0016), unix millis. `from` is
+/// also the TTL freshness anchor; `to` is the asserted end of validity (past it the fact
+/// reads as stale). Defaults to an open interval (unset).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Validity {
+    pub(crate) from: Option<i64>,
+    pub(crate) to: Option<i64>,
+}
+
+impl Validity {
+    fn stamp(self, event: &mut ClaimEvent) {
+        event.valid_from = self.from.map(TimestampMillis::from_unix_millis);
+        event.valid_to = self.to.map(TimestampMillis::from_unix_millis);
+    }
+}
+
+/// The temporal frame for a read (ADR 0016): `as_of` folds only events recorded at or
+/// before that instant (transaction-time travel); `valid_at` sets the instant freshness
+/// and validity are evaluated at. Defaults read the full log at wall-clock now.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ReadClock {
+    pub(crate) as_of: Option<i64>,
+    pub(crate) valid_at: Option<i64>,
+}
+
+impl ReadClock {
+    /// The instant freshness/validity is judged at.
+    fn now(self) -> TimestampMillis {
+        self.valid_at
+            .map_or_else(now_millis, TimestampMillis::from_unix_millis)
+    }
+
+    /// The store as this clock sees it. With `as_of`, the fold is restricted to events
+    /// recorded at or before that instant — trusting appender-supplied `recorded_at`
+    /// exactly as freshness always has. The filtered prefix skips the trusted-reload
+    /// uniqueness gate: it re-reads a historical state that was admitted event-by-event
+    /// when written, judged by the clock of *that* time.
+    fn store(self, path: &str) -> Result<InMemoryEventStore, String> {
+        let store = load_store(path)?;
+        let Some(as_of) = self.as_of else {
+            return Ok(store);
+        };
+        let at = TimestampMillis::from_unix_millis(as_of);
+        let events: Vec<ClaimEvent> = store
+            .scan_events(&EventFilter::default())
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|event| event.provenance.recorded_at <= at)
+            .collect();
+        InMemoryEventStore::from_trusted_events(events)
+            .map_err(|error| format!("as-of load: {error}"))
     }
 }
 
@@ -342,6 +397,7 @@ pub(crate) fn back_off(attempt: u32) {
 
 /// Assert a fact through the firewall + registry and persist it. The shared core behind
 /// both `dent8 assert` and the MCP `assert` tool — one firewall/persistence path.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn op_assert(
     path: &str,
     subject_kind: &str,
@@ -350,6 +406,7 @@ pub(crate) fn op_assert(
     value: &str,
     authority: AuthorityLevel,
     source: &str,
+    validity: Validity,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
         subject_kind,
@@ -375,6 +432,7 @@ pub(crate) fn op_assert(
         now,
     )
     .map_err(|error| OpError::Invalid(format!("invalid assertion: {error}")))?;
+    validity.stamp(&mut event);
     let registry = PredicateRegistry::coding_agent();
     // Apply the predicate's default TTL up front so the event we *persist* is byte-identical
     // to the one `admit` arbitrates and hashes (otherwise the durable event would carry
@@ -405,6 +463,10 @@ pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
             &args.value,
             args.authority.level(),
             &args.source,
+            Validity {
+                from: args.valid_from,
+                to: args.valid_to,
+            },
         )
     });
     present_write(outcome, output, &view)
@@ -785,6 +847,7 @@ pub(crate) fn build_revision(
 /// because *all* believed incumbents become terminal — the replacement assertion goes
 /// through the base firewall directly (not the uniqueness-checking `admit` path) because
 /// the supersessions, not a pre-check, are what restore the invariant.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn op_supersede(
     path: &str,
     subject_kind: &str,
@@ -793,6 +856,7 @@ pub(crate) fn op_supersede(
     new_value: &str,
     authority: AuthorityLevel,
     source: &str,
+    validity: Validity,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
         subject_kind,
@@ -852,6 +916,7 @@ pub(crate) fn op_supersede(
     .map_err(|error| OpError::Invalid(format!("invalid supersession: {error}")))?;
     // The replacement is a fresh assertion of this predicate, so it inherits the same
     // default freshness as `assert` (e.g. a revised `branch.status` still goes stale).
+    validity.stamp(&mut events[0]);
     apply_policy_defaults(&registry, &mut events[0]);
 
     // ADR 0015 (opt-in): the earned-supersession gate. At *equal* authority, a replacement
@@ -931,6 +996,10 @@ pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
             &args.value,
             args.authority.level(),
             &args.source,
+            Validity {
+                from: args.valid_from,
+                to: args.valid_to,
+            },
         )
     });
     present_write(outcome, output, &view)
@@ -1249,6 +1318,7 @@ pub(crate) fn build_contradiction(
     Ok((vec![opposing, contradiction], opposing_claim_id))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn op_contradict(
     path: &str,
     subject_kind: &str,
@@ -1257,6 +1327,7 @@ pub(crate) fn op_contradict(
     opposing_value: &str,
     authority: AuthorityLevel,
     source: &str,
+    validity: Validity,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
         subject_kind,
@@ -1296,6 +1367,7 @@ pub(crate) fn op_contradict(
     )
     .map_err(|error| OpError::Invalid(format!("invalid contradiction: {error}")))?;
     // The opposing claim is a fresh assertion of this predicate (default TTL like `assert`).
+    validity.stamp(&mut events[0]);
     let registry = PredicateRegistry::coding_agent();
     apply_policy_defaults(&registry, &mut events[0]);
 
@@ -1333,6 +1405,10 @@ pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
             &args.value,
             args.authority.level(),
             &args.source,
+            Validity {
+                from: args.valid_from,
+                to: args.valid_to,
+            },
         )
     });
     present_write(outcome, output, &view)
@@ -1391,8 +1467,9 @@ pub(crate) fn replay_outcome(
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
+    clock: ReadClock,
 ) -> Result<ReplayOutcome, OpError> {
-    let store = load_store(path).map_err(OpError::Invalid)?;
+    let store = clock.store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
@@ -1411,7 +1488,7 @@ pub(crate) fn replay_outcome(
         )));
     }
     let current = store
-        .explain_latest(&subject, &predicate_parsed, now_millis())
+        .explain_latest(&subject, &predicate_parsed, clock.now())
         .ok()
         .flatten();
     Ok(ReplayOutcome {
@@ -1462,8 +1539,9 @@ pub(crate) fn op_replay(
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
+    clock: ReadClock,
 ) -> Result<String, OpError> {
-    replay_outcome(path, subject_kind, subject_key, predicate)
+    replay_outcome(path, subject_kind, subject_key, predicate, clock)
         .map(|outcome| format_replay(&outcome))
 }
 
@@ -1564,6 +1642,10 @@ pub(crate) fn cmd_replay(args: &ReadFactArgs, output: CliOutput) -> i32 {
             &args.subject.kind,
             &args.subject.key,
             &args.predicate,
+            ReadClock {
+                as_of: args.as_of,
+                valid_at: args.valid_at,
+            },
         ),
         output,
     ) {
@@ -1593,8 +1675,9 @@ pub(crate) fn op_explain(
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
+    clock: ReadClock,
 ) -> Result<String, OpError> {
-    let receipt = op_explain_receipt(path, subject_kind, subject_key, predicate)?;
+    let receipt = op_explain_receipt(path, subject_kind, subject_key, predicate, clock)?;
     let annotation = read_annotation(receipt.lifecycle, receipt.fresh);
     Ok(format!(
         "explain {subject_kind}:{subject_key} {predicate}{annotation}\n{}",
@@ -1609,13 +1692,14 @@ pub(crate) fn op_explain_receipt(
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
+    clock: ReadClock,
 ) -> Result<IntegrityReceipt, OpError> {
-    let store = load_store(path).map_err(OpError::Invalid)?;
+    let store = clock.store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
-    match store.explain_latest(&subject, &predicate_parsed, now_millis()) {
+    match store.explain_latest(&subject, &predicate_parsed, clock.now()) {
         Ok(Some(receipt)) => Ok(receipt),
         Ok(None) => Err(OpError::Rejected(format!(
             "no claim for {subject_kind}:{subject_key} {predicate}"
@@ -1631,12 +1715,20 @@ pub(crate) fn cmd_explain(args: &ReadFactArgs, output: CliOutput) -> i32 {
             &args.subject.kind,
             &args.subject.key,
             &args.predicate,
+            ReadClock {
+                as_of: args.as_of,
+                valid_at: args.valid_at,
+            },
         )),
         CliOutput::Json => match op_explain_receipt(
             &log_path(),
             &args.subject.kind,
             &args.subject.key,
             &args.predicate,
+            ReadClock {
+                as_of: args.as_of,
+                valid_at: args.valid_at,
+            },
         ) {
             Ok(receipt) => print_json_stdout(&receipt_json("explain", &receipt)),
             Err(error) => {

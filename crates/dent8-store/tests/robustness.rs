@@ -61,6 +61,7 @@ fn event(
             .collect(),
         observed_at: None,
         valid_from: None,
+        valid_to: None,
     }
 }
 

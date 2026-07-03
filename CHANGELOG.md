@@ -59,6 +59,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   kind need this version to read; existing events, hashes, and golden fixtures are
   unchanged (no canon bump).
 
+- **Valid-time intervals + time-travel reads**
+  ([ADR 0016](docs/decisions/0016-valid-time-and-time-travel-reads.md)): `assert` /
+  `supersede` / `contradict` take `--valid-from` / `--valid-to` (unix millis) — a fact can
+  assert *when it stops holding*, and reads treat an elapsed `valid_to` exactly like an
+  elapsed TTL (`expires_at` is the earliest bound; an inverted interval is rejected).
+  `explain` / `replay` take `--as-of` (fold only events recorded at or before an instant —
+  the store as it stood then) and `--valid-at` (judge freshness at an instant instead of
+  now); they compose into "what did we believe, and was it fresh, last Tuesday". `valid_to`
+  is an optional field under the ADR 0013 rule — existing events, hashes, and golden
+  fixtures unchanged.
+
 ### Fixed
 
 - `witness serve` now actually covers the grant log as documented: the cadence signer signs

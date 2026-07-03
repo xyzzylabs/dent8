@@ -58,7 +58,8 @@ Use past-tense event names because events are immutable facts.
 
 `event_hash` is **derived on append** from the canonical bytes (it lives on
 `AppendReceipt` and as a stored column), not a field the appender supplies.
-`observed_at` and `valid_from` are optional `ClaimEvent` fields (valid-time anchors).
+`observed_at`, `valid_from`, and `valid_to` are optional `ClaimEvent` fields (the
+valid-time anchors and the asserted end of validity — ADR 0016).
 
 ## Provenance
 
@@ -129,8 +130,9 @@ projection state; it does not delete history, and it is authority-gated like ret
 > event-driven lifecycle: a claim is not auto-mutated to `Expired` by TTL; `Expired`
 > as a lifecycle state still comes only from an authority-gated `claim.expired` event
 > (ADR 0011). The CLI/MCP read surface applies freshness by flagging stale receipts.
-> Remaining: a `valid_to` closed valid-time interval (only an open `valid_from` plus
-> TTL today) and freshness on every summary surface.
+> `valid_to` closes the interval (ADR 0016): an asserted end of validity is treated by
+> reads exactly like an elapsed TTL (`expires_at` is the earliest of the two bounds).
+> Remaining: freshness on every summary surface.
 
 ## Lifecycle State
 
@@ -199,7 +201,7 @@ See [belief-revision.md](belief-revision.md) and
 - Terminal claims cannot be changed by lifecycle events.
 - State replay must be deterministic.
 - Projection state must be derivable from ordered events.
-- Fresh reads must exclude expired claims unless explicitly requested *(evaluator `ClaimState::is_expired_at` built and **applied on reads**: `explain` flags a stale fact and the receipt carries `fresh`/`expires_at`; remaining target is a `valid_to` interval — see [threat-model.md](threat-model.md) T4)*.
+- Fresh reads must exclude expired claims unless explicitly requested *(evaluator `ClaimState::is_expired_at` built and **applied on reads**: `explain` flags a stale fact and the receipt carries `fresh`/`expires_at`; `valid_to` intervals are built (ADR 0016) — see [threat-model.md](threat-model.md) T4)*.
 - Contradictions and supersessions must leave auditable edges, symmetric at query time.
 - Higher-authority supersession requires an explicit basis: the replacing claim must out-rank or tie the incumbent (enforced in `apply_event`).
 - Cross-stream lineage holds: if a claim is `superseded_by` another, the replacing claim exists and does not orphan the lineage.

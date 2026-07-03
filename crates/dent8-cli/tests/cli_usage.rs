@@ -791,6 +791,181 @@ fn low_authority_supersede_is_rejected_and_original_fact_remains() {
 }
 
 #[test]
+fn valid_time_intervals_bound_freshness_and_validate() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // A fact with an asserted validity window in the past: fresh inside the window
+    // (judged with --valid-at), stale at and after its valid_to.
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority=high",
+                "--source=user:alice",
+                "--valid-from=1000",
+                "--valid-to=2000",
+            ],
+            &envs,
+        ),
+        "assert with validity window",
+    );
+    let inside = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+            "--valid-at",
+            "1500",
+        ],
+        &envs,
+    );
+    assert_success(&inside, "explain inside window");
+    let receipt = stdout_json(&inside);
+    assert_eq!(receipt["fresh"], true, "{}", stdout(&inside));
+    assert_eq!(receipt["expires_at"], 2000);
+    let after = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+            "--valid-at",
+            "2000",
+        ],
+        &envs,
+    );
+    assert_eq!(
+        stdout_json(&after)["fresh"],
+        false,
+        "expiry is inclusive at the validity bound"
+    );
+    // At wall-clock now (far past the window) the text read is headline-stale.
+    let now_read = run_dent8(&["explain", "person:alice", "favorite_drink"], &envs);
+    assert_success(&now_read, "explain now");
+    assert!(stdout(&now_read).contains("stale"), "{}", stdout(&now_read));
+
+    // An empty/inverted interval is rejected at the firewall.
+    let inverted = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_snack",
+            "apple",
+            "--authority=high",
+            "--source=user:alice",
+            "--valid-from=2000",
+            "--valid-to=1000",
+        ],
+        &envs,
+    );
+    assert_eq!(inverted.status.code(), Some(1));
+    assert!(
+        stderr(&inverted).contains("valid_to must be after valid_from"),
+        "{}",
+        stderr(&inverted)
+    );
+}
+
+#[test]
+fn as_of_reads_travel_to_the_store_as_it_stood() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority=high",
+                "--source=user:alice",
+            ],
+            &envs,
+        ),
+        "assert",
+    );
+    let mid = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_millis(),
+    )
+    .expect("in i64 range");
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    assert_success(
+        &run_dent8(
+            &[
+                "supersede",
+                "person:alice",
+                "favorite_drink",
+                "coffee",
+                "--authority=high",
+                "--source=user:alice",
+            ],
+            &envs,
+        ),
+        "supersede",
+    );
+
+    // Now: the revision is believed. As of `mid`: the original is, and the replay shows
+    // exactly the one event the store held then.
+    let now_read = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_eq!(stdout_json(&now_read)["value"]["text"], "coffee");
+    let mid_arg = mid.to_string();
+    let then_read = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+            "--as-of",
+            &mid_arg,
+        ],
+        &envs,
+    );
+    assert_success(&then_read, "explain as-of");
+    let receipt = stdout_json(&then_read);
+    assert_eq!(receipt["value"]["text"], "tea", "{}", stdout(&then_read));
+    assert_eq!(receipt["lifecycle"], "Active");
+    let then_replay = run_dent8(
+        &[
+            "replay",
+            "person:alice",
+            "favorite_drink",
+            "--as-of",
+            &mid_arg,
+        ],
+        &envs,
+    );
+    assert_success(&then_replay, "replay as-of");
+    assert!(
+        stdout(&then_replay).contains("(1 events)") && stdout(&then_replay).contains("believed"),
+        "{}",
+        stdout(&then_replay)
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // one linear lifecycle: reject -> record -> dedup -> opt out
 fn rejected_challenges_entrench_the_incumbent_and_are_replayable() {
     let temp = TempDir::new();

@@ -266,7 +266,13 @@ fn handle_resources_read(id: &Value, params: Option<&Value>, path: &str) -> Valu
     let Some((kind, key, predicate)) = parse_resource_uri(uri) else {
         return error_response(id, -32602, &format!("not a dent8 resource uri: {uri}"));
     };
-    match op_explain(path, &kind, &key, &predicate) {
+    match op_explain(
+        path,
+        &kind,
+        &key,
+        &predicate,
+        crate::ops::ReadClock::default(),
+    ) {
         Ok(text) => result_response(
             id,
             &json!({
@@ -404,7 +410,18 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                     authority,
                     source: &source,
                 },
-                || op_assert(path, &kind, &key, &predicate, &value, authority, &source),
+                || {
+                    op_assert(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        authority,
+                        &source,
+                        crate::ops::Validity::default(),
+                    )
+                },
             )
         }
         "supersede" => {
@@ -428,7 +445,18 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                     authority,
                     source: &source,
                 },
-                || op_supersede(path, &kind, &key, &predicate, &value, authority, &source),
+                || {
+                    op_supersede(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        authority,
+                        &source,
+                        crate::ops::Validity::default(),
+                    )
+                },
             )
         }
         "retract" => {
@@ -573,14 +601,38 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                     authority,
                     source: &source,
                 },
-                || op_contradict(path, &kind, &key, &predicate, &value, authority, &source),
+                || {
+                    op_contradict(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        authority,
+                        &source,
+                        crate::ops::Validity::default(),
+                    )
+                },
             )
         }
         "explain" => {
             let (kind, key, predicate) = (kind()?, key()?, predicate()?);
-            let text = op_explain(path, &kind, &key, &predicate).map_err(into_tool_error)?;
-            let receipt =
-                op_explain_receipt(path, &kind, &key, &predicate).map_err(into_tool_error)?;
+            let text = op_explain(
+                path,
+                &kind,
+                &key,
+                &predicate,
+                crate::ops::ReadClock::default(),
+            )
+            .map_err(into_tool_error)?;
+            let receipt = op_explain_receipt(
+                path,
+                &kind,
+                &key,
+                &predicate,
+                crate::ops::ReadClock::default(),
+            )
+            .map_err(into_tool_error)?;
             Ok(ToolOutput::new(
                 text,
                 explain_structured("explain", &receipt),
@@ -588,8 +640,21 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
         }
         "replay" => {
             let (kind, key, predicate) = (kind()?, key()?, predicate()?);
-            let text = op_replay(path, &kind, &key, &predicate).map_err(into_tool_error)?;
-            let structured = match op_explain_receipt(path, &kind, &key, &predicate) {
+            let text = op_replay(
+                path,
+                &kind,
+                &key,
+                &predicate,
+                crate::ops::ReadClock::default(),
+            )
+            .map_err(into_tool_error)?;
+            let structured = match op_explain_receipt(
+                path,
+                &kind,
+                &key,
+                &predicate,
+                crate::ops::ReadClock::default(),
+            ) {
                 Ok(receipt) => explain_structured("replay", &receipt),
                 Err(_) => json!({
                     "status": "ok",
@@ -706,6 +771,7 @@ fn write_output(
         context.subject_kind,
         context.subject_key,
         context.predicate,
+        crate::ops::ReadClock::default(),
     ) && let Some(object) = structured.as_object_mut()
     {
         object.insert("claim_id".to_string(), json!(receipt.claim_id.as_str()));

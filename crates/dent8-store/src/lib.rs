@@ -686,6 +686,7 @@ mod tests {
             }],
             observed_at: None,
             valid_from,
+            valid_to: None,
         }
     }
 
@@ -752,6 +753,7 @@ mod tests {
             evidence,
             observed_at: None,
             valid_from: None,
+            valid_to: None,
         }
     }
 

@@ -58,6 +58,7 @@ fn skeleton_event() -> ClaimEvent {
         }],
         observed_at: None,
         valid_from: None,
+        valid_to: None,
     }
 }
 

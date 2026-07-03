@@ -352,6 +352,14 @@ struct ValueWriteArgs {
     /// Provenance source for this write.
     #[arg(long, short = 's', value_parser = parse_source)]
     source: String,
+    /// Valid-time lower bound (unix millis): when the fact starts to hold. Also anchors
+    /// TTL freshness. Applies to the assertion this write creates.
+    #[arg(long = "valid-from", value_name = "MILLIS")]
+    valid_from: Option<i64>,
+    /// Valid-time upper bound (unix millis): when the fact stops holding (ADR 0016).
+    /// Past it the fact reads as stale, like an elapsed TTL.
+    #[arg(long = "valid-to", value_name = "MILLIS")]
+    valid_to: Option<i64>,
 }
 
 #[derive(Args, Debug)]
@@ -396,6 +404,13 @@ struct ReadFactArgs {
     /// Predicate within the subject's fact stream.
     #[arg(value_parser = parse_predicate)]
     predicate: String,
+    /// Read the log as it stood at this instant (unix millis): fold only events recorded
+    /// at or before it (transaction-time travel, ADR 0016).
+    #[arg(long = "as-of", value_name = "MILLIS")]
+    as_of: Option<i64>,
+    /// Evaluate freshness/validity at this instant (unix millis) instead of now.
+    #[arg(long = "valid-at", value_name = "MILLIS")]
+    valid_at: Option<i64>,
 }
 
 #[derive(Args, Debug)]
@@ -2972,6 +2987,7 @@ fn base(
         }],
         observed_at: None,
         valid_from: None,
+        valid_to: None,
     }
 }
 

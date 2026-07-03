@@ -1403,6 +1403,7 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         "ok",
         AuthorityLevel::High,
         source,
+        ops::Validity::default(),
     )
     .map_err(|error| error.message().to_string())?;
 
@@ -1414,6 +1415,7 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         "tampered",
         AuthorityLevel::Low,
         source,
+        ops::Validity::default(),
     ) {
         Ok(message) => {
             return Err(format!(
@@ -1424,8 +1426,14 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         Err(error) => return Err(error.message().to_string()),
     }
 
-    let explained = ops::op_explain(&log_path(), "diagnostic", &subject_key, "dent8.write_check")
-        .map_err(|error| error.message().to_string())?;
+    let explained = ops::op_explain(
+        &log_path(),
+        "diagnostic",
+        &subject_key,
+        "dent8.write_check",
+        ops::ReadClock::default(),
+    )
+    .map_err(|error| error.message().to_string())?;
     if !explained.contains("value         : \"ok\"") {
         return Err(format!(
             "expected trusted value ok to remain; got:\n{explained}"

@@ -317,6 +317,7 @@ fn build_event(base: &Base, index: usize, op: &Op) -> ClaimEvent {
         }],
         observed_at: None,
         valid_from: None,
+        valid_to: None,
     }
 }
 

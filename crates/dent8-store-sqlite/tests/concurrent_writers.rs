@@ -60,6 +60,7 @@ fn asserted(writer: usize, sequence: usize) -> ClaimEvent {
         }],
         observed_at: None,
         valid_from: None,
+        valid_to: None,
     }
 }
 

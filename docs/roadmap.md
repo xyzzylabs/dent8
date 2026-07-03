@@ -173,10 +173,11 @@ taint. The CLI parser is now `clap`, with generated shell completions and a glob
 support `--output json` for scripts/agents; other commands fail closed when
 JSON is requested until their structured contract is designed.
 
-**Remaining.** `replay_runs` persistence, `--as-of` / `--valid-at`, `valid_to` intervals,
-and a richer lineage/debugger view are future work. (The `hook` exit-code contract and the
-`witness` JSON surface — including NDJSON streaming from `serve` — are documented and
-pinned by tests; MCP is JSON-RPC by construction.)
+**Remaining.** `replay_runs` persistence and a richer lineage/debugger view are future
+work. (`valid_to` intervals and `--as-of` / `--valid-at` time-travel reads are built —
+[ADR 0016](decisions/0016-valid-time-and-time-travel-reads.md); the `hook` exit-code
+contract and the `witness` JSON surface — including NDJSON streaming from `serve` — are
+documented and pinned by tests; MCP is JSON-RPC by construction.)
 
 **Crates.** `clap`, `clap_complete`, `serde_json`.
 
@@ -270,7 +271,6 @@ debugger surfaces -> SDKs and production deployment packaging.
 
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger ·
-[valid-time intervals (`valid_to`)](decisions/0005-belief-base-revision-semantics.md) ·
 predicate-level volatility policy · HTTP API · **client SDKs** (`pip install dent8` /
 `npm i dent8` with first-class in-process framework adapters — LangChain, LlamaIndex, Vercel AI
 SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/) and

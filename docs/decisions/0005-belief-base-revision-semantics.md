@@ -51,5 +51,6 @@ Negative:
 
 - Implement authority-as-entrenchment arbitration ([ADR 0007](0007-authority-as-entrenchment.md)).
 - Decide JTMS vs ATMS for the debugger's assumption-environment replay (future ADR).
-- Add `valid_to` (closed valid-time intervals) — currently only open `valid_from`
-  exists, which is weaker than a full bitemporal interval.
+- [DONE] Add `valid_to` (closed valid-time intervals) — built as
+  [ADR 0016](0016-valid-time-and-time-travel-reads.md), together with `--as-of` /
+  `--valid-at` time-travel reads.

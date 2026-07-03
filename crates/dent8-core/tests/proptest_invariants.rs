@@ -248,6 +248,7 @@ fn arb_event() -> impl Strategy<Value = ClaimEvent> {
                 evidence,
                 observed_at: observed_at.map(TimestampMillis::from_unix_millis),
                 valid_from: valid_from.map(TimestampMillis::from_unix_millis),
+                valid_to: None,
             },
         )
 }

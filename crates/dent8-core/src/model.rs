@@ -429,10 +429,23 @@ pub struct ClaimEvent {
     pub evidence: Vec<Evidence>,
     pub observed_at: Option<TimestampMillis>,
     pub valid_from: Option<TimestampMillis>,
+    /// Valid-time upper bound (ADR 0016): the instant this fact is asserted to stop
+    /// holding. Read-time freshness treats it like an elapsed TTL. `None` (the
+    /// pre-interval default) is **skipped during serialization**, so events written
+    /// before this field existed keep byte-identical canonical form and their stored
+    /// hashes (the ADR 0013 optional-field rule; unlike `observed_at`/`valid_from`,
+    /// which predate it and serialize as explicit nulls).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<TimestampMillis>,
 }
 
 impl ClaimEvent {
     pub fn validate(&self) -> Result<(), ValidationError> {
+        if let (Some(from), Some(to)) = (self.valid_from, self.valid_to)
+            && to <= from
+        {
+            return Err(ValidationError::InvalidValidityInterval);
+        }
         match &self.kind {
             ClaimEventKind::Asserted if self.value.is_none() => {
                 Err(ValidationError::MissingClaimValue)
@@ -458,6 +471,8 @@ pub enum ValidationError {
     MissingClaimValue,
     MissingEvidence,
     InvalidJson(String),
+    /// `valid_to` at or before `valid_from` — an empty or inverted validity interval.
+    InvalidValidityInterval,
 }
 
 impl fmt::Display for ValidationError {
@@ -470,6 +485,9 @@ impl fmt::Display for ValidationError {
             Self::MissingClaimValue => f.write_str("asserted claims must include a value"),
             Self::MissingEvidence => f.write_str("asserted claims must include evidence"),
             Self::InvalidJson(error) => write!(f, "invalid JSON claim value: {error}"),
+            Self::InvalidValidityInterval => {
+                f.write_str("valid_to must be after valid_from (non-empty validity interval)")
+            }
         }
     }
 }

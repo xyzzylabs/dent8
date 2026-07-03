@@ -42,6 +42,12 @@ pub struct ClaimState {
     /// Valid-time anchor for TTL freshness: `valid_from`, else `observed_at`, else
     /// the assertion's `recorded_at`.
     pub freshness_anchor: TimestampMillis,
+    /// Valid-time upper bound captured at assertion (ADR 0016): the instant the fact is
+    /// asserted to stop holding. Read-time freshness treats an elapsed `valid_to` exactly
+    /// like an elapsed TTL; lifecycle is untouched. `#[serde(default)]` so projections
+    /// materialized before the field existed still deserialize.
+    #[serde(default)]
+    pub valid_to: Option<TimestampMillis>,
     pub lifecycle: ClaimLifecycle,
     pub created_at: TimestampMillis,
     pub updated_at: TimestampMillis,
@@ -103,18 +109,24 @@ impl ClaimState {
             .count()
     }
 
-    /// When this claim's TTL elapses relative to its freshness anchor, if ever.
+    /// When this claim stops being fresh, if ever: the **earliest** of its TTL bound
+    /// (relative to the freshness anchor) and its asserted `valid_to` (ADR 0016).
     #[must_use]
     pub fn expires_at(&self) -> Option<TimestampMillis> {
-        self.ttl.expires_at(self.freshness_anchor)
+        match (self.ttl.expires_at(self.freshness_anchor), self.valid_to) {
+            (Some(ttl), Some(valid_to)) => Some(ttl.min(valid_to)),
+            (ttl, valid_to) => ttl.or(valid_to),
+        }
     }
 
-    /// Whether the claim's TTL has elapsed at `now`. A claim with `Ttl::Never` is
-    /// never expired. This is the read-time freshness predicate; it does not consult
-    /// lifecycle (a `superseded` claim can still be "unexpired" by TTL).
+    /// Whether the claim's freshness has elapsed at `now` — its TTL ran out **or** its
+    /// asserted validity ended. A claim with `Ttl::Never` and no `valid_to` is never
+    /// expired. This is the read-time freshness predicate; it does not consult lifecycle
+    /// (a `superseded` claim can still be "unexpired" by TTL).
     #[must_use]
     pub fn is_expired_at(&self, now: TimestampMillis) -> bool {
-        self.ttl.is_expired_at(self.freshness_anchor, now)
+        self.expires_at()
+            .is_some_and(|expires_at| expires_at <= now)
     }
 }
 
@@ -153,6 +165,7 @@ fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError
         authority: event.authority.clone(),
         ttl: event.ttl.clone(),
         freshness_anchor,
+        valid_to: event.valid_to,
         lifecycle: ClaimLifecycle::Active,
         created_at: event.provenance.recorded_at,
         updated_at: event.provenance.recorded_at,
@@ -454,6 +467,7 @@ mod tests {
             }],
             observed_at: None,
             valid_from: None,
+            valid_to: None,
         }
     }
 
@@ -547,6 +561,57 @@ mod tests {
             .expect("field present in new serialization");
         let old: super::ClaimState = serde_json::from_value(json).expect("old shape deserializes");
         assert_eq!(old.survived_challenge_count(), 0);
+    }
+
+    #[test]
+    fn valid_to_bounds_freshness_like_an_elapsed_ttl() {
+        let mut event = asserted(AuthorityLevel::High);
+        event.valid_from = Some(TimestampMillis::from_unix_millis(1_000));
+        event.valid_to = Some(TimestampMillis::from_unix_millis(2_000));
+        let state = apply_event(None, &event).expect("asserted");
+
+        // No TTL: expiry is the validity bound alone, inclusive at the boundary.
+        assert_eq!(
+            state.expires_at(),
+            Some(TimestampMillis::from_unix_millis(2_000))
+        );
+        assert!(!state.is_expired_at(TimestampMillis::from_unix_millis(1_999)));
+        assert!(state.is_expired_at(TimestampMillis::from_unix_millis(2_000)));
+
+        // With a TTL, the earliest bound wins in both directions.
+        let mut event = asserted(AuthorityLevel::High);
+        event.valid_from = Some(TimestampMillis::from_unix_millis(1_000));
+        event.valid_to = Some(TimestampMillis::from_unix_millis(2_000));
+        event.ttl = crate::model::Ttl::DurationMillis(500);
+        let state = apply_event(None, &event).expect("asserted");
+        assert_eq!(
+            state.expires_at(),
+            Some(TimestampMillis::from_unix_millis(1_500)),
+            "a shorter TTL beats a later valid_to"
+        );
+        let mut event = asserted(AuthorityLevel::High);
+        event.valid_from = Some(TimestampMillis::from_unix_millis(1_000));
+        event.valid_to = Some(TimestampMillis::from_unix_millis(1_200));
+        event.ttl = crate::model::Ttl::DurationMillis(500);
+        let state = apply_event(None, &event).expect("asserted");
+        assert_eq!(
+            state.expires_at(),
+            Some(TimestampMillis::from_unix_millis(1_200)),
+            "an earlier valid_to beats a longer TTL"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_inverted_validity_interval_is_rejected() {
+        let mut event = asserted(AuthorityLevel::High);
+        event.valid_from = Some(TimestampMillis::from_unix_millis(2_000));
+        event.valid_to = Some(TimestampMillis::from_unix_millis(2_000));
+        assert!(matches!(
+            apply_event(None, &event),
+            Err(TransitionError::InvalidEvent(
+                crate::model::ValidationError::InvalidValidityInterval
+            ))
+        ));
     }
 
     #[test]
@@ -915,6 +980,7 @@ mod proofs {
             }],
             observed_at: None,
             valid_from: None,
+            valid_to: None,
         }
     }
 
