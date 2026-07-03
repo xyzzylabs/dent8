@@ -129,10 +129,14 @@ flood is defeated in code (qualified count, not raw) and tested. **The
 "survived supersession attempts" half is built too** ([ADR 0015](../decisions/0015-survived-challenge-recording.md)):
 the op boundary records a rejected challenge as a `claim.challenge_rejected` event on the
 incumbent's stream — challenger provenance, effective authority, Sybil-resistant
-`survived_challenges_at_or_above` on `ClaimState` — and the `WeakerCorroboration` audit is
+`survived_challenges_at_or_above` on `ClaimState` — and the earned-entrenchment audit is
 enforceable at write time via the opt-in earned-supersession gate
-(`DENT8_ENTRENCHMENT_GATE=1`). Feeding survived challenges *into* arbitration (a claim
-that survived N strong challenges demands more to displace) remains open.
+(`DENT8_ENTRENCHMENT_GATE=1`). Survived challenges are now **fed into arbitration**
+([ADR 0017](../decisions/0017-survived-challenges-in-arbitration.md)): the gate and the
+audit weigh *earned entrenchment* = corroboration + survived challenges, so a claim that
+survived an equal-authority challenge resists the next fresh equal-authority replacement —
+protection literally derived from challenge-survival. Remaining open: weighting survival
+differently from corroboration (summed 1:1 today) or consulting it in the default path.
 
 **Why defensible (medium).** Truth-discovery (TruthFinder, Knowledge Vault) turns
 corroboration into a probability of truth, never a *raised revision threshold*.

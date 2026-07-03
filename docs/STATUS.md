@@ -93,7 +93,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   strength is **recorded on the incumbent's stream** as a survived challenge
   (`claim.challenge_rejected`, ADR 0015; `DENT8_RECORD_CHALLENGES=0` opts out), and the
   opt-in `DENT8_ENTRENCHMENT_GATE=1` additionally rejects an equal-authority replacement
-  with strictly weaker authority-weighted corroboration than its incumbent. Reload re-validates
+  with strictly weaker authority-weighted **earned entrenchment** — corroboration plus
+  survived challenges (ADR 0017), so a fact that survived a challenge resists the next fresh
+  equal-authority replacement — than its incumbent. Reload re-validates
   integrity: a torn write or external edit that leaves two fresh believed claims **or** a
   broken supersession lineage (dangling/cyclic) is rejected, not silently masked.
 - **`dent8 retract <subject> <predicate> --authority <level> --source <source>`** — terminally removes

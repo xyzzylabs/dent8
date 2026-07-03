@@ -98,11 +98,12 @@ The projection audit remains the always-on detector either way.
   authority the forger would have to *hold*, and under signed identity the record's
   attestation must verify against the challenger's key with entitlement at write time
   (ADR 0014). Same boundary trust model as identity enforcement (ADR 0012).
-- Survived challenges are **recorded but not yet consulted by arbitration** — they surface
-  in `explain` and the projection. Feeding them into the supersession gate (a claim that
-  survived N high challenges demands more than corroboration parity to displace) is future
-  work, deliberately separate: the recording must exist and accumulate honestly before any
-  gate consumes it.
+- Survived challenges are consulted by arbitration as of
+  [ADR 0017](0017-survived-challenges-in-arbitration.md): the opt-in earned-supersession
+  gate (and the entity-level audit) weigh **earned entrenchment** = corroboration + survived
+  challenges, so a claim that survived an equal-authority challenge resists the next fresh
+  equal-authority replacement. This ADR deliberately delivered recording first — the history
+  had to exist and accumulate honestly before a gate consumed it.
 
 ## Consequences
 

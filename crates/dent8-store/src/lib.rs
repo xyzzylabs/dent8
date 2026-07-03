@@ -225,16 +225,18 @@ impl EntityProjection {
     /// - [`UnearnedSupersession::AuthorityDowngrade`] — the replacing claim is actually
     ///   *lower* authority than the one it replaced (the event must have overstated its
     ///   authority to pass the per-stream gate);
-    /// - [`UnearnedSupersession::WeakerCorroboration`] — at equal authority, the
-    ///   replacing claim has *less authority-weighted* corroboration than the incumbent
-    ///   (measured by [`ClaimState::corroboration_at_or_above`] at their shared
-    ///   authority level, so a Sybil flood of low-authority sources cannot mask it).
+    /// - [`UnearnedSupersession::WeakerEntrenchment`] — at equal authority, the replacing
+    ///   claim has *less authority-weighted earned entrenchment* — corroboration plus
+    ///   survived challenges (ADR 0017) — than the incumbent (measured by
+    ///   [`ClaimState::earned_entrenchment_at_or_above`] at their shared authority level, so
+    ///   a Sybil flood of low-authority sources or challenges cannot mask it). This is the
+    ///   same measure the opt-in write-time gate uses, so the audit and the gate agree.
     ///
     /// Semantics: this is a **current-state advisory**, not a stable at-supersession
-    /// verdict. The incumbent's corroboration is frozen (the terminal guard blocks
+    /// verdict. The incumbent's entrenchment is frozen (the terminal guard blocks
     /// reinforcing a superseded claim), but the replacement's keeps accruing, so a
-    /// `WeakerCorroboration` flag clears if the replacement later earns enough backing.
-    /// Read it as "the replacement *still* has weaker backing than what it displaced."
+    /// `WeakerEntrenchment` flag clears if the replacement later earns enough standing.
+    /// Read it as "the replacement *still* has weaker entrenchment than what it displaced."
     ///
     /// Scope: only supersessions whose target is present *in this entity* are judged (a
     /// dangling target is a [`LineageIssue`]; a target in another entity is not seen).
@@ -262,14 +264,14 @@ impl EntityProjection {
                 });
             } else if by.authority.level == state.authority.level {
                 let level = state.authority.level;
-                let incumbent = state.corroboration_at_or_above(level);
-                let challenger = by.corroboration_at_or_above(level);
+                let incumbent = state.earned_entrenchment_at_or_above(level);
+                let challenger = by.earned_entrenchment_at_or_above(level);
                 if challenger < incumbent {
-                    out.push(UnearnedSupersession::WeakerCorroboration {
+                    out.push(UnearnedSupersession::WeakerEntrenchment {
                         superseded: state.claim_id.clone(),
                         by: target.clone(),
-                        incumbent_corroboration: incumbent,
-                        challenger_corroboration: challenger,
+                        incumbent_entrenchment: incumbent,
+                        challenger_entrenchment: challenger,
                     });
                 }
             }
@@ -345,13 +347,13 @@ pub enum UnearnedSupersession {
         challenger: AuthorityLevel,
     },
     /// `superseded` was replaced by `by` at equal authority, but `by` has weaker
-    /// authority-weighted corroboration (distinct backers at or above the shared
-    /// authority level) than the claim it replaced.
-    WeakerCorroboration {
+    /// authority-weighted **earned entrenchment** — corroboration plus survived challenges,
+    /// at or above the shared authority level (ADR 0017) — than the claim it replaced.
+    WeakerEntrenchment {
         superseded: ClaimId,
         by: ClaimId,
-        incumbent_corroboration: usize,
-        challenger_corroboration: usize,
+        incumbent_entrenchment: usize,
+        challenger_entrenchment: usize,
     },
 }
 
@@ -637,10 +639,10 @@ mod tests {
         replay_claim_with_policy, replay_entity, replay_entity_with_policy, tainted_claims,
     };
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-        ClaimLifecycle, ClaimValue, Confidence, EntityRef, EpistemicPolicy, Evidence, EvidenceId,
-        EvidenceKind, Predicate, Provenance, RetractionReason, SourceId, SupersessionReason,
-        TimestampMillis, Ttl,
+        ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, ClaimEvent,
+        ClaimEventId, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimValue, Confidence, EntityRef,
+        EpistemicPolicy, Evidence, EvidenceId, EvidenceKind, Predicate, Provenance,
+        RetractionReason, SourceId, SupersessionReason, TimestampMillis, Ttl,
     };
 
     #[allow(clippy::too_many_arguments)]
@@ -1077,6 +1079,31 @@ mod tests {
         )
     }
 
+    fn challenge_rejected_in(
+        event_id: &str,
+        claim_id: &str,
+        source: &str,
+        authority: AuthorityLevel,
+    ) -> ClaimEvent {
+        with_claim(
+            ev(
+                event_id,
+                ClaimEventKind::ChallengeRejected {
+                    challenge: ChallengeKind::Supersession,
+                    by: None,
+                    rejection: ChallengeRejection::InsufficientAuthority,
+                },
+                None,
+                source,
+                authority,
+                900,
+                Ttl::Never,
+                None,
+            ),
+            claim_id,
+        )
+    }
+
     fn claim(id: &str) -> ClaimId {
         ClaimId::new(id).expect("claim id")
     }
@@ -1302,11 +1329,11 @@ mod tests {
         assert!(entity.lineage_issues().is_empty());
         assert_eq!(
             entity.unearned_supersessions(),
-            vec![UnearnedSupersession::WeakerCorroboration {
+            vec![UnearnedSupersession::WeakerEntrenchment {
                 superseded: claim("claim:A"),
                 by: claim("claim:B"),
-                incumbent_corroboration: 2,
-                challenger_corroboration: 1,
+                incumbent_entrenchment: 2,
+                challenger_entrenchment: 1,
             }]
         );
     }
@@ -1355,11 +1382,50 @@ mod tests {
         assert_eq!(entity.get(&claim("claim:B")).unwrap().corroboration(), 4); // raw, inflated
         assert_eq!(
             entity.unearned_supersessions(),
-            vec![UnearnedSupersession::WeakerCorroboration {
+            vec![UnearnedSupersession::WeakerEntrenchment {
                 superseded: claim("claim:A"),
                 by: claim("claim:B"),
-                incumbent_corroboration: 2,  // High-authority backers of A
-                challenger_corroboration: 1, // High-authority backers of B (Sybils don't count)
+                incumbent_entrenchment: 2,  // High-authority backers of A
+                challenger_entrenchment: 1, // High-authority backers of B (Sybils don't count)
+            }]
+        );
+    }
+
+    #[test]
+    fn a_survived_challenge_makes_an_equal_corroboration_supersession_unearned() {
+        // A and B each have exactly one High-authority backer, so on corroboration alone the
+        // supersession would look earned. But A survived a High challenge (earned entrenchment
+        // 1 + 1 = 2) while B has survived nothing (entrenchment 1) — so, per ADR 0017, the
+        // supersession is unearned: survived challenges now count in the audit.
+        let events = [
+            assert_in("event:1", "claim:A", "source:owner"),
+            challenge_rejected_in(
+                "event:2",
+                "claim:A",
+                "source:attacker",
+                AuthorityLevel::High,
+            ),
+            assert_in("event:3", "claim:B", "source:rumor"),
+            supersede_in("event:4", "claim:A", "claim:B", "source:rumor"),
+        ];
+
+        let entity = replay_entity(&events).expect("entity replay");
+
+        assert_eq!(entity.get(&claim("claim:A")).unwrap().corroboration(), 1);
+        assert_eq!(
+            entity
+                .get(&claim("claim:A"))
+                .unwrap()
+                .survived_challenges_at_or_above(AuthorityLevel::High),
+            1
+        );
+        assert_eq!(
+            entity.unearned_supersessions(),
+            vec![UnearnedSupersession::WeakerEntrenchment {
+                superseded: claim("claim:A"),
+                by: claim("claim:B"),
+                incumbent_entrenchment: 2, // 1 backer + 1 survived challenge
+                challenger_entrenchment: 1,
             }]
         );
     }

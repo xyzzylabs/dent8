@@ -109,6 +109,17 @@ impl ClaimState {
             .count()
     }
 
+    /// **Earned entrenchment** at `min` (ADR 0017): the sum of both Sybil-resistant halves —
+    /// independent backing ([`Self::corroboration_at_or_above`]) plus
+    /// having-been-attacked-and-held ([`Self::survived_challenges_at_or_above`]), each counted
+    /// only at authority ≥ `min`. This is the measure the opt-in supersession gate and the
+    /// entity-level unearned-supersession audit compare, so a claim that survived challenges
+    /// resists an equal-authority replacement as much as one with extra backing does.
+    #[must_use]
+    pub fn earned_entrenchment_at_or_above(&self, min: AuthorityLevel) -> usize {
+        self.corroboration_at_or_above(min) + self.survived_challenges_at_or_above(min)
+    }
+
     /// When this claim stops being fresh, if ever: the **earliest** of its TTL bound
     /// (relative to the freshness anchor) and its asserted `valid_to` (ADR 0016).
     #[must_use]
@@ -521,6 +532,26 @@ mod tests {
         assert_eq!(
             state.survived_challenges_at_or_above(AuthorityLevel::Low),
             2
+        );
+
+        // Earned entrenchment (ADR 0017) sums both Sybil-resistant halves at the queried
+        // level: the lone High asserter (corroboration 1 at Low) plus survived challenges.
+        assert_eq!(
+            state.earned_entrenchment_at_or_above(AuthorityLevel::Low),
+            state.corroboration_at_or_above(AuthorityLevel::Low)
+                + state.survived_challenges_at_or_above(AuthorityLevel::Low),
+        );
+        assert_eq!(
+            state.earned_entrenchment_at_or_above(AuthorityLevel::Low),
+            3, // 1 backer + 2 distinct survived challengers, all at >= Low
+        );
+        assert_eq!(
+            state.earned_entrenchment_at_or_above(AuthorityLevel::Medium),
+            2, // 1 High backer + 1 survived challenge at >= Medium
+        );
+        assert_eq!(
+            state.earned_entrenchment_at_or_above(AuthorityLevel::Canonical),
+            0, // nothing at Canonical
         );
     }
 

@@ -1188,6 +1188,120 @@ fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
 }
 
 #[test]
+fn a_survived_challenge_hardens_a_fact_against_a_fresh_replacement() {
+    // ADR 0017: survived challenges now count in the opt-in gate. Isolated from
+    // corroboration via a Canonical incumbent with a single backer: contradicting it is a
+    // rejected hard-alarm recorded as a survived challenge, and that survival alone (corr
+    // stays 1) then makes a fresh equal-authority replacement unearned.
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+    let gated = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_ENTRENCHMENT_GATE", "1"),
+    ];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:proj",
+                "database",
+                "postgres",
+                "--authority=canonical",
+                "--source=user:owner",
+            ],
+            &envs,
+        ),
+        "assert canonical",
+    );
+
+    // Before any survived challenge, earned entrenchment is 1 (the lone asserter), so the
+    // gate admits an equal-authority replacement. Prove that on a separate clean stream.
+    let temp0 = TempDir::new();
+    let log0 = temp0.file("memory.jsonl").to_string_lossy().into_owned();
+    let gated0 = [
+        ("DENT8_LOG", log0.as_str()),
+        ("DENT8_ENTRENCHMENT_GATE", "1"),
+    ];
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:proj",
+                "database",
+                "postgres",
+                "--authority=canonical",
+                "--source=user:owner",
+            ],
+            &[("DENT8_LOG", log0.as_str())],
+        ),
+        "assert canonical (control)",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "supersede",
+                "repo:proj",
+                "database",
+                "mysql",
+                "--authority=canonical",
+                "--source=source:web",
+            ],
+            &gated0,
+        ),
+        "un-challenged fact yields to an equal-authority replacement",
+    );
+
+    // Back to the main stream: contradict the Canonical incumbent. A canonical contradiction
+    // is a rejected hard-alarm, recorded as a survived challenge at Canonical.
+    let contradicted = run_dent8(
+        &[
+            "contradict",
+            "repo:proj",
+            "database",
+            "mysql",
+            "--authority=canonical",
+            "--source=source:web",
+        ],
+        &envs,
+    );
+    assert_eq!(
+        contradicted.status.code(),
+        Some(1),
+        "{}",
+        stderr(&contradicted)
+    );
+    assert!(
+        stderr(&contradicted).contains("recorded the survived challenge"),
+        "{}",
+        stderr(&contradicted)
+    );
+
+    // Now the incumbent has corroboration 1 but earned entrenchment 2 (1 backer + 1 survived
+    // Canonical challenge). A fresh Canonical replacement is rejected *purely* because it
+    // survived a challenge — the message spells out the split.
+    let blocked = run_dent8(
+        &[
+            "supersede",
+            "repo:proj",
+            "database",
+            "mysql",
+            "--authority=canonical",
+            "--source=source:web2",
+        ],
+        &gated,
+    );
+    assert_eq!(blocked.status.code(), Some(1), "{}", stderr(&blocked));
+    assert!(
+        stderr(&blocked)
+            .contains("earned entrenchment 2 at Canonical (1 corroborating source(s) + 1 survived challenge(s))"),
+        "{}",
+        stderr(&blocked)
+    );
+}
+
+#[test]
 fn missing_write_metadata_gets_targeted_usage() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

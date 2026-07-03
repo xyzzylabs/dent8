@@ -346,8 +346,14 @@ pub enum ChallengeRejection {
     /// A contradiction against a canonical incumbent (the LFI hard-alarm).
     CanonicalContradiction,
     /// An equal-authority supersession whose backing claim had strictly weaker
-    /// authority-weighted corroboration (the earned-supersession gate, opt-in).
+    /// authority-weighted corroboration (the earned-supersession gate, opt-in). Superseded
+    /// by [`Self::WeakerEntrenchment`] as of ADR 0017; kept so pre-0.3 challenge-rejected
+    /// events still deserialize.
     WeakerCorroboration,
+    /// An equal-authority supersession whose challenger had strictly weaker **earned
+    /// entrenchment** — corroboration plus survived challenges — than the incumbent
+    /// (the earned-supersession gate, opt-in; ADR 0017).
+    WeakerEntrenchment,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

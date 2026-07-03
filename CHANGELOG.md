@@ -9,6 +9,20 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+
+- **Survived challenges feed arbitration**
+  ([ADR 0017](docs/decisions/0017-survived-challenges-in-arbitration.md)): the opt-in
+  earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`) and the entity-level
+  unearned-supersession audit now weigh **earned entrenchment** = authority-weighted
+  corroboration + survived challenges (both Sybil-resistant). A fact that survived an
+  equal-authority challenge (ADR 0015) resists the next fresh equal-authority replacement —
+  protection derived from challenge-survival. No `CANON_VERSION` bump (the new
+  `ChallengeRejection::WeakerEntrenchment` reason is additive; the old `WeakerCorroboration`
+  still deserializes). `dent8-store` renames the computed audit finding
+  `UnearnedSupersession::WeakerCorroboration` → `WeakerEntrenchment` (a non-serialized API
+  type).
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

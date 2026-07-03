@@ -130,7 +130,8 @@ formally separate from evidential strength [1].
    authority) and accumulated into `ClaimState.survived_challenges`, read Sybil-resistantly
    via `survived_challenges_at_or_above` — on by default (`DENT8_RECORD_CHALLENGES=0` opts
    out) — plus an opt-in write-time earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`).
-   Feeding survived challenges *into* arbitration is the remaining piece
+   Feeding survived challenges *into* arbitration is done too (ADR 0017: the gate weighs
+   earned entrenchment = corroboration + survived challenges); see
    ([research/novelty.md](research/novelty.md) rank 3).
 3. **The LFI "gentle explosion" tier.** *Implemented:* `apply_event`'s `Contradicted`
    arm returns `TransitionError::CanonicalContradiction` for a contradiction against

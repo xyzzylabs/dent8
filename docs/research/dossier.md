@@ -60,7 +60,8 @@ pass are folded into the topical docs and noted below.
    `unearned_supersessions` audit + the challenge-survival half — ADR 0015: rejected
    challenges recorded as `claim.challenge_rejected` feeding `ClaimState.survived_challenges`,
    on by default, plus the opt-in earned-supersession gate `DENT8_ENTRENCHMENT_GATE`).
-   Remaining for rank 3: feeding survived challenges *into* arbitration.
+   Rank 3 also now feeds survived challenges *into* arbitration (ADR 0017: the gate weighs
+   earned entrenchment = corroboration + survived challenges).
    → [novelty.md](novelty.md)
 
 ## What's useful for the project (concrete adoptions)
@@ -103,10 +104,10 @@ These are the reviewer objections the project must pre-empt, not hide:
 1. **Authority-weighted supersession is THE differentiator vs Graphiti's recency-only
    arbitration — now implemented, enforced at the write boundary, and runnable through
    CLI/MCP over file, SQLite, and DB-verified Postgres stores** (no longer "zero code").
-   The remaining honesty caveat is product hardening: survived challenges are now
-   *recorded* (the `claim.challenge_rejected` event feeding `ClaimState::survived_challenges`,
-   on by default) but not yet consulted by the supersession gate, and production deployments
-   still need operated witness and source-key workflows.
+   The remaining honesty caveat is product hardening: survived challenges are *recorded* and
+   *consulted* by the opt-in earned-supersession gate (ADR 0017: earned entrenchment =
+   corroboration + survived challenges), and production deployments still need operated
+   witness and source-key workflows.
 2. **Three of four "combination" ingredients are individually prior art** (replay =
    event sourcing; hash-chain = transparency logs; bitemporal/provenance = SQL:2011/
    PROV). Only *typed authority-as-entrenchment arbitration* is uncommon in this

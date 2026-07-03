@@ -848,6 +848,7 @@ pub(crate) fn build_revision(
 /// through the base firewall directly (not the uniqueness-checking `admit` path) because
 /// the supersessions, not a pre-check, are what restore the invariant.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // one linear flow: preflight -> entrenchment gate -> apply -> persist
 pub(crate) fn op_supersede(
     path: &str,
     subject_kind: &str,
@@ -931,8 +932,16 @@ pub(crate) fn op_supersede(
                 .ok()
                 .and_then(|stream| replay_claim(&stream).ok().flatten());
             let Some(state) = state else { continue };
-            let backing = state.corroboration_at_or_above(state.authority.level);
-            if state.authority.level == authority && backing > 1 {
+            // Earned entrenchment (ADR 0017) = corroboration + survived challenges, at the
+            // incumbent's authority. A fresh replacement's earned entrenchment is exactly 1
+            // (its asserter, no survived challenges), so `> 1` is "incumbent out-entrenches
+            // the challenger" — and surviving even one equal-authority challenge (raising
+            // entrenchment to 2) is now enough to resist a fresh equal-authority replacement.
+            let level = state.authority.level;
+            let entrenchment = state.earned_entrenchment_at_or_above(level);
+            if level == authority && entrenchment > 1 {
+                let backing = state.corroboration_at_or_above(level);
+                let survived = state.survived_challenges_at_or_above(level);
                 let note = if challenge_recording_enabled()
                     && persist_challenge_record(
                         path,
@@ -941,7 +950,7 @@ pub(crate) fn op_supersede(
                         &predicate_parsed,
                         ChallengeKind::Supersession,
                         Some(events[0].claim_id.clone()),
-                        ChallengeRejection::WeakerCorroboration,
+                        ChallengeRejection::WeakerEntrenchment,
                         source,
                         authority,
                     ) {
@@ -950,11 +959,11 @@ pub(crate) fn op_supersede(
                     ""
                 };
                 return Err(OpError::Rejected(format!(
-                    "REJECTED: unearned supersession: incumbent {incumbent} has {backing} \
-                     corroborating source(s) at {:?}, and a fresh single-source replacement \
-                     may not displace it (earned-supersession gate, \
-                     DENT8_ENTRENCHMENT_GATE){note}",
-                    state.authority.level
+                    "REJECTED: unearned supersession: incumbent {incumbent} has earned \
+                     entrenchment {entrenchment} at {level:?} ({backing} corroborating \
+                     source(s) + {survived} survived challenge(s)), and a fresh single-source \
+                     replacement may not displace it (earned-supersession gate, \
+                     DENT8_ENTRENCHMENT_GATE){note}"
                 )));
             }
         }
