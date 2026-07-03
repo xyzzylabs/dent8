@@ -1,0 +1,94 @@
+# Prebuilt release binaries: build the operational CLI (postgres + sqlite + witness; export
+# stays cargo-only — the arrow/parquet stack triples the binary for a niche lane) for the
+# five first-class targets and attach the archives + checksums to the GitHub release for the
+# pushed tag.
+#
+# Also runs on workflow_dispatch as a build-only smoke (upload steps are tag-guarded), so the
+# matrix can be verified without cutting a release.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release -p dent8 --target ${{ matrix.target }} --features postgres,sqlite,witness
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          [ "${GITHUB_REF_TYPE}" = "tag" ] || version="dev"
+          name="dent8-v${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp "target/${{ matrix.target }}/release/dent8.exe" "dist/$name/"
+          else
+            cp "target/${{ matrix.target }}/release/dent8" "dist/$name/"
+          fi
+          cp README.md LICENSE-APACHE LICENSE-MIT "dist/$name/"
+          cd dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            archive="$name.zip"
+            tar -a -cf "$archive" "$name"
+          else
+            archive="$name.tar.gz"
+            tar -czf "$archive" "$name"
+          fi
+          openssl dgst -r -sha256 "$archive" > "$archive.sha256"
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+      - name: Smoke the binary
+        if: matrix.os != 'windows-latest'
+        run: |
+          "target/${{ matrix.target }}/release/dent8" --version
+      - name: Smoke the binary (windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          & "target/${{ matrix.target }}/release/dent8.exe" --version
+      # Upload only for real tag pushes; a workflow_dispatch run is a build smoke.
+      - name: Ensure the release exists
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
+            gh release create "${GITHUB_REF_NAME}" --title "dent8 ${GITHUB_REF_NAME}" --generate-notes
+      - name: Upload archive
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" "dist/${ARCHIVE}" "dist/${ARCHIVE}.sha256" --clobber
