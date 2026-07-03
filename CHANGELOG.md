@@ -40,6 +40,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   "events" | "grants"`), lifecycle on stderr (`started` / `warning` / `error` / `stopped`) —
   so the operated signer's logs are machine-parseable. `witness sign --output json` gains a
   structured `grant_log_head` field. Exit codes unchanged.
+- **Hook contract**: the `dent8 hook native-memory-guard` exit-code contract is now written
+  down (examples/agent-hooks/README.md) and pinned by tests — mode x condition -> exit code,
+  the stdout-always-empty invariant (providers interpret hook stdout), the bypass flag, and
+  the audit/session verify paths.
 
 ### Fixed
 

@@ -39,6 +39,32 @@ It reads hook JSON on stdin, recognizes common provider payload shapes, and exit
 `2` when an enforced native memory/rules write should be blocked (`DENT8_HOOK_ENFORCE` accepts
 `1`/`true`/`yes`/`on`; an unreadable payload under enforcement fails **closed**).
 
+### Contract
+
+The guard speaks the exit-code hook protocol, and the contract below is pinned by tests
+(`crates/dent8-cli/tests/agent_hook_examples.rs`) — integrations can rely on it:
+
+- **stdout is always empty.** Some providers interpret hook stdout (Claude Code parses it as
+  a decision document); everything the guard says goes to **stderr**, where a blocking
+  provider feeds it back to the model.
+- **Inputs**: the provider's hook JSON on stdin (any shape — unrecognized shapes simply match
+  nothing); `DENT8_HOOK_MODE` selects the behavior; `DENT8_HOOK_ENFORCE` (malformed values
+  fail closed — a typo cannot disable enforcement); `DENT8_ALLOW_NATIVE_MEMORY_WRITE`
+  (malformed values never grant a bypass).
+
+| `DENT8_HOOK_MODE` | condition | exit code |
+| --- | --- | --- |
+| `guard-native-memory-write` (default) | no native memory/rules target in the payload | 0 |
+| | native target, not enforced | 0 (stderr warns) |
+| | native target, enforced | **2** (block) |
+| | native target, enforced, bypass flag set | 0 (stderr warns) |
+| | unreadable payload, enforced | **2** (fail closed) |
+| | unreadable payload, not enforced | 0 |
+| `post-write-audit` | no native target | 0 |
+| | native target (or unreadable payload) | re-runs `dent8 verify`: 0 ok / 1 fail |
+| `session-start` | always | re-runs `dent8 verify`: 0 ok / 1 fail |
+| any other value | | **2** (unknown mode) |
+
 ### What the guard inspects (and what it can't)
 
 The guard is **best-effort** and matches a write target against the native memory/rules patterns

@@ -44,16 +44,32 @@ fn run_builtin_guard(input: &str, enforce: bool) -> std::process::Output {
 }
 
 fn run_builtin_guard_env(input: &str, enforce_value: &str) -> std::process::Output {
+    run_hook(
+        input,
+        &[
+            ("DENT8_HOOK_MODE", "guard-native-memory-write"),
+            ("DENT8_HOOK_ENFORCE", enforce_value),
+        ],
+    )
+}
+
+/// Run `dent8 hook native-memory-guard` with exactly the given environment (plus a scrubbed
+/// baseline), feeding `input` on stdin.
+fn run_hook(input: &str, envs: &[(&str, &str)]) -> std::process::Output {
     let mut command = Command::new(dent8_bin());
     command
         .args(["hook", "native-memory-guard"])
-        .env("DENT8_HOOK_MODE", "guard-native-memory-write")
-        .env("DENT8_HOOK_ENFORCE", enforce_value)
+        .env_remove("DENT8_HOOK_MODE")
+        .env_remove("DENT8_HOOK_ENFORCE")
         .env_remove("DENT8_ALLOW_NATIVE_MEMORY_WRITE")
         .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (name, value) in envs {
+        command.env(name, value);
+    }
 
     let mut child = command.spawn().expect("spawn built-in native memory guard");
     {
@@ -149,6 +165,136 @@ fn builtin_guard_allows_shell_reads_and_unrelated_writes() {
         let allowed = run_builtin_guard(&payload, true);
         assert!(allowed.status.success(), "should allow: {command}");
     }
+}
+
+// ---- the exit-code contract (documented in examples/agent-hooks/README.md) ---------------
+
+const MEMORY_WRITE: &str = r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/repo/CLAUDE.md"}}"#;
+const CODE_WRITE: &str = r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/repo/src/lib.rs"}}"#;
+
+#[test]
+fn hook_never_writes_stdout() {
+    // Some providers interpret hook stdout (Claude Code parses it as a decision document);
+    // the guard's entire contract is exit code + stderr. Every outcome must keep stdout empty.
+    let temp_log =
+        std::env::temp_dir().join(format!("dent8-hook-contract-{}.jsonl", std::process::id()));
+    let log = temp_log.to_string_lossy().into_owned();
+    let scenarios: Vec<std::process::Output> = vec![
+        run_builtin_guard(MEMORY_WRITE, true),  // block
+        run_builtin_guard(MEMORY_WRITE, false), // advisory warn
+        run_builtin_guard(CODE_WRITE, true),    // pass-through
+        run_builtin_guard("not json", true),    // fail closed
+        run_hook(MEMORY_WRITE, &[("DENT8_HOOK_MODE", "no-such-mode")]), // unknown mode
+        run_hook(
+            "",
+            &[("DENT8_HOOK_MODE", "session-start"), ("DENT8_LOG", &log)],
+        ), // verify
+    ];
+    for output in scenarios {
+        assert!(
+            output.stdout.is_empty(),
+            "hook stdout must stay empty, got: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let _ = std::fs::remove_file(&temp_log);
+}
+
+#[test]
+fn hook_rejects_unknown_mode() {
+    let output = run_hook(MEMORY_WRITE, &[("DENT8_HOOK_MODE", "no-such-mode")]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unknown DENT8_HOOK_MODE"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn hook_bypass_flag_opens_the_guard_but_a_typo_does_not() {
+    // The explicit bypass wins over enforcement (still warning on stderr)…
+    let bypassed = run_hook(
+        MEMORY_WRITE,
+        &[
+            ("DENT8_HOOK_MODE", "guard-native-memory-write"),
+            ("DENT8_HOOK_ENFORCE", "1"),
+            ("DENT8_ALLOW_NATIVE_MEMORY_WRITE", "1"),
+        ],
+    );
+    assert!(bypassed.status.success());
+    assert!(String::from_utf8_lossy(&bypassed.stderr).contains("bypass the claim-event firewall"));
+    // …but a malformed bypass value never grants a bypass.
+    let denied = run_hook(
+        MEMORY_WRITE,
+        &[
+            ("DENT8_HOOK_MODE", "guard-native-memory-write"),
+            ("DENT8_HOOK_ENFORCE", "1"),
+            ("DENT8_ALLOW_NATIVE_MEMORY_WRITE", "maybe"),
+        ],
+    );
+    assert_eq!(denied.status.code(), Some(2));
+}
+
+#[test]
+fn hook_audit_and_session_modes_reverify_the_log() {
+    let dir = std::env::temp_dir().join(format!("dent8-hook-verify-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let healthy = dir.join("healthy.jsonl").to_string_lossy().into_owned();
+    let corrupt_path = dir.join("corrupt.jsonl");
+    std::fs::write(&corrupt_path, "this is not a claim event\n").expect("write corrupt log");
+    let corrupt = corrupt_path.to_string_lossy().into_owned();
+
+    // session-start always verifies: a healthy (missing = empty) log passes, a corrupt one
+    // exits 1.
+    let ok = run_hook(
+        "",
+        &[
+            ("DENT8_HOOK_MODE", "session-start"),
+            ("DENT8_LOG", &healthy),
+        ],
+    );
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let broken = run_hook(
+        "",
+        &[
+            ("DENT8_HOOK_MODE", "session-start"),
+            ("DENT8_LOG", &corrupt),
+        ],
+    );
+    assert_eq!(broken.status.code(), Some(1));
+
+    // post-write-audit verifies only when a native memory/rules file was touched.
+    let untouched = run_hook(
+        CODE_WRITE,
+        &[
+            ("DENT8_HOOK_MODE", "post-write-audit"),
+            ("DENT8_LOG", &corrupt),
+        ],
+    );
+    assert!(
+        untouched.status.success(),
+        "an unrelated write must not trigger a verify"
+    );
+    let touched = run_hook(
+        MEMORY_WRITE,
+        &[
+            ("DENT8_HOOK_MODE", "post-write-audit"),
+            ("DENT8_LOG", &corrupt),
+        ],
+    );
+    assert_eq!(touched.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&touched.stderr).contains("verify"),
+        "{}",
+        String::from_utf8_lossy(&touched.stderr)
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn dent8_bin() -> PathBuf {
