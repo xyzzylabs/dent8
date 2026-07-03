@@ -284,11 +284,24 @@ pub fn sign(output: CliOutput) -> i32 {
     if let Err(error) = append_head(&path, &sth) {
         return print_witness_error(output, SIGN_TOOL, &error, 1);
     }
-    let message = format!(
+    // Grant-log lane (ADR 0014 follow-up): when a grant log is discoverable, witness its
+    // head too, so a truncated revocation is detectable.
+    let grant_lane = match sign_grant_log_head(&signing) {
+        Ok(line) => line,
+        Err(error) => {
+            let message = format!("could not sign the grant-log head: {error}");
+            return print_witness_error(output, SIGN_TOOL, &message, 1);
+        }
+    };
+    let mut message = format!(
         "signed tree head: count={} head={} -> appended to {path}",
         sth.event_count,
         sth.head.as_deref().unwrap_or("(empty log)"),
     );
+    if let Some(line) = &grant_lane {
+        message.push('\n');
+        message.push_str(line);
+    }
     match output {
         CliOutput::Text => {
             println!("{message}");
@@ -628,6 +641,7 @@ fn publication_state(
 }
 
 /// Verify the witness log against the current event log and public key.
+#[allow(clippy::too_many_lines)] // two lanes (event log + grant log) in one linear pass
 pub fn verify(output: CliOutput) -> i32 {
     let events = match load_events() {
         Ok(events) => events,
@@ -674,13 +688,32 @@ pub fn verify(output: CliOutput) -> i32 {
     }
     match verify_heads(&events, &heads, &verifying) {
         Ok(()) => {
+            // Grant-log lane (ADR 0014 follow-up): a fault here is a fault, full stop.
+            let grant_lane = match verify_grant_log_heads(&verifying) {
+                Ok(lane) => lane,
+                Err(WitnessFault::CannotVerify(message)) => {
+                    let message =
+                        format!("grant-log verification could not be performed: {message}");
+                    return print_witness_fault(output, VERIFY_TOOL, "cannot_verify", &message, 2);
+                }
+                Err(WitnessFault::Detected(verdict, message)) => {
+                    return print_witness_fault(output, VERIFY_TOOL, verdict.status(), &message, 1);
+                }
+            };
             let head_count = heads.last().map_or(0, |sth| sth.event_count);
             let current_count = events.len() as u64;
-            let message = format!(
+            let mut message = format!(
                 "OK: {} signed tree head(s) verify — the log is append-only consistent with the \
                  witness (latest witnessed count {head_count}, current log {current_count} events)",
                 heads.len()
             );
+            if let Some(grant_heads) = grant_lane {
+                use std::fmt::Write as _;
+                let _ = write!(
+                    message,
+                    "; {grant_heads} grant-log head(s) verify (grant history is append-only)"
+                );
+            }
             match output {
                 CliOutput::Text => {
                     println!("{message}");
@@ -1446,4 +1479,200 @@ mod tests {
             Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")
         ));
     }
+}
+
+// ---- grant-log witness lane (ADR 0014 follow-up) --------------------------------------
+//
+// The grant log is issuer-signed and hash-chained, but its TAIL can be truncated (hiding a
+// fresh revocation) undetectably from the file alone — the same residual the event log has.
+// Same remedy: the witness signs `(record_count, head)` over the grant log into its own
+// appended sequence, and `witness verify` re-checks every signed head against the current
+// grant log's prefix. Requires both the witness key (this module) and the identity feature
+// (the grant log lives there); builds without `identity` skip the lane.
+
+/// One signed grant-log head: `(record_count, hash of the last record line)` under the
+/// witness key. Strict deserialization — a security artifact.
+#[cfg(feature = "identity")]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GrantLogHead {
+    record_count: u64,
+    /// Lowercase-hex SHA-256 of the last grant-record line, or `None` for an empty log.
+    head: Option<String>,
+    /// Lowercase-hex Ed25519 over the framed `(record_count, head)` message.
+    signature: String,
+}
+
+#[cfg(feature = "identity")]
+#[derive(serde::Serialize)]
+struct GrantLogHeadPayload<'a> {
+    record_count: u64,
+    head: Option<&'a str>,
+}
+
+#[cfg(feature = "identity")]
+const GRANT_LOG_HEAD_DOMAIN: &[u8] = b"dent8.grant-log-head.v1\0";
+#[cfg(feature = "identity")]
+const DEFAULT_GRANTS_WITNESS_LOG: &str = "dent8-witness-grants.jsonl";
+
+#[cfg(feature = "identity")]
+fn grants_witness_log_path() -> String {
+    std::env::var("DENT8_WITNESS_GRANTS_LOG")
+        .unwrap_or_else(|_| DEFAULT_GRANTS_WITNESS_LOG.to_string())
+}
+
+#[cfg(feature = "identity")]
+fn grant_log_head_message(record_count: u64, head: Option<&str>) -> Result<Vec<u8>, String> {
+    let body = serde_json::to_vec(&GrantLogHeadPayload { record_count, head })
+        .map_err(|error| format!("canonicalize grant-log head: {error}"))?;
+    let mut message = Vec::with_capacity(GRANT_LOG_HEAD_DOMAIN.len() + 8 + body.len());
+    message.extend_from_slice(GRANT_LOG_HEAD_DOMAIN);
+    message.extend_from_slice(&(body.len() as u64).to_be_bytes());
+    message.extend_from_slice(&body);
+    Ok(message)
+}
+
+/// Sign the current grant-log head, if a grant log is discoverable. Returns a human line for
+/// the sign/serve output, or `None` when there is no grant log (not an error — witness-only
+/// setups are legitimate).
+#[cfg(feature = "identity")]
+fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<String>, String> {
+    use ed25519_dalek::Signer as _;
+    let Some((grant_log, hashes)) = crate::identity::grant_log_line_hashes()? else {
+        return Ok(None);
+    };
+    let record_count = hashes.len() as u64;
+    let head = hashes.last().cloned();
+    let message = grant_log_head_message(record_count, head.as_deref())?;
+    let signed = GrantLogHead {
+        record_count,
+        head,
+        signature: hex::encode(signing.sign(&message).to_bytes()),
+    };
+    let path = grants_witness_log_path();
+    let line = serde_json::to_string(&signed)
+        .map_err(|error| format!("serialize grant-log head: {error}"))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("cannot open {path}: {error}"))?;
+    file.write_all(format!("{line}\n").as_bytes())
+        .map_err(|error| format!("cannot append to {path}: {error}"))?;
+    Ok(Some(format!(
+        "signed grant-log head: count={} ({}) -> appended to {path}",
+        record_count,
+        grant_log.display(),
+    )))
+}
+
+#[cfg(not(feature = "identity"))]
+fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+/// Verify every signed grant-log head against the CURRENT grant log: signatures under the
+/// witness public key, non-decreasing counts, and each witnessed prefix hash still matching.
+/// Returns `Ok(None)` when the lane is unused, `Ok(Some(count))` with the number of verified
+/// heads, or the same fault taxonomy as the event lane.
+#[cfg(feature = "identity")]
+fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
+    use ed25519_dalek::Verifier as _;
+    let path = grants_witness_log_path();
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(WitnessFault::CannotVerify(format!(
+                "cannot read {path}: {error}"
+            )));
+        }
+    };
+    let current = crate::identity::grant_log_line_hashes()
+        .map_err(WitnessFault::CannotVerify)?
+        .map(|(_, hashes)| hashes)
+        .unwrap_or_default();
+    let mut verified = 0usize;
+    let mut previous_count = 0u64;
+    for (index, line) in contents.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let head: GrantLogHead = serde_json::from_str(line).map_err(|error| {
+            WitnessFault::CannotVerify(format!(
+                "{path}:{}: corrupt grant-log head: {error}",
+                index + 1
+            ))
+        })?;
+        let message = grant_log_head_message(head.record_count, head.head.as_deref())
+            .map_err(WitnessFault::CannotVerify)?;
+        let signature = ed25519_dalek::Signature::from_slice(
+            &hex::decode(&head.signature).map_err(|error| {
+                WitnessFault::CannotVerify(format!(
+                    "{path}:{}: grant-log head signature hex: {error}",
+                    index + 1
+                ))
+            })?,
+        )
+        .map_err(|error| {
+            WitnessFault::CannotVerify(format!(
+                "{path}:{}: grant-log head signature: {error}",
+                index + 1
+            ))
+        })?;
+        verifying.verify(&message, &signature).map_err(|_| {
+            WitnessFault::Detected(
+                WitnessVerdict::Tamper,
+                format!(
+                    "TAMPER: grant-log head #{} does not verify under the witness key",
+                    index + 1
+                ),
+            )
+        })?;
+        if head.record_count < previous_count {
+            return Err(WitnessFault::Detected(
+                WitnessVerdict::Rollback,
+                format!(
+                    "ROLLBACK: grant-log witness went backwards at head #{} ({} after {})",
+                    index + 1,
+                    head.record_count,
+                    previous_count
+                ),
+            ));
+        }
+        previous_count = head.record_count;
+        let count = usize::try_from(head.record_count).map_err(|_| {
+            WitnessFault::CannotVerify("grant-log head count overflows usize".to_string())
+        })?;
+        if count > current.len() {
+            return Err(WitnessFault::Detected(
+                WitnessVerdict::Rollback,
+                format!(
+                    "ROLLBACK: a grant-log head was witnessed at {count} record(s) but the \
+                     current grant log has only {} — a revocation may have been truncated away",
+                    current.len()
+                ),
+            ));
+        }
+        if count > 0 && head.head.as_deref() != Some(current[count - 1].as_str()) {
+            return Err(WitnessFault::Detected(
+                WitnessVerdict::Tamper,
+                format!(
+                    "TAMPER: the grant log's first {count} record(s) no longer match the head \
+                     witnessed at that count — grant history was rewritten"
+                ),
+            ));
+        }
+        verified += 1;
+    }
+    if verified == 0 {
+        Ok(None)
+    } else {
+        Ok(Some(verified))
+    }
+}
+
+#[cfg(not(feature = "identity"))]
+fn verify_grant_log_heads(_verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
+    Ok(None)
 }

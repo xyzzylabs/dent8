@@ -338,6 +338,29 @@ pub(crate) fn entitlement_at(
     Entitlement::Entitled
 }
 
+/// The grant log as (path, per-record line hashes), for witness coverage (ADR 0014
+/// follow-up): a signed head commits to `(record_count, hash_of_last_line)`, and a verifier
+/// re-checks each witnessed count against the hash at that prefix. `Ok(None)` = no grant log
+/// configured/present. The records themselves are chain-validated on load.
+pub(crate) fn grant_log_line_hashes() -> Result<Option<(PathBuf, Vec<String>)>, String> {
+    let Some(path) = grant_log_path_for_verify() else {
+        return Ok(None);
+    };
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot read {}: {error}", path.display())),
+    };
+    // Chain-validate before vouching for line hashes.
+    load_grant_records(&path)?;
+    let hashes = contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(grant_record_line_hash)
+        .collect();
+    Ok(Some((path, hashes)))
+}
+
 /// Everything `verify` needs from the grant history, loaded and integrity-checked (chain +
 /// issuer signatures). `Ok(None)` = no grant log configured/present or an empty one.
 pub(crate) fn load_grant_history_for_verify() -> Result<Option<Vec<GrantRecord>>, String> {
@@ -2443,6 +2466,7 @@ fn doctor_key(lines: &mut Vec<DoctorLine>, grant: &SignedSourceGrant) {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)] // linear arg validation + one grant-log branch
 pub(crate) fn grant_issue(
     source: &str,
     public_key_path: &str,
@@ -2524,6 +2548,39 @@ pub(crate) fn grant_issue(
         signature: hex::encode(issuer_key.sign(&message).to_bytes()),
         grant,
     };
+    // Grant history (ADR 0014): this low-level command runs outside a bundle, so it records
+    // history only when a log is explicitly configured — and says so when it is not, rather
+    // than leaving a silent gap.
+    match nonempty_env("DENT8_GRANT_LOG") {
+        Some(log_path) => {
+            if let Err(error) = append_grant_records(
+                Path::new(&log_path),
+                issuer,
+                &issuer_key,
+                &[(GrantAction::Issued, &signed)],
+                now_millis().as_unix_millis(),
+            ) {
+                return identity_grant_issue_error(
+                    source,
+                    public_key_path,
+                    issuer,
+                    issuer_key_path,
+                    out,
+                    &format!("grant log append failed: {error}"),
+                    1,
+                    output,
+                );
+            }
+        }
+        None if output == CliOutput::Text => {
+            eprintln!(
+                "note: no DENT8_GRANT_LOG configured — this issuance is not recorded in grant \
+                 history (run `dent8 identity backfill-grant-log` on the target bundle, or set \
+                 DENT8_GRANT_LOG)"
+            );
+        }
+        None => {}
+    }
     match write_json(out, &signed) {
         Ok(()) => {
             let result = GrantIssueOutput {

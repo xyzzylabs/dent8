@@ -5122,6 +5122,114 @@ fn signed_identity_grant_is_required_and_bound_to_the_write() {
     assert!(stderr(&out_of_scope).contains("does not cover write subject"));
 }
 
+#[cfg(all(feature = "identity", feature = "witness"))]
+#[test]
+fn witness_covers_the_grant_log_and_detects_truncated_revocations() {
+    let temp = TempDir::new();
+    let bundle = temp.file("bundle").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let wkey = temp.file("witness.key").to_string_lossy().into_owned();
+    let wlog = temp.file("witness.jsonl").to_string_lossy().into_owned();
+    let gwlog = temp
+        .file("witness-grants.jsonl")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &bundle,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "bootstrap",
+    );
+    let trust = format!("{bundle}/trust.json");
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_WITNESS_KEY", wkey.as_str()),
+        ("DENT8_WITNESS_LOG", wlog.as_str()),
+        ("DENT8_WITNESS_GRANTS_LOG", gwlog.as_str()),
+    ];
+    assert_success(&run_dent8(&["witness", "keygen"], &envs), "witness keygen");
+
+    // Signing covers BOTH lanes: the event head and the grant-log head (discovered via the
+    // trust registry's sibling grant log the bootstrap created).
+    let sign = run_dent8(&["witness", "sign"], &envs);
+    assert_success(&sign, "witness sign");
+    assert!(
+        stdout(&sign).contains("signed grant-log head: count=1"),
+        "{}",
+        stdout(&sign)
+    );
+    let verify = run_dent8(&["witness", "verify"], &envs);
+    assert_success(&verify, "witness verify");
+    assert!(
+        stdout(&verify).contains("1 grant-log head(s) verify"),
+        "{}",
+        stdout(&verify)
+    );
+
+    // Revoke (a second grant record), witness it, verify.
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "revoke",
+                "--source",
+                "source:codex",
+                "--dir",
+                &bundle,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "revoke",
+    );
+    let sign = run_dent8(&["witness", "sign"], &envs);
+    assert_success(&sign, "witness sign #2");
+    assert!(
+        stdout(&sign).contains("signed grant-log head: count=2"),
+        "{}",
+        stdout(&sign)
+    );
+    assert_success(&run_dent8(&["witness", "verify"], &envs), "verify #2");
+
+    // The attack the lane exists for: truncate the revocation off the grant log's tail.
+    // The chain still validates (a prefix is a valid chain) — only the witnessed head
+    // betrays it.
+    let grant_log = format!("{bundle}/grant-log.jsonl");
+    let contents = fs::read_to_string(&grant_log).expect("grant log");
+    let first_line = contents.lines().next().expect("first record");
+    fs::write(&grant_log, format!("{first_line}\n")).expect("truncate grant log");
+
+    let truncated = run_dent8(&["witness", "verify"], &envs);
+    assert_eq!(truncated.status.code(), Some(1), "{}", stderr(&truncated));
+    assert!(
+        stderr(&truncated).contains("ROLLBACK") && stderr(&truncated).contains("grant log"),
+        "{}",
+        stderr(&truncated)
+    );
+    let truncated_json = run_dent8(&["--output", "json", "witness", "verify"], &envs);
+    assert_eq!(truncated_json.status.code(), Some(1));
+    assert_eq!(
+        stderr_json(&truncated_json)["status"],
+        "rollback",
+        "{}",
+        stderr(&truncated_json)
+    );
+}
+
 #[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear lifecycle: issue -> rotate -> revoke -> backfill

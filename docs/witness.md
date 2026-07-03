@@ -159,6 +159,16 @@ verdict so a monitor never has to parse the prose `message`:
 equivalent). `witness serve` is intentionally not JSON mode: it is a long-running signer loop
 that streams human-readable progress.
 
+## Grant-Log Coverage
+
+With signed identity in use, the witness also covers the **grant log** (ADR 0014): `sign` and
+`serve` append a signed `(record_count, head)` for the grant log into
+`DENT8_WITNESS_GRANTS_LOG` whenever one is discoverable, and `witness verify` re-checks every
+signed head against the current grant log. Grant history is issuer-signed and hash-chained,
+but a truncated *tail* (hiding a fresh revocation) is a valid-looking prefix — only the
+witnessed head betrays it, surfacing as `ROLLBACK`. Retain the grants-witness file outside
+the writer's control, exactly like published event heads.
+
 ## Doctor Checks
 
 `dent8 doctor` now reports witness status when witness paths are configured:

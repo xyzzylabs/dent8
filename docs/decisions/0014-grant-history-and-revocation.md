@@ -75,8 +75,10 @@ One JSON line per lifecycle action:
   deletion or reordering inside the file is tamper-evident; `issued`/`revoked` for the same
   grant are ordered by construction.
 - Rotation is not a distinct action: `rotate-source` appends `revoked` (old grant) +
-  `issued` (new grant). `bootstrap`, `init --identity`, `agent add`, and `grant-issue`
-  append `issued`.
+  `issued` (new grant). `bootstrap`, `init --identity`, and `agent add` always append
+  `issued`; the low-level `grant-issue` runs outside a bundle, so it appends only when
+  `DENT8_GRANT_LOG` is configured and prints an explicit note otherwise (backfill covers
+  the gap).
 - A new `dent8 identity revoke --source <s>` (and `--grant <path>`) appends `revoked`
   **without** issuing a replacement — the missing compromise response.
 
@@ -108,9 +110,13 @@ The verify summary and JSON gain the three counts.
   relative to each other, but absolute-time confidence is only as good as the recording
   host. The chain head can later be covered by the witness (see below).
 - **Truncation** of the tail (hiding a recent revocation) is not detectable from the file
-  alone — the same residual the event log has, with the same remedy: witness coverage of
-  the grant-log head. That is deliberately **out of scope here** (SignedTreeHead's format is
-  frozen; extending witness coverage is its own decision) and listed as the follow-up.
+  alone — the same residual the event log has, with the same remedy, now **implemented**:
+  `dent8 witness sign`/`serve` also sign the grant-log head `(record_count, last-record
+  hash)` into their own appended sequence (`DENT8_WITNESS_GRANTS_LOG`, a separate file so
+  the frozen `SignedTreeHead` format is untouched), and `witness verify` re-checks every
+  signed head against the current grant log — a truncated revocation surfaces as ROLLBACK.
+  The one-level-up residual mirrors the event lane: retain the grants-witness file outside
+  the writer's control, exactly like published heads.
 - Existing stores have attested events but no history. `dent8 identity backfill-grant-log`
   seeds `issued` records from the *current* grant/active-grants with `at_ms = now` — making
   the limitation explicit (entitlement before the backfill stays **unknown**; we do not

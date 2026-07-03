@@ -47,6 +47,7 @@ dent8 doctor --agent codex --write-check
 | `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
 | `DENT8_WITNESS_PUBKEY` | `dent8 witness verify` | `<DENT8_WITNESS_KEY>.pub` | Override the public key used for verification (e.g. when verifying a published head without the signing key). |
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
+| `DENT8_WITNESS_GRANTS_LOG` | `dent8 witness` (`--features witness` + identity) | `./dent8-witness-grants.jsonl` | Appended log of witness-signed **grant-log** heads (ADR 0014 follow-up): `sign`/`serve` cover the grant log when one is discoverable, and `witness verify` detects grant-history truncation (a hidden revocation) as ROLLBACK. |
 | `DATABASE_URL` | the adapter's integration tests only | *(unset → tests skip)* | A throwaway `postgres://…` for `cargo test -p dent8-store-postgres --features adapter`. **Not** read by the CLI/MCP — that is `DENT8_STORE_URL`. |
 
 The optional hook helper `dent8 hook native-memory-guard` has its own variables:

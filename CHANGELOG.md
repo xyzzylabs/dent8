@@ -22,7 +22,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   resolves each attested event's **entitlement at write time** — entitled / unentitled
   (an integrity failure) / unknown (no history, reported honestly) — so rotation no longer
   destroys the evidence needed to audit old writes. `identity status`/`doctor` gain a
-  grant-log consistency line.
+  grant-log consistency line. The **witness now covers the grant log** too: `sign`/`serve`
+  append signed grant-log heads (`DENT8_WITNESS_GRANTS_LOG`) and `witness verify` detects a
+  truncated revocation as ROLLBACK — closing the ADR's named residual. The low-level
+  `grant-issue` appends to the history only when `DENT8_GRANT_LOG` is configured and prints
+  an explicit note otherwise.
 
 ## [0.1.0] - 2026-07-03
 
