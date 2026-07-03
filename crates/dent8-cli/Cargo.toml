@@ -4,6 +4,8 @@ description = "Command-line interface for dent8."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
+keywords = ["agent", "memory", "mcp", "provenance", "firewall"]
+categories = ["command-line-utilities", "development-tools"]
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -53,3 +55,7 @@ export = ["dep:dent8-export"]
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+# docs.rs builds once per version; without this the feature-gated APIs vanish from the docs.
+all-features = true

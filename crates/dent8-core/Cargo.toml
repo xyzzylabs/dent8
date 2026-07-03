@@ -4,6 +4,8 @@ description = "Core claim-event model and invariants for dent8."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
+keywords = ["event-sourcing", "provenance", "belief-revision", "integrity", "memory"]
+categories = ["data-structures", "development-tools"]
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -34,3 +36,7 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+# docs.rs builds once per version; without this the feature-gated APIs vanish from the docs.
+all-features = true
