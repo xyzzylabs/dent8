@@ -367,6 +367,9 @@ fn eval_emits_machine_readable_json() {
     );
 }
 
+// The demo initializes a `--store sqlite` project (the stock-install story), so the binary
+// under test must carry the sqlite feature — a --no-default-features build cannot run it.
+#[cfg(feature = "sqlite")]
 #[test]
 fn firewall_demo_runs_against_test_binary() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/firewall/demo.sh");
@@ -5117,6 +5120,153 @@ fn signed_identity_grant_is_required_and_bound_to_the_write() {
     );
     assert_eq!(out_of_scope.status.code(), Some(2));
     assert!(stderr(&out_of_scope).contains("does not cover write subject"));
+}
+
+#[cfg(feature = "identity")]
+#[test]
+#[allow(clippy::too_many_lines)] // one linear lifecycle: issue -> rotate -> revoke -> backfill
+fn grant_history_decides_entitlement_across_rotation_and_revocation() {
+    let temp = TempDir::new();
+    let bundle = temp.file("bundle").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &bundle,
+                "--source",
+                "source:codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "bootstrap",
+    );
+    let trust = format!("{bundle}/trust.json");
+    let grants = format!("{bundle}/grants/source_codex.grant.json");
+    let key = format!("{bundle}/identities/source_codex.key");
+    let identity_env = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_TRUST", trust.as_str()),
+        ("DENT8_GRANT", grants.as_str()),
+        ("DENT8_IDENTITY_KEY", key.as_str()),
+        ("DENT8_REQUIRE_IDENTITY", "1"),
+    ];
+    let write = |predicate: &str| {
+        run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                predicate,
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "source:codex",
+            ],
+            &identity_env,
+        )
+    };
+
+    // 1. Bootstrap recorded the issuance: the first attested write is ENTITLED.
+    assert_success(&write("favorite_drink"), "attested write #1");
+    let verify = run_dent8(&["verify"], &identity_env);
+    assert_success(&verify, "verify #1");
+    assert!(
+        stdout(&verify)
+            .contains("1 write attestation(s) verify (1 entitled at write time, 0 unknown"),
+        "{}",
+        stdout(&verify)
+    );
+
+    // 2. Rotation revokes the old grant and issues a new one — as history, not erasure:
+    //    the OLD event stays entitled (it predates the revocation), the new one is entitled
+    //    under the new grant.
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "rotate-source",
+                "--source",
+                "source:codex",
+                "--dir",
+                &bundle,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "rotate",
+    );
+    assert_success(&write("favorite_snack"), "attested write #2 (new key)");
+    let verify = run_dent8(&["verify"], &identity_env);
+    assert_success(&verify, "verify #2");
+    assert!(
+        stdout(&verify)
+            .contains("2 write attestation(s) verify (2 entitled at write time, 0 unknown"),
+        "{}",
+        stdout(&verify)
+    );
+
+    // 3. Revocation without replacement: the write path fails closed, and history still
+    //    vouches for everything written before the revocation.
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "revoke",
+                "--source",
+                "source:codex",
+                "--dir",
+                &bundle,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "revoke",
+    );
+    let rejected = write("favorite_color");
+    assert_eq!(rejected.status.code(), Some(2), "{}", stderr(&rejected));
+    let verify = run_dent8(&["verify"], &identity_env);
+    assert_success(&verify, "verify #3 (history outlives revocation)");
+    assert!(
+        stdout(&verify)
+            .contains("2 write attestation(s) verify (2 entitled at write time, 0 unknown"),
+        "{}",
+        stdout(&verify)
+    );
+
+    // 4. Backfill honesty: a log seeded AFTER the writes must make them UNKNOWN, never
+    //    fabricate entitlement (records are stamped now, not backdated).
+    fs::remove_file(format!("{bundle}/grant-log.jsonl")).expect("drop grant log");
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "backfill-grant-log",
+                "--dir",
+                &bundle,
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "backfill",
+    );
+    let verify = run_dent8(&["verify"], &identity_env);
+    assert_success(&verify, "verify #4 (backfilled history is honest)");
+    assert!(
+        stdout(&verify)
+            .contains("2 write attestation(s) verify (0 entitled at write time, 2 unknown"),
+        "{}",
+        stdout(&verify)
+    );
 }
 
 #[cfg(feature = "identity")]
