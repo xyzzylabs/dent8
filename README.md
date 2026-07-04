@@ -102,7 +102,7 @@ Shortcuts exist for `codex`, `claude-code`, `cursor`, `gemini`, `grok-build`, `c
 [examples/mcp/](examples/mcp/) and the per-agent example directories, or wire dent8 in over
 MCP from [LangChain](examples/langchain/) / the [Vercel AI SDK](examples/vercel-ai-sdk/).
 
-## What is built
+## Status
 
 dent8 is **pre-1.0 and experimental** — the API and on-disk encoding may change between minor
 versions. [docs/STATUS.md](docs/STATUS.md) is the single source of truth for what is runnable
