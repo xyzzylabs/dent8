@@ -123,8 +123,9 @@ formally separate from evidential strength [1].
    `equal_authority_supersession_succeeds`) and exhaustively over the 5×5 authority
    lattice. *Earned entrenchment v0 built:* `ClaimState` tracks authority-weighted
    corroboration (`corroboration_at_or_above`), and `EntityProjection::unearned_supersessions`
-   audits supersessions against the replacing claim's real authority/corroboration
-   (`AuthorityDowngrade`, `WeakerCorroboration`; Sybil-resistant). *Challenge-survival
+   audits supersessions against the replacing claim's real authority and earned entrenchment
+   — authority-weighted corroboration plus survived challenges — (`AuthorityDowngrade`,
+   `WeakerEntrenchment`; Sybil-resistant, ADR 0017). *Challenge-survival
    half now built (ADR 0015):* a rejected challenge is recorded on the incumbent's stream
    (`ClaimEventKind::ChallengeRejected`, carrying the challenger's provenance and effective
    authority) and accumulated into `ClaimState.survived_challenges`, read Sybil-resistantly
@@ -166,8 +167,11 @@ formally separate from evidential strength [1].
 
 In short: dent8 is a **belief base with paraconsistent contradiction-tolerance, an
 authority-as-entrenchment ordering, and TMS-style justification edges over a
-replayable log** — a precise, defensible formal identity the codebase is already
-shaped toward, but has not yet implemented at the arbitration layer.
+replayable log** — a precise, defensible formal identity the codebase implements at the
+arbitration layer: `apply_event` arbitrates supersession by authority (lower-authority
+challengers rejected as `InsufficientAuthority`) and hard-alarms canonical contradictions,
+while earned entrenchment — authority-weighted corroboration plus survived challenges — drives
+the opt-in supersession gate and the unearned-supersession audit (ADR 0017).
 
 ## References
 

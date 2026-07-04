@@ -382,8 +382,10 @@ subject+predicate.
   supersession/expiration/retraction) + `#[cfg(kani)]` harnesses (run manually via
   `cargo kani`; a green CI job is a tracked follow-up — Kani's pinned nightly does not yet
   build this edition-2024 workspace).
-- Read-time freshness evaluator (`ClaimState::is_expired_at`).
-- Earned-entrenchment: authority-weighted `corroboration_at_or_above`.
+- Read-time freshness evaluator over the full validity window `[valid_from, expires_at)`
+  (`ClaimState::is_fresh_at` / `is_not_yet_valid_at` / `is_expired_at`, ADR 0016).
+- Earned-entrenchment (ADR 0017): authority-weighted `earned_entrenchment_at_or_above` =
+  `corroboration_at_or_above` + `survived_challenges_at_or_above` (both Sybil-resistant halves).
 - Canonicalization + hash chain (`canonical_bytes`, `event_hash`, `hash_chain`):
   serde, SHA-256, injective length-framed leaf, `0x00` domain separation. **Not JCS**
   (sorted-key `serde_json` form — see [storage.md](storage.md)). The "logically-equal →

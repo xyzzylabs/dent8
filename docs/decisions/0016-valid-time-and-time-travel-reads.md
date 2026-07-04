@@ -49,10 +49,10 @@ not-yet-valid.
 
 ### 2. The write surface completes the interval
 
-`assert`, `supersede`, and `contradict` gain `--valid-from <millis>` / `--valid-to
+`assert`, `supersede`, `contradict`, and `derive` gain `--valid-from <millis>` / `--valid-to
 <millis>` (the shared value-write surface): `assert` stamps its claim; `supersede` and
-`contradict` stamp the *replacement* / *opposing* assertion they create. Setting
-`valid_from` also restores its intended role as the freshness anchor.
+`contradict` stamp the *replacement* / *opposing* assertion they create; `derive` stamps the
+derived assertion. Setting `valid_from` also restores its intended role as the freshness anchor.
 
 ### 3. Time-travel reads
 
@@ -85,6 +85,6 @@ predate the rule and serialize as explicit `null`s, absence is omitted.)
   believed at decision time (`--as-of` at the decision's timestamp) instead of inferring
   it from the current fold.
 - MCP time-travel and validity parameters ride the same `op_*` signatures and are now
-  exposed as tool arguments: `assert`/`supersede`/`contradict` take optional
+  exposed as tool arguments: `assert`/`supersede`/`contradict`/`derive` take optional
   `valid_from`/`valid_to` and `explain`/`replay` take optional `as_of`/`valid_at`, advertised
   in their input schemas — surface plumbing over the existing signatures, not a new mechanism.

@@ -88,8 +88,10 @@ not prior art that implements integrity [7].
 Two cells deserve blunt honesty:
 
 - **Temporal validity.** dent8 now has `observed_at` + `valid_from` + `valid_to`
-  (ADR 0016) and **applies freshness on reads** — `ClaimState::is_expired_at` drives the
-  `fresh` flag and `explain`'s stale annotation, with `expires_at()` taking the *earliest* of
+  (ADR 0016) and **applies freshness on reads** — `ClaimState::is_fresh_at` drives the
+  `fresh` flag and `explain`'s freshness annotation, bounding the full window
+  `[valid_from, expires_at)` (a future `valid_from` reads `[not yet valid]`, an elapsed
+  `valid_to`/TTL reads `[stale — no longer valid]`), with `expires_at()` taking the *earliest* of
   the TTL bound and the asserted `valid_to`; `--as-of`/`--valid-at` add time-travel reads.
   The closed `valid_from`/`valid_to` interval is the analog of Zep's `t_valid`/`t_invalid`;
   what still differs is mechanism — Zep runs graph edge-invalidation, whereas dent8's

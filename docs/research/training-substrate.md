@@ -52,7 +52,7 @@ under different trust policies.
 weakness of DPO-style methods. dent8 addresses it head-on:
 
 - **Poisoning filter.** `EntityProjection::unearned_supersessions` flags
-  `AuthorityDowngrade` and `WeakerCorroboration` supersessions — so you can **drop the
+  `AuthorityDowngrade` and `WeakerEntrenchment` supersessions — so you can **drop the
   pairs where the "preferred" claim was an attacker's injection**, instead of training
   on them. No plain preference corpus can do this.
 - **Confidence weighting.** Authority-weighted corroboration

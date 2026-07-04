@@ -83,13 +83,16 @@ mechanisms are built; the remaining bullets here are refinements, not blockers.
 - **[DONE] Earned entrenchment v0 (novelty rank 3).** `ClaimState` tracks
   authority-weighted `corroborating_sources` (`corroboration_at_or_above`, Sybil-
   resistant); `EntityProjection::unearned_supersessions` audits each supersession
-  against the replacing claim's *actual* authority/corroboration, flagging
-  `AuthorityDowngrade` and `WeakerCorroboration`. The "survived-challenge" half is
+  against the replacing claim's *actual* authority and **earned entrenchment**, flagging
+  `AuthorityDowngrade` and `WeakerEntrenchment`. The "survived-challenge" half is
   **built too** ([ADR 0015](decisions/0015-survived-challenge-recording.md)): a rejected
   challenge is recorded on the incumbent's stream as `claim.challenge_rejected` (with the
   challenger's provenance and effective authority; Sybil-resistant
-  `survived_challenges_at_or_above`), and the `WeakerCorroboration` audit is enforceable at
-  write time via the opt-in earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`).
+  `survived_challenges_at_or_above`), and both the always-on unearned-supersession audit and
+  the opt-in earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`) now weigh *earned
+  entrenchment* — authority-weighted corroboration **plus** survived challenges
+  ([ADR 0017](decisions/0017-survived-challenges-in-arbitration.md); the rejection reason is
+  `WeakerEntrenchment`, the old `WeakerCorroboration` still deserializes).
   *([research/novelty.md](research/novelty.md) rank 3.)*
 - **[DONE] LFI "gentle-explosion" tier.** `apply_event`'s `Contradicted` arm returns
   `CanonicalContradiction` for a contradiction against an `AuthorityLevel::Canonical`

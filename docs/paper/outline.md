@@ -96,7 +96,7 @@ verifiable invariants.
 > built** — serde canonicalization + SHA-256 + injective leaf + a witness-keyed
 > `(count, head)` commitment, with both a **symmetric (HMAC)** and an **asymmetric
 > (Ed25519 signed tree head)** variant — and the **integrity evaluation is built** (the
-> `dent8-evals` corpus, bullet 5). Still plans: TTL-expiry evaluation, a hosted/managed witness
+> `dent8-evals` corpus, bullet 5). Still plans: a hosted/managed witness
 > service, and the transactional Postgres store-layer enforcement.
 
 ### Novelty positioning (read [research/novelty.md](../research/novelty.md))

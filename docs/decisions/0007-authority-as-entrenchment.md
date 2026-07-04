@@ -59,7 +59,8 @@ Negative:
   non-resurrection test and a `#[cfg(kani)]` harness.
 - [DONE] Earned entrenchment v0: authority-weighted `corroborating_sources` /
   `corroboration_at_or_above` on `ClaimState`, and `EntityProjection::unearned_supersessions`
-  (`AuthorityDowngrade`, `WeakerCorroboration`; Sybil-resistant), tested.
+  (`AuthorityDowngrade`, `WeakerEntrenchment` — now weighing earned entrenchment =
+  corroboration + survived challenges, ADR 0017; Sybil-resistant), tested.
 - Enforce the arbitration *transactionally* in the store layer once the Postgres
   adapter exists (load incumbent, lock, arbitrate, append atomically).
 - [DONE] Record *rejected* supersession attempts — the "survived-challenge" half of

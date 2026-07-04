@@ -124,7 +124,8 @@ stored state.
 Sybil-resistant `corroboration_at_or_above(level)`; `EntityProjection::unearned_supersessions`
 audits each supersession against the replacing claim's *actual* state, flagging
 `AuthorityDowngrade` (replacement is really lower-authority than its stated event) and
-`WeakerCorroboration` (less authority-weighted backing at equal authority). The Sybil
+`WeakerEntrenchment` (less authority-weighted earned entrenchment — corroboration plus
+survived challenges, ADR 0017 — at equal authority). The Sybil
 flood is defeated in code (qualified count, not raw) and tested. **The
 "survived supersession attempts" half is built too** ([ADR 0015](../decisions/0015-survived-challenge-recording.md)):
 the op boundary records a rejected challenge as a `claim.challenge_rejected` event on the

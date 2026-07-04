@@ -42,7 +42,8 @@ ClaimEventKind::ChallengeRejected {
     challenge: ChallengeKind,        // Supersession | Contradiction | Retraction | Expiration
     by: Option<ClaimId>,             // the challenging claim, when the challenge named one
     rejection: ChallengeRejection,   // InsufficientAuthority | LaunderedAuthority
-                                     //   | CanonicalContradiction | WeakerCorroboration
+                                     //   | CanonicalContradiction | WeakerEntrenchment
+                                     //   (WeakerCorroboration retained for pre-0.3 events)
 }
 ```
 
