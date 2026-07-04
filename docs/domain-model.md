@@ -131,8 +131,10 @@ projection state; it does not delete history, and it is authority-gated like ret
 > as a lifecycle state still comes only from an authority-gated `claim.expired` event
 > (ADR 0011). The CLI/MCP read surface applies freshness by flagging stale receipts.
 > `valid_to` closes the interval (ADR 0016): an asserted end of validity is treated by
-> reads exactly like an elapsed TTL (`expires_at` is the earliest of the two bounds).
-> Remaining: freshness on every summary surface.
+> reads exactly like an elapsed TTL (`expires_at` is the earliest of the two bounds), and a
+> future `valid_from` reads *not yet valid*. The enumeration surfaces — `facts list`, MCP
+> `list_facts`, and `resources/list` — now flag each stream's freshness too, so the read
+> surface is complete.
 
 ## Lifecycle State
 

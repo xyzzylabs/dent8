@@ -22,8 +22,7 @@ use serde_json::{Value, json};
 
 use crate::ops::{
     OpError, op_assert, op_conflicts, op_contradict, op_derive, op_expire, op_explain,
-    op_explain_receipt, op_list_subjects, op_reinforce, op_replay, op_retract, op_supersede,
-    with_write_retry,
+    op_explain_receipt, op_reinforce, op_replay, op_retract, op_supersede, with_write_retry,
 };
 use crate::{display_value, load_store, log_path, parse_authority, short, verify_log};
 
@@ -236,16 +235,17 @@ fn handle_tool_call(id: &Value, params: Option<&Value>, path: &str) -> Value {
 
 /// `resources/list`: one resource per distinct fact stream in the log.
 fn handle_resources_list(id: &Value, path: &str) -> Value {
-    match op_list_subjects(path, false) {
+    match crate::ops::op_list_subjects_with_freshness(path, false) {
         Ok(subjects) => {
             let resources: Vec<Value> = subjects
                 .iter()
-                .map(|(kind, key, predicate)| {
+                .map(|(kind, key, predicate, freshness)| {
                     json!({
                         "uri": resource_uri(kind, key, predicate),
-                        "name": format!("{kind}:{key} {predicate}"),
+                        "name": format!("{kind}:{key} {predicate}{}", freshness.text_marker()),
                         "description": format!(
-                            "The believed (or terminal) value of `{predicate}` for {kind}:{key}, with its integrity receipt."
+                            "The believed (or terminal) value of `{predicate}` for {kind}:{key} (currently {}), with its integrity receipt.",
+                            freshness.json_name()
                         ),
                         "mimeType": "text/plain",
                     })
@@ -530,6 +530,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 arg(arguments, "from_key")?,
                 arg(arguments, "from_predicate")?,
             );
+            let validity = arg_validity(arguments)?;
             let mut output = run_write_tool(
                 "derive",
                 "accepted",
@@ -554,6 +555,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                         &from_kind,
                         &from_key,
                         &from_predicate,
+                        validity,
                     )
                 },
             )?;
@@ -629,13 +631,14 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
 
 fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
     let include_diagnostics = optional_bool(arguments, "include_diagnostics")?;
-    let subjects = op_list_subjects(path, include_diagnostics).map_err(into_tool_error)?;
-    let hidden_diagnostics_count = if include_diagnostics {
-        0
-    } else {
-        let all_subjects = op_list_subjects(path, true).map_err(into_tool_error)?;
-        all_subjects.len().saturating_sub(subjects.len())
-    };
+    // One store load: resolve every stream's freshness, then partition — visible streams and
+    // the count of hidden diagnostic streams — instead of a second full pass just to count.
+    let all = crate::ops::op_list_subjects_with_freshness(path, true).map_err(into_tool_error)?;
+    let (subjects, hidden): (Vec<_>, Vec<_>) =
+        all.into_iter().partition(|(kind, key, predicate, _)| {
+            include_diagnostics || !crate::ops::is_diagnostic_fact_stream(kind, key, predicate)
+        });
+    let hidden_diagnostics_count = hidden.len();
     if subjects.is_empty() {
         let hidden_note = if hidden_diagnostics_count == 0 {
             String::new()
@@ -658,26 +661,22 @@ fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
     }
     let facts: Vec<Value> = subjects
         .iter()
-        .map(|(kind, key, predicate)| {
+        .map(|(kind, key, predicate, freshness)| {
             json!({
                 "uri": resource_uri(kind, key, predicate),
                 "subject": { "kind": kind, "key": key },
                 "predicate": predicate,
+                "freshness": freshness.json_name(),
             })
         })
         .collect();
-    let lines: Vec<String> = facts
+    let lines: Vec<String> = subjects
         .iter()
-        .map(|fact| {
-            let kind = fact["subject"]["kind"].as_str().unwrap_or("");
-            let key = fact["subject"]["key"].as_str().unwrap_or("");
-            let predicate = fact["predicate"].as_str().unwrap_or("");
+        .map(|(kind, key, predicate, freshness)| {
             format!(
-                "- {}  ({}:{} {})",
-                fact["uri"].as_str().unwrap_or(""),
-                kind,
-                key,
-                predicate
+                "- {}  ({kind}:{key} {predicate}){}",
+                resource_uri(kind, key, predicate),
+                freshness.text_marker(),
             )
         })
         .collect();
@@ -1092,8 +1091,9 @@ fn tool_list() -> Vec<Value> {
         "valid_at": { "type": "integer", "description": "evaluate freshness/validity at this instant (unix millis) instead of now" },
     });
     let valued = merge(&subject, &merge(&value, &write));
-    // assert/supersede/contradict create an assertion, so they take the validity interval;
-    // derive (also valued) does not, matching the CLI.
+    // Every assertion-creating tool takes the validity interval: assert/supersede/contradict
+    // via `valued_vt`, and derive via `derive_props` (which merges it in) — matching the CLI's
+    // --valid-from/--valid-to on all four (ADR 0016).
     let valued_vt = merge(&valued, &validity);
     let read_props = merge(&subject, &clock);
     let write_only = merge(&subject, &write);
@@ -1102,7 +1102,7 @@ fn tool_list() -> Vec<Value> {
         "from_key": { "type": "string", "description": "source fact's entity key" },
         "from_predicate": { "type": "string", "description": "source fact's predicate" },
     });
-    let derive_props = merge(&valued, &from);
+    let derive_props = merge(&valued_vt, &from);
     let read = ["subject_kind", "subject_key", "predicate"];
     let valued_req = [
         "subject_kind",
@@ -1187,7 +1187,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "derive",
-            "Assert a fact derived from another fact (named by its subject), recording a dependency edge. If that source is later retracted or expired, this derivative is flagged as tainted.",
+            "Assert a fact derived from another fact (named by its subject), recording a dependency edge. If that source is later retracted or expired, this derivative is flagged as tainted. Optional valid_from/valid_to set the derived assertion's validity interval.",
             &derive_props,
             &derive_req,
         ),
@@ -1263,8 +1263,9 @@ fn list_facts_output_schema() -> Value {
                         "uri": { "type": "string" },
                         "subject": subject_output_schema(),
                         "predicate": { "type": "string" },
+                        "freshness": { "enum": ["fresh", "stale", "not_yet_valid", "no_longer_believed"] },
                     }),
-                    &["uri", "subject", "predicate"],
+                    &["uri", "subject", "predicate", "freshness"],
                 ),
             },
         }),
@@ -1860,12 +1861,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {name}"))["inputSchema"]["properties"]
                 .clone()
         };
-        for w in ["assert", "supersede", "contradict"] {
+        // Every tool that creates an assertion advertises the validity interval.
+        for w in ["assert", "supersede", "contradict", "derive"] {
             assert!(props(w)["valid_from"].is_object(), "{w} lacks valid_from");
             assert!(props(w)["valid_to"].is_object(), "{w} lacks valid_to");
         }
-        // derive creates an assertion but the CLI does not stamp it, so neither does MCP.
-        assert!(props("derive")["valid_from"].is_null());
+        // …but not the read clock.
+        assert!(props("derive")["as_of"].is_null());
         for r in ["explain", "replay"] {
             assert!(props(r)["as_of"].is_object(), "{r} lacks as_of");
             assert!(props(r)["valid_at"].is_object(), "{r} lacks valid_at");
@@ -1873,6 +1875,54 @@ mod tests {
         // Writes do not advertise the read clock, reads do not advertise validity.
         assert!(props("assert")["as_of"].is_null());
         assert!(props("explain")["valid_from"].is_null());
+    }
+
+    #[test]
+    fn list_surfaces_flag_freshness() {
+        let (_dir, path) = temp_log();
+        call_tool(
+            &path,
+            "assert",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "value": "postgres", "authority": "high", "source": "u" }),
+        );
+        call_tool(
+            &path,
+            "assert",
+            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "window", "value": "open", "authority": "high", "source": "u", "valid_from": 1000, "valid_to": 2000 }),
+        );
+
+        // list_facts carries a per-stream freshness field (also validated against the schema).
+        let result = assert_tool_output_matches_schema(&path, "list_facts", json!({}));
+        let facts = result["structuredContent"]["facts"]
+            .as_array()
+            .expect("facts");
+        let fresh_of = |pred: &str| {
+            facts
+                .iter()
+                .find(|f| f["predicate"] == pred)
+                .unwrap_or_else(|| panic!("missing {pred}"))["freshness"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(fresh_of("db"), "fresh");
+        assert_eq!(fresh_of("window"), "stale");
+
+        // resources/list flags the stale stream in its name.
+        let req = json!({ "jsonrpc": "2.0", "id": 7, "method": "resources/list" });
+        let resources = handle(&req, &path).expect("response")["result"]["resources"]
+            .as_array()
+            .expect("resources")
+            .clone();
+        let window = resources
+            .iter()
+            .find(|r| r["uri"].as_str().unwrap_or("").ends_with("/window"))
+            .expect("window resource");
+        assert!(
+            window["name"].as_str().unwrap().contains("[stale]"),
+            "{}",
+            window["name"]
+        );
     }
 
     #[test]

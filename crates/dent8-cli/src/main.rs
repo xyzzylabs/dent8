@@ -395,6 +395,12 @@ struct DeriveWriteArgs {
     /// Provenance source for this write.
     #[arg(long, short = 's', value_parser = parse_source)]
     source: String,
+    /// Valid-time lower bound (unix millis) for the derived assertion (ADR 0016).
+    #[arg(long = "valid-from", value_name = "MILLIS")]
+    valid_from: Option<i64>,
+    /// Valid-time upper bound (unix millis) for the derived assertion (ADR 0016).
+    #[arg(long = "valid-to", value_name = "MILLIS")]
+    valid_to: Option<i64>,
 }
 
 #[derive(Args, Debug)]

@@ -489,6 +489,7 @@ pub(crate) fn op_derive(
     from_kind: &str,
     from_key: &str,
     from_predicate: &str,
+    validity: Validity,
 ) -> Result<String, OpError> {
     enforce_write_authority(&WriteAuth::new(
         subject_kind,
@@ -524,6 +525,7 @@ pub(crate) fn op_derive(
         now,
     )
     .map_err(|error| OpError::Invalid(format!("invalid derivation: {error}")))?;
+    validity.stamp(&mut event);
     // Record a DerivedFrom evidence edge to each believed source claim.
     for (index, src) in sources.iter().enumerate() {
         event.evidence.push(Evidence {
@@ -598,6 +600,10 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
             &from_subject.kind,
             &from_subject.key,
             &from_predicate,
+            Validity {
+                from: args.valid_from,
+                to: args.valid_to,
+            },
         )
     });
     present_write(outcome, output, &view)
@@ -1751,27 +1757,81 @@ pub(crate) fn cmd_explain(args: &ReadFactArgs, output: CliOutput) -> i32 {
     }
 }
 
-/// The distinct `(kind, key, predicate)` fact streams in the log, in append order — the
-/// enumeration behind the MCP `resources/list` surface.
-pub(crate) fn op_list_subjects(
+/// The read-time freshness of a listed fact stream (threat-model T4), so the enumeration
+/// surfaces (`facts list`, MCP `list_facts` / `resources/list`) flag a stale or not-yet-valid
+/// fact without the caller reading each one. Computed from the believed (or terminal) receipt
+/// at wall-clock now.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FactFreshness {
+    Fresh,
+    Stale,
+    NotYetValid,
+    NoLongerBelieved,
+}
+
+impl FactFreshness {
+    fn from_receipt(receipt: &IntegrityReceipt) -> Self {
+        if receipt.lifecycle.is_terminal() {
+            Self::NoLongerBelieved
+        } else if receipt.not_yet_valid {
+            Self::NotYetValid
+        } else if !receipt.fresh {
+            Self::Stale
+        } else {
+            Self::Fresh
+        }
+    }
+
+    /// Stable machine name for JSON.
+    pub(crate) fn json_name(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::NotYetValid => "not_yet_valid",
+            Self::NoLongerBelieved => "no_longer_believed",
+        }
+    }
+
+    /// A compact human marker; empty for a fresh fact so the common case stays quiet.
+    pub(crate) fn text_marker(self) -> &'static str {
+        match self {
+            Self::Fresh => "",
+            Self::Stale => "  [stale]",
+            Self::NotYetValid => "  [not yet valid]",
+            Self::NoLongerBelieved => "  [no longer believed]",
+        }
+    }
+}
+
+/// Distinct fact streams **with each one's current freshness** (T4), resolved from a single
+/// store load. `facts list` and the MCP list surfaces use this so a stale/not-yet-valid fact
+/// is visible in the summary, not only on an individual `explain`/`resources/read`.
+pub(crate) fn op_list_subjects_with_freshness(
     path: &str,
     include_diagnostics: bool,
-) -> Result<Vec<(String, String, String)>, OpError> {
+) -> Result<Vec<(String, String, String, FactFreshness)>, OpError> {
     let store = load_store(path).map_err(OpError::Invalid)?;
-    Ok(store
-        .subjects()
-        .into_iter()
-        .map(|(subject, predicate)| {
-            (
-                subject.kind().to_string(),
-                subject.key().to_string(),
-                predicate.as_str().to_string(),
-            )
-        })
-        .filter(|(kind, key, predicate)| {
-            include_diagnostics || !is_diagnostic_fact_stream(kind, key, predicate)
-        })
-        .collect())
+    let now = now_millis();
+    let mut out = Vec::new();
+    for (subject, predicate) in store.subjects() {
+        let kind = subject.kind().to_string();
+        let key = subject.key().to_string();
+        let pred = predicate.as_str().to_string();
+        if !include_diagnostics && is_diagnostic_fact_stream(&kind, &key, &pred) {
+            continue;
+        }
+        // Freshness only needs the claim's replayed state, so use the chain-check-free
+        // resolver — listing N streams must not re-hash the whole log N times.
+        let freshness = store
+            .latest_freshness(&subject, &predicate, now)
+            .ok()
+            .flatten()
+            .map_or(FactFreshness::Fresh, |receipt| {
+                FactFreshness::from_receipt(&receipt)
+            });
+        out.push((kind, key, pred, freshness));
+    }
+    Ok(out)
 }
 
 pub(crate) fn is_diagnostic_fact_stream(kind: &str, key: &str, predicate: &str) -> bool {
@@ -1798,7 +1858,7 @@ pub(crate) fn filters_are_empty(filters: &FactsListArgs) -> bool {
 }
 
 pub(crate) struct FactsListOutcome {
-    facts: Vec<(String, String, String)>,
+    facts: Vec<(String, String, String, FactFreshness)>,
     include_diagnostics: bool,
     hidden_diagnostics_count: usize,
     filters_applied: bool,
@@ -1827,10 +1887,10 @@ pub(crate) fn facts_list_outcome(
     path: &str,
     filters: &FactsListArgs,
 ) -> Result<FactsListOutcome, OpError> {
-    let all_subjects = op_list_subjects(path, true)?;
+    let all_subjects = op_list_subjects_with_freshness(path, true)?;
     let mut visible = Vec::new();
     let mut hidden_diagnostics_count = 0usize;
-    for (kind, key, predicate) in all_subjects {
+    for (kind, key, predicate, freshness) in all_subjects {
         if !fact_stream_matches(&kind, &key, &predicate, filters) {
             continue;
         }
@@ -1838,7 +1898,7 @@ pub(crate) fn facts_list_outcome(
             hidden_diagnostics_count += 1;
             continue;
         }
-        visible.push((kind, key, predicate));
+        visible.push((kind, key, predicate, freshness));
     }
 
     Ok(FactsListOutcome {
@@ -1874,13 +1934,14 @@ pub(crate) fn format_facts_list(outcome: &FactsListOutcome) -> String {
     let lines = outcome
         .facts
         .iter()
-        .map(|(kind, key, predicate)| {
+        .map(|(kind, key, predicate, freshness)| {
             format!(
-                "- {}  ({}:{} {})",
+                "- {}  ({}:{} {}){}",
                 crate::mcp::resource_uri(kind, key, predicate),
                 kind,
                 key,
-                predicate
+                predicate,
+                freshness.text_marker(),
             )
         })
         .collect::<Vec<_>>();
@@ -1896,7 +1957,7 @@ pub(crate) fn facts_list_json(outcome: &FactsListOutcome) -> serde_json::Value {
     let facts = outcome
         .facts
         .iter()
-        .map(|(kind, key, predicate)| {
+        .map(|(kind, key, predicate, freshness)| {
             serde_json::json!({
                 "uri": crate::mcp::resource_uri(kind, key, predicate),
                 "subject": {
@@ -1904,6 +1965,7 @@ pub(crate) fn facts_list_json(outcome: &FactsListOutcome) -> serde_json::Value {
                     "key": key,
                 },
                 "predicate": predicate,
+                "freshness": freshness.json_name(),
             })
         })
         .collect::<Vec<_>>();

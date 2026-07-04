@@ -171,6 +171,19 @@ impl InMemoryEventStore {
         claim_id: &ClaimId,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, ReplayError> {
+        self.explain_with(claim_id, now, true)
+    }
+
+    /// [`Self::explain`] with the whole-log chain re-verification optional. Enumeration
+    /// surfaces that only need a claim's freshness/lifecycle (`latest_freshness`) pass
+    /// `verify_chain = false` so listing N streams does not re-hash the entire log N times;
+    /// `chain_verified` is then reported `false` (the caller was not asking).
+    fn explain_with(
+        &self,
+        claim_id: &ClaimId,
+        now: TimestampMillis,
+        verify_chain: bool,
+    ) -> Result<Option<IntegrityReceipt>, ReplayError> {
         let Some(indices) = self.by_claim.get(claim_id) else {
             return Ok(None);
         };
@@ -204,8 +217,56 @@ impl InMemoryEventStore {
             contradicted_by: state.contradicted_by.clone(),
             replay_position: last.global_sequence,
             event_hash: last.event_hash.clone(),
-            chain_verified: self.verify_chain(),
+            chain_verified: verify_chain && self.verify_chain(),
         }))
+    }
+
+    /// The claim id [`Self::explain_latest`] resolves to: the believed claim (a contested or
+    /// fresh one preferred), else the most-recently-updated terminal claim, else `None`.
+    /// Shared by `explain_latest` and `latest_freshness` so the two never disagree.
+    fn latest_claim_id(
+        &self,
+        subject: &EntityRef,
+        predicate: &Predicate,
+        now: TimestampMillis,
+    ) -> Result<Option<ClaimId>, StoreError> {
+        let filter = EventFilter {
+            subject: Some(subject.clone()),
+            predicate: Some(predicate.clone()),
+            ..EventFilter::default()
+        };
+        let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
+        if let Some(state) = entity
+            .believed()
+            .find(|state| state.lifecycle == ClaimLifecycle::Contested && !state.is_expired_at(now))
+            .or_else(|| entity.believed().find(|state| !state.is_expired_at(now)))
+            .or_else(|| entity.believed().next())
+        {
+            return Ok(Some(state.claim_id.clone()));
+        }
+        Ok(entity
+            .claims
+            .values()
+            .max_by_key(|state| state.updated_at)
+            .map(|state| state.claim_id.clone()))
+    }
+
+    /// The believed (or terminal) fact's receipt with freshness resolved **without** the
+    /// whole-log chain re-verification — for enumeration surfaces (`facts list`, MCP
+    /// `list_facts` / `resources/list`) that flag per-stream freshness at scale. Resolves the
+    /// same claim as [`Self::explain_latest`]; `chain_verified` is `false` (not asked).
+    pub fn latest_freshness(
+        &self,
+        subject: &EntityRef,
+        predicate: &Predicate,
+        now: TimestampMillis,
+    ) -> Result<Option<IntegrityReceipt>, StoreError> {
+        match self.latest_claim_id(subject, predicate, now)? {
+            Some(id) => self
+                .explain_with(&id, now, false)
+                .map_err(StoreError::Replay),
+            None => Ok(None),
+        }
     }
 
     /// All currently-believed (lifecycle-non-terminal) claim ids for a subject+predicate,
@@ -240,21 +301,7 @@ impl InMemoryEventStore {
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, StoreError> {
-        if let Some(receipt) = self.explain_subject(subject, predicate, now)? {
-            return Ok(Some(receipt));
-        }
-        let filter = EventFilter {
-            subject: Some(subject.clone()),
-            predicate: Some(predicate.clone()),
-            ..EventFilter::default()
-        };
-        let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
-        let latest = entity
-            .claims
-            .values()
-            .max_by_key(|state| state.updated_at)
-            .map(|state| state.claim_id.clone());
-        match latest {
+        match self.latest_claim_id(subject, predicate, now)? {
             Some(id) => self.explain(&id, now).map_err(StoreError::Replay),
             None => Ok(None),
         }

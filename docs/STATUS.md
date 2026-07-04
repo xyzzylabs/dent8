@@ -119,7 +119,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   staleness, and is **authority-gated** like retraction ([ADR 0011](decisions/0011-authority-gated-expiration.md)):
   a lower-authority source cannot expire a higher-authority incumbent.
 - **`dent8 derive <subject> <predicate> <value> --from <source-subject> <source-predicate>
-  --authority <level> --source <source>`** — asserts a fact **derived from** another (named by subject, resolved to
+  --authority <level> --source <source> [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts
+  a fact **derived from** another (named by subject, resolved to
   its believed claim id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
   "poison does not survive in derivatives" differentiator, demonstrated by the
@@ -148,9 +149,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `explain`. Supports `--output json`.
 - **`dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE]
   [--include-diagnostics]`** — lists distinct fact streams known to dent8 as
-  `dent8://{kind}/{key}/{predicate}` resources for human browsing. It hides internal
-  doctor/write-check diagnostic streams by default, matching MCP `list_facts`; pass
-  `--include-diagnostics` when auditing setup noise. Supports `--output json`.
+  `dent8://{kind}/{key}/{predicate}` resources for human browsing, each **flagged with its
+  current freshness** (`[stale]` / `[not yet valid]` / `[no longer believed]`; T4) so a stale
+  fact is visible in the summary without reading each one. It hides internal
+  doctor/write-check diagnostic streams by default, matching MCP `list_facts` /
+  `resources/list` (which carry the same `freshness`); pass `--include-diagnostics` when
+  auditing setup noise. Supports `--output json` (each fact gains a `freshness` field).
 - **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
   global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly

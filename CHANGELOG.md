@@ -10,6 +10,15 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Freshness on the list surfaces** (threat-model T4): `dent8 facts list`, the MCP
+  `list_facts` tool, and `resources/list` now flag each fact stream's freshness
+  (`fresh`/`stale`/`not_yet_valid`/`no_longer_believed`) from a single store load — a stale
+  fact is visible in the summary without reading each one. Text gains a `[stale]`-style
+  marker; JSON/structured output and the `list_facts` schema gain a `freshness` field; the
+  resource name/description carry it. Closes the last T4 read-surface residual.
+- **`derive` valid-time interval** (ADR 0016): `dent8 derive` and the MCP `derive` tool take
+  optional `--valid-from`/`--valid-to`, stamping the derived assertion — completing the
+  valid-time write surface (assert/supersede/contradict/derive all carry it).
 - **Unearned-supersession advisories in `verify`**
   ([ADR 0017](docs/decisions/0017-survived-challenges-in-arbitration.md)): `dent8 verify`
   now surfaces `EntityProjection::unearned_supersessions` (previously computed but wired into

@@ -971,6 +971,76 @@ fn a_future_valid_from_reads_not_yet_valid() {
 }
 
 #[test]
+fn facts_list_flags_freshness_and_derive_stamps_validity() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // A fresh fact, and a derived fact stamped with an already-elapsed validity window —
+    // proving `derive` threads --valid-from/--valid-to (ADR 0016) onto the derived assertion.
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:proj",
+                "db",
+                "postgres",
+                "--authority=high",
+                "--source=user:o",
+            ],
+            &envs,
+        ),
+        "assert source",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "derive",
+                "repo:proj",
+                "summary",
+                "uses-postgres",
+                "--from",
+                "repo:proj",
+                "db",
+                "--authority=high",
+                "--source=user:o",
+                "--valid-from=1000",
+                "--valid-to=2000",
+            ],
+            &envs,
+        ),
+        "derive with a bounded (elapsed) validity window",
+    );
+
+    // `facts list` flags freshness per stream: db fresh, summary stale (past valid_to).
+    let text = run_dent8(&["facts", "list"], &envs);
+    assert_success(&text, "facts list");
+    assert!(
+        stdout(&text).contains("/summary  (repo:proj summary)  [stale]")
+            && stdout(&text).contains("/db  (repo:proj db)\n"),
+        "{}",
+        stdout(&text)
+    );
+
+    let json = run_dent8(&["--output", "json", "facts", "list"], &envs);
+    assert_success(&json, "facts list json");
+    let facts = stdout_json(&json);
+    let freshness = |pred: &str| {
+        facts["facts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["predicate"] == pred)
+            .unwrap_or_else(|| panic!("missing {pred}"))["freshness"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(freshness("db"), "fresh");
+    assert_eq!(freshness("summary"), "stale");
+}
+
+#[test]
 fn as_of_reads_travel_to_the_store_as_it_stood() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

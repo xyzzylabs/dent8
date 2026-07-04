@@ -149,10 +149,11 @@ formally separate from evidential strength [1].
 5. **Frame TTL/expiry as principled non-monotonic defeat.** The read-time freshness
    evaluator and CLI/MCP receipt surface are built; explicit `claim.expired` is a
    separate authority-gated terminal close (ADR 0011). `valid_to` closed valid-time intervals
-   are built (ADR 0016): `assert`/`supersede`/`contradict` take `--valid-from`/`--valid-to`,
-   reads fold `valid_to` into `expires_at` (the earliest of the TTL bound and `valid_to`),
-   and `explain`/`replay` take `--as-of`/`--valid-at`. Remaining work is freshness on every
-   summary surface [5].
+   are built (ADR 0016): `assert`/`supersede`/`contradict`/`derive` take
+   `--valid-from`/`--valid-to`, reads fold `valid_to` into `expires_at` (the earliest of the
+   TTL bound and `valid_to`) and flag a future `valid_from` as not-yet-valid, and
+   `explain`/`replay` take `--as-of`/`--valid-at`. Freshness is flagged on every summary
+   surface too (`facts list` / MCP `list_facts` / `resources/list`) [5].
 
 **Deliberately do NOT:**
 
