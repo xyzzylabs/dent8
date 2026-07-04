@@ -159,6 +159,12 @@ pub fn serve_daemon(socket: Option<&str>) -> i32 {
     })
 }
 
+/// The largest single JSON-RPC request frame the daemon will buffer (8 MiB — generous for the
+/// belief surface). A frame that reaches this without a newline is rejected and the connection
+/// closed, so a client cannot grow the read buffer unboundedly.
+#[cfg(all(unix, feature = "async-store"))]
+const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
+
 /// One accepted connection: refuse a cross-user peer, then read newline-delimited JSON-RPC
 /// and reply, running each (blocking) [`dispatch`] on the blocking pool so its throwaway
 /// current-thread runtime does not nest inside this async worker.
@@ -190,16 +196,28 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
     let mut session = HandshakeState::Fresh;
 
     let (read_half, mut write_half) = stream.into_split();
-    let mut lines = tokio::io::BufReader::new(read_half).lines();
+    let mut reader = tokio::io::BufReader::new(read_half);
     loop {
-        let line = match lines.next_line().await {
-            Ok(Some(line)) => line,
-            Ok(None) => return,
+        // Cap a single request frame: `read_line` accumulates into one `String`, so an unbounded
+        // read lets a (same-user) client grow it toward OOM. `take` re-applies the limit each
+        // iteration; an over-cap frame with no newline is rejected and the connection closed.
+        let mut line = String::new();
+        let read = tokio::io::AsyncReadExt::take(&mut reader, MAX_FRAME_BYTES)
+            .read_line(&mut line)
+            .await;
+        let bytes = match read {
+            Ok(0) => return,
+            Ok(bytes) => bytes,
             Err(error) => {
                 eprintln!("mcp: connection read error: {error}");
                 return;
             }
         };
+        if bytes as u64 == MAX_FRAME_BYTES && !line.ends_with('\n') {
+            let response = error_response(&Value::Null, -32700, "request frame too large");
+            let _ = write_line(&mut write_half, &response).await;
+            return;
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -227,7 +245,8 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
                 &request,
                 daemon_identity.as_ref(),
                 crate::now_millis(),
-            );
+            )
+            .await;
             if !write_line(&mut write_half, &response).await {
                 return;
             }
@@ -346,9 +365,11 @@ impl HandshakeState {
     }
 }
 
-/// Dispatch a `dent8/hello` or `dent8/prove` message, mutating the per-connection state.
+/// Dispatch a `dent8/hello` or `dent8/prove` message, mutating the per-connection state. The
+/// cheap state transitions stay on the reactor thread (they hold `&mut session`); the blocking
+/// grant/signature verification is offloaded to the blocking pool by the handlers.
 #[cfg(all(unix, feature = "async-store", feature = "identity"))]
-fn handle_handshake(
+async fn handle_handshake(
     session: &mut HandshakeState,
     method: &str,
     request: &Value,
@@ -358,16 +379,17 @@ fn handle_handshake(
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let params = request.get("params");
     match method {
-        "dent8/hello" => handle_hello(session, &id, params, daemon_identity, now),
-        "dent8/prove" => handle_prove(session, &id, params, now),
+        "dent8/hello" => handle_hello(session, &id, params, daemon_identity, now).await,
+        "dent8/prove" => handle_prove(session, &id, params, now).await,
         _ => error_response(&id, -32601, "unknown handshake method"),
     }
 }
 
 /// `dent8/hello`: verify the presented grant against the daemon's own trust + key, then issue a
-/// fresh single-use nonce. A fresh hello always resets the connection to `Challenged`.
+/// fresh single-use nonce. A fresh hello always resets the connection to `Challenged`. The grant
+/// verification (file reads + Ed25519) runs on the blocking pool, off the reactor.
 #[cfg(all(unix, feature = "async-store", feature = "identity"))]
-fn handle_hello(
+async fn handle_hello(
     session: &mut HandshakeState,
     id: &Value,
     params: Option<&Value>,
@@ -393,8 +415,16 @@ fn handle_hello(
         *session = HandshakeState::Failed;
         return error_response(id, -32602, "dent8/hello requires a `grant` object");
     };
-    match crate::identity::verify_session_hello(daemon_identity, grant, source, now) {
-        Ok(hello) => match crate::identity::session_nonce() {
+    // Offload the grant verification (trust/active-grant/key file reads + Ed25519) to the
+    // blocking pool so the single-threaded reactor keeps serving other connections.
+    let ctx = daemon_identity.clone();
+    let (source, grant) = (source.to_string(), grant.clone());
+    let verified = tokio::task::spawn_blocking(move || {
+        crate::identity::verify_session_hello(&ctx, &grant, &source, now)
+    })
+    .await;
+    match verified {
+        Ok(Ok(hello)) => match crate::identity::session_nonce() {
             Ok(nonce) => {
                 let expires_at = now
                     .as_unix_millis()
@@ -417,10 +447,15 @@ fn handle_hello(
                 error_response(id, SESSION_ERR_INTERNAL, "could not issue a challenge")
             }
         },
-        Err(detail) => {
+        Ok(Err(detail)) => {
             eprintln!("mcp: dent8/hello rejected: {detail}");
             *session = HandshakeState::Failed;
             error_response(id, SESSION_ERR_HELLO, SESSION_HELLO_REJECTED)
+        }
+        Err(join_error) => {
+            eprintln!("mcp: handshake verify task failed: {join_error}");
+            *session = HandshakeState::Failed;
+            error_response(id, SESSION_ERR_INTERNAL, "could not verify the handshake")
         }
     }
 }
@@ -430,7 +465,7 @@ fn handle_hello(
 /// in any *other* state is out of sequence and leaves that state unchanged — a stray or replayed
 /// prove never demotes an already-authenticated connection.
 #[cfg(all(unix, feature = "async-store", feature = "identity"))]
-fn handle_prove(
+async fn handle_prove(
     session: &mut HandshakeState,
     id: &Value,
     params: Option<&Value>,
@@ -467,22 +502,30 @@ fn handle_prove(
     else {
         return error_response(id, -32602, "dent8/prove requires a hex `signature`");
     };
-    match crate::identity::verify_session_prove(&hello, &nonce, signature) {
-        Ok(()) => {
-            let response = result_response(
-                id,
-                &json!({ "authenticated": true, "source": hello.source }),
-            );
+    // Offload the Ed25519 verification to the blocking pool, consistent with hello and dispatch.
+    let source = hello.source.clone();
+    let signature = signature.to_string();
+    let verified = tokio::task::spawn_blocking(move || {
+        crate::identity::verify_session_prove(&hello, &nonce, &signature)
+    })
+    .await;
+    match verified {
+        Ok(Ok(())) => {
+            let response = result_response(id, &json!({ "authenticated": true, "source": source }));
             *session = HandshakeState::Authenticated { identity };
             response
         }
-        Err(detail) => {
+        Ok(Err(detail)) => {
             eprintln!("mcp: dent8/prove rejected: {detail}");
             error_response(
                 id,
                 SESSION_ERR_BAD_SIGNATURE,
                 "session challenge signature does not verify",
             )
+        }
+        Err(join_error) => {
+            eprintln!("mcp: handshake verify task failed: {join_error}");
+            error_response(id, SESSION_ERR_INTERNAL, "could not verify the handshake")
         }
     }
 }
@@ -3394,6 +3437,52 @@ mod tests {
             drop(write_half);
             drop(lines);
             connection.await.unwrap();
+        });
+    }
+
+    /// `write_identity` grants `Connection` (writes allowed, attested as that source) only in
+    /// the `Authenticated` state; every other state is `Unauthenticated` (read-only). This is
+    /// the invariant the gate relies on.
+    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    #[test]
+    fn write_identity_is_connection_only_when_authenticated() {
+        use super::HandshakeState;
+        assert!(matches!(
+            HandshakeState::Fresh.write_identity(),
+            WriteIdentity::Unauthenticated
+        ));
+        assert!(matches!(
+            HandshakeState::Failed.write_identity(),
+            WriteIdentity::Unauthenticated
+        ));
+        let identity =
+            std::sync::Arc::new(crate::identity::IdentityContext::from_env().expect("from_env"));
+        assert!(matches!(
+            HandshakeState::Authenticated { identity }.write_identity(),
+            WriteIdentity::Connection(_)
+        ));
+    }
+
+    /// A `dent8/prove` with no prior `dent8/hello` is out of sequence, and it does not demote the
+    /// connection: a `Fresh` (or `Authenticated`) state is preserved, not knocked to `Failed`.
+    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    #[test]
+    fn prove_without_a_challenge_is_out_of_sequence_and_preserves_state() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut session = super::HandshakeState::Fresh;
+            let params = json!({ "signature": "00" });
+            let response =
+                super::handle_prove(&mut session, &json!(1), Some(&params), crate::now_millis())
+                    .await;
+            assert_eq!(response["error"]["code"], super::SESSION_ERR_SEQUENCE);
+            assert!(
+                matches!(session, super::HandshakeState::Fresh),
+                "a stray prove must not demote the connection state",
+            );
         });
     }
 
