@@ -158,12 +158,12 @@ fn active_grant_status(path: &Path, grant: &SignedSourceGrant) -> Vec<DoctorLine
 
 pub(super) fn verify_active_grant_if_configured(
     grant: &SignedSourceGrant,
-    trust_path: &str,
+    active_grants: Option<&Path>,
 ) -> Result<(), String> {
-    let Some(path) = active_grants_path(trust_path) else {
+    let Some(path) = active_grants else {
         return Ok(());
     };
-    let Some(active) = load_active_grants_at(&path, true)? else {
+    let Some(active) = load_active_grants_at(path, true)? else {
         return Ok(());
     };
     verify_active_grant(grant, &active)

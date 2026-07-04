@@ -408,35 +408,115 @@ fn active_grants_path(trust_path: &str) -> Option<PathBuf> {
     candidate.exists().then_some(candidate)
 }
 
+fn missing_identity_path(name: &str) -> String {
+    format!("{name} must point to a signed source identity file")
+}
+
 fn env_string(name: &str) -> Result<String, String> {
     std::env::var(name)
         .map(|value| value.trim().to_string())
         .ok()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{name} must point to a signed source identity file"))
+        .ok_or_else(|| missing_identity_path(name))
 }
 
-pub(crate) fn enforce_write(auth: &WriteAuth<'_>, now: TimestampMillis) -> Result<(), String> {
-    let required = identity_required()?;
-    let path = trust_path();
-    let configured = required
-        || nonempty_env_is_set("DENT8_TRUST")
-        || nonempty_env_is_set("DENT8_GRANT")
-        || nonempty_env_is_set("DENT8_IDENTITY_KEY")
-        || std::path::Path::new(&path).exists();
-    let Some(trust) = load_trust_at(&path, configured)? else {
+/// The on-disk identity inputs a write is authorized and attested against (ADR 0018).
+///
+/// This is the single seam between *where the identity comes from* and *how it is checked*.
+/// The CLI builds one from process env via [`IdentityContext::from_env`] — byte-identical to
+/// the pre-0018 direct env reads — for every command. A per-connection local daemon (the rest
+/// of ADR 0018) builds ONE PER CONNECTION from the source it proved possession of, so each
+/// request is authorized and Ed25519-attested as its own source without the process-global env.
+/// [`enforce_write`] and [`attest_events`] read *only* from this struct, never from env.
+pub(crate) struct IdentityContext {
+    /// Trust-registry path (`DENT8_TRUST`, else [`DEFAULT_TRUST`]). Always resolved.
+    trust_path: String,
+    /// Whether `DENT8_TRUST` was explicitly set to a non-empty value. Kept distinct from the
+    /// resolved default because it is one of the "identity is configured" signals — a bare
+    /// default trust path that happens not to exist must not flip the write into fail-closed.
+    trust_explicit: bool,
+    /// Signed-grant path (`DENT8_GRANT`), if set to a non-empty value.
+    grant_path: Option<String>,
+    /// Source signing-key path (`DENT8_IDENTITY_KEY`), if set to a non-empty value.
+    identity_key_path: Option<String>,
+    /// Explicit active-grants path (`DENT8_ACTIVE_GRANTS`); when unset it is derived as the
+    /// sibling of the trust registry (see [`IdentityContext::active_grants_path`]).
+    active_grants_override: Option<String>,
+    /// `DENT8_REQUIRE_IDENTITY`: fail closed even when nothing else is configured.
+    required: bool,
+}
+
+impl IdentityContext {
+    /// Resolve the identity inputs from process env. Byte-identical to the direct env reads
+    /// these functions used before ADR 0018 — the CLI's only constructor.
+    pub(crate) fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            trust_path: trust_path(),
+            trust_explicit: nonempty_env_is_set("DENT8_TRUST"),
+            grant_path: nonempty_env("DENT8_GRANT"),
+            identity_key_path: nonempty_env("DENT8_IDENTITY_KEY"),
+            active_grants_override: nonempty_env("DENT8_ACTIVE_GRANTS"),
+            required: identity_required()?,
+        })
+    }
+
+    /// Whether signed identity is *configured*: a missing or invalid grant is then a hard
+    /// error rather than unconfigured dev mode (in which writes pass unattested).
+    fn configured(&self) -> bool {
+        self.required
+            || self.trust_explicit
+            || self.grant_path.is_some()
+            || self.identity_key_path.is_some()
+            || Path::new(&self.trust_path).exists()
+    }
+
+    /// The grant path, or the same `must point to a signed source identity file` error the
+    /// direct env read produced.
+    fn require_grant_path(&self) -> Result<&str, String> {
+        self.grant_path
+            .as_deref()
+            .ok_or_else(|| missing_identity_path("DENT8_GRANT"))
+    }
+
+    /// The signing-key path, with the same missing-path error as the grant path.
+    fn require_identity_key_path(&self) -> Result<&str, String> {
+        self.identity_key_path
+            .as_deref()
+            .ok_or_else(|| missing_identity_path("DENT8_IDENTITY_KEY"))
+    }
+
+    /// The active-grants file to check a grant against, if one exists: the explicit override,
+    /// else the `active-grants.json` sibling of the trust registry when present.
+    fn active_grants_path(&self) -> Option<PathBuf> {
+        if let Some(path) = self.active_grants_override.as_deref() {
+            return Some(PathBuf::from(path));
+        }
+        let candidate = Path::new(&self.trust_path).parent().map_or_else(
+            || PathBuf::from(ACTIVE_GRANTS_FILE),
+            |parent| parent.join(ACTIVE_GRANTS_FILE),
+        );
+        candidate.exists().then_some(candidate)
+    }
+}
+
+pub(crate) fn enforce_write(
+    ctx: &IdentityContext,
+    auth: &WriteAuth<'_>,
+    now: TimestampMillis,
+) -> Result<(), String> {
+    let Some(trust) = load_trust_at(&ctx.trust_path, ctx.configured())? else {
         return Ok(());
     };
     if trust.issuers.is_empty() {
         return Err("identity trust registry is empty; no issuer can verify grants".to_string());
     }
 
-    let grant = load_grant(&grant_path()?)?;
+    let grant = load_grant(ctx.require_grant_path()?)?;
     verify_grant(&grant, &trust, now)?;
     verify_grant_matches_write(&grant.grant, auth, now)?;
-    verify_active_grant_if_configured(&grant, &path)?;
+    verify_active_grant_if_configured(&grant, ctx.active_grants_path().as_deref())?;
 
-    let signing = load_signing_key(&identity_key_path()?)?;
+    let signing = load_signing_key(ctx.require_identity_key_path()?)?;
     let source_key = signing.verifying_key();
     let grant_key = verifying_key_from_hex(&grant.grant.public_key)?;
     if source_key.to_bytes() != grant_key.to_bytes() {
@@ -456,19 +536,15 @@ pub(crate) fn enforce_write(auth: &WriteAuth<'_>, now: TimestampMillis) -> Resul
 /// [`enforce_write`] has already validated the grant against the trust registry and the
 /// write's source/authority/scope; this signs [`dent8_core::attestation_message`] with the
 /// source key and embeds the public key + signature in `provenance.attestation`.
-pub(crate) fn attest_events(events: &mut [ClaimEvent]) -> Result<bool, String> {
-    let required = identity_required()?;
-    let path = trust_path();
-    let configured = required
-        || nonempty_env_is_set("DENT8_TRUST")
-        || nonempty_env_is_set("DENT8_GRANT")
-        || nonempty_env_is_set("DENT8_IDENTITY_KEY")
-        || std::path::Path::new(&path).exists();
-    if !configured {
+pub(crate) fn attest_events(
+    ctx: &IdentityContext,
+    events: &mut [ClaimEvent],
+) -> Result<bool, String> {
+    if !ctx.configured() {
         return Ok(false);
     }
-    let grant = load_grant(&grant_path()?)?;
-    let signing = load_signing_key(&identity_key_path()?)?;
+    let grant = load_grant(ctx.require_grant_path()?)?;
+    let signing = load_signing_key(ctx.require_identity_key_path()?)?;
     if signing.verifying_key().to_bytes()
         != verifying_key_from_hex(&grant.grant.public_key)?.to_bytes()
     {

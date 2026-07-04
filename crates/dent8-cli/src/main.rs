@@ -1743,7 +1743,8 @@ fn enforce_write_authority(auth: &WriteAuth<'_>) -> Result<(), ops::OpError> {
 
 #[cfg(feature = "identity")]
 fn enforce_source_identity(auth: &WriteAuth<'_>) -> Result<(), String> {
-    identity::enforce_write(auth, now_millis())
+    let ctx = identity::IdentityContext::from_env()?;
+    identity::enforce_write(&ctx, auth, now_millis())
 }
 
 #[cfg(not(feature = "identity"))]
@@ -2873,7 +2874,8 @@ fn append_events(path: &str, events: &mut [ClaimEvent]) -> Result<(), WriteError
 /// in unconfigured dev mode.
 #[cfg(feature = "identity")]
 fn attest_events(events: &mut [ClaimEvent]) -> Result<(), String> {
-    identity::attest_events(events).map(|_| ())
+    let ctx = identity::IdentityContext::from_env()?;
+    identity::attest_events(&ctx, events).map(|_| ())
 }
 
 /// Without the `identity` feature there is no signer. `enforce_source_identity` has already
