@@ -210,7 +210,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `resources/read`** — each fact stream is a readable resource at
   `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt) — and accepts
   **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
-  omitted; an empty batch is `-32600`).
+  omitted; an empty batch is `-32600`). With **`--daemon [--socket <path>]`** the same
+  surface is served over a per-user Unix-domain socket (default
+  `$XDG_RUNTIME_DIR/dent8/dent8.sock`, `0700` dir + `0600` socket; `$TMPDIR` fallback where
+  `$XDG_RUNTIME_DIR` is unset) so many agents share one belief base over one transport;
+  connections are refused unless the peer runs as the same OS user. The daemon is **read-only
+  today** — write tools are refused (`-32601`) until per-connection identity lands (ADR 0018),
+  so a socket write is never attested with the daemon's process identity.
 - **`dent8 mcp install --agent <profile> [--dir .dent8] [--config PATH]
   [--command COMMAND|--local-bin] [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.

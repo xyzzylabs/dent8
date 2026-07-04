@@ -143,7 +143,7 @@ fn run_cli(cli: Cli) -> i32 {
             HookCommand::NativeMemoryGuard => hook::cmd_hook_native_memory_guard(),
         },
         Some(CliCommand::Mcp(args)) => match args.command {
-            McpCommand::Serve => mcp::serve(),
+            McpCommand::Serve(args) => mcp::serve_command(args.daemon, args.socket.as_deref()),
             McpCommand::Install(args) => setup::cmd_mcp_install(&args, cli.output),
         },
         Some(CliCommand::Schema(args)) => match args.command {
@@ -970,10 +970,23 @@ struct McpArgs {
 
 #[derive(Subcommand, Debug)]
 enum McpCommand {
-    /// Expose the belief surface over stdio JSON-RPC.
-    Serve,
+    /// Expose the belief surface over JSON-RPC — stdio by default, or a local Unix socket
+    /// with `--daemon` (ADR 0018).
+    Serve(McpServeArgs),
     /// Patch an agent MCP config with dent8 and show the resulting file.
     Install(McpInstallArgs),
+}
+
+#[derive(Args, Debug)]
+struct McpServeArgs {
+    /// Serve on a local Unix-domain socket instead of stdio: a per-user daemon many agents
+    /// share over one transport. Reads only for now; writes await per-connection identity.
+    #[arg(long)]
+    daemon: bool,
+    /// Socket path for `--daemon`. Defaults to `$XDG_RUNTIME_DIR/dent8/dent8.sock` (a per-user
+    /// fallback under the temp dir is used when `$XDG_RUNTIME_DIR` is unset, e.g. macOS).
+    #[arg(long, value_name = "PATH", requires = "daemon")]
+    socket: Option<String>,
 }
 
 #[derive(Args, Debug)]

@@ -30,8 +30,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml_edit = "0.22"
 # Async backend bridge used by SQLite by default and by opt-in backends such as Postgres.
-# This lets the CLI/MCP run against a backend selected by DENT8_STORE_URL.
-tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
+# This lets the CLI/MCP run against a backend selected by DENT8_STORE_URL. `net`/`io-util`
+# also back the local `dent8 mcp serve --daemon` Unix-socket transport (ADR 0018).
+tokio = { version = "1", features = ["rt", "net", "time", "io-util"], optional = true }
 # Default: Ed25519 source identity is part of the stock CLI because the secure onboarding
 # path should not require a custom build. The witness command remains opt-in below.
 ed25519-dalek = { version = "2", optional = true }

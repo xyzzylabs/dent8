@@ -10,6 +10,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Local Unix-socket MCP daemon (read-only)**
+  ([ADR 0018](docs/decisions/0018-local-daemon-and-per-connection-identity.md)): `dent8 mcp
+  serve --daemon [--socket <path>]` serves the same JSON-RPC belief surface over a per-user
+  Unix-domain socket (default `$XDG_RUNTIME_DIR/dent8/dent8.sock`, `0700` dir + `0600` socket;
+  a `$TMPDIR` fallback where `$XDG_RUNTIME_DIR` is unset, e.g. macOS), so many agents share one
+  belief base over one transport instead of one server per agent. Each connection dispatches
+  through the **exact same firewall path** as stdio and is refused unless the peer runs as the
+  same OS user. **Reads only for now**: write tools are refused (`-32601`) until per-connection
+  identity lands, so a socket write can never be attested with the daemon's *process* identity.
+  Zero new dependencies (reuses the tokio bridge that SQLite already pulls in). Internally,
+  identity resolution moves behind an `IdentityContext` seam (byte-identical for the CLI) that
+  the per-connection signer will build on.
 - **Freshness on the list surfaces** (threat-model T4): `dent8 facts list`, the MCP
   `list_facts` tool, and `resources/list` now flag each fact stream's freshness
   (`fresh`/`stale`/`not_yet_valid`/`no_longer_believed`) from a single store load — a stale

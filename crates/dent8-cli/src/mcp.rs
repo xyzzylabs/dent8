@@ -55,7 +55,7 @@ pub fn serve() -> i32 {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => dispatch(&request, &path),
+            Ok(request) => dispatch(&request, &path, Access::Full),
             Err(error) => Some(error_response(
                 &Value::Null,
                 -32700,
@@ -72,13 +72,245 @@ pub fn serve() -> i32 {
     0
 }
 
+/// Route `dent8 mcp serve`: the stdio loop by default, or a local per-user Unix-socket daemon
+/// with `--daemon` (ADR 0018) — the same JSON-RPC surface many agents can share over one
+/// transport. The daemon is read-only until per-connection identity lands.
+pub fn serve_command(daemon: bool, socket: Option<&str>) -> i32 {
+    if daemon {
+        serve_daemon(socket)
+    } else {
+        serve()
+    }
+}
+
+/// Serve the belief surface over a local Unix-domain socket (ADR 0018): a per-user daemon that
+/// dispatches each newline-delimited JSON-RPC request through the exact same [`dispatch`] the
+/// stdio server uses, so the firewall decision is identical on both transports. Read-only
+/// ([`Access::ReadOnly`]) for now — a socket write would otherwise be attested with the
+/// daemon's *process* identity; per-connection identity is a later ADR 0018 step. Connections
+/// are refused unless the peer runs as the same OS user (defence in depth atop the `0700`
+/// runtime dir). Returns a process exit code.
+#[cfg(all(unix, feature = "async-store"))]
+pub fn serve_daemon(socket: Option<&str>) -> i32 {
+    use std::os::unix::fs::MetadataExt;
+
+    let socket_path = daemon_socket_path(socket);
+    if let Err(error) = prepare_socket_path(&socket_path) {
+        eprintln!("mcp: {error}");
+        return 1;
+    }
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("mcp: tokio runtime: {error}");
+            return 1;
+        }
+    };
+
+    runtime.block_on(async move {
+        let listener = match tokio::net::UnixListener::bind(&socket_path) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("mcp: cannot bind {}: {error}", socket_path.display());
+                return 1;
+            }
+        };
+        if let Err(error) = std::fs::set_permissions(
+            &socket_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o600),
+        ) {
+            eprintln!("mcp: cannot set 0600 on {}: {error}", socket_path.display());
+            return 1;
+        }
+        // The socket file is owned by whoever bound it — us — so its owner uid is the daemon
+        // uid without a libc `geteuid` dependency.
+        let daemon_uid = match std::fs::metadata(&socket_path) {
+            Ok(meta) => meta.uid(),
+            Err(error) => {
+                eprintln!("mcp: cannot stat {}: {error}", socket_path.display());
+                return 1;
+            }
+        };
+        let store_path = log_path();
+        eprintln!(
+            "dent8 mcp daemon (read-only) listening on {}",
+            socket_path.display()
+        );
+        loop {
+            match listener.accept().await {
+                Ok((stream, _addr)) => {
+                    let store_path = store_path.clone();
+                    tokio::spawn(async move {
+                        serve_connection(stream, store_path, daemon_uid).await;
+                    });
+                }
+                Err(error) => {
+                    // A transient accept error should not tear the daemon down; keep looping.
+                    eprintln!("mcp: accept error: {error}");
+                }
+            }
+        }
+    })
+}
+
+/// One accepted connection: refuse a cross-user peer, then read newline-delimited JSON-RPC
+/// and reply, running each (blocking) [`dispatch`] on the blocking pool so its throwaway
+/// current-thread runtime does not nest inside this async worker.
+#[cfg(all(unix, feature = "async-store"))]
+async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, daemon_uid: u32) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    match stream.peer_cred() {
+        Ok(cred) if cred.uid() == daemon_uid => {}
+        Ok(cred) => {
+            eprintln!("mcp: refused connection from uid {}", cred.uid());
+            return;
+        }
+        Err(error) => {
+            eprintln!("mcp: cannot read peer credentials: {error}");
+            return;
+        }
+    }
+
+    let (read_half, mut write_half) = stream.into_split();
+    let mut lines = tokio::io::BufReader::new(read_half).lines();
+    loop {
+        let line = match lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) => return,
+            Err(error) => {
+                eprintln!("mcp: connection read error: {error}");
+                return;
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match serde_json::from_str::<Value>(&line) {
+            Ok(request) => {
+                let store_path = store_path.clone();
+                match tokio::task::spawn_blocking(move || {
+                    dispatch(&request, &store_path, Access::ReadOnly)
+                })
+                .await
+                {
+                    Ok(response) => response,
+                    Err(error) => {
+                        eprintln!("mcp: dispatch task failed: {error}");
+                        return;
+                    }
+                }
+            }
+            Err(error) => Some(error_response(
+                &Value::Null,
+                -32700,
+                &format!("parse error: {error}"),
+            )),
+        };
+        let Some(response) = response else {
+            continue;
+        };
+        let mut serialized = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
+        serialized.push('\n');
+        if write_half.write_all(serialized.as_bytes()).await.is_err()
+            || write_half.flush().await.is_err()
+        {
+            return;
+        }
+    }
+}
+
+/// Resolve the daemon socket path: an explicit `--socket`, else `$XDG_RUNTIME_DIR/dent8/
+/// dent8.sock`, else a fallback under the temp dir (`$TMPDIR`/`/tmp`) for platforms that
+/// leave `$XDG_RUNTIME_DIR` unset (e.g. macOS, where `$TMPDIR` is already a per-user private
+/// directory). The `dent8` subdir is created `0700` regardless, so the socket is never
+/// world-reachable even under a shared `/tmp`.
+#[cfg(all(unix, feature = "async-store"))]
+fn daemon_socket_path(socket: Option<&str>) -> std::path::PathBuf {
+    if let Some(socket) = socket {
+        return std::path::PathBuf::from(socket);
+    }
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("TMPDIR").filter(|value| !value.is_empty()))
+        .map_or_else(
+            || std::path::PathBuf::from("/tmp"),
+            std::path::PathBuf::from,
+        );
+    base.join("dent8").join("dent8.sock")
+}
+
+/// Create the socket's parent dir `0700` and clear a stale socket left by a prior run. Refuses
+/// to remove a path that exists and is *not* a socket, so a mistyped `--socket` never deletes
+/// a real file.
+#[cfg(all(unix, feature = "async-store"))]
+fn prepare_socket_path(socket_path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{DirBuilderExt, FileTypeExt};
+
+    if let Some(parent) = socket_path.parent() {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(parent)
+            .map_err(|error| format!("cannot create socket dir {}: {error}", parent.display()))?;
+    }
+    match std::fs::symlink_metadata(socket_path) {
+        Ok(meta) if meta.file_type().is_socket() => {
+            std::fs::remove_file(socket_path).map_err(|error| {
+                format!(
+                    "cannot remove stale socket {}: {error}",
+                    socket_path.display()
+                )
+            })
+        }
+        Ok(_) => Err(format!(
+            "refusing to bind: {} exists and is not a socket",
+            socket_path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot stat {}: {error}", socket_path.display())),
+    }
+}
+
+/// Non-Unix or storage-backend-less builds have no `tokio` Unix socket — refuse `--daemon`
+/// with a clear message rather than silently falling back to stdio.
+#[cfg(not(all(unix, feature = "async-store")))]
+pub fn serve_daemon(_socket: Option<&str>) -> i32 {
+    eprintln!(
+        "mcp: `--daemon` needs a Unix build with a storage backend (e.g. the default \
+         `sqlite` feature); use plain `dent8 mcp serve` for stdio"
+    );
+    1
+}
+
+/// Whether a dispatch may execute writes. The stdio server is [`Access::Full`]; the local
+/// daemon (ADR 0018) runs [`Access::ReadOnly`] until per-connection identity lands, so a socket
+/// connection can never persist an event attested with the daemon's *process* identity.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    Full,
+    ReadOnly,
+}
+
+/// The seven belief-mutating tools, rejected up front under [`Access::ReadOnly`].
+fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "assert" | "supersede" | "retract" | "contradict" | "derive" | "reinforce" | "expire"
+    )
+}
+
 /// Dispatch one parsed JSON-RPC message: a single request object, or a **batch** (a
 /// non-empty array of requests → an array of responses, omitting notifications; an empty
 /// array is an invalid request). Returns `None` when there is nothing to send (a lone
 /// notification, or a batch of only notifications).
-fn dispatch(message: &Value, path: &str) -> Option<Value> {
+fn dispatch(message: &Value, path: &str, access: Access) -> Option<Value> {
     let Some(batch) = message.as_array() else {
-        return handle(message, path);
+        return handle(message, path, access);
     };
     if batch.is_empty() {
         return Some(error_response(
@@ -87,7 +319,10 @@ fn dispatch(message: &Value, path: &str) -> Option<Value> {
             "invalid request: empty batch",
         ));
     }
-    let responses: Vec<Value> = batch.iter().filter_map(|item| handle(item, path)).collect();
+    let responses: Vec<Value> = batch
+        .iter()
+        .filter_map(|item| handle(item, path, access))
+        .collect();
     // A batch containing only notifications gets no reply (JSON-RPC 2.0).
     if responses.is_empty() {
         None
@@ -98,7 +333,7 @@ fn dispatch(message: &Value, path: &str) -> Option<Value> {
 
 /// Handle one JSON-RPC request object. Returns the response value, or `None` for a
 /// notification (a request with no `id`, e.g. `notifications/initialized`).
-fn handle(request: &Value, path: &str) -> Option<Value> {
+fn handle(request: &Value, path: &str, access: Access) -> Option<Value> {
     // Each message (or batch element) must be a single JSON-RPC object; batches are unwrapped
     // one level up in `dispatch`, so a nested array here is itself an invalid request.
     if !request.is_object() {
@@ -146,7 +381,28 @@ fn handle(request: &Value, path: &str) -> Option<Value> {
             }),
         )),
         "tools/list" => Some(result_response(&id, &json!({ "tools": tool_list() }))),
-        "tools/call" => Some(handle_tool_call(&id, request.get("params"), path)),
+        "tools/call" => {
+            // Fail a write closed *before* dispatch under ReadOnly: the daemon has not yet
+            // proven this connection's identity, so a persisted write would carry the daemon's
+            // process attestation (ADR 0018 wires per-connection identity in a later step).
+            if access == Access::ReadOnly
+                && let Some(name) = request
+                    .get("params")
+                    .and_then(|params| params.get("name"))
+                    .and_then(Value::as_str)
+                && is_write_tool(name)
+            {
+                return Some(error_response(
+                    &id,
+                    -32601,
+                    &format!(
+                        "tool '{name}' writes belief state and is not available over the \
+                         read-only daemon; per-connection identity lands in a later step"
+                    ),
+                ));
+            }
+            Some(handle_tool_call(&id, request.get("params"), path))
+        }
         "resources/list" => Some(handle_resources_list(&id, path)),
         "resources/read" => Some(handle_resources_read(&id, request.get("params"), path)),
         _ => Some(error_response(
@@ -1615,8 +1871,18 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch, handle};
+    use super::{Access, dispatch as raw_dispatch, handle as raw_handle};
     use serde_json::{Value, json};
+
+    // The pre-daemon suite exercises the stdio surface, which is always `Access::Full`. These
+    // shims pin that default so those tests read unchanged; the read-only daemon tests call
+    // `raw_dispatch`/`raw_handle` with `Access::ReadOnly` explicitly.
+    fn handle(request: &Value, path: &str) -> Option<Value> {
+        raw_handle(request, path, Access::Full)
+    }
+    fn dispatch(message: &Value, path: &str) -> Option<Value> {
+        raw_dispatch(message, path, Access::Full)
+    }
 
     fn temp_log() -> (tempdir::Guard, String) {
         let dir = tempdir::Guard::new();
@@ -2734,6 +3000,109 @@ mod tests {
         let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "bogus/method" });
         let response = handle(&request, "/tmp/unused.jsonl").expect("response");
         assert_eq!(response["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn readonly_access_serves_reads_but_rejects_writes() {
+        let (_guard, path) = temp_log();
+        // Seed a fact through the full surface so the read below has content to return.
+        let seed = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "assert", "arguments": {
+                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "value": "postgres", "authority": "high", "source": "source:owner",
+            }},
+        });
+        assert_eq!(
+            raw_handle(&seed, &path, Access::Full).expect("seed")["result"]["isError"],
+            Value::Bool(false),
+        );
+
+        // A read passes the gate and returns a normal result.
+        let list = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "list_facts", "arguments": {} },
+        });
+        let read = raw_dispatch(&list, &path, Access::ReadOnly).expect("read reply");
+        assert!(read.get("error").is_none(), "read must not error: {read}");
+        assert_eq!(read["result"]["isError"], Value::Bool(false));
+
+        // A write is refused *before* dispatch, as a protocol error, so nothing is persisted.
+        let write = json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "supersede", "arguments": {
+                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "value": "mysql", "authority": "high", "source": "source:owner",
+            }},
+        });
+        let refused = raw_dispatch(&write, &path, Access::ReadOnly).expect("write reply");
+        assert_eq!(refused["error"]["code"], -32601);
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("read-only daemon"),
+            "{refused}",
+        );
+
+        // The refusal did not mutate belief: the seeded value still stands under Full.
+        let explain = json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": { "name": "explain", "arguments": {
+                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+            }},
+        });
+        let text = handle(&explain, &path).expect("explain")["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(text.contains("postgres"), "{text}");
+    }
+
+    #[cfg(all(unix, feature = "async-store"))]
+    #[test]
+    fn daemon_socket_path_prefers_explicit_socket() {
+        let resolved = super::daemon_socket_path(Some("/run/custom/dent8.sock"));
+        assert_eq!(resolved, std::path::PathBuf::from("/run/custom/dent8.sock"));
+    }
+
+    #[cfg(all(unix, feature = "async-store"))]
+    #[test]
+    fn daemon_connection_round_trips_a_read_over_the_socket() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (_guard, path) = temp_log();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let (client, server) = tokio::net::UnixStream::pair().unwrap();
+            // A socketpair peer runs as this process, so its uid is the daemon uid.
+            let uid = server.peer_cred().unwrap().uid();
+            let connection = tokio::spawn(super::serve_connection(server, path.clone(), uid));
+
+            let (read_half, mut write_half) = client.into_split();
+            let mut lines = BufReader::new(read_half).lines();
+
+            let request = json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "verify", "arguments": {} },
+            });
+            write_half
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .unwrap();
+            let reply: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert!(reply.get("error").is_none(), "verify should serve: {reply}");
+            assert_eq!(reply["result"]["isError"], Value::Bool(false));
+
+            // Closing the client end drives the connection loop to EOF and it returns cleanly.
+            drop(write_half);
+            drop(lines);
+            connection.await.unwrap();
+        });
     }
 
     /// A tiny temp-dir helper (no external dep): a unique directory removed on drop.
