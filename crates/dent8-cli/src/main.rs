@@ -1747,21 +1747,57 @@ fn enforce_source_ceiling(source: &str, requested: AuthorityLevel) -> Result<(),
     ceiling_check(registry.as_ref(), source, requested)
 }
 
-/// The write-boundary auth gate: source→authority ceiling first (authz), then optional
-/// signed source identity (authn) when a trust root is configured.
-fn enforce_write_authority(auth: &WriteAuth<'_>) -> Result<(), ops::OpError> {
-    enforce_source_ceiling(auth.source, auth.authority)?;
-    enforce_source_identity(auth).map_err(ops::OpError::Invalid)
+/// Which source identity a write is authorized and attested under, threaded from the request
+/// origin down to the two identity wrappers (ADR 0018). This is the single seam between *where
+/// the identity comes from* and *how the write is signed*, and it encodes the fail-closed
+/// invariant in the type: a daemon connection that has not proven an identity carries
+/// [`WriteIdentity::Unauthenticated`], so a write that somehow reaches the seam without a proven
+/// identity errors rather than silently borrowing the daemon's *own* env identity.
+#[derive(Clone)]
+pub(crate) enum WriteIdentity {
+    /// The CLI and the stdio MCP server: resolve identity from process env, exactly as before
+    /// ADR 0018 (`IdentityContext::from_env` when the `identity` feature is on; the configured
+    /// check otherwise).
+    Env,
+    /// A local-daemon connection that has not completed the session-challenge handshake: it may
+    /// only read, and a write reaching the identity seam fails closed. A per-connection proven
+    /// identity (ADR 0018 PR 3b) is threaded as a further variant. Only the daemon transport
+    /// constructs this, so a build without it (no `async-store`) never does.
+    #[cfg_attr(not(feature = "async-store"), allow(dead_code))]
+    Unauthenticated,
 }
 
+/// The write-boundary auth gate: source→authority ceiling first (authz), then optional
+/// signed source identity (authn) when a trust root is configured.
+fn enforce_write_authority(
+    auth: &WriteAuth<'_>,
+    identity: &WriteIdentity,
+) -> Result<(), ops::OpError> {
+    enforce_source_ceiling(auth.source, auth.authority)?;
+    enforce_source_identity(auth, identity).map_err(ops::OpError::Invalid)
+}
+
+/// The error a write that reaches the identity seam without a proven connection identity fails
+/// closed with — a daemon-plumbing backstop that must never sign with the daemon's own grant.
+const UNAUTHENTICATED_WRITE_ERROR: &str =
+    "write reached the identity seam without a proven connection identity";
+
 #[cfg(feature = "identity")]
-fn enforce_source_identity(auth: &WriteAuth<'_>) -> Result<(), String> {
-    let ctx = identity::IdentityContext::from_env()?;
-    identity::enforce_write(&ctx, auth, now_millis())
+fn enforce_source_identity(auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Result<(), String> {
+    match identity {
+        WriteIdentity::Env => {
+            let ctx = identity::IdentityContext::from_env()?;
+            identity::enforce_write(&ctx, auth, now_millis())
+        }
+        WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
+    }
 }
 
 #[cfg(not(feature = "identity"))]
-fn enforce_source_identity(_auth: &WriteAuth<'_>) -> Result<(), String> {
+fn enforce_source_identity(_auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Result<(), String> {
+    if matches!(identity, WriteIdentity::Unauthenticated) {
+        return Err(UNAUTHENTICATED_WRITE_ERROR.to_string());
+    }
     let required = env_flag("DENT8_REQUIRE_IDENTITY")?;
     let trust_path =
         std::env::var("DENT8_TRUST").unwrap_or_else(|_| "dent8-trust.json".to_string());
@@ -2852,12 +2888,16 @@ enum WriteError {
 /// multi-event operation (e.g. a supersession's replacement + supersession events) lands
 /// all-or-nothing at the file boundary. This is best-effort file atomicity for the dev
 /// store; true transactional atomicity belongs to the async backends.
-fn append_events(path: &str, events: &mut [ClaimEvent]) -> Result<(), WriteError> {
+fn append_events(
+    path: &str,
+    events: &mut [ClaimEvent],
+    identity: &WriteIdentity,
+) -> Result<(), WriteError> {
     use std::io::Write;
     // Sign the write attestations (ADR 0013) at this choke point — after every op-level
     // mutation, immediately before persistence — so each signature covers exactly the stored
     // content and the append's hash chain covers the attestation.
-    attest_events(events).map_err(WriteError::Other)?;
+    attest_events(events, identity).map_err(WriteError::Other)?;
     // An async backend commits the whole operation (assert / supersede / retract / contradict)
     // as one transaction via `append_many`; the file store just appends the lines. (A build
     // with no async backend that reaches here with a store URL set already errored in
@@ -2886,17 +2926,25 @@ fn append_events(path: &str, events: &mut [ClaimEvent]) -> Result<(), WriteError
 /// Sign per-event write attestations when signed identity is configured (ADR 0013); a no-op
 /// in unconfigured dev mode.
 #[cfg(feature = "identity")]
-fn attest_events(events: &mut [ClaimEvent]) -> Result<(), String> {
-    let ctx = identity::IdentityContext::from_env()?;
-    identity::attest_events(&ctx, events).map(|_| ())
+fn attest_events(events: &mut [ClaimEvent], identity: &WriteIdentity) -> Result<(), String> {
+    match identity {
+        WriteIdentity::Env => {
+            let ctx = identity::IdentityContext::from_env()?;
+            identity::attest_events(&ctx, events).map(|_| ())
+        }
+        WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
+    }
 }
 
 /// Without the `identity` feature there is no signer. `enforce_source_identity` has already
-/// failed closed if identity is *configured* in this build, so reaching here means dev mode —
-/// events are simply written unattested.
+/// failed closed if identity is *configured* in this build (or the write is from an
+/// unauthenticated daemon connection), so reaching here means dev mode — events are simply
+/// written unattested.
 #[cfg(not(feature = "identity"))]
-#[allow(clippy::unnecessary_wraps)] // signature mirrors the identity variant
-fn attest_events(_events: &mut [ClaimEvent]) -> Result<(), String> {
+fn attest_events(_events: &mut [ClaimEvent], identity: &WriteIdentity) -> Result<(), String> {
+    if matches!(identity, WriteIdentity::Unauthenticated) {
+        return Err(UNAUTHENTICATED_WRITE_ERROR.to_string());
+    }
     Ok(())
 }
 

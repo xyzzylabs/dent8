@@ -24,7 +24,9 @@ use crate::ops::{
     OpError, op_assert, op_conflicts, op_contradict, op_derive, op_expire, op_explain,
     op_explain_receipt, op_reinforce, op_replay, op_retract, op_supersede, with_write_retry,
 };
-use crate::{display_value, load_store, log_path, parse_authority, short, verify_log};
+use crate::{
+    WriteIdentity, display_value, load_store, log_path, parse_authority, short, verify_log,
+};
 
 /// The latest MCP protocol revision this server prefers.
 const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -55,7 +57,7 @@ pub fn serve() -> i32 {
             continue;
         }
         let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => dispatch(&request, &path, Access::Full),
+            Ok(request) => dispatch(&request, &path, &WriteIdentity::Env),
             Err(error) => Some(error_response(
                 &Value::Null,
                 -32700,
@@ -194,7 +196,9 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
             Ok(request) => {
                 let store_path = store_path.clone();
                 match tokio::task::spawn_blocking(move || {
-                    dispatch(&request, &store_path, Access::ReadOnly)
+                    // PR 3a plumbing: the daemon is still read-only (no handshake yet), so every
+                    // connection is `Unauthenticated`. PR 3b builds a per-connection identity.
+                    dispatch(&request, &store_path, &WriteIdentity::Unauthenticated)
                 })
                 .await
                 {
@@ -304,13 +308,24 @@ fn is_write_tool(name: &str) -> bool {
     )
 }
 
+/// The access a request identity grants, derived so the write gate and the identity seam can
+/// never disagree: a proven identity (the CLI/stdio env, or a daemon connection) is [`Full`];
+/// an unauthenticated daemon connection is [`ReadOnly`]. There is no way to be `Full` without a
+/// `WriteIdentity` the identity seam accepts (ADR 0018).
+fn access_for(identity: &WriteIdentity) -> Access {
+    match identity {
+        WriteIdentity::Env => Access::Full,
+        WriteIdentity::Unauthenticated => Access::ReadOnly,
+    }
+}
+
 /// Dispatch one parsed JSON-RPC message: a single request object, or a **batch** (a
 /// non-empty array of requests → an array of responses, omitting notifications; an empty
 /// array is an invalid request). Returns `None` when there is nothing to send (a lone
 /// notification, or a batch of only notifications).
-fn dispatch(message: &Value, path: &str, access: Access) -> Option<Value> {
+fn dispatch(message: &Value, path: &str, identity: &WriteIdentity) -> Option<Value> {
     let Some(batch) = message.as_array() else {
-        return handle(message, path, access);
+        return handle(message, path, identity);
     };
     if batch.is_empty() {
         return Some(error_response(
@@ -321,7 +336,7 @@ fn dispatch(message: &Value, path: &str, access: Access) -> Option<Value> {
     }
     let responses: Vec<Value> = batch
         .iter()
-        .filter_map(|item| handle(item, path, access))
+        .filter_map(|item| handle(item, path, identity))
         .collect();
     // A batch containing only notifications gets no reply (JSON-RPC 2.0).
     if responses.is_empty() {
@@ -333,7 +348,7 @@ fn dispatch(message: &Value, path: &str, access: Access) -> Option<Value> {
 
 /// Handle one JSON-RPC request object. Returns the response value, or `None` for a
 /// notification (a request with no `id`, e.g. `notifications/initialized`).
-fn handle(request: &Value, path: &str, access: Access) -> Option<Value> {
+fn handle(request: &Value, path: &str, identity: &WriteIdentity) -> Option<Value> {
     // Each message (or batch element) must be a single JSON-RPC object; batches are unwrapped
     // one level up in `dispatch`, so a nested array here is itself an invalid request.
     if !request.is_object() {
@@ -382,10 +397,10 @@ fn handle(request: &Value, path: &str, access: Access) -> Option<Value> {
         )),
         "tools/list" => Some(result_response(&id, &json!({ "tools": tool_list() }))),
         "tools/call" => {
-            // Fail a write closed *before* dispatch under ReadOnly: the daemon has not yet
-            // proven this connection's identity, so a persisted write would carry the daemon's
-            // process attestation (ADR 0018 wires per-connection identity in a later step).
-            if access == Access::ReadOnly
+            // Fail a write closed *before* dispatch under ReadOnly: an unauthenticated daemon
+            // connection has not proven its identity, so a persisted write would carry the
+            // daemon's own process attestation (ADR 0018). Reads are always allowed.
+            if access_for(identity) == Access::ReadOnly
                 && let Some(name) = request
                     .get("params")
                     .and_then(|params| params.get("name"))
@@ -396,12 +411,12 @@ fn handle(request: &Value, path: &str, access: Access) -> Option<Value> {
                     &id,
                     -32601,
                     &format!(
-                        "tool '{name}' writes belief state and is not available over the \
-                         read-only daemon; per-connection identity lands in a later step"
+                        "tool '{name}' writes belief state and is not available until this \
+                         connection proves a source identity (dent8/hello)"
                     ),
                 ));
             }
-            Some(handle_tool_call(&id, request.get("params"), path))
+            Some(handle_tool_call(&id, request.get("params"), path, identity))
         }
         "resources/list" => Some(handle_resources_list(&id, path)),
         "resources/read" => Some(handle_resources_read(&id, request.get("params"), path)),
@@ -470,7 +485,12 @@ impl ToolOutput {
     }
 }
 
-fn handle_tool_call(id: &Value, params: Option<&Value>, path: &str) -> Value {
+fn handle_tool_call(
+    id: &Value,
+    params: Option<&Value>,
+    path: &str,
+    identity: &WriteIdentity,
+) -> Value {
     let Some(params) = params else {
         return error_response(id, -32602, "missing params");
     };
@@ -479,7 +499,7 @@ fn handle_tool_call(id: &Value, params: Option<&Value>, path: &str) -> Value {
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    match dispatch_tool(name, &arguments, path) {
+    match dispatch_tool(name, &arguments, path, identity) {
         Ok(output) => result_response(id, &tool_content(&output.text, false, &output.structured)),
         Err(ToolError::Unknown(message)) => error_response(id, -32602, &message),
         Err(error) => {
@@ -609,7 +629,12 @@ fn decode_segment(segment: &str) -> Option<String> {
 
 // A flat one-arm-per-tool dispatch; grows with the tool set, not in complexity.
 #[allow(clippy::too_many_lines)]
-fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput, ToolError> {
+fn dispatch_tool(
+    name: &str,
+    arguments: &Value,
+    path: &str,
+    identity: &WriteIdentity,
+) -> Result<ToolOutput, ToolError> {
     let kind = || arg(arguments, "subject_kind");
     let key = || arg(arguments, "subject_key");
     let predicate = || arg(arguments, "predicate");
@@ -670,6 +695,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 || {
                     op_assert(
                         path, &kind, &key, &predicate, &value, authority, &source, validity,
+                        identity,
                     )
                 },
             )
@@ -699,6 +725,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 || {
                     op_supersede(
                         path, &kind, &key, &predicate, &value, authority, &source, validity,
+                        identity,
                     )
                 },
             )
@@ -723,7 +750,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                     authority,
                     source: &source,
                 },
-                || op_retract(path, &kind, &key, &predicate, authority, &source),
+                || op_retract(path, &kind, &key, &predicate, authority, &source, identity),
             )
         }
         "reinforce" => {
@@ -746,7 +773,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                     authority,
                     source: &source,
                 },
-                || op_reinforce(path, &kind, &key, &predicate, authority, &source),
+                || op_reinforce(path, &kind, &key, &predicate, authority, &source, identity),
             )
         }
         "expire" => {
@@ -769,7 +796,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                     authority,
                     source: &source,
                 },
-                || op_expire(path, &kind, &key, &predicate, authority, &source),
+                || op_expire(path, &kind, &key, &predicate, authority, &source, identity),
             )
         }
         "derive" => {
@@ -812,6 +839,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                         &from_key,
                         &from_predicate,
                         validity,
+                        identity,
                     )
                 },
             )?;
@@ -851,6 +879,7 @@ fn dispatch_tool(name: &str, arguments: &Value, path: &str) -> Result<ToolOutput
                 || {
                     op_contradict(
                         path, &kind, &key, &predicate, &value, authority, &source, validity,
+                        identity,
                     )
                 },
             )
@@ -1871,17 +1900,18 @@ fn error_response(id: &Value, code: i64, message: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Access, dispatch as raw_dispatch, handle as raw_handle};
+    use super::{dispatch as raw_dispatch, handle as raw_handle};
+    use crate::WriteIdentity;
     use serde_json::{Value, json};
 
-    // The pre-daemon suite exercises the stdio surface, which is always `Access::Full`. These
-    // shims pin that default so those tests read unchanged; the read-only daemon tests call
-    // `raw_dispatch`/`raw_handle` with `Access::ReadOnly` explicitly.
+    // The pre-daemon suite exercises the stdio surface, which always carries `WriteIdentity::Env`
+    // (Full access). These shims pin that default so those tests read unchanged; the read-only
+    // daemon tests call `raw_dispatch`/`raw_handle` with `WriteIdentity::Unauthenticated`.
     fn handle(request: &Value, path: &str) -> Option<Value> {
-        raw_handle(request, path, Access::Full)
+        raw_handle(request, path, &WriteIdentity::Env)
     }
     fn dispatch(message: &Value, path: &str) -> Option<Value> {
-        raw_dispatch(message, path, Access::Full)
+        raw_dispatch(message, path, &WriteIdentity::Env)
     }
 
     fn temp_log() -> (tempdir::Guard, String) {
@@ -3014,7 +3044,7 @@ mod tests {
             }},
         });
         assert_eq!(
-            raw_handle(&seed, &path, Access::Full).expect("seed")["result"]["isError"],
+            raw_handle(&seed, &path, &WriteIdentity::Env).expect("seed")["result"]["isError"],
             Value::Bool(false),
         );
 
@@ -3023,7 +3053,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
             "params": { "name": "list_facts", "arguments": {} },
         });
-        let read = raw_dispatch(&list, &path, Access::ReadOnly).expect("read reply");
+        let read = raw_dispatch(&list, &path, &WriteIdentity::Unauthenticated).expect("read reply");
         assert!(read.get("error").is_none(), "read must not error: {read}");
         assert_eq!(read["result"]["isError"], Value::Bool(false));
 
@@ -3035,13 +3065,14 @@ mod tests {
                 "value": "mysql", "authority": "high", "source": "source:owner",
             }},
         });
-        let refused = raw_dispatch(&write, &path, Access::ReadOnly).expect("write reply");
+        let refused =
+            raw_dispatch(&write, &path, &WriteIdentity::Unauthenticated).expect("write reply");
         assert_eq!(refused["error"]["code"], -32601);
         assert!(
             refused["error"]["message"]
                 .as_str()
                 .unwrap()
-                .contains("read-only daemon"),
+                .contains("proves a source identity"),
             "{refused}",
         );
 

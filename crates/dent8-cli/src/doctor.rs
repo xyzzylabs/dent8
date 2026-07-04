@@ -1404,6 +1404,7 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         AuthorityLevel::High,
         source,
         ops::Validity::default(),
+        &crate::WriteIdentity::Env,
     )
     .map_err(|error| error.message().to_string())?;
 
@@ -1416,6 +1417,7 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         AuthorityLevel::Low,
         source,
         ops::Validity::default(),
+        &crate::WriteIdentity::Env,
     ) {
         Ok(message) => {
             return Err(format!(

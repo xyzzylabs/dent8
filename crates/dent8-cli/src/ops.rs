@@ -21,9 +21,9 @@ use std::str::FromStr;
 
 use crate::{
     CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs, ReadFactArgs,
-    ValueWriteArgs, WriteAuth, WriteError, append_events, attest_events, claim_value_json,
-    display_value, enforce_write_authority, format_receipt, load_store, log_path, next_seq,
-    now_millis, paint_status, parse_predicate, print_json_stderr, print_json_stdout,
+    ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events, attest_events,
+    claim_value_json, display_value, enforce_write_authority, format_receipt, load_store, log_path,
+    next_seq, now_millis, paint_status, parse_predicate, print_json_stderr, print_json_stdout,
     read_annotation, receipt_fields_json, receipt_json, short,
 };
 
@@ -285,6 +285,7 @@ fn persist_challenge_record(
     rejection: ChallengeRejection,
     source: &str,
     effective: AuthorityLevel,
+    identity: &WriteIdentity,
 ) -> bool {
     let Ok(mut store) = load_store(path) else {
         return false;
@@ -311,7 +312,7 @@ fn persist_challenge_record(
         return false;
     }
     let mut batch = [record];
-    append_events(path, &mut batch).is_ok()
+    append_events(path, &mut batch, identity).is_ok()
 }
 
 /// The note appended to a rejection message when the survived challenge was recorded.
@@ -327,6 +328,7 @@ fn record_survived_challenge(
     path: &str,
     candidate: &ClaimEvent,
     error: &StoreError,
+    identity: &WriteIdentity,
 ) -> &'static str {
     if !challenge_recording_enabled() {
         return "";
@@ -344,6 +346,7 @@ fn record_survived_challenge(
         rejection,
         candidate.provenance.source.as_str(),
         effective,
+        identity,
     ) {
         CHALLENGE_RECORDED_NOTE
     } else {
@@ -407,13 +410,12 @@ pub(crate) fn op_assert(
     authority: AuthorityLevel,
     source: &str,
     validity: Validity,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
-    enforce_write_authority(&WriteAuth::new(
-        subject_kind,
-        subject_key,
-        authority,
-        source,
-    ))?;
+    enforce_write_authority(
+        &WriteAuth::new(subject_kind, subject_key, authority, source),
+        identity,
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let now = now_millis();
     // A fresh claim per assertion (keyed by sequence); the registry's uniqueness governs
@@ -440,10 +442,10 @@ pub(crate) fn op_assert(
     apply_policy_defaults(&registry, &mut event);
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
-    attest_events(std::slice::from_mut(&mut event)).map_err(OpError::Invalid)?;
+    attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::Invalid)?;
     let receipt = admit(&mut store, &registry, event.clone(), now)
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
-    append_events(path, std::slice::from_mut(&mut event)).map_err(write_error_to_op)?;
+    append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?})\n  \
          seq={}  hash={}",
@@ -467,6 +469,7 @@ pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 from: args.valid_from,
                 to: args.valid_to,
             },
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
@@ -490,13 +493,12 @@ pub(crate) fn op_derive(
     from_key: &str,
     from_predicate: &str,
     validity: Validity,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
-    enforce_write_authority(&WriteAuth::new(
-        subject_kind,
-        subject_key,
-        authority,
-        source,
-    ))?;
+    enforce_write_authority(
+        &WriteAuth::new(subject_kind, subject_key, authority, source),
+        identity,
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let from_subject = EntityRef::new(from_kind, from_key)
         .map_err(|error| OpError::Invalid(format!("invalid source subject: {error}")))?;
@@ -541,10 +543,10 @@ pub(crate) fn op_derive(
     apply_policy_defaults(&registry, &mut event);
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
-    attest_events(std::slice::from_mut(&mut event)).map_err(OpError::Invalid)?;
+    attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::Invalid)?;
     let receipt = admit(&mut store, &registry, event.clone(), now)
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
-    append_events(path, std::slice::from_mut(&mut event)).map_err(write_error_to_op)?;
+    append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?}, \
          derived from {from_kind}:{from_key} {from_predicate})\n  seq={}  hash={}",
@@ -604,6 +606,7 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
                 from: args.valid_from,
                 to: args.valid_to,
             },
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
@@ -864,13 +867,12 @@ pub(crate) fn op_supersede(
     authority: AuthorityLevel,
     source: &str,
     validity: Validity,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
-    enforce_write_authority(&WriteAuth::new(
-        subject_kind,
-        subject_key,
-        authority,
-        source,
-    ))?;
+    enforce_write_authority(
+        &WriteAuth::new(subject_kind, subject_key, authority, source),
+        identity,
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -959,6 +961,7 @@ pub(crate) fn op_supersede(
                         ChallengeRejection::WeakerEntrenchment,
                         source,
                         authority,
+                        identity,
                     ) {
                     CHALLENGE_RECORDED_NOTE
                 } else {
@@ -979,11 +982,11 @@ pub(crate) fn op_supersede(
     // every one is admitted, so a rejected revision leaves no orphan in the durable log.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
-            let note = record_survived_challenge(path, event, &error);
+            let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
         }
     }
-    append_events(path, &mut events).map_err(write_error_to_op)?;
+    append_events(path, &mut events, identity).map_err(write_error_to_op)?;
 
     let count = incumbents.len();
     let claims = if count == 1 { "claim" } else { "claims" };
@@ -1015,6 +1018,7 @@ pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 from: args.valid_from,
                 to: args.valid_to,
             },
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
@@ -1063,13 +1067,12 @@ pub(crate) fn op_retract(
     predicate: &str,
     authority: AuthorityLevel,
     source: &str,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
-    enforce_write_authority(&WriteAuth::new(
-        subject_kind,
-        subject_key,
-        authority,
-        source,
-    ))?;
+    enforce_write_authority(
+        &WriteAuth::new(subject_kind, subject_key, authority, source),
+        identity,
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -1100,11 +1103,11 @@ pub(crate) fn op_retract(
     // Apply all in memory first (each authority-gated); persist only if all are admitted.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
-            let note = record_survived_challenge(path, event, &error);
+            let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
         }
     }
-    append_events(path, &mut events).map_err(write_error_to_op)?;
+    append_events(path, &mut events, identity).map_err(write_error_to_op)?;
     let count = incumbents.len();
     let claims = if count == 1 { "claim" } else { "claims" };
     Ok(format!(
@@ -1127,6 +1130,7 @@ pub(crate) fn cmd_retract(args: &FactWriteArgs, output: CliOutput) -> i32 {
             &args.predicate,
             args.authority.level(),
             &args.source,
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
@@ -1143,6 +1147,7 @@ pub(crate) fn op_reinforce(
     predicate: &str,
     authority: AuthorityLevel,
     source: &str,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
     let events = build_per_incumbent(
         path,
@@ -1155,6 +1160,7 @@ pub(crate) fn op_reinforce(
         |incumbent| ClaimEventKind::Reinforced {
             by: incumbent.clone(),
         },
+        identity,
     )?;
     let count = events.len();
     Ok(format!(
@@ -1174,6 +1180,7 @@ pub(crate) fn op_expire(
     predicate: &str,
     authority: AuthorityLevel,
     source: &str,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
     let events = build_per_incumbent(
         path,
@@ -1186,6 +1193,7 @@ pub(crate) fn op_expire(
         |_incumbent| ClaimEventKind::Expired {
             reason: dent8_core::ExpirationReason::PolicyRetention,
         },
+        identity,
     )?;
     let count = events.len();
     Ok(format!(
@@ -1206,13 +1214,12 @@ pub(crate) fn build_per_incumbent(
     source: &str,
     verb: &str,
     kind_for: impl Fn(&ClaimId) -> ClaimEventKind,
+    identity: &WriteIdentity,
 ) -> Result<Vec<ClaimEvent>, OpError> {
-    enforce_write_authority(&WriteAuth::new(
-        subject_kind,
-        subject_key,
-        authority,
-        source,
-    ))?;
+    enforce_write_authority(
+        &WriteAuth::new(subject_kind, subject_key, authority, source),
+        identity,
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -1247,11 +1254,11 @@ pub(crate) fn build_per_incumbent(
     }
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
-            let note = record_survived_challenge(path, event, &error);
+            let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
         }
     }
-    append_events(path, &mut events).map_err(write_error_to_op)?;
+    append_events(path, &mut events, identity).map_err(write_error_to_op)?;
     Ok(events)
 }
 
@@ -1265,6 +1272,7 @@ pub(crate) fn cmd_reinforce(args: &FactWriteArgs, output: CliOutput) -> i32 {
             &args.predicate,
             args.authority.level(),
             &args.source,
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
@@ -1280,6 +1288,7 @@ pub(crate) fn cmd_expire(args: &FactWriteArgs, output: CliOutput) -> i32 {
             &args.predicate,
             args.authority.level(),
             &args.source,
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
@@ -1343,13 +1352,12 @@ pub(crate) fn op_contradict(
     authority: AuthorityLevel,
     source: &str,
     validity: Validity,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
-    enforce_write_authority(&WriteAuth::new(
-        subject_kind,
-        subject_key,
-        authority,
-        source,
-    ))?;
+    enforce_write_authority(
+        &WriteAuth::new(subject_kind, subject_key, authority, source),
+        identity,
+    )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let subject = EntityRef::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
@@ -1390,11 +1398,11 @@ pub(crate) fn op_contradict(
     // the contradiction hard-alarm, rejecting the whole operation with nothing persisted).
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
-            let note = record_survived_challenge(path, event, &error);
+            let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
         }
     }
-    append_events(path, &mut events).map_err(write_error_to_op)?;
+    append_events(path, &mut events, identity).map_err(write_error_to_op)?;
     Ok(format!(
         "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
          (authority={authority:?})\n  both are now believed; resolve with `supersede` (install a \
@@ -1424,6 +1432,7 @@ pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 from: args.valid_from,
                 to: args.valid_to,
             },
+            &WriteIdentity::Env,
         )
     });
     present_write(outcome, output, &view)
