@@ -104,9 +104,12 @@ MCP from [LangChain](examples/langchain/) / the [Vercel AI SDK](examples/vercel-
 
 ## Status
 
-dent8 is **pre-1.0 and experimental** — the API and on-disk encoding may change between minor
-versions. [docs/STATUS.md](docs/STATUS.md) is the single source of truth for what is runnable
-vs. library-only vs. design-only. In brief, runnable today:
+dent8 is **pre-1.0 and experimental** — the CLI and library API, and the Postgres storage
+schema, may still change between minor versions. The **event log format itself is stable**:
+fields are only ever added, and optionally, so existing events keep their exact bytes and
+hashes and an upgrade never rewrites your history. [docs/STATUS.md](docs/STATUS.md) is the
+single source of truth for what is runnable vs. library-only vs. design-only. In brief,
+runnable today:
 
 - The full belief lifecycle — `assert` / `supersede` / `retract` / `contradict` / `reinforce`
   / `expire` / `derive` / `explain` / `replay` — plus the operator surfaces `facts list`,
