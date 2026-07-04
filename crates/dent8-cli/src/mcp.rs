@@ -164,7 +164,7 @@ pub fn serve_daemon(socket: Option<&str>) -> i32 {
 /// current-thread runtime does not nest inside this async worker.
 #[cfg(all(unix, feature = "async-store"))]
 async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, daemon_uid: u32) {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::io::AsyncBufReadExt;
 
     match stream.peer_cred() {
         Ok(cred) if cred.uid() == daemon_uid => {}
@@ -177,6 +177,17 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
             return;
         }
     }
+
+    // The daemon's own signed identity, resolved once per connection from process env. A
+    // connection authenticates *as this same-user source* (ADR 0018): the session challenge
+    // proves the connecting party holds the key the daemon will attest its writes with. `None`
+    // (or an unconfigured identity) leaves the connection read-only.
+    #[cfg(feature = "identity")]
+    let daemon_identity = crate::identity::IdentityContext::from_env()
+        .ok()
+        .map(std::sync::Arc::new);
+    #[cfg(feature = "identity")]
+    let mut session = HandshakeState::Fresh;
 
     let (read_half, mut write_half) = stream.into_split();
     let mut lines = tokio::io::BufReader::new(read_half).lines();
@@ -192,38 +203,286 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => {
-                let store_path = store_path.clone();
-                match tokio::task::spawn_blocking(move || {
-                    // PR 3a plumbing: the daemon is still read-only (no handshake yet), so every
-                    // connection is `Unauthenticated`. PR 3b builds a per-connection identity.
-                    dispatch(&request, &store_path, &WriteIdentity::Unauthenticated)
-                })
-                .await
-                {
-                    Ok(response) => response,
-                    Err(error) => {
-                        eprintln!("mcp: dispatch task failed: {error}");
-                        return;
-                    }
+        let request = match serde_json::from_str::<Value>(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                let response =
+                    error_response(&Value::Null, -32700, &format!("parse error: {error}"));
+                if !write_line(&mut write_half, &response).await {
+                    return;
                 }
+                continue;
             }
-            Err(error) => Some(error_response(
-                &Value::Null,
-                -32700,
-                &format!("parse error: {error}"),
-            )),
+        };
+
+        // The session-challenge handshake is handled inline (never dispatched to the store),
+        // maintaining per-connection state so one connection can never present another's nonce.
+        #[cfg(feature = "identity")]
+        if let Some(method) = request.get("method").and_then(Value::as_str)
+            && matches!(method, "dent8/hello" | "dent8/prove")
+        {
+            let response = handle_handshake(
+                &mut session,
+                method,
+                &request,
+                daemon_identity.as_ref(),
+                crate::now_millis(),
+            );
+            if !write_line(&mut write_half, &response).await {
+                return;
+            }
+            continue;
+        }
+
+        // A normal request runs under this connection's current write identity: `Connection`
+        // once authenticated (writes allowed, attested as that source), else `Unauthenticated`
+        // (reads only — the gate in `handle` refuses writes).
+        #[cfg(feature = "identity")]
+        let write_identity = session.write_identity();
+        #[cfg(not(feature = "identity"))]
+        let write_identity = WriteIdentity::Unauthenticated;
+
+        let store_path = store_path.clone();
+        let response = match tokio::task::spawn_blocking(move || {
+            dispatch(&request, &store_path, &write_identity)
+        })
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("mcp: dispatch task failed: {error}");
+                return;
+            }
         };
         let Some(response) = response else {
             continue;
         };
-        let mut serialized = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
-        serialized.push('\n');
-        if write_half.write_all(serialized.as_bytes()).await.is_err()
-            || write_half.flush().await.is_err()
-        {
+        if !write_line(&mut write_half, &response).await {
             return;
+        }
+    }
+}
+
+/// Write one JSON-RPC response as a newline-delimited line; `false` on a broken pipe.
+#[cfg(all(unix, feature = "async-store"))]
+async fn write_line(
+    write_half: &mut (impl tokio::io::AsyncWrite + Unpin),
+    response: &Value,
+) -> bool {
+    use tokio::io::AsyncWriteExt;
+    let mut serialized = serde_json::to_string(response).unwrap_or_else(|_| "{}".to_string());
+    serialized.push('\n');
+    write_half.write_all(serialized.as_bytes()).await.is_ok() && write_half.flush().await.is_ok()
+}
+
+// ---- Session-challenge handshake (ADR 0018) -----------------------------------------------
+//
+// A daemon connection proves possession of its source key before it may write. `dent8/hello`
+// names the source + grant; the daemon verifies the grant and issues a single-use, 30s,
+// connection-scoped nonce; `dent8/prove` carries an Ed25519 signature over
+// `framed(dent8.session-challenge.v1\0, {nonce, source, public_key, grant_signature})`. On
+// success the connection's writes are attested with that source's (same-user) key — attestation
+// stays server-side and unchanged (ADR 0013). All the crypto lives in `identity`.
+
+/// A challenge is valid for 30 seconds — long enough for a client round-trip, short enough to
+/// bound the replay window (the nonce is also single-use and connection-scoped).
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_CHALLENGE_TTL_MS: i64 = 30_000;
+
+// Server-defined JSON-RPC error codes for the handshake, so a client can distinguish
+// "retry the handshake" from "your grant is dead."
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_ERR_UNCONFIGURED: i64 = -32010;
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_ERR_HELLO: i64 = -32011;
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_ERR_SEQUENCE: i64 = -32012;
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_ERR_EXPIRED: i64 = -32013;
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_ERR_BAD_SIGNATURE: i64 = -32014;
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_ERR_INTERNAL: i64 = -32015;
+
+/// The coarse client-facing reason for any hello-check failure, so the wire never reveals
+/// *which* of grant / active-grant / key mismatched. The specific reason is logged server-side.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+const SESSION_HELLO_REJECTED: &str =
+    "hello rejected: not a valid, active grant for this daemon's source";
+
+/// Per-connection handshake state, owned by the one `serve_connection` task (so a nonce is never
+/// reachable from another connection). Every early return / failure lands in `Failed`, never a
+/// reusable `Challenged`.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+enum HandshakeState {
+    /// No handshake attempted yet — reads allowed, writes refused.
+    Fresh,
+    /// A nonce has been issued and is awaiting exactly one `dent8/prove`.
+    Challenged {
+        nonce: String,
+        hello: crate::identity::VerifiedHello,
+        identity: std::sync::Arc<crate::identity::IdentityContext>,
+        expires_at: i64,
+    },
+    /// Possession proven — writes are attested as this connection's source.
+    Authenticated {
+        identity: std::sync::Arc<crate::identity::IdentityContext>,
+    },
+    /// A failed or consumed handshake — reads allowed, writes refused, until a fresh hello.
+    Failed,
+}
+
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+impl HandshakeState {
+    /// The write identity for a normal request in this state: a proven `Connection` once
+    /// authenticated, else `Unauthenticated` (the gate refuses writes).
+    fn write_identity(&self) -> WriteIdentity {
+        match self {
+            HandshakeState::Authenticated { identity } => {
+                WriteIdentity::Connection(identity.clone())
+            }
+            _ => WriteIdentity::Unauthenticated,
+        }
+    }
+}
+
+/// Dispatch a `dent8/hello` or `dent8/prove` message, mutating the per-connection state.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+fn handle_handshake(
+    session: &mut HandshakeState,
+    method: &str,
+    request: &Value,
+    daemon_identity: Option<&std::sync::Arc<crate::identity::IdentityContext>>,
+    now: dent8_core::TimestampMillis,
+) -> Value {
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let params = request.get("params");
+    match method {
+        "dent8/hello" => handle_hello(session, &id, params, daemon_identity, now),
+        "dent8/prove" => handle_prove(session, &id, params, now),
+        _ => error_response(&id, -32601, "unknown handshake method"),
+    }
+}
+
+/// `dent8/hello`: verify the presented grant against the daemon's own trust + key, then issue a
+/// fresh single-use nonce. A fresh hello always resets the connection to `Challenged`.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+fn handle_hello(
+    session: &mut HandshakeState,
+    id: &Value,
+    params: Option<&Value>,
+    daemon_identity: Option<&std::sync::Arc<crate::identity::IdentityContext>>,
+    now: dent8_core::TimestampMillis,
+) -> Value {
+    let Some(daemon_identity) = daemon_identity.filter(|ctx| ctx.configured()) else {
+        *session = HandshakeState::Failed;
+        return error_response(
+            id,
+            SESSION_ERR_UNCONFIGURED,
+            "this daemon has no signed identity configured; writes are unavailable",
+        );
+    };
+    let Some(source) = params
+        .and_then(|params| params.get("source"))
+        .and_then(Value::as_str)
+    else {
+        *session = HandshakeState::Failed;
+        return error_response(id, -32602, "dent8/hello requires a string `source`");
+    };
+    let Some(grant) = params.and_then(|params| params.get("grant")) else {
+        *session = HandshakeState::Failed;
+        return error_response(id, -32602, "dent8/hello requires a `grant` object");
+    };
+    match crate::identity::verify_session_hello(daemon_identity, grant, source, now) {
+        Ok(hello) => match crate::identity::session_nonce() {
+            Ok(nonce) => {
+                let expires_at = now
+                    .as_unix_millis()
+                    .saturating_add(SESSION_CHALLENGE_TTL_MS);
+                let response = result_response(
+                    id,
+                    &json!({ "nonce": nonce, "expires_in_ms": SESSION_CHALLENGE_TTL_MS }),
+                );
+                *session = HandshakeState::Challenged {
+                    nonce,
+                    hello,
+                    identity: daemon_identity.clone(),
+                    expires_at,
+                };
+                response
+            }
+            Err(error) => {
+                eprintln!("mcp: could not issue a session nonce: {error}");
+                *session = HandshakeState::Failed;
+                error_response(id, SESSION_ERR_INTERNAL, "could not issue a challenge")
+            }
+        },
+        Err(detail) => {
+            eprintln!("mcp: dent8/hello rejected: {detail}");
+            *session = HandshakeState::Failed;
+            error_response(id, SESSION_ERR_HELLO, SESSION_HELLO_REJECTED)
+        }
+    }
+}
+
+/// `dent8/prove`: verify the signature over the stored challenge. A `Challenged` nonce is
+/// consumed here (it never returns to `Challenged`, pass or fail) so it is single-use. A prove
+/// in any *other* state is out of sequence and leaves that state unchanged — a stray or replayed
+/// prove never demotes an already-authenticated connection.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+fn handle_prove(
+    session: &mut HandshakeState,
+    id: &Value,
+    params: Option<&Value>,
+    now: dent8_core::TimestampMillis,
+) -> Value {
+    let (nonce, hello, identity, expires_at) =
+        match std::mem::replace(session, HandshakeState::Failed) {
+            HandshakeState::Challenged {
+                nonce,
+                hello,
+                identity,
+                expires_at,
+            } => (nonce, hello, identity, expires_at),
+            other => {
+                // Not awaiting a prove: restore the prior state and reject out of sequence.
+                *session = other;
+                return error_response(
+                    id,
+                    SESSION_ERR_SEQUENCE,
+                    "no active challenge; send dent8/hello first",
+                );
+            }
+        };
+    if now.as_unix_millis() > expires_at {
+        return error_response(
+            id,
+            SESSION_ERR_EXPIRED,
+            "challenge expired; resend dent8/hello",
+        );
+    }
+    let Some(signature) = params
+        .and_then(|params| params.get("signature"))
+        .and_then(Value::as_str)
+    else {
+        return error_response(id, -32602, "dent8/prove requires a hex `signature`");
+    };
+    match crate::identity::verify_session_prove(&hello, &nonce, signature) {
+        Ok(()) => {
+            let response = result_response(
+                id,
+                &json!({ "authenticated": true, "source": hello.source }),
+            );
+            *session = HandshakeState::Authenticated { identity };
+            response
+        }
+        Err(detail) => {
+            eprintln!("mcp: dent8/prove rejected: {detail}");
+            error_response(
+                id,
+                SESSION_ERR_BAD_SIGNATURE,
+                "session challenge signature does not verify",
+            )
         }
     }
 }
@@ -316,6 +575,8 @@ fn access_for(identity: &WriteIdentity) -> Access {
     match identity {
         WriteIdentity::Env => Access::Full,
         WriteIdentity::Unauthenticated => Access::ReadOnly,
+        #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+        WriteIdentity::Connection(_) => Access::Full,
     }
 }
 

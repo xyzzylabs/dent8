@@ -214,9 +214,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   surface is served over a per-user Unix-domain socket (default
   `$XDG_RUNTIME_DIR/dent8/dent8.sock`, `0700` dir + `0600` socket; `$TMPDIR` fallback where
   `$XDG_RUNTIME_DIR` is unset) so many agents share one belief base over one transport;
-  connections are refused unless the peer runs as the same OS user. The daemon is **read-only
-  today** — write tools are refused (`-32601`) until per-connection identity lands (ADR 0018),
-  so a socket write is never attested with the daemon's process identity.
+  connections are refused unless the peer runs as the same OS user. A connection proves its
+  source identity before it may write (ADR 0018): **`dent8/hello`** presents the grant, the
+  daemon verifies it and issues a single-use, 30-second, connection-scoped nonce, and
+  **`dent8/prove`** returns an Ed25519 signature over the domain-separated
+  `dent8.session-challenge.v1` challenge (nonce + source + grant). Authenticated writes are
+  attested server-side as that source, so they re-verify offline like a CLI write; an
+  unauthenticated connection is read-only and a stray write fails closed. Handshake failures
+  use server-defined codes (`-32010`…`-32015`).
 - **`dent8 mcp install --agent <profile> [--dir .dent8] [--config PATH]
   [--command COMMAND|--local-bin] [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.

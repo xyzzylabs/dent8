@@ -1760,11 +1760,16 @@ pub(crate) enum WriteIdentity {
     /// check otherwise).
     Env,
     /// A local-daemon connection that has not completed the session-challenge handshake: it may
-    /// only read, and a write reaching the identity seam fails closed. A per-connection proven
-    /// identity (ADR 0018 PR 3b) is threaded as a further variant. Only the daemon transport
+    /// only read, and a write reaching the identity seam fails closed. Only the daemon transport
     /// constructs this, so a build without it (no `async-store`) never does.
     #[cfg_attr(not(feature = "async-store"), allow(dead_code))]
     Unauthenticated,
+    /// A local-daemon connection's proven per-connection identity (ADR 0018): the source it
+    /// proved possession of at `dent8/hello` + `dent8/prove`. Its writes are authorized and
+    /// Ed25519-attested as that source — the same-user key the daemon holds — never borrowing an
+    /// ambient env identity. Constructed only by the Unix-socket daemon handshake.
+    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    Connection(std::sync::Arc<identity::IdentityContext>),
 }
 
 /// The write-boundary auth gate: source→authority ceiling first (authz), then optional
@@ -1789,6 +1794,8 @@ fn enforce_source_identity(auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Re
             let ctx = identity::IdentityContext::from_env()?;
             identity::enforce_write(&ctx, auth, now_millis())
         }
+        #[cfg(all(unix, feature = "async-store"))]
+        WriteIdentity::Connection(ctx) => identity::enforce_write(ctx, auth, now_millis()),
         WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
     }
 }
@@ -2932,6 +2939,8 @@ fn attest_events(events: &mut [ClaimEvent], identity: &WriteIdentity) -> Result<
             let ctx = identity::IdentityContext::from_env()?;
             identity::attest_events(&ctx, events).map(|_| ())
         }
+        #[cfg(all(unix, feature = "async-store"))]
+        WriteIdentity::Connection(ctx) => identity::attest_events(ctx, events).map(|_| ()),
         WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
     }
 }

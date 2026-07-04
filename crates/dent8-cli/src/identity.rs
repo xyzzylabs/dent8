@@ -462,7 +462,7 @@ impl IdentityContext {
 
     /// Whether signed identity is *configured*: a missing or invalid grant is then a hard
     /// error rather than unconfigured dev mode (in which writes pass unattested).
-    fn configured(&self) -> bool {
+    pub(crate) fn configured(&self) -> bool {
         self.required
             || self.trust_explicit
             || self.grant_path.is_some()
@@ -1732,6 +1732,111 @@ fn framed<T: Serialize>(domain: &[u8], value: &T) -> Result<Vec<u8>, String> {
     Ok(framed)
 }
 
+/// Domain-separation tag for the local daemon's session-challenge signature (ADR 0018),
+/// following the `dent8.<purpose>.v1\0` convention ([`GRANT_DOMAIN`]). Distinct from the grant
+/// and event-attestation domains, so a challenge signature can never verify as a grant or an
+/// attestation, and vice versa.
+///
+/// The whole session-challenge surface is gated on `all(unix, async-store)`: its only consumer
+/// is the local Unix-socket daemon, which needs the tokio bridge (`async-store`) and a Unix
+/// socket. A non-daemon build never compiles it.
+#[cfg(all(unix, feature = "async-store"))]
+const SESSION_CHALLENGE_DOMAIN: &[u8] = b"dent8.session-challenge.v1\0";
+
+/// The exact structure a daemon connection signs to prove possession of its source key: the
+/// issued nonce bound to the source and the *exact* grant it presented (public key + grant
+/// signature). Binding all four defeats cross-nonce replay, cross-source confusion, key
+/// substitution, and rotated-grant reuse in one signature. Field/declaration order is
+/// load-bearing (serde emits in declaration order) — pinned by a sign-here/verify-there test.
+#[cfg(all(unix, feature = "async-store"))]
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct SessionChallenge<'a> {
+    nonce: &'a str,
+    source: &'a str,
+    public_key: &'a str,
+    grant_signature: &'a str,
+}
+
+/// The verified facts captured at `dent8/hello`, held per-connection until `dent8/prove`. The
+/// daemon rebuilds the [`SessionChallenge`] to verify from *these stored fields*, never from
+/// anything the prove message re-supplies.
+#[cfg(all(unix, feature = "async-store"))]
+pub(crate) struct VerifiedHello {
+    pub(crate) source: String,
+    public_key: String,
+    grant_signature: String,
+}
+
+/// A fresh 32-byte session nonce from the OS CSPRNG, hex-encoded (64 chars). A `getrandom`
+/// failure fails the handshake closed (no nonce issued) — never a zero/constant/counter/time
+/// fallback.
+#[cfg(all(unix, feature = "async-store"))]
+pub(crate) fn session_nonce() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).map_err(|error| format!("session nonce: {error}"))?;
+    Ok(hex::encode(bytes))
+}
+
+/// Verify a daemon connection's `dent8/hello` (ADR 0018): the client-presented grant must be a
+/// valid, active grant whose key the daemon *holds* (the same-user identity in `ctx`), so the
+/// daemon can Ed25519-attest that source's writes. Returns the facts to challenge against.
+///
+/// `ctx` is the daemon's own [`IdentityContext::from_env`]. The `verify_source_key_matches_grant`
+/// check ties a connection to the daemon's single configured source: a grant for any other key
+/// is rejected here (multi-source over one daemon is future work). The caller maps any error to
+/// a coarse client response and logs the detail, so the wire never reveals which check failed.
+#[cfg(all(unix, feature = "async-store"))]
+pub(crate) fn verify_session_hello(
+    ctx: &IdentityContext,
+    grant_json: &serde_json::Value,
+    claimed_source: &str,
+    now: TimestampMillis,
+) -> Result<VerifiedHello, String> {
+    let grant: SignedSourceGrant = serde_json::from_value(grant_json.clone())
+        .map_err(|error| format!("invalid grant in hello: {error}"))?;
+    if grant.grant.source != claimed_source {
+        return Err(format!(
+            "hello source {claimed_source:?} does not match the presented grant's source {:?}",
+            grant.grant.source
+        ));
+    }
+    let trust = load_trust_at(&ctx.trust_path, true)?
+        .ok_or_else(|| "daemon has no trust registry configured".to_string())?;
+    verify_grant(&grant, &trust, now)?;
+    verify_active_grant_if_configured(&grant, ctx.active_grants_path().as_deref())?;
+    let key_path = ctx.require_identity_key_path()?;
+    verify_source_key_matches_grant(Path::new(key_path), &grant)?;
+    Ok(VerifiedHello {
+        source: grant.grant.source,
+        public_key: grant.grant.public_key,
+        grant_signature: grant.signature,
+    })
+}
+
+/// Verify a `dent8/prove` signature against the stored [`VerifiedHello`] and the issued nonce:
+/// the connection proves it holds the source private key by signing
+/// `framed(SESSION_CHALLENGE_DOMAIN, &challenge)`. The challenge is reconstructed from stored
+/// fields, so a signature is bound to exactly this nonce, source, key, and grant.
+#[cfg(all(unix, feature = "async-store"))]
+pub(crate) fn verify_session_prove(
+    hello: &VerifiedHello,
+    nonce: &str,
+    signature_hex: &str,
+) -> Result<(), String> {
+    let challenge = SessionChallenge {
+        nonce,
+        source: &hello.source,
+        public_key: &hello.public_key,
+        grant_signature: &hello.grant_signature,
+    };
+    let message = framed(SESSION_CHALLENGE_DOMAIN, &challenge)?;
+    let key = verifying_key_from_hex(&hello.public_key)?;
+    let signature = signature_from_hex(signature_hex)?;
+    key.verify(&message, &signature)
+        .map_err(|error| format!("session challenge signature does not verify: {error}"))
+}
+
 fn write_json<T: Serialize>(path: &str, value: &T) -> Result<(), String> {
     let json =
         serde_json::to_string_pretty(value).map_err(|error| format!("serialize: {error}"))?;
@@ -2031,4 +2136,111 @@ fn backfill_grant_log_inner(
         appended += 1;
     }
     Ok((appended, skipped, grant_log))
+}
+
+#[cfg(all(test, unix, feature = "async-store"))]
+mod session_challenge_tests {
+    use super::{
+        SESSION_CHALLENGE_DOMAIN, SessionChallenge, SigningKey, VerifiedHello, framed,
+        session_nonce, verify_session_prove,
+    };
+    use ed25519_dalek::Signer;
+
+    /// A source signing key + the `VerifiedHello` the daemon would have stored for it, plus a
+    /// nonce. The `grant_signature` is arbitrary here — `verify_session_prove` only needs it to
+    /// be the *same bytes* the client signed over (binding is what matters, not validity).
+    fn fixture(seed: u8) -> (SigningKey, VerifiedHello, String) {
+        let key = SigningKey::from_bytes(&[seed; 32]);
+        let public_key = hex::encode(key.verifying_key().to_bytes());
+        let hello = VerifiedHello {
+            source: "source:owner".to_string(),
+            public_key,
+            grant_signature: "abcd1234".to_string(),
+        };
+        (key, hello, session_nonce().expect("nonce"))
+    }
+
+    /// The exact bytes a client signs, mirroring `verify_session_prove`'s reconstruction.
+    fn sign(key: &SigningKey, hello: &VerifiedHello, nonce: &str) -> String {
+        let challenge = SessionChallenge {
+            nonce,
+            source: &hello.source,
+            public_key: &hello.public_key,
+            grant_signature: &hello.grant_signature,
+        };
+        let message = framed(SESSION_CHALLENGE_DOMAIN, &challenge).expect("framed");
+        hex::encode(key.sign(&message).to_bytes())
+    }
+
+    #[test]
+    fn a_valid_signature_over_the_challenge_verifies() {
+        let (key, hello, nonce) = fixture(1);
+        let signature = sign(&key, &hello, &nonce);
+        assert!(verify_session_prove(&hello, &nonce, &signature).is_ok());
+    }
+
+    #[test]
+    fn a_signature_for_a_different_nonce_is_rejected() {
+        let (key, hello, nonce) = fixture(2);
+        let signature = sign(&key, &hello, &nonce);
+        let other_nonce = session_nonce().expect("nonce");
+        assert_ne!(nonce, other_nonce);
+        // A captured signature cannot be lifted onto a fresh challenge.
+        assert!(verify_session_prove(&hello, &other_nonce, &signature).is_err());
+    }
+
+    #[test]
+    fn a_signature_from_a_different_key_is_rejected() {
+        let (attacker, hello, nonce) = fixture(3);
+        // `hello` advertises key 3's public key, but a fresh victim key signs. Since the hello
+        // used the attacker's key, re-point it at a *different* public key to model substitution.
+        let victim = SigningKey::from_bytes(&[9u8; 32]);
+        let victim_hello = VerifiedHello {
+            source: hello.source.clone(),
+            public_key: hex::encode(victim.verifying_key().to_bytes()),
+            grant_signature: hello.grant_signature.clone(),
+        };
+        // The attacker signs the victim's challenge; it must not verify under the victim's key.
+        let forged = sign(&attacker, &victim_hello, &nonce);
+        assert!(verify_session_prove(&victim_hello, &nonce, &forged).is_err());
+    }
+
+    #[test]
+    fn a_signature_over_a_tampered_grant_is_rejected() {
+        let (key, hello, nonce) = fixture(4);
+        let signature = sign(&key, &hello, &nonce);
+        // Same nonce + key, but a different presented grant signature: the binding breaks.
+        let rotated = VerifiedHello {
+            source: hello.source.clone(),
+            public_key: hello.public_key.clone(),
+            grant_signature: "ffff0000".to_string(),
+        };
+        assert!(verify_session_prove(&rotated, &nonce, &signature).is_err());
+    }
+
+    #[test]
+    fn the_challenge_serializes_in_a_pinned_field_order() {
+        // The client and daemon must produce byte-identical `framed` input; field order is part
+        // of the wire contract. Pin it so a struct reordering is caught here, not in the field.
+        let challenge = SessionChallenge {
+            nonce: "NONCE",
+            source: "source:owner",
+            public_key: "PUBKEY",
+            grant_signature: "SIG",
+        };
+        let json = serde_json::to_string(&challenge).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"nonce":"NONCE","source":"source:owner","public_key":"PUBKEY","grant_signature":"SIG"}"#
+        );
+    }
+
+    #[test]
+    fn a_nonce_is_64_hex_chars_and_fresh_each_call() {
+        let a = session_nonce().expect("nonce");
+        let b = session_nonce().expect("nonce");
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(a, b, "32 bytes of CSPRNG must not repeat");
+    }
 }
