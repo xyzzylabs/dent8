@@ -30,6 +30,10 @@ mod hook;
 #[cfg(feature = "identity")]
 mod identity;
 mod mcp;
+/// The daemon write client (ADR 0018 PR 5): a synchronous Unix socket that proves identity via
+/// the session challenge, so it needs `identity` signing and a Unix target.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+mod mcp_client;
 mod mcp_config;
 mod ops;
 mod setup;

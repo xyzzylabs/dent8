@@ -1837,6 +1837,29 @@ pub(crate) fn verify_session_prove(
         .map_err(|error| format!("session challenge signature does not verify: {error}"))
 }
 
+/// The *client* side of the session challenge (ADR 0018 PR 5): sign the daemon's nonce with the
+/// caller's source key, producing the hex signature `dent8/prove` carries. It reconstructs the
+/// exact same [`SessionChallenge`] bytes [`verify_session_prove`] checks, so the daemon accepts
+/// it. Used by the daemon client shim when the CLI routes writes through a shared daemon.
+#[cfg(all(unix, feature = "async-store"))]
+pub(crate) fn sign_session_challenge(
+    nonce: &str,
+    source: &str,
+    public_key: &str,
+    grant_signature: &str,
+    key_path: &str,
+) -> Result<String, String> {
+    let challenge = SessionChallenge {
+        nonce,
+        source,
+        public_key,
+        grant_signature,
+    };
+    let message = framed(SESSION_CHALLENGE_DOMAIN, &challenge)?;
+    let signing = load_signing_key(key_path)?;
+    Ok(hex::encode(signing.sign(&message).to_bytes()))
+}
+
 fn write_json<T: Serialize>(path: &str, value: &T) -> Result<(), String> {
     let json =
         serde_json::to_string_pretty(value).map_err(|error| format!("serialize: {error}"))?;

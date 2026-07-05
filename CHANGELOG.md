@@ -26,7 +26,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   connection that has not proven identity is read-only and a stray write fails closed rather than
   borrowing the daemon's own identity. Zero new dependencies (reuses the tokio bridge that SQLite
   already pulls in). Internally, identity threads through the write path as a `WriteIdentity` seam
-  (byte-identical for the CLI/stdio path).
+  (byte-identical for the CLI/stdio path). Setting **`DENT8_DAEMON_SOCKET`** makes the CLI's own
+  writes route through a running daemon at that socket — the CLI does the handshake with its
+  `DENT8_GRANT`/`DENT8_IDENTITY_KEY` and the daemon attests the write — so several agents (and the
+  CLI) dogfood one shared belief base on a box. Reads stay local; output is identical to a local
+  write.
 - **Freshness on the list surfaces** (threat-model T4): `dent8 facts list`, the MCP
   `list_facts` tool, and `resources/list` now flag each fact stream's freshness
   (`fresh`/`stale`/`not_yet_valid`/`no_longer_believed`) from a single store load — a stale

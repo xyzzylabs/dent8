@@ -221,7 +221,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `dent8.session-challenge.v1` challenge (nonce + source + grant). Authenticated writes are
   attested server-side as that source, so they re-verify offline like a CLI write; an
   unauthenticated connection is read-only and a stray write fails closed. Handshake failures
-  use server-defined codes (`-32010`…`-32015`).
+  use server-defined codes (`-32010`…`-32015`). Setting **`DENT8_DAEMON_SOCKET`** routes the
+  CLI's own writes through such a daemon (the CLI does the handshake with its
+  `DENT8_GRANT`/`DENT8_IDENTITY_KEY`); reads stay local and the output is identical to a local
+  write — so the CLI and several agents can dogfood one shared belief base on a box.
 - **`dent8 mcp install --agent <profile> [--dir .dent8] [--config PATH]
   [--command COMMAND|--local-bin] [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.

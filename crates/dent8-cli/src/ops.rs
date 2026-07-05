@@ -456,23 +456,28 @@ pub(crate) fn op_assert(
 
 pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
     let view = value_write_json_view("assert", args);
-    let outcome = with_write_retry(|| {
-        op_assert(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            &args.value,
-            args.authority.level(),
-            &args.source,
-            Validity {
-                from: args.valid_from,
-                to: args.valid_to,
-            },
-            &WriteIdentity::Env,
-        )
-    });
-    present_write(outcome, output, &view)
+    run_write(
+        "assert",
+        &value_write_arguments(args),
+        output,
+        &view,
+        || {
+            op_assert(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                &args.value,
+                args.authority.level(),
+                &args.source,
+                Validity {
+                    from: args.valid_from,
+                    to: args.valid_to,
+                },
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 /// Assert a fact **derived from** another fact, recording the claim->claim dependency edge
@@ -590,26 +595,42 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
             predicate: &from_predicate,
         }),
     };
-    let outcome = with_write_retry(|| {
-        op_derive(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            &args.value,
-            args.authority.level(),
-            &args.source,
-            &from_subject.kind,
-            &from_subject.key,
-            &from_predicate,
-            Validity {
-                from: args.valid_from,
-                to: args.valid_to,
-            },
-            &WriteIdentity::Env,
-        )
-    });
-    present_write(outcome, output, &view)
+    let mut arguments = serde_json::Map::new();
+    arguments.insert("subject_kind".into(), args.subject.kind.clone().into());
+    arguments.insert("subject_key".into(), args.subject.key.clone().into());
+    arguments.insert("predicate".into(), args.predicate.clone().into());
+    arguments.insert("value".into(), args.value.clone().into());
+    arguments.insert("authority".into(), args.authority.level().name().into());
+    arguments.insert("source".into(), args.source.clone().into());
+    arguments.insert("from_kind".into(), from_subject.kind.clone().into());
+    arguments.insert("from_key".into(), from_subject.key.clone().into());
+    arguments.insert("from_predicate".into(), from_predicate.clone().into());
+    insert_validity(&mut arguments, args.valid_from, args.valid_to);
+    run_write(
+        "derive",
+        &serde_json::Value::Object(arguments),
+        output,
+        &view,
+        || {
+            op_derive(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                &args.value,
+                args.authority.level(),
+                &args.source,
+                &from_subject.kind,
+                &from_subject.key,
+                &from_predicate,
+                Validity {
+                    from: args.valid_from,
+                    to: args.valid_to,
+                },
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 /// Render an operation result for the CLI: success to stdout (exit 0), a malformed request
@@ -776,6 +797,93 @@ pub(crate) fn op_error_exit_code(error: &OpError) -> i32 {
     match error {
         OpError::Invalid(_) => 2,
         OpError::Rejected(_) | OpError::Conflict(_) => 1,
+    }
+}
+
+/// The daemon socket writes route through when `DENT8_DAEMON_SOCKET` names one (ADR 0018 PR 5),
+/// so several agents can share one belief base over one transport.
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+fn daemon_socket() -> Option<String> {
+    std::env::var("DENT8_DAEMON_SOCKET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Run a write through the daemon (when `DENT8_DAEMON_SOCKET` is set) or locally, then render
+/// with [`present_write`]. The daemon runs the *same* `op_*`, so its reply maps back to the same
+/// `Result<String, OpError>` and the CLI output is byte-identical either way — the CLI's own
+/// authority/identity checks are simply performed daemon-side instead.
+fn run_write(
+    tool: &str,
+    arguments: &serde_json::Value,
+    output: CliOutput,
+    view: &WriteJsonView<'_>,
+    local: impl FnMut() -> Result<String, OpError>,
+) -> i32 {
+    // Route only when a signed identity is configured: the handshake needs the caller's grant +
+    // key, and dev mode (no identity) writes locally-unattested — routing an unconfigured caller
+    // would diverge (a hard error) from the local exit-0 accept it expects.
+    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    if let Some(socket) = daemon_socket()
+        && crate::identity::IdentityContext::from_env().is_ok_and(|ctx| ctx.configured())
+    {
+        let outcome = match crate::mcp_client::daemon_write(&socket, tool, arguments) {
+            Ok(outcome) => outcome,
+            Err(transport) => Err(OpError::Invalid(transport)),
+        };
+        return present_write(outcome, output, view);
+    }
+    // A storage-backend build without `identity` cannot handshake, so routing is compiled out —
+    // warn rather than silently ignoring an explicitly-set socket.
+    #[cfg(all(unix, feature = "async-store", not(feature = "identity")))]
+    if std::env::var("DENT8_DAEMON_SOCKET").is_ok_and(|value| !value.trim().is_empty()) {
+        eprintln!(
+            "warning: DENT8_DAEMON_SOCKET is set but this build lacks the `identity` feature; \
+             writing to the local store instead of routing to the daemon"
+        );
+    }
+    #[cfg(not(all(unix, feature = "async-store", feature = "identity")))]
+    let _ = (tool, arguments);
+    present_write(with_write_retry(local), output, view)
+}
+
+/// The MCP tool arguments for a value write (`assert` / `supersede` / `contradict`): the same
+/// fields the tool schema declares, so the daemon parses them exactly like a stdio client.
+fn value_write_arguments(args: &ValueWriteArgs) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    object.insert("subject_kind".into(), args.subject.kind.clone().into());
+    object.insert("subject_key".into(), args.subject.key.clone().into());
+    object.insert("predicate".into(), args.predicate.clone().into());
+    object.insert("value".into(), args.value.clone().into());
+    object.insert("authority".into(), args.authority.level().name().into());
+    object.insert("source".into(), args.source.clone().into());
+    insert_validity(&mut object, args.valid_from, args.valid_to);
+    serde_json::Value::Object(object)
+}
+
+/// The MCP tool arguments for a fact write (`retract` / `reinforce` / `expire`): no value, no
+/// validity window.
+fn fact_write_arguments(args: &FactWriteArgs) -> serde_json::Value {
+    serde_json::json!({
+        "subject_kind": args.subject.kind,
+        "subject_key": args.subject.key,
+        "predicate": args.predicate,
+        "authority": args.authority.level().name(),
+        "source": args.source,
+    })
+}
+
+fn insert_validity(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    from: Option<i64>,
+    to: Option<i64>,
+) {
+    if let Some(from) = from {
+        object.insert("valid_from".into(), from.into());
+    }
+    if let Some(to) = to {
+        object.insert("valid_to".into(), to.into());
     }
 }
 
@@ -1005,23 +1113,28 @@ pub(crate) fn op_supersede(
 /// MCP `supersede` tool.
 pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
     let view = value_write_json_view("supersede", args);
-    let outcome = with_write_retry(|| {
-        op_supersede(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            &args.value,
-            args.authority.level(),
-            &args.source,
-            Validity {
-                from: args.valid_from,
-                to: args.valid_to,
-            },
-            &WriteIdentity::Env,
-        )
-    });
-    present_write(outcome, output, &view)
+    run_write(
+        "supersede",
+        &value_write_arguments(args),
+        output,
+        &view,
+        || {
+            op_supersede(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                &args.value,
+                args.authority.level(),
+                &args.source,
+                Validity {
+                    from: args.valid_from,
+                    to: args.valid_to,
+                },
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 /// Build one `Retracted` event per believed incumbent. Each retraction is authority-gated
@@ -1122,18 +1235,23 @@ pub(crate) fn op_retract(
 /// cannot delete a trusted fact. Shared by `dent8 retract` and the MCP `retract` tool.
 pub(crate) fn cmd_retract(args: &FactWriteArgs, output: CliOutput) -> i32 {
     let view = fact_write_json_view("retract", args);
-    let outcome = with_write_retry(|| {
-        op_retract(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            args.authority.level(),
-            &args.source,
-            &WriteIdentity::Env,
-        )
-    });
-    present_write(outcome, output, &view)
+    run_write(
+        "retract",
+        &fact_write_arguments(args),
+        output,
+        &view,
+        || {
+            op_retract(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                args.authority.level(),
+                &args.source,
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 /// Corroborate the believed fact(s): append a `Reinforced` event per believed claim. The
@@ -1264,23 +1382,28 @@ pub(crate) fn build_per_incumbent(
 
 pub(crate) fn cmd_reinforce(args: &FactWriteArgs, output: CliOutput) -> i32 {
     let view = fact_write_json_view("reinforce", args);
-    let outcome = with_write_retry(|| {
-        op_reinforce(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            args.authority.level(),
-            &args.source,
-            &WriteIdentity::Env,
-        )
-    });
-    present_write(outcome, output, &view)
+    run_write(
+        "reinforce",
+        &fact_write_arguments(args),
+        output,
+        &view,
+        || {
+            op_reinforce(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                args.authority.level(),
+                &args.source,
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 pub(crate) fn cmd_expire(args: &FactWriteArgs, output: CliOutput) -> i32 {
     let view = fact_write_json_view("expire", args);
-    let outcome = with_write_retry(|| {
+    run_write("expire", &fact_write_arguments(args), output, &view, || {
         op_expire(
             &log_path(),
             &args.subject.kind,
@@ -1290,8 +1413,7 @@ pub(crate) fn cmd_expire(args: &FactWriteArgs, output: CliOutput) -> i32 {
             &args.source,
             &WriteIdentity::Env,
         )
-    });
-    present_write(outcome, output, &view)
+    })
 }
 
 /// Build the `(events, opposing_claim_id)` for a `contradict`: a fresh opposing assertion
@@ -1419,23 +1541,28 @@ pub(crate) fn op_contradict(
 /// MCP `contradict` tool.
 pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
     let view = value_write_json_view("contradict", args);
-    let outcome = with_write_retry(|| {
-        op_contradict(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            &args.value,
-            args.authority.level(),
-            &args.source,
-            Validity {
-                from: args.valid_from,
-                to: args.valid_to,
-            },
-            &WriteIdentity::Env,
-        )
-    });
-    present_write(outcome, output, &view)
+    run_write(
+        "contradict",
+        &value_write_arguments(args),
+        output,
+        &view,
+        || {
+            op_contradict(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                &args.value,
+                args.authority.level(),
+                &args.source,
+                Validity {
+                    from: args.valid_from,
+                    to: args.valid_to,
+                },
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 /// One line of a fact's event history for `replay`: what happened, with provenance.
