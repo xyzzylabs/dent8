@@ -8,18 +8,18 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use dent8_core::{
-    AuthorityLevel, ChainAnchor, ClaimEvent, ClaimId, ClaimLifecycle, ClaimValue, EntityRef,
-    Predicate, TimestampMillis, anchor_head, hash_chain, verify_anchor,
+    AuthorityLevel, ChainAnchor, EntityRef, FactEvent, FactId, FactLifecycle, FactValue, Predicate,
+    TimestampMillis, anchor_head, hash_chain, verify_anchor,
 };
 
 use crate::{
-    AppendReceipt, EventFilter, EventStore, ReplayError, StoreError, replay_claim, replay_entity,
+    AppendReceipt, EventFilter, EventStore, ReplayError, StoreError, replay_entity, replay_fact,
 };
 
 #[derive(Clone, Debug)]
 struct StoredEvent {
     global_sequence: u64,
-    event: ClaimEvent,
+    event: FactEvent,
     event_hash: String,
 }
 
@@ -29,7 +29,7 @@ struct StoredEvent {
 #[derive(Clone, Debug, Default)]
 pub struct InMemoryEventStore {
     log: Vec<StoredEvent>,
-    by_claim: BTreeMap<ClaimId, Vec<usize>>,
+    by_fact: BTreeMap<FactId, Vec<usize>>,
     event_ids: BTreeSet<String>,
     last_hash: Option<String>,
 }
@@ -49,7 +49,7 @@ impl InMemoryEventStore {
     /// arbitrated write path): callers must not feed it un-arbitrated events. A duplicate
     /// `event_id` is still rejected ([`StoreError::Conflict`]).
     pub fn from_trusted_events(
-        events: impl IntoIterator<Item = ClaimEvent>,
+        events: impl IntoIterator<Item = FactEvent>,
     ) -> Result<Self, StoreError> {
         let mut store = Self::new();
         for event in events {
@@ -61,7 +61,7 @@ impl InMemoryEventStore {
     /// Persist one event: dedup `event_id`, chain its `event_hash` to the global head,
     /// assign a `global_sequence`, and index it. Assumes the event has already cleared
     /// the firewall (or is a trusted reload) — it performs **no** arbitration.
-    fn persist(&mut self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+    fn persist(&mut self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         if self.event_ids.contains(event.event_id.as_str()) {
             return Err(StoreError::Conflict(format!(
                 "duplicate event_id {}",
@@ -73,8 +73,8 @@ impl InMemoryEventStore {
 
         let global_sequence = self.log.len() as u64;
         let index = self.log.len();
-        self.by_claim
-            .entry(event.claim_id.clone())
+        self.by_fact
+            .entry(event.fact_id.clone())
             .or_default()
             .push(index);
         self.event_ids.insert(event.event_id.to_string());
@@ -103,7 +103,7 @@ impl InMemoryEventStore {
         self.log.is_empty()
     }
 
-    fn all_events(&self) -> Vec<ClaimEvent> {
+    fn all_events(&self) -> Vec<FactEvent> {
         self.log.iter().map(|stored| stored.event.clone()).collect()
     }
 
@@ -164,43 +164,43 @@ impl InMemoryEventStore {
             .map_err(|error| StoreError::Canonicalization(error.to_string()))
     }
 
-    /// Build an [`IntegrityReceipt`] for one claim, evaluated for freshness at `now`.
-    /// Returns `None` if the claim has no events.
+    /// Build an [`IntegrityReceipt`] for one fact, evaluated for freshness at `now`.
+    /// Returns `None` if the fact has no events.
     pub fn explain(
         &self,
-        claim_id: &ClaimId,
+        fact_id: &FactId,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, ReplayError> {
-        self.explain_with(claim_id, now, true)
+        self.explain_with(fact_id, now, true)
     }
 
     /// [`Self::explain`] with the whole-log chain re-verification optional. Enumeration
-    /// surfaces that only need a claim's freshness/lifecycle (`latest_freshness`) pass
+    /// surfaces that only need a fact's freshness/lifecycle (`latest_freshness`) pass
     /// `verify_chain = false` so listing N streams does not re-hash the entire log N times;
     /// `chain_verified` is then reported `false` (the caller was not asking).
     fn explain_with(
         &self,
-        claim_id: &ClaimId,
+        fact_id: &FactId,
         now: TimestampMillis,
         verify_chain: bool,
     ) -> Result<Option<IntegrityReceipt>, ReplayError> {
-        let Some(indices) = self.by_claim.get(claim_id) else {
+        let Some(indices) = self.by_fact.get(fact_id) else {
             return Ok(None);
         };
         let Some(&last_index) = indices.last() else {
             return Ok(None);
         };
-        let events: Vec<ClaimEvent> = indices
+        let events: Vec<FactEvent> = indices
             .iter()
             .map(|&index| self.log[index].event.clone())
             .collect();
-        let Some(state) = replay_claim(&events)? else {
+        let Some(state) = replay_fact(&events)? else {
             return Ok(None);
         };
         let last = &self.log[last_index];
 
         Ok(Some(IntegrityReceipt {
-            claim_id: state.claim_id.clone(),
+            fact_id: state.fact_id.clone(),
             subject: state.subject.clone(),
             predicate: state.predicate.clone(),
             value: state.value.clone(),
@@ -221,15 +221,15 @@ impl InMemoryEventStore {
         }))
     }
 
-    /// The claim id [`Self::explain_latest`] resolves to: the believed claim (a contested or
-    /// fresh one preferred), else the most-recently-updated terminal claim, else `None`.
+    /// The fact id [`Self::explain_latest`] resolves to: the believed fact (a contested or
+    /// fresh one preferred), else the most-recently-updated terminal fact, else `None`.
     /// Shared by `explain_latest` and `latest_freshness` so the two never disagree.
-    fn latest_claim_id(
+    fn latest_fact_id(
         &self,
         subject: &EntityRef,
         predicate: &Predicate,
         now: TimestampMillis,
-    ) -> Result<Option<ClaimId>, StoreError> {
+    ) -> Result<Option<FactId>, StoreError> {
         let filter = EventFilter {
             subject: Some(subject.clone()),
             predicate: Some(predicate.clone()),
@@ -238,30 +238,30 @@ impl InMemoryEventStore {
         let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
         if let Some(state) = entity
             .believed()
-            .find(|state| state.lifecycle == ClaimLifecycle::Contested && !state.is_expired_at(now))
+            .find(|state| state.lifecycle == FactLifecycle::Contested && !state.is_expired_at(now))
             .or_else(|| entity.believed().find(|state| !state.is_expired_at(now)))
             .or_else(|| entity.believed().next())
         {
-            return Ok(Some(state.claim_id.clone()));
+            return Ok(Some(state.fact_id.clone()));
         }
         Ok(entity
-            .claims
+            .facts
             .values()
             .max_by_key(|state| state.updated_at)
-            .map(|state| state.claim_id.clone()))
+            .map(|state| state.fact_id.clone()))
     }
 
     /// The believed (or terminal) fact's receipt with freshness resolved **without** the
     /// whole-log chain re-verification — for enumeration surfaces (`facts list`, MCP
     /// `list_facts` / `resources/list`) that flag per-stream freshness at scale. Resolves the
-    /// same claim as [`Self::explain_latest`]; `chain_verified` is `false` (not asked).
+    /// same fact as [`Self::explain_latest`]; `chain_verified` is `false` (not asked).
     pub fn latest_freshness(
         &self,
         subject: &EntityRef,
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, StoreError> {
-        match self.latest_claim_id(subject, predicate, now)? {
+        match self.latest_fact_id(subject, predicate, now)? {
             Some(id) => self
                 .explain_with(&id, now, false)
                 .map_err(StoreError::Replay),
@@ -269,15 +269,15 @@ impl InMemoryEventStore {
         }
     }
 
-    /// All currently-believed (lifecycle-non-terminal) claim ids for a subject+predicate,
-    /// in claim-id order. `supersede` uses this to revise **every** believed claim, so the
+    /// All currently-believed (lifecycle-non-terminal) fact ids for a subject+predicate,
+    /// in fact-id order. `supersede` uses this to revise **every** believed fact, so the
     /// end state has at most one — the registry's freshness-aware uniqueness can otherwise
     /// leave a stale + fresh pair both believed, and superseding only one would leak.
-    pub fn believed_claim_ids(
+    pub fn believed_fact_ids(
         &self,
         subject: &EntityRef,
         predicate: &Predicate,
-    ) -> Result<Vec<ClaimId>, StoreError> {
+    ) -> Result<Vec<FactId>, StoreError> {
         let filter = EventFilter {
             subject: Some(subject.clone()),
             predicate: Some(predicate.clone()),
@@ -286,12 +286,12 @@ impl InMemoryEventStore {
         let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
         Ok(entity
             .believed()
-            .map(|state| state.claim_id.clone())
+            .map(|state| state.fact_id.clone())
             .collect())
     }
 
     /// Explain the subject+predicate's current state at `now`, falling back to the most
-    /// recently updated **terminal** claim when nothing is believed — so a fact that was
+    /// recently updated **terminal** fact when nothing is believed — so a fact that was
     /// retracted or superseded reads as `lifecycle: Retracted`/`Superseded` rather than
     /// being indistinguishable from one that never existed. Returns `None` only when the
     /// subject+predicate has no events at all.
@@ -301,15 +301,15 @@ impl InMemoryEventStore {
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, StoreError> {
-        match self.latest_claim_id(subject, predicate, now)? {
+        match self.latest_fact_id(subject, predicate, now)? {
             Some(id) => self.explain(&id, now).map_err(StoreError::Replay),
             None => Ok(None),
         }
     }
 
-    /// Explain the believed claim for a `subject` + `predicate` at time `now`. When the
-    /// predicate is contested, a `Contested` claim is surfaced first so the conflict is
-    /// always visible (independent of claim-id ordering); otherwise a fresh claim is
+    /// Explain the believed fact for a `subject` + `predicate` at time `now`. When the
+    /// predicate is contested, a `Contested` fact is surfaced first so the conflict is
+    /// always visible (independent of fact-id ordering); otherwise a fresh fact is
     /// preferred over a stale one. Returns `None` if nothing is believed. This is the read
     /// used to resolve the *current* fact (e.g. by `supersede`/`contradict`).
     pub fn explain_subject(
@@ -324,13 +324,13 @@ impl InMemoryEventStore {
             ..EventFilter::default()
         };
         let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
-        let claim_id = entity
+        let fact_id = entity
             .believed()
-            .find(|state| state.lifecycle == ClaimLifecycle::Contested && !state.is_expired_at(now))
+            .find(|state| state.lifecycle == FactLifecycle::Contested && !state.is_expired_at(now))
             .or_else(|| entity.believed().find(|state| !state.is_expired_at(now)))
             .or_else(|| entity.believed().next())
-            .map(|state| state.claim_id.clone());
-        match claim_id {
+            .map(|state| state.fact_id.clone());
+        match fact_id {
             Some(id) => self.explain(&id, now).map_err(StoreError::Replay),
             None => Ok(None),
         }
@@ -338,7 +338,7 @@ impl InMemoryEventStore {
 }
 
 impl EventStore for InMemoryEventStore {
-    fn append(&mut self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+    fn append(&mut self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         // The firewall: arbitrate against current state and reject inadmissible writes
         // (insufficient or laundered authority, canonical contradiction, ...) before any
         // event is persisted. There is no un-arbitrated write path on this store.
@@ -346,23 +346,23 @@ impl EventStore for InMemoryEventStore {
         self.persist(event)
     }
 
-    fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError> {
+    fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError> {
         Ok(self
-            .by_claim
-            .get(claim_id)
+            .by_fact
+            .get(fact_id)
             .map(|indices| indices.iter().map(|&i| self.log[i].event.clone()).collect())
             .unwrap_or_default())
     }
 
-    fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError> {
+    fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
         let matches = self
             .log
             .iter()
             .filter(|stored| {
                 filter
-                    .claim_id
+                    .fact_id
                     .as_ref()
-                    .is_none_or(|c| c == &stored.event.claim_id)
+                    .is_none_or(|c| c == &stored.event.fact_id)
                     && filter
                         .subject
                         .as_ref()
@@ -382,40 +382,40 @@ impl EventStore for InMemoryEventStore {
     }
 }
 
-/// A read-time integrity receipt for one claim: its current believed state plus the
+/// A read-time integrity receipt for one fact: its current believed state plus the
 /// metadata that makes that state auditable. Returned by [`InMemoryEventStore::explain`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrityReceipt {
-    pub claim_id: ClaimId,
+    pub fact_id: FactId,
     pub subject: EntityRef,
     pub predicate: Predicate,
-    pub value: ClaimValue,
-    pub lifecycle: ClaimLifecycle,
+    pub value: FactValue,
+    pub lifecycle: FactLifecycle,
     pub authority: AuthorityLevel,
-    /// Whether the claim is fresh at the query time: within its validity window — at or
+    /// Whether the fact is fresh at the query time: within its validity window — at or
     /// after `valid_from` and before its TTL / `valid_to` upper bound (ADR 0016).
     pub fresh: bool,
-    /// Whether the claim is **not yet valid** at the query time (its asserted `valid_from`
+    /// Whether the fact is **not yet valid** at the query time (its asserted `valid_from`
     /// is in the future) — a distinct reason for `fresh == false` from having expired.
     pub not_yet_valid: bool,
     /// The asserted valid-time lower bound, or `None`. Pairs with `expires_at` to bound the
     /// validity window and, with `not_yet_valid`, to explain a not-yet-in-effect read.
     pub valid_from: Option<TimestampMillis>,
-    /// The instant the claim stops being fresh — the earliest of its TTL bound and asserted
+    /// The instant the fact stops being fresh — the earliest of its TTL bound and asserted
     /// `valid_to`, or `None` if it never expires. Pairs with `fresh` to explain *why* a read
     /// is stale and *when* it lapsed.
     pub expires_at: Option<TimestampMillis>,
     pub evidence_count: usize,
     pub corroboration: usize,
-    /// Distinct sources whose challenge against this claim the firewall rejected
+    /// Distinct sources whose challenge against this fact the firewall rejected
     /// (ADR 0015) — the "attacked and stood" half of earned entrenchment.
     pub survived_challenges: usize,
-    pub superseded_by: Option<ClaimId>,
-    pub contradicted_by: Vec<ClaimId>,
-    /// Global sequence of the claim's most recent event of *any* kind (including audit
+    pub superseded_by: Option<FactId>,
+    pub contradicted_by: Vec<FactId>,
+    /// Global sequence of the fact's most recent event of *any* kind (including audit
     /// events like `retrieved`), not necessarily the state-determining one.
     pub replay_position: u64,
-    /// Hash of the claim's most recent event (its link in the global hash chain).
+    /// Hash of the fact's most recent event (its link in the global hash chain).
     pub event_hash: String,
     /// Whether the whole log's hash chain is internally consistent (see
     /// [`InMemoryEventStore::verify_chain`] for what this does and does not prove).
@@ -427,20 +427,19 @@ mod tests {
     use super::InMemoryEventStore;
     use crate::EventStore;
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-        ClaimLifecycle, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence,
-        EvidenceId, EvidenceKind, Predicate, Provenance, SourceId, SupersessionReason,
-        TimestampMillis, Ttl,
+        ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+        EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle,
+        FactValue, Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis, Ttl,
     };
 
-    fn assertion(event_id: &str, claim_id: &str, value: &str) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new(claim_id).expect("claim id"),
-            kind: ClaimEventKind::Asserted,
+    fn assertion(event_id: &str, fact_id: &str, value: &str) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new(fact_id).expect("fact id"),
+            kind: FactEventKind::Asserted,
             subject: EntityRef::new("repo", "myproj").expect("entity"),
             predicate: Predicate::new("database").expect("predicate"),
-            value: Some(ClaimValue::Text(value.to_string())),
+            value: Some(FactValue::Text(value.to_string())),
             confidence: Confidence::from_millis(900).expect("confidence"),
             authority: Authority {
                 level: AuthorityLevel::High,
@@ -473,7 +472,7 @@ mod tests {
     #[test]
     fn the_receipt_reports_freshness_and_expiry_at_the_query_time() {
         let mut store = InMemoryEventStore::new();
-        let mut event = assertion("event:1", "claim:A", "postgres");
+        let mut event = assertion("event:1", "fact:A", "postgres");
         event.ttl = Ttl::DurationMillis(100); // anchored at recorded_at = 1 -> expires at 101
         store.append(event).expect("append");
         let subject = EntityRef::new("repo", "myproj").unwrap();
@@ -501,19 +500,19 @@ mod tests {
             stale.expires_at,
             Some(TimestampMillis::from_unix_millis(101))
         );
-        assert_eq!(stale.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(stale.lifecycle, FactLifecycle::Active);
     }
 
     #[test]
     fn a_serialized_log_reloads_through_the_trusted_path_with_an_identical_chain() {
         let now = TimestampMillis::from_unix_millis(100);
         let mut original = InMemoryEventStore::new();
-        // Two distinct claims so the chain has more than one link.
+        // Two distinct facts so the chain has more than one link.
         original
-            .append(assertion("event:1", "claim:A", "postgres"))
+            .append(assertion("event:1", "fact:A", "postgres"))
             .expect("append 1");
         original
-            .append(assertion("event:2", "claim:B", "redis"))
+            .append(assertion("event:2", "fact:B", "redis"))
             .expect("append 2");
         assert!(original.verify_chain());
 
@@ -526,14 +525,14 @@ mod tests {
             .collect();
         let reloaded_events = wire
             .iter()
-            .map(|line| serde_json::from_str::<ClaimEvent>(line).expect("deserialize"));
+            .map(|line| serde_json::from_str::<FactEvent>(line).expect("deserialize"));
         let reloaded = InMemoryEventStore::from_trusted_events(reloaded_events).expect("reload");
 
         assert_eq!(reloaded.len(), original.len());
         assert!(reloaded.verify_chain());
-        // The reloaded store explains each claim identically (same hash, same chain).
-        for claim in ["claim:A", "claim:B"] {
-            let id = ClaimId::new(claim).unwrap();
+        // The reloaded store explains each fact identically (same hash, same chain).
+        for fact in ["fact:A", "fact:B"] {
+            let id = FactId::new(fact).unwrap();
             assert_eq!(
                 reloaded.explain(&id, now).unwrap(),
                 original.explain(&id, now).unwrap(),
@@ -546,10 +545,10 @@ mod tests {
         const KEY: &[u8] = b"witness-key-held-off-the-writer";
         let mut original = InMemoryEventStore::new();
         original
-            .append(assertion("event:0", "claim:A", "postgres"))
+            .append(assertion("event:0", "fact:A", "postgres"))
             .unwrap();
         original
-            .append(assertion("event:1", "claim:B", "redis"))
+            .append(assertion("event:1", "fact:B", "redis"))
             .unwrap();
         let anchor = original.anchor(KEY).expect("anchor");
         assert!(
@@ -561,8 +560,8 @@ mod tests {
         // An operator edits the persisted log and the reload re-hashes the whole chain
         // forward (from_trusted_events) — the result is internally self-consistent.
         let tampered = InMemoryEventStore::from_trusted_events([
-            assertion("event:0", "claim:A", "postgres"),
-            assertion("event:1", "claim:B", "mysql"), // the quiet edit
+            assertion("event:0", "fact:A", "postgres"),
+            assertion("event:1", "fact:B", "mysql"), // the quiet edit
         ])
         .expect("reload");
 
@@ -579,25 +578,25 @@ mod tests {
 
     #[test]
     fn the_trusted_path_still_rejects_a_duplicate_event_id() {
-        let dup = || assertion("event:1", "claim:A", "postgres");
+        let dup = || assertion("event:1", "fact:A", "postgres");
         let result = InMemoryEventStore::from_trusted_events([dup(), dup()]);
         assert!(matches!(result, Err(crate::StoreError::Conflict(_))));
     }
 
-    fn supersession(event_id: &str, claim_id: &str, by: &str) -> ClaimEvent {
-        let mut event = assertion(event_id, claim_id, "ignored");
-        event.kind = ClaimEventKind::Superseded {
-            by: ClaimId::new(by).expect("by"),
+    fn supersession(event_id: &str, fact_id: &str, by: &str) -> FactEvent {
+        let mut event = assertion(event_id, fact_id, "ignored");
+        event.kind = FactEventKind::Superseded {
+            by: FactId::new(by).expect("by"),
             reason: SupersessionReason::UserCorrection,
         };
         event.value = None;
         event
     }
 
-    fn contradiction(event_id: &str, claim_id: &str, by: &str) -> ClaimEvent {
-        let mut event = assertion(event_id, claim_id, "ignored");
-        event.kind = ClaimEventKind::Contradicted {
-            by: ClaimId::new(by).expect("by"),
+    fn contradiction(event_id: &str, fact_id: &str, by: &str) -> FactEvent {
+        let mut event = assertion(event_id, fact_id, "ignored");
+        event.kind = FactEventKind::Contradicted {
+            by: FactId::new(by).expect("by"),
             basis: ContradictionBasis::SamePredicateDifferentValue,
         };
         event.value = None;
@@ -607,47 +606,44 @@ mod tests {
     #[test]
     fn a_contradiction_contests_the_incumbent_and_keeps_both_believed() {
         // Paraconsistency: a contradiction localizes the conflict (incumbent -> Contested)
-        // and *keeps* both claims, rather than dropping one (ADR 0009).
+        // and *keeps* both facts, rather than dropping one (ADR 0009).
         let mut store = InMemoryEventStore::from_trusted_events([
-            assertion("event:0", "claim:A", "postgres"),
-            assertion("event:1", "claim:B", "mysql"),
+            assertion("event:0", "fact:A", "postgres"),
+            assertion("event:1", "fact:B", "mysql"),
         ])
         .expect("load");
         store
-            .append(contradiction("event:2", "claim:A", "claim:B"))
+            .append(contradiction("event:2", "fact:A", "fact:B"))
             .expect("contradiction admitted");
 
         let subject = EntityRef::new("repo", "myproj").unwrap();
         let predicate = Predicate::new("database").unwrap();
         assert_eq!(
-            store
-                .believed_claim_ids(&subject, &predicate)
-                .unwrap()
-                .len(),
+            store.believed_fact_ids(&subject, &predicate).unwrap().len(),
             2,
             "both the contested incumbent and its contradictor remain believed"
         );
         let now = TimestampMillis::from_unix_millis(100);
         let incumbent = store
-            .explain(&ClaimId::new("claim:A").unwrap(), now)
+            .explain(&FactId::new("fact:A").unwrap(), now)
             .unwrap()
             .unwrap();
-        assert_eq!(incumbent.lifecycle, ClaimLifecycle::Contested);
+        assert_eq!(incumbent.lifecycle, FactLifecycle::Contested);
         assert_eq!(incumbent.contradicted_by.len(), 1);
     }
 
     #[test]
-    fn explain_surfaces_a_contested_claim_regardless_of_claim_id_order() {
-        // "claim:10" sorts BEFORE "claim:9" lexicographically, so a naive first-believed
+    fn explain_surfaces_a_contested_fact_regardless_of_fact_id_order() {
+        // "fact:10" sorts BEFORE "fact:9" lexicographically, so a naive first-believed
         // pick would return the Active contradictor and hide the contest. explain must
         // prefer the Contested incumbent.
         let mut store = InMemoryEventStore::from_trusted_events([
-            assertion("event:0", "claim:9", "postgres"),
-            assertion("event:1", "claim:10", "mysql"),
+            assertion("event:0", "fact:9", "postgres"),
+            assertion("event:1", "fact:10", "mysql"),
         ])
         .expect("load");
         store
-            .append(contradiction("event:2", "claim:9", "claim:10"))
+            .append(contradiction("event:2", "fact:9", "fact:10"))
             .expect("contradiction admitted");
 
         let receipt = store
@@ -658,44 +654,41 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-        assert_eq!(receipt.lifecycle, ClaimLifecycle::Contested);
-        assert_eq!(receipt.value, ClaimValue::Text("postgres".to_string()));
+        assert_eq!(receipt.lifecycle, FactLifecycle::Contested);
+        assert_eq!(receipt.value, FactValue::Text("postgres".to_string()));
     }
 
     #[test]
     fn superseding_every_believed_incumbent_leaves_exactly_one() {
-        // Two believed claims coexist for one subject+predicate — the base store enforces
+        // Two believed facts coexist for one subject+predicate — the base store enforces
         // no uniqueness (that is the registry's job, and freshness can leave a stale+fresh
         // pair both believed). `supersede` must revise *both*, not just one.
         let mut store = InMemoryEventStore::from_trusted_events([
-            assertion("event:0", "claim:A", "postgres"),
-            assertion("event:1", "claim:B", "mysql"),
+            assertion("event:0", "fact:A", "postgres"),
+            assertion("event:1", "fact:B", "mysql"),
         ])
         .expect("load");
         let subject = EntityRef::new("repo", "myproj").unwrap();
         let predicate = Predicate::new("database").unwrap();
         assert_eq!(
-            store
-                .believed_claim_ids(&subject, &predicate)
-                .unwrap()
-                .len(),
+            store.believed_fact_ids(&subject, &predicate).unwrap().len(),
             2
         );
 
         // One replacement, a supersession for EACH incumbent, all pointing at it.
         store
-            .append(assertion("event:2", "claim:C", "sqlite"))
+            .append(assertion("event:2", "fact:C", "sqlite"))
             .expect("replacement");
         store
-            .append(supersession("event:3", "claim:A", "claim:C"))
+            .append(supersession("event:3", "fact:A", "fact:C"))
             .expect("supersede A");
         store
-            .append(supersession("event:4", "claim:B", "claim:C"))
+            .append(supersession("event:4", "fact:B", "fact:C"))
             .expect("supersede B");
 
         assert_eq!(
-            store.believed_claim_ids(&subject, &predicate).unwrap(),
-            vec![ClaimId::new("claim:C").unwrap()],
+            store.believed_fact_ids(&subject, &predicate).unwrap(),
+            vec![FactId::new("fact:C").unwrap()],
         );
     }
 }

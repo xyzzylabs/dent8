@@ -18,7 +18,7 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-// Migration 001 (a per-column `dent8_claim_events` design sketch) was never applied and has
+// Migration 001 (a per-column `dent8_fact_events` design sketch) was never applied and has
 // been dropped; the live schema is the JSONB event log (002) + its materialized caches (003).
 pub const MIGRATIONS: &[Migration] = &[
     Migration {

@@ -1,8 +1,8 @@
 {
-  "chain_head": "9a70cbbae1e2c0f909899344e873aba0b1a9a0d0390cc79ef38eb44f812e9b7b",
-  "claims": [
+  "chain_head": "41f29de5e3c90a5be9db3e29c27b0509a97928e620d257092948f6b25ca9b135",
+  "facts": [
     {
-      "claim_id": "claim:jan",
+      "fact_id": "fact:jan",
       "lifecycle": "Superseded",
       "value": "text:beginner",
       "authority": "High",
@@ -10,7 +10,7 @@
       "fresh": true
     },
     {
-      "claim_id": "claim:nov",
+      "fact_id": "fact:nov",
       "lifecycle": "Active",
       "value": "text:senior",
       "authority": "High",

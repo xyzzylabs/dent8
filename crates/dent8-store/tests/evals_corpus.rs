@@ -1,19 +1,19 @@
-//! Scenario-family golden corpus (`evals/`): named, often **multi-claim** event streams whose
+//! Scenario-family golden corpus (`evals/`): named, often **multi-fact** event streams whose
 //! whole-stream **firewall outcome** is frozen to disk — which writes the firewall admits vs
-//! rejects, the final believed state per claim, read-time freshness, and evidence-edge
+//! rejects, the final believed state per fact, read-time freshness, and evidence-edge
 //! **retraction taint**. A regression in authority arbitration, the canonical hard-alarm,
 //! freshness, or the taint analysis is then caught as a snapshot mismatch.
 //!
 //! This is the file-based corpus [docs/evals.md](../../../docs/evals.md) calls for ("Fixtures
 //! should live under `evals/fixtures` and `evals/replay`"). It complements, not duplicates:
-//!   - `dent8-core/tests/golden_replay.rs` freezes the *single-claim* encoding + fold (every
+//!   - `dent8-core/tests/golden_replay.rs` freezes the *single-fact* encoding + fold (every
 //!     event must apply); this harness runs the *store-level firewall* over whole scenario
 //!     streams that may include writes the firewall is **expected to reject**.
 //!   - `dent8-evals` is the firewall-vs-recency *benchmark* (booleans, `dent8 eval`); this is
 //!     the frozen *fixture* form, regression-guarded byte-for-byte.
 //!
 //! Each scenario owns two files:
-//!   - `evals/fixtures/<name>.events.jsonl` — the authored stream (one `ClaimEvent` per line,
+//!   - `evals/fixtures/<name>.events.jsonl` — the authored stream (one `FactEvent` per line,
 //!     the `DENT8_LOG` format), including any write the firewall rejects, and
 //!   - `evals/replay/<name>.expected.json` — the frozen outcome.
 //!
@@ -24,21 +24,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-    ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind,
-    Predicate, Provenance, RetractionReason, SourceId, SupersessionReason, TimestampMillis,
-    TransitionError, Ttl, hash_chain,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+    EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate,
+    Provenance, RetractionReason, SourceId, SupersessionReason, TimestampMillis, TransitionError,
+    Ttl, hash_chain,
 };
 use dent8_store::{
-    EventFilter, EventStore, InMemoryEventStore, StoreError, replay_entity, tainted_claims,
+    EventFilter, EventStore, InMemoryEventStore, StoreError, replay_entity, tainted_facts,
 };
 use serde::{Deserialize, Serialize};
 
-/// One claim's frozen end-state. `believed` is non-terminal lifecycle (Active/Contested);
+/// One fact's frozen end-state. `believed` is non-terminal lifecycle (Active/Contested);
 /// `fresh` is read-time TTL freshness at the scenario's `now`.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-struct ClaimOutcome {
-    claim_id: String,
+struct FactOutcome {
+    fact_id: String,
     lifecycle: String,
     value: String,
     authority: String,
@@ -53,10 +53,10 @@ struct RejectionOutcome {
     reason: String,
 }
 
-/// A still-believed claim that transitively derives from an invalidated source.
+/// A still-believed fact that transitively derives from an invalidated source.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct TaintOutcome {
-    claim: String,
+    fact: String,
     root: String,
     root_lifecycle: String,
 }
@@ -65,7 +65,7 @@ struct TaintOutcome {
 struct Expected {
     /// Lowercase-hex head of the hash chain over the **admitted** events.
     chain_head: String,
-    claims: Vec<ClaimOutcome>,
+    facts: Vec<FactOutcome>,
     rejected: Vec<RejectionOutcome>,
     tainted: Vec<TaintOutcome>,
 }
@@ -75,7 +75,7 @@ struct Scenario {
     description: &'static str,
     /// Read-time clock for freshness (`unix_millis`).
     now_ms: i64,
-    events: Vec<ClaimEvent>,
+    events: Vec<FactEvent>,
     /// The **independent, hand-declared** headline of the outcome, asserted against the freshly
     /// computed result (not just frozen to disk). This is the guard against a bad regeneration:
     /// if a code regression changes an outcome and someone runs `UPDATE_GOLDEN=1`, the frozen
@@ -85,41 +85,41 @@ struct Scenario {
 }
 
 /// The load-bearing facts of a scenario's outcome, declared by the author. Each list is the
-/// **sorted** set of claim/event ids; the harness derives the same four sets from the computed
+/// **sorted** set of fact/event ids; the harness derives the same four sets from the computed
 /// [`Expected`] and asserts equality.
 struct Headline {
-    /// Claim ids expected to be believed (non-terminal lifecycle), sorted.
+    /// Fact ids expected to be believed (non-terminal lifecycle), sorted.
     believed: &'static [&'static str],
     /// Event ids the firewall is expected to reject, sorted.
     rejected: &'static [&'static str],
-    /// Claim ids expected to be flagged as retraction-tainted, sorted.
+    /// Fact ids expected to be flagged as retraction-tainted, sorted.
     tainted: &'static [&'static str],
-    /// Believed claim ids expected to be read-time stale (`fresh == false`), sorted.
+    /// Believed fact ids expected to be read-time stale (`fresh == false`), sorted.
     stale: &'static [&'static str],
 }
 
-/// Compact event builder: one event on `claim`/`subject`/`predicate`, stamped at `seq`
+/// Compact event builder: one event on `fact`/`subject`/`predicate`, stamped at `seq`
 /// (which is also its `recorded_at`). `Ttl::Never`, one `UserStatement` evidence — callers
 /// mutate the result for the TTL and `DerivedFrom` cases.
 #[allow(clippy::too_many_arguments)]
 fn ev(
     seq: i64,
-    claim: &str,
+    fact: &str,
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
-    kind: ClaimEventKind,
+    kind: FactEventKind,
     value: Option<&str>,
     authority: AuthorityLevel,
     source: &str,
-) -> ClaimEvent {
-    ClaimEvent {
-        event_id: ClaimEventId::new(format!("event:{seq}")).expect("event id"),
-        claim_id: ClaimId::new(claim).expect("claim id"),
+) -> FactEvent {
+    FactEvent {
+        event_id: FactEventId::new(format!("event:{seq}")).expect("event id"),
+        fact_id: FactId::new(fact).expect("fact id"),
         kind,
         subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
         predicate: Predicate::new(predicate).expect("predicate"),
-        value: value.map(|v| ClaimValue::Text(v.to_string())),
+        value: value.map(|v| FactValue::Text(v.to_string())),
         confidence: Confidence::from_millis(900).expect("confidence"),
         authority: Authority {
             level: authority,
@@ -149,43 +149,43 @@ fn ev(
     }
 }
 
-fn assert_kind() -> ClaimEventKind {
-    ClaimEventKind::Asserted
+fn assert_kind() -> FactEventKind {
+    FactEventKind::Asserted
 }
 
-fn superseded_by(by: &str) -> ClaimEventKind {
-    ClaimEventKind::Superseded {
-        by: ClaimId::new(by).expect("claim id"),
+fn superseded_by(by: &str) -> FactEventKind {
+    FactEventKind::Superseded {
+        by: FactId::new(by).expect("fact id"),
         reason: SupersessionReason::UserCorrection,
     }
 }
 
-fn contradicted_by(by: &str) -> ClaimEventKind {
-    ClaimEventKind::Contradicted {
-        by: ClaimId::new(by).expect("claim id"),
+fn contradicted_by(by: &str) -> FactEventKind {
+    FactEventKind::Contradicted {
+        by: FactId::new(by).expect("fact id"),
         basis: ContradictionBasis::SamePredicateDifferentValue,
     }
 }
 
-fn retracted_kind() -> ClaimEventKind {
-    ClaimEventKind::Retracted {
+fn retracted_kind() -> FactEventKind {
+    FactEventKind::Retracted {
         reason: RetractionReason::UserDeleted,
     }
 }
 
-/// Add a `DerivedFrom` evidence edge to `source_claim`, recording a claim->claim dependency.
-fn derived_from(mut event: ClaimEvent, source_claim: &str) -> ClaimEvent {
+/// Add a `DerivedFrom` evidence edge to `source_fact`, recording a fact->fact dependency.
+fn derived_from(mut event: FactEvent, source_fact: &str) -> FactEvent {
     event.evidence.push(Evidence {
         id: EvidenceId::new("evidence:derived").expect("evidence id"),
         kind: EvidenceKind::DerivedFrom,
-        locator: source_claim.to_string(),
+        locator: source_fact.to_string(),
         digest: None,
         summary: None,
     });
     event
 }
 
-fn with_ttl(mut event: ClaimEvent, ttl: Ttl) -> ClaimEvent {
+fn with_ttl(mut event: FactEvent, ttl: Ttl) -> FactEvent {
     event.ttl = ttl;
     event
 }
@@ -204,7 +204,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 ev(
                     0,
-                    "claim:jan",
+                    "fact:jan",
                     "person",
                     "alex",
                     "developer_level",
@@ -215,7 +215,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ev(
                     1,
-                    "claim:nov",
+                    "fact:nov",
                     "person",
                     "alex",
                     "developer_level",
@@ -226,18 +226,18 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ev(
                     2,
-                    "claim:jan",
+                    "fact:jan",
                     "person",
                     "alex",
                     "developer_level",
-                    superseded_by("claim:nov"),
+                    superseded_by("fact:nov"),
                     None,
                     AuthorityLevel::High,
                     "source:owner",
                 ),
             ],
             expect: Headline {
-                believed: &["claim:nov"],
+                believed: &["fact:nov"],
                 rejected: &[],
                 tainted: &[],
                 stale: &[],
@@ -253,7 +253,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![with_ttl(
                 ev(
                     0,
-                    "claim:flag",
+                    "fact:flag",
                     "repo",
                     "dent8",
                     "feature_flag",
@@ -265,10 +265,10 @@ fn scenarios() -> Vec<Scenario> {
                 Ttl::DurationMillis(1000),
             )],
             expect: Headline {
-                believed: &["claim:flag"],
+                believed: &["fact:flag"],
                 rejected: &[],
                 tainted: &[],
-                stale: &["claim:flag"],
+                stale: &["fact:flag"],
             },
         },
         // The differentiator (ADR 0010): a summary derived from a source fact is poisoned when
@@ -282,7 +282,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 ev(
                     0,
-                    "claim:source",
+                    "fact:source",
                     "repo",
                     "dent8",
                     "database",
@@ -294,7 +294,7 @@ fn scenarios() -> Vec<Scenario> {
                 derived_from(
                     ev(
                         1,
-                        "claim:summary",
+                        "fact:summary",
                         "doc",
                         "readme",
                         "stack_summary",
@@ -303,11 +303,11 @@ fn scenarios() -> Vec<Scenario> {
                         AuthorityLevel::Medium,
                         "source:agent",
                     ),
-                    "claim:source",
+                    "fact:source",
                 ),
                 ev(
                     2,
-                    "claim:source",
+                    "fact:source",
                     "repo",
                     "dent8",
                     "database",
@@ -318,9 +318,9 @@ fn scenarios() -> Vec<Scenario> {
                 ),
             ],
             expect: Headline {
-                believed: &["claim:summary"],
+                believed: &["fact:summary"],
                 rejected: &[],
-                tainted: &["claim:summary"],
+                tainted: &["fact:summary"],
                 stale: &[],
             },
         },
@@ -334,7 +334,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 ev(
                     0,
-                    "claim:canon",
+                    "fact:canon",
                     "repo",
                     "dent8",
                     "license",
@@ -345,18 +345,18 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ev(
                     1,
-                    "claim:canon",
+                    "fact:canon",
                     "repo",
                     "dent8",
                     "license",
-                    contradicted_by("claim:rumor"),
+                    contradicted_by("fact:rumor"),
                     None,
                     AuthorityLevel::Low,
                     "source:user",
                 ),
             ],
             expect: Headline {
-                believed: &["claim:canon"],
+                believed: &["fact:canon"],
                 rejected: &["event:1"],
                 tainted: &[],
                 stale: &[],
@@ -364,7 +364,7 @@ fn scenarios() -> Vec<Scenario> {
         },
         // MINJA: a low-authority source tries to supersede a high-authority fact. The firewall
         // rejects the supersession (the challenger cannot out-rank the incumbent), so the
-        // trusted fact stands; the low-authority claim lingers but never overrode it.
+        // trusted fact stands; the low-authority fact lingers but never overrode it.
         Scenario {
             name: "low_authority_injection",
             description: "A low-authority supersession of a high-authority fact is rejected; \
@@ -373,7 +373,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 ev(
                     0,
-                    "claim:trusted",
+                    "fact:trusted",
                     "repo",
                     "dent8",
                     "database",
@@ -384,7 +384,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ev(
                     1,
-                    "claim:attacker",
+                    "fact:attacker",
                     "repo",
                     "dent8",
                     "database",
@@ -395,18 +395,18 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 ev(
                     2,
-                    "claim:trusted",
+                    "fact:trusted",
                     "repo",
                     "dent8",
                     "database",
-                    superseded_by("claim:attacker"),
+                    superseded_by("fact:attacker"),
                     None,
                     AuthorityLevel::Low,
                     "source:web-scrape",
                 ),
             ],
             expect: Headline {
-                believed: &["claim:attacker", "claim:trusted"],
+                believed: &["fact:attacker", "fact:trusted"],
                 rejected: &["event:2"],
                 tainted: &[],
                 stale: &[],
@@ -415,11 +415,11 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-fn render_value(value: &ClaimValue) -> String {
+fn render_value(value: &FactValue) -> String {
     match value {
-        ClaimValue::Text(text) => format!("text:{text}"),
-        ClaimValue::Json(json) => format!("json:{}", json.as_str()),
-        ClaimValue::Redacted => "<redacted>".to_string(),
+        FactValue::Text(text) => format!("text:{text}"),
+        FactValue::Json(json) => format!("json:{}", json.as_str()),
+        FactValue::Redacted => "<redacted>".to_string(),
     }
 }
 
@@ -449,8 +449,8 @@ fn transition_category(error: &TransitionError) -> &'static str {
         TransitionError::InvalidEvent(_) => "InvalidEvent",
         TransitionError::MissingInitialAssertion => "MissingInitialAssertion",
         TransitionError::DuplicateAssertion => "DuplicateAssertion",
-        TransitionError::ClaimIdMismatch => "ClaimIdMismatch",
-        TransitionError::ClaimShapeMismatch => "ClaimShapeMismatch",
+        TransitionError::FactIdMismatch => "FactIdMismatch",
+        TransitionError::FactShapeMismatch => "FactShapeMismatch",
         TransitionError::ReinforcementValueMismatch => "ReinforcementValueMismatch",
         TransitionError::TerminalStateMutation(_) => "TerminalStateMutation",
         TransitionError::InsufficientAuthority { .. } => "InsufficientAuthority",
@@ -459,8 +459,8 @@ fn transition_category(error: &TransitionError) -> &'static str {
 }
 
 /// Replay a whole authored stream through the **store firewall**, capturing rejections, then
-/// summarize the admitted log: chain head, per-claim end-state, and retraction taint.
-fn replay(events: &[ClaimEvent], now: TimestampMillis) -> Expected {
+/// summarize the admitted log: chain head, per-fact end-state, and retraction taint.
+fn replay(events: &[FactEvent], now: TimestampMillis) -> Expected {
     let mut store = InMemoryEventStore::new();
     let mut rejected = Vec::new();
     for event in events {
@@ -482,7 +482,7 @@ fn replay(events: &[ClaimEvent], now: TimestampMillis) -> Expected {
         .cloned()
         .unwrap_or_default();
 
-    let mut claims = Vec::new();
+    let mut facts = Vec::new();
     for (subject, predicate) in store.subjects() {
         let filter = EventFilter {
             subject: Some(subject),
@@ -491,9 +491,9 @@ fn replay(events: &[ClaimEvent], now: TimestampMillis) -> Expected {
         };
         let stream = store.scan_events(&filter).expect("scan entity");
         let projection = replay_entity(&stream).expect("replay entity");
-        for (claim_id, state) in &projection.claims {
-            claims.push(ClaimOutcome {
-                claim_id: claim_id.as_str().to_string(),
+        for (fact_id, state) in &projection.facts {
+            facts.push(FactOutcome {
+                fact_id: fact_id.as_str().to_string(),
                 lifecycle: format!("{:?}", state.lifecycle),
                 value: render_value(&state.value),
                 authority: format!("{:?}", state.authority.level),
@@ -502,22 +502,22 @@ fn replay(events: &[ClaimEvent], now: TimestampMillis) -> Expected {
             });
         }
     }
-    claims.sort_by(|a, b| a.claim_id.cmp(&b.claim_id));
+    facts.sort_by(|a, b| a.fact_id.cmp(&b.fact_id));
 
-    let mut tainted: Vec<TaintOutcome> = tainted_claims(&admitted)
+    let mut tainted: Vec<TaintOutcome> = tainted_facts(&admitted)
         .expect("taint analysis")
         .into_iter()
         .map(|t| TaintOutcome {
-            claim: t.claim.as_str().to_string(),
+            fact: t.fact.as_str().to_string(),
             root: t.root.as_str().to_string(),
             root_lifecycle: format!("{:?}", t.root_lifecycle),
         })
         .collect();
-    tainted.sort_by(|a, b| a.claim.cmp(&b.claim));
+    tainted.sort_by(|a, b| a.fact.cmp(&b.fact));
 
     Expected {
         chain_head,
-        claims,
+        facts,
         rejected,
         tainted,
     }
@@ -528,7 +528,7 @@ fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals")
 }
 
-fn serialize_events(events: &[ClaimEvent]) -> String {
+fn serialize_events(events: &[FactEvent]) -> String {
     let mut out = String::new();
     for event in events {
         out.push_str(&serde_json::to_string(event).expect("serialize event"));
@@ -578,7 +578,7 @@ fn evals_corpus_outcomes_are_stable() {
         );
 
         // Replay the ON-DISK stream through the firewall and compare to the frozen outcome.
-        let from_disk: Vec<ClaimEvent> = fs::read_to_string(&events_path)
+        let from_disk: Vec<FactEvent> = fs::read_to_string(&events_path)
             .expect("read events")
             .lines()
             .filter(|line| !line.trim().is_empty())
@@ -599,15 +599,15 @@ fn evals_corpus_outcomes_are_stable() {
         // `computed == frozen` check above compares two code-derived values; this one
         // compares against author intent.) Each list is sorted, matching `Headline`'s order.
         let believed: Vec<&str> = computed
-            .claims
+            .facts
             .iter()
-            .filter(|claim| claim.believed)
-            .map(|claim| claim.claim_id.as_str())
+            .filter(|fact| fact.believed)
+            .map(|fact| fact.fact_id.as_str())
             .collect();
         assert_eq!(
             believed.as_slice(),
             scenario.expect.believed,
-            "believed claims for `{}`",
+            "believed facts for `{}`",
             scenario.name
         );
         let rejected: Vec<&str> = computed
@@ -624,24 +624,24 @@ fn evals_corpus_outcomes_are_stable() {
         let tainted: Vec<&str> = computed
             .tainted
             .iter()
-            .map(|taint| taint.claim.as_str())
+            .map(|taint| taint.fact.as_str())
             .collect();
         assert_eq!(
             tainted.as_slice(),
             scenario.expect.tainted,
-            "tainted claims for `{}`",
+            "tainted facts for `{}`",
             scenario.name
         );
         let stale: Vec<&str> = computed
-            .claims
+            .facts
             .iter()
-            .filter(|claim| claim.believed && !claim.fresh)
-            .map(|claim| claim.claim_id.as_str())
+            .filter(|fact| fact.believed && !fact.fresh)
+            .map(|fact| fact.fact_id.as_str())
             .collect();
         assert_eq!(
             stale.as_slice(),
             scenario.expect.stale,
-            "stale believed claims for `{}`",
+            "stale believed facts for `{}`",
             scenario.name
         );
     }

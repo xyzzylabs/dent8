@@ -10,19 +10,19 @@
 //! Scope: a policy controls which events are *admitted* into the fold. It does not
 //! vary the contradiction-resolution rule (that is hard-coded in `apply_event` —
 //! a future knob) and it does not evaluate *freshness*. Freshness is deliberately a
-//! separate read-time axis — [`crate::ClaimState::is_expired_at`] — so that valid-time
+//! separate read-time axis — [`crate::FactState::is_expired_at`] — so that valid-time
 //! staleness is never conflated with the event-driven lifecycle.
 
 use std::collections::BTreeSet;
 
 use crate::ids::SourceId;
-use crate::model::{AuthorityLevel, ClaimEvent, ClaimEventKind, Confidence};
+use crate::model::{AuthorityLevel, Confidence, FactEvent, FactEventKind};
 
-/// A set of trust assumptions applied while replaying a claim-event stream.
+/// A set of trust assumptions applied while replaying a fact-event stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EpistemicPolicy {
     /// Events whose provenance source is in this set are treated as if they never
-    /// happened. Distrusting the source that *asserted* a claim makes the whole claim
+    /// happened. Distrusting the source that *asserted* a fact makes the whole fact
     /// stream absent under this policy.
     pub distrusted_sources: BTreeSet<SourceId>,
     /// Belief-affecting events (assert/reinforce/contradict/supersede) below this
@@ -57,7 +57,7 @@ impl EpistemicPolicy {
     /// never occurred — the mechanism behind the "distrust source", "raise the
     /// authority floor", and "raise the confidence floor" counterfactuals.
     #[must_use]
-    pub fn admits(&self, event: &ClaimEvent) -> bool {
+    pub fn admits(&self, event: &FactEvent) -> bool {
         if self.distrusted_sources.contains(&event.provenance.source) {
             return false;
         }
@@ -81,13 +81,13 @@ impl Default for EpistemicPolicy {
 /// authority and confidence floors). Audit and lifecycle-closing events are not
 /// gated: retrieval/decision-use never change state, and expiry/retraction are
 /// policy- or system-driven rather than authority challenges.
-const fn affects_belief(kind: &ClaimEventKind) -> bool {
+const fn affects_belief(kind: &FactEventKind) -> bool {
     matches!(
         kind,
-        ClaimEventKind::Asserted
-            | ClaimEventKind::Reinforced { .. }
-            | ClaimEventKind::Contradicted { .. }
-            | ClaimEventKind::Superseded { .. }
+        FactEventKind::Asserted
+            | FactEventKind::Reinforced { .. }
+            | FactEventKind::Contradicted { .. }
+            | FactEventKind::Superseded { .. }
     )
 }
 

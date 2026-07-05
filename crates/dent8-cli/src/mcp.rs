@@ -16,7 +16,7 @@
 
 use std::io::{BufRead, Write};
 
-use dent8_core::{AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimLifecycle, ClaimValue};
+use dent8_core::{AuthorityLevel, FactEvent, FactEventKind, FactLifecycle, FactValue};
 use dent8_store::{EventFilter, EventStore, IntegrityReceipt};
 use serde_json::{Value, json};
 
@@ -1320,7 +1320,7 @@ fn write_output(
         crate::ops::ReadClock::default(),
     ) && let Some(object) = structured.as_object_mut()
     {
-        object.insert("claim_id".to_string(), json!(receipt.claim_id.as_str()));
+        object.insert("fact_id".to_string(), json!(receipt.fact_id.as_str()));
         object.insert("receipt_kind".to_string(), json!("current_state"));
         object.insert("event_hash".to_string(), json!(&receipt.event_hash));
         object.insert(
@@ -1337,7 +1337,7 @@ fn write_output(
         );
         object.insert(
             "current_value".to_string(),
-            claim_value_structured(&receipt.value),
+            fact_value_structured(&receipt.value),
         );
         object.insert("current_receipt".to_string(), receipt_structured(&receipt));
         object.insert("receipt".to_string(), receipt_structured(&receipt));
@@ -1371,7 +1371,7 @@ fn run_write_tool(
     ))
 }
 
-fn all_events(path: &str) -> Result<Vec<ClaimEvent>, ToolError> {
+fn all_events(path: &str) -> Result<Vec<FactEvent>, ToolError> {
     let store = load_store(path).map_err(ToolError::Failed)?;
     store
         .scan_events(&EventFilter::default())
@@ -1379,7 +1379,7 @@ fn all_events(path: &str) -> Result<Vec<ClaimEvent>, ToolError> {
 }
 
 fn accepted_events_since(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     start: usize,
 ) -> Result<Vec<AcceptedEvent>, ToolError> {
     let hashes = dent8_core::hash_chain(events)
@@ -1390,12 +1390,12 @@ fn accepted_events_since(
         .skip(start)
         .map(|(event, event_hash)| AcceptedEvent {
             event_id: event.event_id.as_str().to_string(),
-            claim_id: event.claim_id.as_str().to_string(),
+            fact_id: event.fact_id.as_str().to_string(),
             kind: event_kind_name(&event.kind),
             subject_kind: event.subject.kind().to_string(),
             subject_key: event.subject.key().to_string(),
             predicate: event.predicate.as_str().to_string(),
-            value: event.value.as_ref().map(claim_value_structured),
+            value: event.value.as_ref().map(fact_value_structured),
             authority: event.authority.level.name(),
             source: event.provenance.source.as_str().to_string(),
             event_hash,
@@ -1405,7 +1405,7 @@ fn accepted_events_since(
 
 struct AcceptedEvent {
     event_id: String,
-    claim_id: String,
+    fact_id: String,
     kind: &'static str,
     subject_kind: String,
     subject_key: String,
@@ -1420,7 +1420,7 @@ impl AcceptedEvent {
     fn to_json(&self) -> Value {
         json!({
             "event_id": self.event_id,
-            "claim_id": self.claim_id,
+            "fact_id": self.fact_id,
             "kind": self.kind,
             "subject": {
                 "kind": self.subject_kind,
@@ -1440,13 +1440,13 @@ fn explain_structured(tool: &str, receipt: &IntegrityReceipt) -> Value {
     json!({
         "status": receipt_status(receipt),
         "tool": tool,
-        "claim_id": receipt.claim_id.as_str(),
+        "fact_id": receipt.fact_id.as_str(),
         "subject": {
             "kind": receipt.subject.kind(),
             "key": receipt.subject.key(),
         },
         "predicate": receipt.predicate.as_str(),
-        "current_value": claim_value_structured(&receipt.value),
+        "current_value": fact_value_structured(&receipt.value),
         "event_hash": &receipt.event_hash,
         "event_hash_short": short(&receipt.event_hash),
         "replay_position": receipt.replay_position,
@@ -1504,7 +1504,7 @@ fn argument_string(arguments: &Value, name: &str) -> Option<String> {
 }
 
 fn receipt_status(receipt: &IntegrityReceipt) -> &'static str {
-    if receipt.lifecycle == ClaimLifecycle::Contested {
+    if receipt.lifecycle == FactLifecycle::Contested {
         "contested"
     } else {
         "ok"
@@ -1513,13 +1513,13 @@ fn receipt_status(receipt: &IntegrityReceipt) -> &'static str {
 
 fn receipt_structured(receipt: &IntegrityReceipt) -> Value {
     json!({
-        "claim_id": receipt.claim_id.as_str(),
+        "fact_id": receipt.fact_id.as_str(),
         "subject": {
             "kind": receipt.subject.kind(),
             "key": receipt.subject.key(),
         },
         "predicate": receipt.predicate.as_str(),
-        "value": claim_value_structured(&receipt.value),
+        "value": fact_value_structured(&receipt.value),
         "lifecycle": lifecycle_name(receipt.lifecycle),
         "authority": receipt.authority.name(),
         "fresh": receipt.fresh,
@@ -1529,11 +1529,11 @@ fn receipt_structured(receipt: &IntegrityReceipt) -> Value {
         "evidence_count": receipt.evidence_count,
         "corroboration": receipt.corroboration,
         "survived_challenges": receipt.survived_challenges,
-        "superseded_by": receipt.superseded_by.as_ref().map(dent8_core::ClaimId::as_str),
+        "superseded_by": receipt.superseded_by.as_ref().map(dent8_core::FactId::as_str),
         "contradicted_by": receipt
             .contradicted_by
             .iter()
-            .map(dent8_core::ClaimId::as_str)
+            .map(dent8_core::FactId::as_str)
             .collect::<Vec<_>>(),
         "replay_position": receipt.replay_position,
         "event_hash": &receipt.event_hash,
@@ -1542,44 +1542,44 @@ fn receipt_structured(receipt: &IntegrityReceipt) -> Value {
     })
 }
 
-fn lifecycle_name(lifecycle: ClaimLifecycle) -> &'static str {
+fn lifecycle_name(lifecycle: FactLifecycle) -> &'static str {
     match lifecycle {
-        ClaimLifecycle::Active => "Active",
-        ClaimLifecycle::Contested => "Contested",
-        ClaimLifecycle::Superseded => "Superseded",
-        ClaimLifecycle::Retracted => "Retracted",
-        ClaimLifecycle::Expired => "Expired",
+        FactLifecycle::Active => "Active",
+        FactLifecycle::Contested => "Contested",
+        FactLifecycle::Superseded => "Superseded",
+        FactLifecycle::Retracted => "Retracted",
+        FactLifecycle::Expired => "Expired",
     }
 }
 
-fn event_kind_name(kind: &ClaimEventKind) -> &'static str {
+fn event_kind_name(kind: &FactEventKind) -> &'static str {
     match kind {
-        ClaimEventKind::Asserted => "Asserted",
-        ClaimEventKind::Superseded { .. } => "Superseded",
-        ClaimEventKind::Contradicted { .. } => "Contradicted",
-        ClaimEventKind::Retracted { .. } => "Retracted",
-        ClaimEventKind::Expired { .. } => "Expired",
-        ClaimEventKind::Reinforced { .. } => "Reinforced",
-        ClaimEventKind::Retrieved { .. } => "Retrieved",
-        ClaimEventKind::UsedInDecision { .. } => "UsedInDecision",
-        ClaimEventKind::ChallengeRejected { .. } => "ChallengeRejected",
+        FactEventKind::Asserted => "Asserted",
+        FactEventKind::Superseded { .. } => "Superseded",
+        FactEventKind::Contradicted { .. } => "Contradicted",
+        FactEventKind::Retracted { .. } => "Retracted",
+        FactEventKind::Expired { .. } => "Expired",
+        FactEventKind::Reinforced { .. } => "Reinforced",
+        FactEventKind::Retrieved { .. } => "Retrieved",
+        FactEventKind::UsedInDecision { .. } => "UsedInDecision",
+        FactEventKind::ChallengeRejected { .. } => "ChallengeRejected",
     }
 }
 
-fn claim_value_structured(value: &ClaimValue) -> Value {
+fn fact_value_structured(value: &FactValue) -> Value {
     match value {
-        ClaimValue::Text(text) => json!({
+        FactValue::Text(text) => json!({
             "kind": "text",
             "text": text,
             "display": display_value(value),
         }),
-        ClaimValue::Json(canonical) => json!({
+        FactValue::Json(canonical) => json!({
             "kind": "json",
             "canonical": canonical.as_str(),
             "json": serde_json::from_str::<Value>(canonical.as_str()).ok(),
             "display": display_value(value),
         }),
-        ClaimValue::Redacted => json!({
+        FactValue::Redacted => json!({
             "kind": "redacted",
             "display": display_value(value),
         }),
@@ -1763,7 +1763,7 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "contradict",
-            "Flag a conflict (dissent): contest the believed fact, keeping both. Not authority-gated, except a canonical fact hard-alarms. Optional valid_from/valid_to set the opposing claim's validity interval.",
+            "Flag a conflict (dissent): contest the believed fact, keeping both. Not authority-gated, except a canonical fact hard-alarms. Optional valid_from/valid_to set the opposing fact's validity interval.",
             &valued_vt,
             &valued_req,
         ),
@@ -1911,13 +1911,13 @@ fn write_output_schema(tool: &str, statuses: &[&str]) -> Value {
                 "items": accepted_event_output_schema(),
             },
             "message": { "type": "string" },
-            "claim_id": { "type": "string" },
+            "fact_id": { "type": "string" },
             "receipt_kind": { "const": "current_state" },
             "event_hash": digest_schema(),
             "event_hash_kind": { "const": "current_state_latest_event" },
             "event_hash_short": { "type": "string" },
             "replay_position": { "type": "integer", "minimum": 0 },
-            "current_value": claim_value_output_schema(),
+            "current_value": fact_value_output_schema(),
             "current_receipt": receipt_output_schema(),
             "receipt": receipt_output_schema(),
             "derived_from": derived_from_output_schema(),
@@ -1943,8 +1943,8 @@ fn read_output_schema(tool: &str) -> Value {
             "tool": { "const": tool },
             "subject": subject_output_schema(),
             "predicate": { "type": "string" },
-            "claim_id": { "type": "string" },
-            "current_value": claim_value_output_schema(),
+            "fact_id": { "type": "string" },
+            "current_value": fact_value_output_schema(),
             "event_hash": digest_schema(),
             "event_hash_short": { "type": "string" },
             "replay_position": { "type": "integer", "minimum": 0 },
@@ -1993,7 +1993,7 @@ fn accepted_event_output_schema() -> Value {
     object_schema(
         json!({
             "event_id": { "type": "string" },
-            "claim_id": { "type": "string" },
+            "fact_id": { "type": "string" },
             "kind": {
                 "enum": [
                     "Asserted",
@@ -2010,7 +2010,7 @@ fn accepted_event_output_schema() -> Value {
             "predicate": { "type": "string" },
             "value": {
                 "anyOf": [
-                    claim_value_output_schema(),
+                    fact_value_output_schema(),
                     { "type": "null" }
                 ]
             },
@@ -2021,7 +2021,7 @@ fn accepted_event_output_schema() -> Value {
         }),
         &[
             "event_id",
-            "claim_id",
+            "fact_id",
             "kind",
             "subject",
             "predicate",
@@ -2037,10 +2037,10 @@ fn accepted_event_output_schema() -> Value {
 fn receipt_output_schema() -> Value {
     object_schema(
         json!({
-            "claim_id": { "type": "string" },
+            "fact_id": { "type": "string" },
             "subject": subject_output_schema(),
             "predicate": { "type": "string" },
-            "value": claim_value_output_schema(),
+            "value": fact_value_output_schema(),
             "lifecycle": {
                 "enum": ["Active", "Contested", "Superseded", "Retracted", "Expired"]
             },
@@ -2073,7 +2073,7 @@ fn receipt_output_schema() -> Value {
             "chain_verified": { "type": "boolean" },
         }),
         &[
-            "claim_id",
+            "fact_id",
             "subject",
             "predicate",
             "value",
@@ -2096,7 +2096,7 @@ fn receipt_output_schema() -> Value {
     )
 }
 
-fn claim_value_output_schema() -> Value {
+fn fact_value_output_schema() -> Value {
     json!({
         "oneOf": [
             object_schema(
@@ -2148,7 +2148,7 @@ fn subject_output_schema() -> Value {
 }
 
 fn authority_schema() -> Value {
-    json!({ "enum": ["Unknown", "Low", "Medium", "High", "Canonical"] })
+    json!({ "enum": ["unknown", "low", "medium", "high", "canonical"] })
 }
 
 fn digest_schema() -> Value {
@@ -2932,7 +2932,7 @@ mod tests {
         let result = call_tool_result(&path, "assert", database("postgres", "low"));
         assert_eq!(result["isError"], true);
         assert_eq!(result["structuredContent"]["status"], "rejected");
-        assert_eq!(result["structuredContent"]["authority"], "Low");
+        assert_eq!(result["structuredContent"]["authority"], "low");
         assert!(
             result["structuredContent"]["rejection_reason"]
                 .as_str()
@@ -3275,7 +3275,7 @@ mod tests {
         );
         assert!(!err && text.contains("retracted"), "{text}");
         let (err, text) = call(5, "explain", subject(json!({})));
-        // After retracting all believed claims, explain falls back to the terminal claim
+        // After retracting all believed facts, explain falls back to the terminal fact
         // and reports it as no longer believed (a successful, audited read).
         assert!(!err && text.contains("no longer believed"), "{text}");
     }

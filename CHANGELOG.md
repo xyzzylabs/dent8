@@ -9,6 +9,19 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Changed (breaking)
+- **`fact` vocabulary + event format v2.** The central concept is now **fact** everywhere — the
+  library types (`ClaimEvent` → `FactEvent`, `ClaimState` → `FactState`, `ClaimValue` →
+  `FactValue`, `ClaimId` → `FactId`, `ClaimEventId` → `FactEventId`, `ClaimEventKind` →
+  `FactEventKind`, `ClaimLifecycle` → `FactLifecycle`), the methods (`load_claim_events` →
+  `load_fact_events`, `replay_claim` → `replay_fact`, `believed_claim_ids` → `believed_fact_ids`),
+  and the **on-disk event format**: the field `claim_id` → `fact_id`, fact ids are `fact:…`
+  (was `claim:…`), and `authority` is lowercase (`"high"`, not `"High"`) so it round-trips with
+  the `--authority high` you type. `CANON_VERSION` is bumped to **2**; every event's hash
+  therefore changes, so a v1 log **does not verify against this build** and must be re-ingested
+  from source (there is no in-place migration). This withdraws the pre-1.0 format-stability
+  promise for this one break; from v2 onward the intent is additive-only again.
+
 ### Added
 - **Local Unix-socket MCP daemon with per-connection identity**
   ([ADR 0018](docs/decisions/0018-local-daemon-and-per-connection-identity.md)): `dent8 mcp

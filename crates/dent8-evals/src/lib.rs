@@ -1,6 +1,6 @@
 //! Adversarial evaluation corpus for the dent8 memory firewall.
 //!
-//! Each scenario is a concrete attack — a sequence of `ClaimEvent`s a poisoning adversary
+//! Each scenario is a concrete attack — a sequence of `FactEvent`s a poisoning adversary
 //! might submit — run two ways:
 //!
 //! - through the **real firewall** (`dent8_store::InMemoryEventStore::append`, i.e.
@@ -11,17 +11,17 @@
 //!
 //! The eval asserts the firewall **blocks** each attack while the baseline is
 //! **compromised** — the measurable evidence behind the [threat model](../../docs/threat-model.md)
-//! claims (T1 MINJA, T5 canonical contradiction, authority laundering, Sybil corroboration).
+//! facts (T1 MINJA, T5 canonical contradiction, authority laundering, Sybil corroboration).
 //! This is the empirical complement to the `#[cfg(kani)]` proofs and the exhaustive
 //! authority-lattice tests in `dent8-core`.
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-    ClaimLifecycle, ClaimState, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, Predicate, Provenance, RetractionReason, SourceId,
-    SupersessionReason, TimestampMillis, Ttl,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+    EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle,
+    FactState, FactValue, Predicate, Provenance, RetractionReason, SourceId, SupersessionReason,
+    TimestampMillis, Ttl,
 };
-use dent8_store::{EventFilter, EventStore, InMemoryEventStore, replay_claim, tainted_claims};
+use dent8_store::{EventFilter, EventStore, InMemoryEventStore, replay_fact, tainted_facts};
 
 /// The outcome of running one attack scenario through both resolution strategies.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -92,7 +92,7 @@ fn minja_low_authority_injection() -> AttackResult {
     let events = vec![
         asserted(
             "event:0",
-            "claim:trusted",
+            "fact:trusted",
             "postgres",
             "source:owner",
             AuthorityLevel::High,
@@ -100,7 +100,7 @@ fn minja_low_authority_injection() -> AttackResult {
         ),
         asserted(
             "event:1",
-            "claim:attacker",
+            "fact:attacker",
             "mysql",
             "source:user",
             AuthorityLevel::Low,
@@ -108,8 +108,8 @@ fn minja_low_authority_injection() -> AttackResult {
         ),
         superseded(
             "event:2",
-            "claim:trusted",
-            "claim:attacker",
+            "fact:trusted",
+            "fact:attacker",
             "source:user",
             AuthorityLevel::Low,
             3,
@@ -118,15 +118,15 @@ fn minja_low_authority_injection() -> AttackResult {
     AttackResult {
         name: "minja_low_authority_injection",
         family: "T1_memory_injection",
-        // Firewall: the trusted claim is still Active (the supersession was rejected).
-        firewall_blocked: firewall_state(&events, "claim:trusted")
-            .is_some_and(|state| state.lifecycle == ClaimLifecycle::Active),
+        // Firewall: the trusted fact is still Active (the supersession was rejected).
+        firewall_blocked: firewall_state(&events, "fact:trusted")
+            .is_some_and(|state| state.lifecycle == FactLifecycle::Active),
         // Baseline: newest write wins, so the trusted fact is overridden by "mysql".
         baseline_compromised: recency_head(&events) == Some("mysql".to_string()),
     }
 }
 
-/// Retraction taint (T2/T8 — poison does not survive in derivatives, ADR 0010): a claim is
+/// Retraction taint (T2/T8 — poison does not survive in derivatives, ADR 0010): a fact is
 /// **derived** (`EvidenceKind::DerivedFrom`) from a source, then the source is retracted as
 /// poisoned. The firewall flags the still-believed derivative as **tainted** (it traces to a
 /// retracted source); a recency-only store has no dependency graph at all, so the derivative
@@ -135,7 +135,7 @@ fn minja_low_authority_injection() -> AttackResult {
 fn poisoned_source_retraction() -> AttackResult {
     let source = asserted(
         "event:0",
-        "claim:source",
+        "fact:source",
         "postgres",
         "source:owner",
         AuthorityLevel::High,
@@ -143,16 +143,16 @@ fn poisoned_source_retraction() -> AttackResult {
     );
     let derived = derived_from(
         "event:1",
-        "claim:derived",
+        "fact:derived",
         "deploy-to-pg",
         "source:agent",
         AuthorityLevel::High,
         2,
-        "claim:source",
+        "fact:source",
     );
     let retract = retracted(
         "event:2",
-        "claim:source",
+        "fact:source",
         "source:owner",
         AuthorityLevel::High,
         3,
@@ -162,10 +162,10 @@ fn poisoned_source_retraction() -> AttackResult {
         name: "poisoned_source_retraction",
         family: "T2_retraction_cascade",
         // Firewall: the still-believed derivative is flagged as tainted (its source retracted).
-        firewall_blocked: tainted_claims(&admitted)
+        firewall_blocked: tainted_facts(&admitted)
             .expect("taint")
             .iter()
-            .any(|taint| taint.claim.as_str() == "claim:derived"),
+            .any(|taint| taint.fact.as_str() == "fact:derived"),
         // Baseline: recency-only has no dependency graph, so the derivative's own stream is
         // never touched by the source's retraction — it silently survives, unflagged.
         baseline_compromised: recency_head(&[derived]).is_some(),
@@ -173,13 +173,13 @@ fn poisoned_source_retraction() -> AttackResult {
 }
 
 /// Authority laundering: the attacker over-states the *supersession event's* authority as
-/// High while it is backed by a Low claim. The firewall resolves the backing claim's real
+/// High while it is backed by a Low fact. The firewall resolves the backing fact's real
 /// authority and rejects; recency-only never looks at authority at all.
 fn authority_laundering() -> AttackResult {
     let events = vec![
         asserted(
             "event:0",
-            "claim:trusted",
+            "fact:trusted",
             "postgres",
             "source:owner",
             AuthorityLevel::High,
@@ -187,17 +187,17 @@ fn authority_laundering() -> AttackResult {
         ),
         asserted(
             "event:1",
-            "claim:attacker",
+            "fact:attacker",
             "mysql",
             "source:user",
             AuthorityLevel::Low,
             2,
         ),
-        // The supersession EVENT claims High, but claim:attacker is really Low.
+        // The supersession EVENT facts High, but fact:attacker is really Low.
         superseded(
             "event:2",
-            "claim:trusted",
-            "claim:attacker",
+            "fact:trusted",
+            "fact:attacker",
             "source:user",
             AuthorityLevel::High,
             3,
@@ -206,8 +206,8 @@ fn authority_laundering() -> AttackResult {
     AttackResult {
         name: "authority_laundering",
         family: "T1_memory_injection",
-        firewall_blocked: firewall_state(&events, "claim:trusted")
-            .is_some_and(|state| state.lifecycle == ClaimLifecycle::Active),
+        firewall_blocked: firewall_state(&events, "fact:trusted")
+            .is_some_and(|state| state.lifecycle == FactLifecycle::Active),
         baseline_compromised: recency_head(&events) == Some("mysql".to_string()),
     }
 }
@@ -219,7 +219,7 @@ fn canonical_contradiction() -> AttackResult {
     let events = vec![
         asserted(
             "event:0",
-            "claim:canon",
+            "fact:canon",
             "postgres",
             "source:owner",
             AuthorityLevel::Canonical,
@@ -227,8 +227,8 @@ fn canonical_contradiction() -> AttackResult {
         ),
         contradicted(
             "event:1",
-            "claim:canon",
-            "claim:rumor",
+            "fact:canon",
+            "fact:rumor",
             "source:user",
             AuthorityLevel::Low,
             2,
@@ -239,20 +239,20 @@ fn canonical_contradiction() -> AttackResult {
         family: "T5_canonical_contradiction",
         // Firewall: the canonical fact is still Active — the contradiction hard-alarmed
         // (was rejected) rather than moving it to Contested.
-        firewall_blocked: firewall_state(&events, "claim:canon")
-            .is_some_and(|state| state.lifecycle == ClaimLifecycle::Active),
+        firewall_blocked: firewall_state(&events, "fact:canon")
+            .is_some_and(|state| state.lifecycle == FactLifecycle::Active),
         // Baseline: an unguarded store accepts the contradiction and casts doubt.
         baseline_compromised: recency_contested(&events),
     }
 }
 
-/// Sybil corroboration: many distinct *low*-authority sources reinforce a claim to fake
+/// Sybil corroboration: many distinct *low*-authority sources reinforce a fact to fake
 /// entrenchment by volume. The firewall's authority-weighted corroboration is unmoved
 /// (no high-authority backing); a naive count-based metric is fooled.
 fn sybil_corroboration() -> AttackResult {
     let mut events = vec![asserted(
         "event:0",
-        "claim:rumor",
+        "fact:rumor",
         "mysql",
         "source:sybil:0",
         AuthorityLevel::Low,
@@ -261,14 +261,14 @@ fn sybil_corroboration() -> AttackResult {
     for n in 1i64..=9 {
         events.push(reinforced(
             &format!("event:{n}"),
-            "claim:rumor",
+            "fact:rumor",
             "mysql",
             &format!("source:sybil:{n}"),
             AuthorityLevel::Low,
             n + 1,
         ));
     }
-    let state = firewall_state(&events, "claim:rumor");
+    let state = firewall_state(&events, "fact:rumor");
     AttackResult {
         name: "sybil_corroboration",
         family: "earned_entrenchment",
@@ -290,7 +290,7 @@ pub fn legitimate_supersession_is_accepted() -> bool {
     let events = vec![
         asserted(
             "event:0",
-            "claim:old",
+            "fact:old",
             "postgres",
             "source:owner",
             AuthorityLevel::High,
@@ -298,7 +298,7 @@ pub fn legitimate_supersession_is_accepted() -> bool {
         ),
         asserted(
             "event:1",
-            "claim:new",
+            "fact:new",
             "mysql",
             "source:owner",
             AuthorityLevel::High,
@@ -306,51 +306,51 @@ pub fn legitimate_supersession_is_accepted() -> bool {
         ),
         superseded(
             "event:2",
-            "claim:old",
-            "claim:new",
+            "fact:old",
+            "fact:new",
             "source:owner",
             AuthorityLevel::High,
             3,
         ),
     ];
-    firewall_state(&events, "claim:old")
-        .is_some_and(|state| state.lifecycle == ClaimLifecycle::Superseded)
+    firewall_state(&events, "fact:old")
+        .is_some_and(|state| state.lifecycle == FactLifecycle::Superseded)
 }
 
 // ---- Resolution strategies -----------------------------------------------------------
 
-/// Replay one claim's stream through the **real firewall** and return its projected state.
+/// Replay one fact's stream through the **real firewall** and return its projected state.
 /// Events the firewall rejects simply never land, exactly as in the operational store.
-fn firewall_state(events: &[ClaimEvent], claim_id: &str) -> Option<ClaimState> {
+fn firewall_state(events: &[FactEvent], fact_id: &str) -> Option<FactState> {
     let mut store = InMemoryEventStore::new();
     for event in events {
         // A rejected (inadmissible) write is dropped — that is the firewall doing its job.
         let _ = store.append(event.clone());
     }
-    let id = ClaimId::new(claim_id).expect("claim id");
-    let claim_events = store.load_claim_events(&id).expect("load");
-    replay_claim(&claim_events).expect("replay")
+    let id = FactId::new(fact_id).expect("fact id");
+    let fact_events = store.load_fact_events(&id).expect("load");
+    replay_fact(&fact_events).expect("replay")
 }
 
 /// The recency-only baseline's believed value: newest assertion wins, and a supersession
 /// adopts its replacement's value — **with no authority arbitration**. `None` if retracted.
-fn recency_head(events: &[ClaimEvent]) -> Option<String> {
+fn recency_head(events: &[FactEvent]) -> Option<String> {
     use std::collections::HashMap;
-    let mut values: HashMap<&ClaimId, Option<String>> = HashMap::new();
+    let mut values: HashMap<&FactId, Option<String>> = HashMap::new();
     let mut head: Option<String> = None;
     for event in events {
         match &event.kind {
-            ClaimEventKind::Asserted => {
+            FactEventKind::Asserted => {
                 let value = text(event);
-                values.insert(&event.claim_id, value.clone());
+                values.insert(&event.fact_id, value.clone());
                 head = value; // newest assertion wins
             }
-            ClaimEventKind::Superseded { by, .. } => {
+            FactEventKind::Superseded { by, .. } => {
                 // Recency: the supersession is applied unconditionally; adopt the
                 // replacement's value.
                 head = values.get(by).cloned().flatten();
             }
-            ClaimEventKind::Retracted { .. } => head = None,
+            FactEventKind::Retracted { .. } => head = None,
             _ => {}
         }
     }
@@ -359,15 +359,15 @@ fn recency_head(events: &[ClaimEvent]) -> Option<String> {
 
 /// Whether the recency-only baseline would mark the fact contested (it accepts any
 /// contradiction, with no canonical hard-alarm).
-fn recency_contested(events: &[ClaimEvent]) -> bool {
+fn recency_contested(events: &[FactEvent]) -> bool {
     events
         .iter()
-        .any(|event| matches!(event.kind, ClaimEventKind::Contradicted { .. }))
+        .any(|event| matches!(event.kind, FactEventKind::Contradicted { .. }))
 }
 
-fn text(event: &ClaimEvent) -> Option<String> {
+fn text(event: &FactEvent) -> Option<String> {
     match &event.value {
-        Some(ClaimValue::Text(value)) => Some(value.clone()),
+        Some(FactValue::Text(value)) => Some(value.clone()),
         _ => None,
     }
 }
@@ -376,16 +376,16 @@ fn text(event: &ClaimEvent) -> Option<String> {
 
 fn asserted(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     value: &str,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-) -> ClaimEvent {
+) -> FactEvent {
     event(
         event_id,
-        claim_id,
-        ClaimEventKind::Asserted,
+        fact_id,
+        FactEventKind::Asserted,
         Some(value),
         source,
         authority,
@@ -395,17 +395,17 @@ fn asserted(
 
 fn reinforced(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     value: &str,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-) -> ClaimEvent {
+) -> FactEvent {
     event(
         event_id,
-        claim_id,
-        ClaimEventKind::Reinforced {
-            by: ClaimId::new(claim_id).expect("claim id"),
+        fact_id,
+        FactEventKind::Reinforced {
+            by: FactId::new(fact_id).expect("fact id"),
         },
         Some(value),
         source,
@@ -416,17 +416,17 @@ fn reinforced(
 
 fn superseded(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     by: &str,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-) -> ClaimEvent {
+) -> FactEvent {
     event(
         event_id,
-        claim_id,
-        ClaimEventKind::Superseded {
-            by: ClaimId::new(by).expect("by"),
+        fact_id,
+        FactEventKind::Superseded {
+            by: FactId::new(by).expect("by"),
             reason: SupersessionReason::NewerObservation,
         },
         None,
@@ -438,17 +438,17 @@ fn superseded(
 
 fn contradicted(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     by: &str,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-) -> ClaimEvent {
+) -> FactEvent {
     event(
         event_id,
-        claim_id,
-        ClaimEventKind::Contradicted {
-            by: ClaimId::new(by).expect("by"),
+        fact_id,
+        FactEventKind::Contradicted {
+            by: FactId::new(by).expect("by"),
             basis: ContradictionBasis::SamePredicateDifferentValue,
         },
         None,
@@ -460,15 +460,15 @@ fn contradicted(
 
 fn retracted(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-) -> ClaimEvent {
+) -> FactEvent {
     event(
         event_id,
-        claim_id,
-        ClaimEventKind::Retracted {
+        fact_id,
+        FactEventKind::Retracted {
             reason: RetractionReason::PoisoningDetected,
         },
         None,
@@ -478,22 +478,22 @@ fn retracted(
     )
 }
 
-/// An `Asserted` claim on a *distinct* predicate (`deploy_target`, so it does not collide with
-/// the source's `database` fact) carrying a `DerivedFrom` evidence edge to `from_claim` — the
-/// claim->claim dependency the taint analysis walks (ADR 0010).
+/// An `Asserted` fact on a *distinct* predicate (`deploy_target`, so it does not collide with
+/// the source's `database` fact) carrying a `DerivedFrom` evidence edge to `from_fact` — the
+/// fact->fact dependency the taint analysis walks (ADR 0010).
 fn derived_from(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     value: &str,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-    from_claim: &str,
-) -> ClaimEvent {
+    from_fact: &str,
+) -> FactEvent {
     let mut e = event(
         event_id,
-        claim_id,
-        ClaimEventKind::Asserted,
+        fact_id,
+        FactEventKind::Asserted,
         Some(value),
         source,
         authority,
@@ -503,7 +503,7 @@ fn derived_from(
     e.evidence.push(Evidence {
         id: EvidenceId::new(format!("evidence:dep:{event_id}")).expect("evidence id"),
         kind: EvidenceKind::DerivedFrom,
-        locator: from_claim.to_string(),
+        locator: from_fact.to_string(),
         digest: None,
         summary: None,
     });
@@ -512,7 +512,7 @@ fn derived_from(
 
 /// The events the firewall actually admitted (rejected writes dropped), for an analysis that
 /// should reflect the stored log rather than the raw candidate sequence.
-fn firewall_admitted(events: &[ClaimEvent]) -> Vec<ClaimEvent> {
+fn firewall_admitted(events: &[FactEvent]) -> Vec<FactEvent> {
     let mut store = InMemoryEventStore::new();
     for event in events {
         let _ = store.append(event.clone());
@@ -522,20 +522,20 @@ fn firewall_admitted(events: &[ClaimEvent]) -> Vec<ClaimEvent> {
 
 fn event(
     event_id: &str,
-    claim_id: &str,
-    kind: ClaimEventKind,
+    fact_id: &str,
+    kind: FactEventKind,
     value: Option<&str>,
     source: &str,
     authority: AuthorityLevel,
     at: i64,
-) -> ClaimEvent {
-    ClaimEvent {
-        event_id: ClaimEventId::new(event_id).expect("event id"),
-        claim_id: ClaimId::new(claim_id).expect("claim id"),
+) -> FactEvent {
+    FactEvent {
+        event_id: FactEventId::new(event_id).expect("event id"),
+        fact_id: FactId::new(fact_id).expect("fact id"),
         kind,
         subject: EntityRef::new("repo", "proj").expect("entity"),
         predicate: Predicate::new("database").expect("predicate"),
-        value: value.map(|v| ClaimValue::Text(v.to_string())),
+        value: value.map(|v| FactValue::Text(v.to_string())),
         confidence: Confidence::from_millis(900).expect("confidence"),
         authority: Authority {
             level: authority,
@@ -628,7 +628,7 @@ mod tests {
         store
             .append(asserted(
                 "e0",
-                "claim:trusted",
+                "fact:trusted",
                 "postgres",
                 "src:owner",
                 AuthorityLevel::High,
@@ -638,7 +638,7 @@ mod tests {
         store
             .append(asserted(
                 "e1",
-                "claim:attacker",
+                "fact:attacker",
                 "mysql",
                 "src:user",
                 AuthorityLevel::Low,
@@ -648,8 +648,8 @@ mod tests {
         let minja = store
             .append(superseded(
                 "e2",
-                "claim:trusted",
-                "claim:attacker",
+                "fact:trusted",
+                "fact:attacker",
                 "src:user",
                 AuthorityLevel::Low,
                 3,
@@ -663,13 +663,13 @@ mod tests {
             "MINJA rejected by the wrong mechanism: {minja:?}"
         );
 
-        // Laundering: the supersession EVENT over-states High, but its backing claim is
+        // Laundering: the supersession EVENT over-states High, but its backing fact is
         // Low — the anti-laundering branch (not apply_event) must catch it.
         let mut store = InMemoryEventStore::new();
         store
             .append(asserted(
                 "e0",
-                "claim:trusted",
+                "fact:trusted",
                 "postgres",
                 "src:owner",
                 AuthorityLevel::High,
@@ -679,7 +679,7 @@ mod tests {
         store
             .append(asserted(
                 "e1",
-                "claim:attacker",
+                "fact:attacker",
                 "mysql",
                 "src:user",
                 AuthorityLevel::Low,
@@ -689,8 +689,8 @@ mod tests {
         let laundering = store
             .append(superseded(
                 "e2",
-                "claim:trusted",
-                "claim:attacker",
+                "fact:trusted",
+                "fact:attacker",
                 "src:user",
                 AuthorityLevel::High,
                 3,
@@ -706,7 +706,7 @@ mod tests {
         store
             .append(asserted(
                 "e0",
-                "claim:canon",
+                "fact:canon",
                 "postgres",
                 "src:owner",
                 AuthorityLevel::Canonical,
@@ -716,8 +716,8 @@ mod tests {
         let canonical = store
             .append(contradicted(
                 "e1",
-                "claim:canon",
-                "claim:rumor",
+                "fact:canon",
+                "fact:rumor",
                 "src:user",
                 AuthorityLevel::Low,
                 2,

@@ -30,7 +30,7 @@ fn builtin_native_memory_guard_blocks_agent_memory_files_when_enforced() {
         true,
     );
     assert_eq!(denied.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("bypass the claim-event firewall"));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("bypass the fact-event firewall"));
 
     let allowed = run_builtin_guard(
         r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/repo/src/lib.rs"}}"#,
@@ -130,7 +130,7 @@ fn builtin_guard_blocks_apply_patch_writes_to_native_memory() {
         true,
     );
     assert_eq!(denied.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("bypass the claim-event firewall"));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("bypass the fact-event firewall"));
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn hook_bypass_flag_opens_the_guard_but_a_typo_does_not() {
         ],
     );
     assert!(bypassed.status.success());
-    assert!(String::from_utf8_lossy(&bypassed.stderr).contains("bypass the claim-event firewall"));
+    assert!(String::from_utf8_lossy(&bypassed.stderr).contains("bypass the fact-event firewall"));
     // …but a malformed bypass value never grants a bypass.
     let denied = run_hook(
         MEMORY_WRITE,
@@ -242,7 +242,7 @@ fn hook_audit_and_session_modes_reverify_the_log() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let healthy = dir.join("healthy.jsonl").to_string_lossy().into_owned();
     let corrupt_path = dir.join("corrupt.jsonl");
-    std::fs::write(&corrupt_path, "this is not a claim event\n").expect("write corrupt log");
+    std::fs::write(&corrupt_path, "this is not a fact event\n").expect("write corrupt log");
     let corrupt = corrupt_path.to_string_lossy().into_owned();
 
     // session-start always verifies: a healthy (missing = empty) log passes, a corrupt one

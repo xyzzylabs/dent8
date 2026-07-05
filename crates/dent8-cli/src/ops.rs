@@ -6,15 +6,15 @@
 //! `append_events`, attestation) and the write-boundary auth gate stay in the crate root.
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, ClaimEvent,
-    ClaimEventId, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimValue, Confidence,
-    ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind, Predicate, Provenance,
-    RetractionReason, SupersessionReason, TimestampMillis, Ttl,
+    ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, Confidence,
+    ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId,
+    FactEventKind, FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason,
+    SupersessionReason, TimestampMillis, Ttl,
 };
 use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt,
-    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_claim,
-    replay_entity,
+    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_entity,
+    replay_fact,
 };
 
 use std::str::FromStr;
@@ -22,31 +22,31 @@ use std::str::FromStr;
 use crate::{
     CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs, ReadFactArgs,
     ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events, attest_events,
-    claim_value_json, display_value, enforce_write_authority, format_receipt, load_store, log_path,
+    display_value, enforce_write_authority, fact_value_json, format_receipt, load_store, log_path,
     next_seq, now_millis, paint_status, parse_predicate, print_json_stderr, print_json_stdout,
     read_annotation, receipt_fields_json, receipt_json, short,
 };
 
-/// Build a validated `ClaimEvent` from CLI strings, returning a friendly error rather than
+/// Build a validated `FactEvent` from CLI strings, returning a friendly error rather than
 /// panicking on malformed input. The `kind` and `value` distinguish an assertion from a
-/// supersession; `claim_id` is the *subject* claim of the event (the new claim for an
+/// supersession; `fact_id` is the *subject* fact of the event (the new fact for an
 /// assertion, the incumbent for a supersession).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_event(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
-    kind: ClaimEventKind,
-    value: Option<ClaimValue>,
+    kind: FactEventKind,
+    value: Option<FactValue>,
     source: &str,
     authority: AuthorityLevel,
     now: TimestampMillis,
-) -> Result<ClaimEvent, String> {
-    Ok(ClaimEvent {
-        event_id: ClaimEventId::new(event_id).map_err(|e| format!("event id: {e}"))?,
-        claim_id: ClaimId::new(claim_id).map_err(|e| format!("claim id: {e}"))?,
+) -> Result<FactEvent, String> {
+    Ok(FactEvent {
+        event_id: FactEventId::new(event_id).map_err(|e| format!("event id: {e}"))?,
+        fact_id: FactId::new(fact_id).map_err(|e| format!("fact id: {e}"))?,
         kind,
         subject: EntityRef::new(subject_kind, subject_key).map_err(|e| format!("subject: {e}"))?,
         predicate: Predicate::new(predicate).map_err(|e| format!("predicate: {e}"))?,
@@ -124,7 +124,7 @@ pub(crate) struct Validity {
 }
 
 impl Validity {
-    fn stamp(self, event: &mut ClaimEvent) {
+    fn stamp(self, event: &mut FactEvent) {
         event.valid_from = self.from.map(TimestampMillis::from_unix_millis);
         event.valid_to = self.to.map(TimestampMillis::from_unix_millis);
     }
@@ -157,7 +157,7 @@ impl ReadClock {
             return Ok(store);
         };
         let at = TimestampMillis::from_unix_millis(as_of);
-        let events: Vec<ClaimEvent> = store
+        let events: Vec<FactEvent> = store
             .scan_events(&EventFilter::default())
             .map_err(|error| error.to_string())?
             .into_iter()
@@ -174,7 +174,7 @@ impl ReadClock {
 pub(crate) fn admit(
     store: &mut InMemoryEventStore,
     registry: &PredicateRegistry,
-    mut event: ClaimEvent,
+    mut event: FactEvent,
     now: TimestampMillis,
 ) -> Result<AppendReceipt, StoreError> {
     apply_policy_defaults(registry, &mut event);
@@ -208,14 +208,14 @@ fn entrenchment_gate_enabled() -> bool {
 /// lost **on strength** counts — insufficient stated authority, a laundered supersession,
 /// or the canonical hard-alarm. Malformed writes, duplicates, and terminal-state mutations
 /// are never recorded. Returns the challenge shape and the challenger's *effective*
-/// authority (for a laundered supersession, the backing claim's actual level — "survived a
+/// authority (for a laundered supersession, the backing fact's actual level — "survived a
 /// High challenge" must mean the challenge was actually High).
 fn classify_challenge(
-    candidate: &ClaimEvent,
+    candidate: &FactEvent,
     error: &StoreError,
 ) -> Option<(
     ChallengeKind,
-    Option<ClaimId>,
+    Option<FactId>,
     ChallengeRejection,
     AuthorityLevel,
 )> {
@@ -223,7 +223,7 @@ fn classify_challenge(
     let stated = candidate.authority.level;
     match (&candidate.kind, error) {
         (
-            ClaimEventKind::Superseded { by, .. },
+            FactEventKind::Superseded { by, .. },
             StoreError::Rejected(T::InsufficientAuthority { .. }),
         ) => Some((
             ChallengeKind::Supersession,
@@ -232,7 +232,7 @@ fn classify_challenge(
             stated,
         )),
         (
-            ClaimEventKind::Superseded { by, .. },
+            FactEventKind::Superseded { by, .. },
             StoreError::LaunderedAuthority { challenger, .. },
         ) => Some((
             ChallengeKind::Supersession,
@@ -241,7 +241,7 @@ fn classify_challenge(
             *challenger,
         )),
         (
-            ClaimEventKind::Contradicted { by, .. },
+            FactEventKind::Contradicted { by, .. },
             StoreError::Rejected(T::CanonicalContradiction),
         ) => Some((
             ChallengeKind::Contradiction,
@@ -250,7 +250,7 @@ fn classify_challenge(
             stated,
         )),
         (
-            ClaimEventKind::Retracted { .. },
+            FactEventKind::Retracted { .. },
             StoreError::Rejected(T::InsufficientAuthority { .. }),
         ) => Some((
             ChallengeKind::Retraction,
@@ -258,7 +258,7 @@ fn classify_challenge(
             ChallengeRejection::InsufficientAuthority,
             stated,
         )),
-        (ClaimEventKind::Expired { .. }, StoreError::Rejected(T::InsufficientAuthority { .. })) => {
+        (FactEventKind::Expired { .. }, StoreError::Rejected(T::InsufficientAuthority { .. })) => {
             Some((
                 ChallengeKind::Expiration,
                 None,
@@ -277,11 +277,11 @@ fn classify_challenge(
 #[allow(clippy::too_many_arguments)]
 fn persist_challenge_record(
     path: &str,
-    incumbent: &ClaimId,
+    incumbent: &FactId,
     subject: &EntityRef,
     predicate: &Predicate,
     challenge: ChallengeKind,
-    by: Option<ClaimId>,
+    by: Option<FactId>,
     rejection: ChallengeRejection,
     source: &str,
     effective: AuthorityLevel,
@@ -296,7 +296,7 @@ fn persist_challenge_record(
         subject.kind(),
         subject.key(),
         predicate.as_str(),
-        ClaimEventKind::ChallengeRejected {
+        FactEventKind::ChallengeRejected {
             challenge,
             by,
             rejection,
@@ -317,7 +317,7 @@ fn persist_challenge_record(
 
 /// The note appended to a rejection message when the survived challenge was recorded.
 const CHALLENGE_RECORDED_NOTE: &str =
-    "\n  the incumbent recorded the survived challenge (claim.challenge_rejected)";
+    "\n  the incumbent recorded the survived challenge (fact.challenge_rejected)";
 
 /// ADR 0015 — when a rejected write was a real challenge lost on strength, record the
 /// survival on the incumbent's stream with the **challenger's** provenance (so identity
@@ -326,7 +326,7 @@ const CHALLENGE_RECORDED_NOTE: &str =
 /// caller's error message when a record was persisted.
 fn record_survived_challenge(
     path: &str,
-    candidate: &ClaimEvent,
+    candidate: &FactEvent,
     error: &StoreError,
     identity: &WriteIdentity,
 ) -> &'static str {
@@ -338,7 +338,7 @@ fn record_survived_challenge(
     };
     if persist_challenge_record(
         path,
-        &candidate.claim_id,
+        &candidate.fact_id,
         &candidate.subject,
         &candidate.predicate,
         challenge,
@@ -418,17 +418,17 @@ pub(crate) fn op_assert(
     )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
     let now = now_millis();
-    // A fresh claim per assertion (keyed by sequence); the registry's uniqueness governs
-    // whether a second *fresh* claim for the same subject+predicate is admissible.
+    // A fresh fact per assertion (keyed by sequence); the registry's uniqueness governs
+    // whether a second *fresh* fact for the same subject+predicate is admissible.
     let seq = next_seq(&store);
     let mut event = build_event(
         &format!("event:{seq}"),
-        &format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}"),
+        &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
         subject_kind,
         subject_key,
         predicate,
-        ClaimEventKind::Asserted,
-        Some(ClaimValue::Text(value.to_string())),
+        FactEventKind::Asserted,
+        Some(FactValue::Text(value.to_string())),
         source,
         authority,
         now,
@@ -480,9 +480,9 @@ pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
     )
 }
 
-/// Assert a fact **derived from** another fact, recording the claim->claim dependency edge
+/// Assert a fact **derived from** another fact, recording the fact->fact dependency edge
 /// (`EvidenceKind::DerivedFrom`, ADR 0010). The source is named by *subject* (kind/key/
-/// predicate) and resolved to its currently-believed claim id(s), so no internal claim id need
+/// predicate) and resolved to its currently-believed fact id(s), so no internal fact id need
 /// be typed. If that source is later retracted/expired, `verify` flags this derivative as
 /// tainted. Shared by `dent8 derive` and the MCP `derive` tool.
 #[allow(clippy::too_many_arguments)]
@@ -510,7 +510,7 @@ pub(crate) fn op_derive(
     let from_predicate_parsed = Predicate::new(from_predicate)
         .map_err(|error| OpError::Invalid(format!("invalid source predicate: {error}")))?;
     let sources = store
-        .believed_claim_ids(&from_subject, &from_predicate_parsed)
+        .believed_fact_ids(&from_subject, &from_predicate_parsed)
         .map_err(|error| OpError::Invalid(error.to_string()))?;
     if sources.is_empty() {
         return Err(OpError::Rejected(format!(
@@ -521,19 +521,19 @@ pub(crate) fn op_derive(
     let seq = next_seq(&store);
     let mut event = build_event(
         &format!("event:{seq}"),
-        &format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}"),
+        &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
         subject_kind,
         subject_key,
         predicate,
-        ClaimEventKind::Asserted,
-        Some(ClaimValue::Text(value.to_string())),
+        FactEventKind::Asserted,
+        Some(FactValue::Text(value.to_string())),
         source,
         authority,
         now,
     )
     .map_err(|error| OpError::Invalid(format!("invalid derivation: {error}")))?;
     validity.stamp(&mut event);
-    // Record a DerivedFrom evidence edge to each believed source claim.
+    // Record a DerivedFrom evidence edge to each believed source fact.
     for (index, src) in sources.iter().enumerate() {
         event.evidence.push(Evidence {
             id: EvidenceId::new(format!("evidence:derived:{index}"))
@@ -731,7 +731,7 @@ pub(crate) fn fact_write_json_view<'a>(
 
 pub(crate) fn write_value_json(value: Option<&str>) -> serde_json::Value {
     value.map_or(serde_json::Value::Null, |text| {
-        claim_value_json(&ClaimValue::Text(text.to_string()))
+        fact_value_json(&FactValue::Text(text.to_string()))
     })
 }
 
@@ -908,11 +908,11 @@ pub(crate) fn present_write(
 /// believed incumbent** (`event:{seq+1+i}`), each pointing `by` at the replacement.
 /// Superseding *every* believed incumbent — not just one — is what makes the end state
 /// satisfy uniqueness, since the registry can leave a stale + fresh pair both believed.
-/// Returns `(events, replacement_claim_id)` with `events[0]` the replacement.
+/// Returns `(events, replacement_fact_id)` with `events[0]` the replacement.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_revision(
     seq: usize,
-    incumbents: &[ClaimId],
+    incumbents: &[FactId],
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
@@ -920,30 +920,30 @@ pub(crate) fn build_revision(
     source: &str,
     authority: AuthorityLevel,
     now: TimestampMillis,
-) -> Result<(Vec<ClaimEvent>, String), String> {
-    let replacement_claim_id = format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}");
+) -> Result<(Vec<FactEvent>, String), String> {
+    let replacement_fact_id = format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}");
     let replacement = build_event(
         &format!("event:{seq}"),
-        &replacement_claim_id,
+        &replacement_fact_id,
         subject_kind,
         subject_key,
         predicate,
-        ClaimEventKind::Asserted,
-        Some(ClaimValue::Text(new_value.to_string())),
+        FactEventKind::Asserted,
+        Some(FactValue::Text(new_value.to_string())),
         source,
         authority,
         now,
     )?;
     let mut events = vec![replacement];
     for (index, incumbent) in incumbents.iter().enumerate() {
-        let by = ClaimId::new(&replacement_claim_id).map_err(|e| format!("claim id: {e}"))?;
+        let by = FactId::new(&replacement_fact_id).map_err(|e| format!("fact id: {e}"))?;
         events.push(build_event(
             &format!("event:{}", seq + 1 + index),
             incumbent.as_str(),
             subject_kind,
             subject_key,
             predicate,
-            ClaimEventKind::Superseded {
+            FactEventKind::Superseded {
                 by,
                 reason: SupersessionReason::UserCorrection,
             },
@@ -953,11 +953,11 @@ pub(crate) fn build_revision(
             now,
         )?);
     }
-    Ok((events, replacement_claim_id))
+    Ok((events, replacement_fact_id))
 }
 
 /// Revise the believed fact for a subject+predicate via the sanctioned supersession path:
-/// assert a *replacement* claim and mark **every** believed incumbent superseded by it,
+/// assert a *replacement* fact and mark **every** believed incumbent superseded by it,
 /// persisted as one best-effort single write on the file dev store, or a real transaction on
 /// async backends. The base firewall's anti-laundering enforces that the replacement out-ranks each
 /// incumbent, so a lower-authority revision is rejected. Uniqueness holds in the end state
@@ -990,7 +990,7 @@ pub(crate) fn op_supersede(
 
     // Every believed incumbent must be superseded so the end state is unique.
     let incumbents = match store
-        .believed_claim_ids(&subject, &predicate_parsed)
+        .believed_fact_ids(&subject, &predicate_parsed)
         .map_err(|error| OpError::Invalid(error.to_string()))?
     {
         ids if !ids.is_empty() => ids,
@@ -1019,7 +1019,7 @@ pub(crate) fn op_supersede(
         )));
     }
 
-    let (mut events, replacement_claim_id) = build_revision(
+    let (mut events, replacement_fact_id) = build_revision(
         next_seq(&store),
         &incumbents,
         subject_kind,
@@ -1044,9 +1044,9 @@ pub(crate) fn op_supersede(
     if entrenchment_gate_enabled() {
         for incumbent in &incumbents {
             let state = store
-                .load_claim_events(incumbent)
+                .load_fact_events(incumbent)
                 .ok()
-                .and_then(|stream| replay_claim(&stream).ok().flatten());
+                .and_then(|stream| replay_fact(&stream).ok().flatten());
             let Some(state) = state else { continue };
             // Earned entrenchment (ADR 0017) = corroboration + survived challenges, at the
             // incumbent's authority. A fresh replacement's earned entrenchment is exactly 1
@@ -1065,7 +1065,7 @@ pub(crate) fn op_supersede(
                         &subject,
                         &predicate_parsed,
                         ChallengeKind::Supersession,
-                        Some(events[0].claim_id.clone()),
+                        Some(events[0].fact_id.clone()),
                         ChallengeRejection::WeakerEntrenchment,
                         source,
                         authority,
@@ -1097,16 +1097,16 @@ pub(crate) fn op_supersede(
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
 
     let count = incumbents.len();
-    let claims = if count == 1 { "claim" } else { "claims" };
+    let facts = if count == 1 { "fact" } else { "facts" };
     Ok(format!(
-        "ACCEPTED  superseded {count} believed {claims} of {subject_kind}:{subject_key} \
+        "ACCEPTED  superseded {count} believed {facts} of {subject_kind}:{subject_key} \
          {predicate}: {previous} -> \"{new_value}\"  (authority={authority:?})\n  \
-         new believed claim {replacement_claim_id}"
+         new believed fact {replacement_fact_id}"
     ))
 }
 
 /// Revise the believed fact for a subject+predicate via the sanctioned supersession path:
-/// assert a *replacement* claim and mark **every** believed incumbent superseded by it.
+/// assert a *replacement* fact and mark **every** believed incumbent superseded by it.
 /// The base firewall's anti-laundering enforces that the replacement out-ranks each
 /// incumbent, so a lower-authority revision is rejected; uniqueness holds in the end state
 /// because all believed incumbents become terminal. Shared by `dent8 supersede` and the
@@ -1143,14 +1143,14 @@ pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_retractions(
     seq: usize,
-    incumbents: &[ClaimId],
+    incumbents: &[FactId],
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
     source: &str,
     authority: AuthorityLevel,
     now: TimestampMillis,
-) -> Result<Vec<ClaimEvent>, String> {
+) -> Result<Vec<FactEvent>, String> {
     incumbents
         .iter()
         .enumerate()
@@ -1161,7 +1161,7 @@ pub(crate) fn build_retractions(
                 subject_kind,
                 subject_key,
                 predicate,
-                ClaimEventKind::Retracted {
+                FactEventKind::Retracted {
                     reason: RetractionReason::UserDeleted,
                 },
                 None,
@@ -1192,7 +1192,7 @@ pub(crate) fn op_retract(
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
     let incumbents = match store
-        .believed_claim_ids(&subject, &predicate_parsed)
+        .believed_fact_ids(&subject, &predicate_parsed)
         .map_err(|error| OpError::Invalid(error.to_string()))?
     {
         ids if !ids.is_empty() => ids,
@@ -1222,9 +1222,9 @@ pub(crate) fn op_retract(
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
     let count = incumbents.len();
-    let claims = if count == 1 { "claim" } else { "claims" };
+    let facts = if count == 1 { "fact" } else { "facts" };
     Ok(format!(
-        "ACCEPTED  retracted {count} believed {claims} of {subject_kind}:{subject_key} \
+        "ACCEPTED  retracted {count} believed {facts} of {subject_kind}:{subject_key} \
          {predicate}  (authority={authority:?})"
     ))
 }
@@ -1254,7 +1254,7 @@ pub(crate) fn cmd_retract(args: &FactWriteArgs, output: CliOutput) -> i32 {
     )
 }
 
-/// Corroborate the believed fact(s): append a `Reinforced` event per believed claim. The
+/// Corroborate the believed fact(s): append a `Reinforced` event per believed fact. The
 /// fold raises earned entrenchment (a distinct source/authority backing the same value) and
 /// counts the evidence; the value is left unset so it is pure corroboration (no restatement,
 /// no value-mismatch). Shared by `dent8 reinforce` and the MCP `reinforce` tool.
@@ -1275,19 +1275,19 @@ pub(crate) fn op_reinforce(
         authority,
         source,
         "reinforce",
-        |incumbent| ClaimEventKind::Reinforced {
+        |incumbent| FactEventKind::Reinforced {
             by: incumbent.clone(),
         },
         identity,
     )?;
     let count = events.len();
     Ok(format!(
-        "ACCEPTED  reinforced {count} believed claim(s) of {subject_kind}:{subject_key} \
+        "ACCEPTED  reinforced {count} believed fact(s) of {subject_kind}:{subject_key} \
          {predicate}  (authority={authority:?})"
     ))
 }
 
-/// Mark the believed fact(s) expired: append an `Expired` event per believed claim, moving it
+/// Mark the believed fact(s) expired: append an `Expired` event per believed fact, moving it
 /// to the terminal `Expired` lifecycle. This is an explicit lifecycle close and is
 /// authority-gated by the core fold; TTL staleness remains read-time and non-mutating.
 /// Shared by `dent8 expire` and the MCP `expire` tool.
@@ -1308,18 +1308,18 @@ pub(crate) fn op_expire(
         authority,
         source,
         "expire",
-        |_incumbent| ClaimEventKind::Expired {
+        |_incumbent| FactEventKind::Expired {
             reason: dent8_core::ExpirationReason::PolicyRetention,
         },
         identity,
     )?;
     let count = events.len();
     Ok(format!(
-        "ACCEPTED  expired {count} believed claim(s) of {subject_kind}:{subject_key} {predicate}"
+        "ACCEPTED  expired {count} believed fact(s) of {subject_kind}:{subject_key} {predicate}"
     ))
 }
 
-/// Shared body for the single-event-per-believed-claim writes (`reinforce`, `expire`): find
+/// Shared body for the single-event-per-believed-fact writes (`reinforce`, `expire`): find
 /// the believed incumbents, build one event per incumbent (its kind chosen by `kind_for`),
 /// admit each through the firewall, then persist all-or-nothing.
 #[allow(clippy::too_many_arguments)]
@@ -1331,9 +1331,9 @@ pub(crate) fn build_per_incumbent(
     authority: AuthorityLevel,
     source: &str,
     verb: &str,
-    kind_for: impl Fn(&ClaimId) -> ClaimEventKind,
+    kind_for: impl Fn(&FactId) -> FactEventKind,
     identity: &WriteIdentity,
-) -> Result<Vec<ClaimEvent>, OpError> {
+) -> Result<Vec<FactEvent>, OpError> {
     enforce_write_authority(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
@@ -1344,7 +1344,7 @@ pub(crate) fn build_per_incumbent(
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
     let incumbents = store
-        .believed_claim_ids(&subject, &predicate_parsed)
+        .believed_fact_ids(&subject, &predicate_parsed)
         .map_err(|error| OpError::Invalid(error.to_string()))?;
     if incumbents.is_empty() {
         return Err(OpError::Rejected(format!(
@@ -1416,14 +1416,14 @@ pub(crate) fn cmd_expire(args: &FactWriteArgs, output: CliOutput) -> i32 {
     })
 }
 
-/// Build the `(events, opposing_claim_id)` for a `contradict`: a fresh opposing assertion
+/// Build the `(events, opposing_fact_id)` for a `contradict`: a fresh opposing assertion
 /// (`event:{seq}`, appended first) carrying the rival value, plus a `Contradicted` event on
 /// the incumbent pointing `by` at it. Both end up believed — the paraconsistent surfaced
 /// conflict ([ADR 0009](../../docs/decisions/0009-uniqueness-and-contestation.md)).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_contradiction(
     seq: usize,
-    incumbent_claim_id: &str,
+    incumbent_fact_id: &str,
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
@@ -1431,28 +1431,28 @@ pub(crate) fn build_contradiction(
     source: &str,
     authority: AuthorityLevel,
     now: TimestampMillis,
-) -> Result<(Vec<ClaimEvent>, String), String> {
-    let opposing_claim_id = format!("claim:{subject_kind}:{subject_key}:{predicate}:{seq}");
+) -> Result<(Vec<FactEvent>, String), String> {
+    let opposing_fact_id = format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}");
     let opposing = build_event(
         &format!("event:{seq}"),
-        &opposing_claim_id,
+        &opposing_fact_id,
         subject_kind,
         subject_key,
         predicate,
-        ClaimEventKind::Asserted,
-        Some(ClaimValue::Text(opposing_value.to_string())),
+        FactEventKind::Asserted,
+        Some(FactValue::Text(opposing_value.to_string())),
         source,
         authority,
         now,
     )?;
-    let by = ClaimId::new(&opposing_claim_id).map_err(|e| format!("claim id: {e}"))?;
+    let by = FactId::new(&opposing_fact_id).map_err(|e| format!("fact id: {e}"))?;
     let contradiction = build_event(
         &format!("event:{}", seq + 1),
-        incumbent_claim_id,
+        incumbent_fact_id,
         subject_kind,
         subject_key,
         predicate,
-        ClaimEventKind::Contradicted {
+        FactEventKind::Contradicted {
             by,
             basis: ContradictionBasis::SamePredicateDifferentValue,
         },
@@ -1461,7 +1461,7 @@ pub(crate) fn build_contradiction(
         authority,
         now,
     )?;
-    Ok((vec![opposing, contradiction], opposing_claim_id))
+    Ok((vec![opposing, contradiction], opposing_fact_id))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1487,7 +1487,7 @@ pub(crate) fn op_contradict(
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
     let now = now_millis();
     // Contradiction targets the *single* believed incumbent (explain_subject prefers the
-    // contested/fresh one) — unlike supersede/retract, which act on every believed claim.
+    // contested/fresh one) — unlike supersede/retract, which act on every believed fact.
     // Flagging one fact as disputed is the intent (ADR 0009); the surfaced conflict can
     // then be resolved with supersede/retract.
     let Some(incumbent) = store
@@ -1499,9 +1499,9 @@ pub(crate) fn op_contradict(
             "nothing to contradict: no believed {subject_kind}:{subject_key} {predicate}"
         )));
     };
-    let (mut events, opposing_claim_id) = build_contradiction(
+    let (mut events, opposing_fact_id) = build_contradiction(
         next_seq(&store),
-        incumbent.claim_id.as_str(),
+        incumbent.fact_id.as_str(),
         subject_kind,
         subject_key,
         predicate,
@@ -1511,7 +1511,7 @@ pub(crate) fn op_contradict(
         now,
     )
     .map_err(|error| OpError::Invalid(format!("invalid contradiction: {error}")))?;
-    // The opposing claim is a fresh assertion of this predicate (default TTL like `assert`).
+    // The opposing fact is a fresh assertion of this predicate (default TTL like `assert`).
     validity.stamp(&mut events[0]);
     let registry = PredicateRegistry::coding_agent();
     apply_policy_defaults(&registry, &mut events[0]);
@@ -1528,12 +1528,12 @@ pub(crate) fn op_contradict(
     Ok(format!(
         "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
          (authority={authority:?})\n  both are now believed; resolve with `supersede` (install a \
-         winner) or `retract`. new claim {opposing_claim_id}",
+         winner) or `retract`. new fact {opposing_fact_id}",
         display_value(&incumbent.value)
     ))
 }
 
-/// Flag a conflict: assert an opposing claim and move the believed incumbent to
+/// Flag a conflict: assert an opposing fact and move the believed incumbent to
 /// `Contested`, keeping **both** (paraconsistency — localize, don't drop). Unlike
 /// `supersede`/`retract` this is **dissent**: it is *not* authority-gated, so a
 /// low-authority source can flag a wrong fact without overriding it — the one exception
@@ -1566,37 +1566,37 @@ pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
 }
 
 /// One line of a fact's event history for `replay`: what happened, with provenance.
-pub(crate) fn format_history_line(event: &ClaimEvent) -> String {
+pub(crate) fn format_history_line(event: &FactEvent) -> String {
     let what = match &event.kind {
-        ClaimEventKind::Asserted => {
+        FactEventKind::Asserted => {
             let value = event
                 .value
                 .as_ref()
                 .map_or_else(|| "-".to_string(), display_value);
             format!("asserted     = {value}")
         }
-        ClaimEventKind::Superseded { by, .. } => format!("superseded   by {by}"),
-        ClaimEventKind::Contradicted { by, .. } => format!("contradicted by {by}"),
-        ClaimEventKind::Retracted { reason } => format!("retracted    ({reason:?})"),
-        ClaimEventKind::Expired { .. } => "expired".to_string(),
-        ClaimEventKind::Reinforced { .. } => "reinforced".to_string(),
-        ClaimEventKind::Retrieved { .. } => "retrieved".to_string(),
-        ClaimEventKind::UsedInDecision { .. } => "used-in-decision".to_string(),
-        ClaimEventKind::ChallengeRejected {
+        FactEventKind::Superseded { by, .. } => format!("superseded   by {by}"),
+        FactEventKind::Contradicted { by, .. } => format!("contradicted by {by}"),
+        FactEventKind::Retracted { reason } => format!("retracted    ({reason:?})"),
+        FactEventKind::Expired { .. } => "expired".to_string(),
+        FactEventKind::Reinforced { .. } => "reinforced".to_string(),
+        FactEventKind::Retrieved { .. } => "retrieved".to_string(),
+        FactEventKind::UsedInDecision { .. } => "used-in-decision".to_string(),
+        FactEventKind::ChallengeRejected {
             challenge,
             by,
             rejection,
         } => {
             let who = by
                 .as_ref()
-                .map_or_else(String::new, |claim| format!(" by {claim}"));
+                .map_or_else(String::new, |fact| format!(" by {fact}"));
             format!("survived     {challenge:?} challenge{who} ({rejection:?})")
         }
     };
     format!(
         "  {:<9} {:<34} {what}  ({:?}, {})",
         event.event_id.as_str(),
-        event.claim_id.as_str(),
+        event.fact_id.as_str(),
         event.authority.level,
         event.provenance.source
     )
@@ -1606,7 +1606,7 @@ pub(crate) struct ReplayOutcome {
     subject_kind: String,
     subject_key: String,
     predicate: String,
-    events: Vec<ClaimEvent>,
+    events: Vec<FactEvent>,
     current: Option<IntegrityReceipt>,
 }
 
@@ -1667,11 +1667,11 @@ pub(crate) fn format_replay(outcome: &ReplayOutcome) -> String {
     }
     if let Some(receipt) = &outcome.current {
         // Freshness is folded into the non-terminal cases so the audit summary never
-        // understates staleness (a contested *and* stale claim says so).
+        // understates staleness (a contested *and* stale fact says so).
         let stale = if receipt.fresh { "" } else { " (stale)" };
         let status = if receipt.lifecycle.is_terminal() {
             format!("{:?}", receipt.lifecycle)
-        } else if receipt.lifecycle == ClaimLifecycle::Contested {
+        } else if receipt.lifecycle == FactLifecycle::Contested {
             format!("contested by {}{stale}", receipt.contradicted_by.len())
         } else {
             format!("believed{stale}")
@@ -1700,48 +1700,48 @@ pub(crate) fn enum_name_json<T: serde::Serialize>(value: T) -> serde_json::Value
     serde_json::to_value(value).expect("enum name should serialize")
 }
 
-pub(crate) fn event_kind_details_json(kind: &ClaimEventKind) -> serde_json::Value {
+pub(crate) fn event_kind_details_json(kind: &FactEventKind) -> serde_json::Value {
     match kind {
-        ClaimEventKind::Asserted => serde_json::json!({}),
-        ClaimEventKind::Reinforced { by } => serde_json::json!({
+        FactEventKind::Asserted => serde_json::json!({}),
+        FactEventKind::Reinforced { by } => serde_json::json!({
             "by": by.as_str(),
         }),
-        ClaimEventKind::Contradicted { by, basis } => serde_json::json!({
+        FactEventKind::Contradicted { by, basis } => serde_json::json!({
             "by": by.as_str(),
             "basis": enum_name_json(basis),
         }),
-        ClaimEventKind::Superseded { by, reason } => serde_json::json!({
+        FactEventKind::Superseded { by, reason } => serde_json::json!({
             "by": by.as_str(),
             "reason": enum_name_json(reason),
         }),
-        ClaimEventKind::Expired { reason } => serde_json::json!({
+        FactEventKind::Expired { reason } => serde_json::json!({
             "reason": enum_name_json(reason),
         }),
-        ClaimEventKind::Retracted { reason } => serde_json::json!({
+        FactEventKind::Retracted { reason } => serde_json::json!({
             "reason": enum_name_json(reason),
         }),
-        ClaimEventKind::Retrieved { purpose } => serde_json::json!({
+        FactEventKind::Retrieved { purpose } => serde_json::json!({
             "purpose": purpose,
         }),
-        ClaimEventKind::UsedInDecision { decision_id } => serde_json::json!({
+        FactEventKind::UsedInDecision { decision_id } => serde_json::json!({
             "decision_id": decision_id,
         }),
-        ClaimEventKind::ChallengeRejected {
+        FactEventKind::ChallengeRejected {
             challenge,
             by,
             rejection,
         } => serde_json::json!({
             "challenge": enum_name_json(challenge),
-            "by": by.as_ref().map(dent8_core::ClaimId::as_str),
+            "by": by.as_ref().map(dent8_core::FactId::as_str),
             "rejection": enum_name_json(rejection),
         }),
     }
 }
 
-pub(crate) fn claim_event_json(event: &ClaimEvent) -> serde_json::Value {
+pub(crate) fn fact_event_json(event: &FactEvent) -> serde_json::Value {
     serde_json::json!({
         "event_id": event.event_id.as_str(),
-        "claim_id": event.claim_id.as_str(),
+        "fact_id": event.fact_id.as_str(),
         "kind": event.kind.name(),
         "details": event_kind_details_json(&event.kind),
         "subject": {
@@ -1749,7 +1749,7 @@ pub(crate) fn claim_event_json(event: &ClaimEvent) -> serde_json::Value {
             "key": event.subject.key(),
         },
         "predicate": event.predicate.as_str(),
-        "value": event.value.as_ref().map(claim_value_json),
+        "value": event.value.as_ref().map(fact_value_json),
         "authority": event.authority.level.name(),
         "source": event.provenance.source.as_str(),
         "actor": event.provenance.actor.as_str(),
@@ -1762,7 +1762,7 @@ pub(crate) fn claim_event_json(event: &ClaimEvent) -> serde_json::Value {
         "derived_from": event
             .dependency_edges()
             .into_iter()
-            .map(|claim_id| claim_id.as_str().to_string())
+            .map(|fact_id| fact_id.as_str().to_string())
             .collect::<Vec<_>>(),
     })
 }
@@ -1780,7 +1780,7 @@ pub(crate) fn replay_json(outcome: &ReplayOutcome) -> serde_json::Value {
         "events": outcome
             .events
             .iter()
-            .map(claim_event_json)
+            .map(fact_event_json)
             .collect::<Vec<_>>(),
         "current": outcome.current.as_ref().map(receipt_fields_json),
     })
@@ -1853,7 +1853,7 @@ pub(crate) fn op_explain_receipt(
     match store.explain_latest(&subject, &predicate_parsed, clock.now()) {
         Ok(Some(receipt)) => Ok(receipt),
         Ok(None) => Err(OpError::Rejected(format!(
-            "no claim for {subject_kind}:{subject_key} {predicate}"
+            "no fact for {subject_kind}:{subject_key} {predicate}"
         ))),
         Err(error) => Err(OpError::Rejected(format!("explain failed: {error}"))),
     }
@@ -1956,7 +1956,7 @@ pub(crate) fn op_list_subjects_with_freshness(
         if !include_diagnostics && is_diagnostic_fact_stream(&kind, &key, &pred) {
             continue;
         }
-        // Freshness only needs the claim's replayed state, so use the chain-check-free
+        // Freshness only needs the fact's replayed state, so use the chain-check-free
         // resolver — listing N streams must not re-hash the whole log N times.
         let freshness = store
             .latest_freshness(&subject, &predicate, now)
@@ -2004,10 +2004,10 @@ pub(crate) struct FactsListOutcome {
 }
 
 pub(crate) struct ConflictRival {
-    claim_id: ClaimId,
-    value: ClaimValue,
+    fact_id: FactId,
+    value: FactValue,
     authority: AuthorityLevel,
-    lifecycle: ClaimLifecycle,
+    lifecycle: FactLifecycle,
 }
 
 pub(crate) struct ConflictFact {
@@ -2160,17 +2160,17 @@ pub(crate) fn conflicts_outcome(path: &str) -> Result<Vec<ConflictFact>, OpError
         let Ok(projection) = replay_entity(&events) else {
             continue;
         };
-        // An entity is in dispute when one of its believed claims is `Contested`. Show *all*
-        // its believed claims so both sides of the dispute are visible, not just one.
-        let believed: Vec<&dent8_core::ClaimState> = projection.believed().collect();
+        // An entity is in dispute when one of its believed facts is `Contested`. Show *all*
+        // its believed facts so both sides of the dispute are visible, not just one.
+        let believed: Vec<&dent8_core::FactState> = projection.believed().collect();
         if believed
             .iter()
-            .any(|state| state.lifecycle == ClaimLifecycle::Contested)
+            .any(|state| state.lifecycle == FactLifecycle::Contested)
         {
             let rivals = believed
                 .iter()
                 .map(|state| ConflictRival {
-                    claim_id: state.claim_id.clone(),
+                    fact_id: state.fact_id.clone(),
                     value: state.value.clone(),
                     authority: state.authority.level,
                     lifecycle: state.lifecycle,
@@ -2244,8 +2244,8 @@ pub(crate) fn conflicts_json(conflicts: &[ConflictFact]) -> serde_json::Value {
                         .iter()
                         .map(|rival| {
                             serde_json::json!({
-                                "claim_id": rival.claim_id.as_str(),
-                                "value": claim_value_json(&rival.value),
+                                "fact_id": rival.fact_id.as_str(),
+                                "value": fact_value_json(&rival.value),
                                 "authority": rival.authority.name(),
                                 "lifecycle": enum_name_json(rival.lifecycle),
                             })

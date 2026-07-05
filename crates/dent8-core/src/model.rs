@@ -2,7 +2,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
+use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct EntityRef {
@@ -56,7 +56,7 @@ impl Predicate {
 /// insignificant whitespace — so two semantically-equal JSON values share identical bytes
 /// and therefore identical hashes ([ADR 0004](../../docs/decisions/0004-canonicalization-and-hash-chain.md)
 /// item 6). The inner form is an invariant: there is no way to construct a non-canonical
-/// value. Build via [`ClaimValue::json`] / [`CanonicalJson::new`]; the canonicalization is
+/// value. Build via [`FactValue::json`] / [`CanonicalJson::new`]; the canonicalization is
 /// re-applied on deserialize, so the invariant also holds on the trusted-reload path.
 ///
 /// **Number model.** Numbers follow `serde_json`'s `f64`/`i64`/`u64` model, not JCS:
@@ -105,14 +105,14 @@ impl<'de> Deserialize<'de> for CanonicalJson {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ClaimValue {
+pub enum FactValue {
     Text(String),
     Json(CanonicalJson),
     Redacted,
 }
 
-impl ClaimValue {
-    /// A canonical JSON claim value (see [`CanonicalJson`]). Errors on invalid JSON.
+impl FactValue {
+    /// A canonical JSON fact value (see [`CanonicalJson`]). Errors on invalid JSON.
     pub fn json(raw: &str) -> Result<Self, ValidationError> {
         Ok(Self::Json(CanonicalJson::new(raw)?))
     }
@@ -154,6 +154,7 @@ impl Default for Confidence {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AuthorityLevel {
     Unknown,
     Low,
@@ -163,18 +164,18 @@ pub enum AuthorityLevel {
 }
 
 impl AuthorityLevel {
-    /// A stable string name for the level, matching its serde representation. Use this — not
-    /// `format!("{self:?}")` — anywhere the name is persisted or becomes a query key (e.g. the
-    /// Parquet export's `authority` column), so a future `Debug` change cannot silently break
-    /// downstream consumers.
+    /// The stable lowercase name for the level, matching both its serde representation and the
+    /// CLI/MCP input spelling (`--authority high`), so a level round-trips: what you write is what
+    /// you read back. Use this — not `format!("{self:?}")` — anywhere the name is persisted or
+    /// becomes a query key (e.g. the Parquet export's `authority` column).
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
-            Self::Unknown => "Unknown",
-            Self::Low => "Low",
-            Self::Medium => "Medium",
-            Self::High => "High",
-            Self::Canonical => "Canonical",
+            Self::Unknown => "unknown",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Canonical => "canonical",
         }
     }
 }
@@ -276,8 +277,8 @@ pub enum EvidenceKind {
     UserStatement,
     DerivedSummary,
     ExternalDocument,
-    /// The claim was **derived from another claim**: the [`Evidence::locator`] holds the
-    /// source `claim:` id (ADR 0010). These items form the claim->claim dependency graph that
+    /// The fact was **derived from another fact**: the [`Evidence::locator`] holds the
+    /// source `fact:` id (ADR 0010). These items form the fact->fact dependency graph that
     /// retraction-taint analysis walks (poison must not survive in its derivatives).
     DerivedFrom,
 }
@@ -291,16 +292,16 @@ pub struct Evidence {
     pub summary: Option<String>,
 }
 
-impl ClaimEvent {
-    /// The claim ids this event was **derived from** — its [`EvidenceKind::DerivedFrom`]
-    /// evidence items, whose `locator` is the source `claim:` id (ADR 0010). A malformed
+impl FactEvent {
+    /// The fact ids this event was **derived from** — its [`EvidenceKind::DerivedFrom`]
+    /// evidence items, whose `locator` is the source `fact:` id (ADR 0010). A malformed
     /// locator is skipped (it simply contributes no edge), so this never fails.
     #[must_use]
-    pub fn dependency_edges(&self) -> Vec<ClaimId> {
+    pub fn dependency_edges(&self) -> Vec<FactId> {
         self.evidence
             .iter()
             .filter(|item| item.kind == EvidenceKind::DerivedFrom)
-            .filter_map(|item| ClaimId::new(item.locator.clone()).ok())
+            .filter_map(|item| FactId::new(item.locator.clone()).ok())
             .collect()
     }
 }
@@ -352,12 +353,12 @@ pub enum ChallengeKind {
 pub enum ChallengeRejection {
     /// The challenge's stated authority was below the incumbent's.
     InsufficientAuthority,
-    /// The supersession stated enough authority, but its backing claim was actually
+    /// The supersession stated enough authority, but its backing fact was actually
     /// weaker (the entity-aware anti-laundering check).
     LaunderedAuthority,
     /// A contradiction against a canonical incumbent (the LFI hard-alarm).
     CanonicalContradiction,
-    /// An equal-authority supersession whose backing claim had strictly weaker
+    /// An equal-authority supersession whose backing fact had strictly weaker
     /// authority-weighted corroboration (the earned-supersession gate, opt-in). Superseded
     /// by [`Self::WeakerEntrenchment`] as of ADR 0017; kept so pre-0.3 challenge-rejected
     /// events still deserialize.
@@ -369,17 +370,17 @@ pub enum ChallengeRejection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ClaimEventKind {
+pub enum FactEventKind {
     Asserted,
     Reinforced {
-        by: ClaimId,
+        by: FactId,
     },
     Contradicted {
-        by: ClaimId,
+        by: FactId,
         basis: ContradictionBasis,
     },
     Superseded {
-        by: ClaimId,
+        by: FactId,
         reason: SupersessionReason,
     },
     Expired {
@@ -394,32 +395,32 @@ pub enum ClaimEventKind {
     UsedInDecision {
         decision_id: String,
     },
-    /// A challenge against this claim was rejected by the firewall (ADR 0015). Written to
+    /// A challenge against this fact was rejected by the firewall (ADR 0015). Written to
     /// the **incumbent's** stream with the **challenger's** provenance and *effective*
     /// authority, so surviving it is replayable, attributed entrenchment evidence.
     ChallengeRejected {
         challenge: ChallengeKind,
-        /// The challenging claim, when the challenge named one (a supersession's
+        /// The challenging fact, when the challenge named one (a supersession's
         /// replacement, a contradiction's contradictor).
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        by: Option<ClaimId>,
+        by: Option<FactId>,
         rejection: ChallengeRejection,
     },
 }
 
-impl ClaimEventKind {
+impl FactEventKind {
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Asserted => "claim.asserted",
-            Self::Reinforced { .. } => "claim.reinforced",
-            Self::Contradicted { .. } => "claim.contradicted",
-            Self::Superseded { .. } => "claim.superseded",
-            Self::Expired { .. } => "claim.expired",
-            Self::Retracted { .. } => "claim.retracted",
-            Self::Retrieved { .. } => "claim.retrieved",
-            Self::UsedInDecision { .. } => "claim.used_in_decision",
-            Self::ChallengeRejected { .. } => "claim.challenge_rejected",
+            Self::Asserted => "fact.asserted",
+            Self::Reinforced { .. } => "fact.reinforced",
+            Self::Contradicted { .. } => "fact.contradicted",
+            Self::Superseded { .. } => "fact.superseded",
+            Self::Expired { .. } => "fact.expired",
+            Self::Retracted { .. } => "fact.retracted",
+            Self::Retrieved { .. } => "fact.retrieved",
+            Self::UsedInDecision { .. } => "fact.used_in_decision",
+            Self::ChallengeRejected { .. } => "fact.challenge_rejected",
         }
     }
 
@@ -433,13 +434,13 @@ impl ClaimEventKind {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClaimEvent {
-    pub event_id: ClaimEventId,
-    pub claim_id: ClaimId,
-    pub kind: ClaimEventKind,
+pub struct FactEvent {
+    pub event_id: FactEventId,
+    pub fact_id: FactId,
+    pub kind: FactEventKind,
     pub subject: EntityRef,
     pub predicate: Predicate,
-    pub value: Option<ClaimValue>,
+    pub value: Option<FactValue>,
     pub confidence: Confidence,
     pub authority: Authority,
     pub ttl: Ttl,
@@ -457,7 +458,7 @@ pub struct ClaimEvent {
     pub valid_to: Option<TimestampMillis>,
 }
 
-impl ClaimEvent {
+impl FactEvent {
     pub fn validate(&self) -> Result<(), ValidationError> {
         if let (Some(from), Some(to)) = (self.valid_from, self.valid_to)
             && to <= from
@@ -465,16 +466,16 @@ impl ClaimEvent {
             return Err(ValidationError::InvalidValidityInterval);
         }
         match &self.kind {
-            ClaimEventKind::Asserted if self.value.is_none() => {
-                Err(ValidationError::MissingClaimValue)
+            FactEventKind::Asserted if self.value.is_none() => {
+                Err(ValidationError::MissingFactValue)
             }
-            ClaimEventKind::Asserted if self.evidence.is_empty() => {
+            FactEventKind::Asserted if self.evidence.is_empty() => {
                 Err(ValidationError::MissingEvidence)
             }
-            ClaimEventKind::Retrieved { purpose } if purpose.trim().is_empty() => {
+            FactEventKind::Retrieved { purpose } if purpose.trim().is_empty() => {
                 Err(ValidationError::EmptyField("retrieval.purpose"))
             }
-            ClaimEventKind::UsedInDecision { decision_id } if decision_id.trim().is_empty() => {
+            FactEventKind::UsedInDecision { decision_id } if decision_id.trim().is_empty() => {
                 Err(ValidationError::EmptyField("decision_id"))
             }
             _ => Ok(()),
@@ -486,7 +487,7 @@ impl ClaimEvent {
 pub enum ValidationError {
     EmptyField(&'static str),
     ConfidenceOutOfRange(u16),
-    MissingClaimValue,
+    MissingFactValue,
     MissingEvidence,
     InvalidJson(String),
     /// `valid_to` at or before `valid_from` — an empty or inverted validity interval.
@@ -500,9 +501,9 @@ impl fmt::Display for ValidationError {
             Self::ConfidenceOutOfRange(value) => {
                 write!(f, "confidence {value} is outside 0..=1000")
             }
-            Self::MissingClaimValue => f.write_str("asserted claims must include a value"),
-            Self::MissingEvidence => f.write_str("asserted claims must include evidence"),
-            Self::InvalidJson(error) => write!(f, "invalid JSON claim value: {error}"),
+            Self::MissingFactValue => f.write_str("asserted facts must include a value"),
+            Self::MissingEvidence => f.write_str("asserted facts must include evidence"),
+            Self::InvalidJson(error) => write!(f, "invalid JSON fact value: {error}"),
             Self::InvalidValidityInterval => {
                 f.write_str("valid_to must be after valid_from (non-empty validity interval)")
             }
@@ -514,7 +515,7 @@ impl std::error::Error for ValidationError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{CanonicalJson, ClaimValue, ValidationError};
+    use super::{CanonicalJson, FactValue, ValidationError};
 
     #[test]
     fn canonical_json_sorts_keys_and_strips_whitespace() {
@@ -546,23 +547,23 @@ mod tests {
             assert_eq!(once, twice, "not idempotent: {raw}");
 
             // The reload path (custom Deserialize re-canonicalizes) must not change it.
-            let value = ClaimValue::Json(once.clone());
+            let value = FactValue::Json(once.clone());
             let bytes = serde_json::to_string(&value).expect("serialize");
-            let reloaded: ClaimValue = serde_json::from_str(&bytes).expect("deserialize");
+            let reloaded: FactValue = serde_json::from_str(&bytes).expect("deserialize");
             assert_eq!(value, reloaded, "reload changed the value: {raw}");
         }
     }
 
     #[test]
     fn semantically_equal_json_is_equal_regardless_of_form() {
-        let a = ClaimValue::json("{ \"b\": 2, \"a\": 1 }").expect("valid json");
-        let b = ClaimValue::json(r#"{"a":1,"b":2}"#).expect("valid json");
+        let a = FactValue::json("{ \"b\": 2, \"a\": 1 }").expect("valid json");
+        let b = FactValue::json(r#"{"a":1,"b":2}"#).expect("valid json");
         assert_eq!(a, b);
     }
 
     #[test]
     fn invalid_json_is_rejected() {
-        let error = ClaimValue::json("{not json").unwrap_err();
+        let error = FactValue::json("{not json").unwrap_err();
         assert!(matches!(error, ValidationError::InvalidJson(_)));
     }
 
@@ -586,14 +587,14 @@ mod tests {
     fn deserialize_recanonicalizes_a_non_canonical_stored_value() {
         // A hand-edited or legacy non-canonical encoding is re-canonicalized on load, so
         // the canonical invariant holds even off the constructor path.
-        let loaded: ClaimValue =
+        let loaded: FactValue =
             serde_json::from_str(r#"{"Json":"{ \"b\": 2, \"a\": 1 }"}"#).expect("load");
-        assert_eq!(loaded, ClaimValue::json(r#"{"a":1,"b":2}"#).unwrap());
+        assert_eq!(loaded, FactValue::json(r#"{"a":1,"b":2}"#).unwrap());
     }
 
     #[test]
     fn deserialize_rejects_invalid_embedded_json() {
-        let result: Result<ClaimValue, _> = serde_json::from_str(r#"{"Json":"{not json"}"#);
+        let result: Result<FactValue, _> = serde_json::from_str(r#"{"Json":"{not json"}"#);
         assert!(result.is_err());
     }
 }

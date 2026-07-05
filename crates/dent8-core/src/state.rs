@@ -3,13 +3,13 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ClaimEventId, ClaimId, SourceId, TimestampMillis};
+use crate::ids::{FactEventId, FactId, SourceId, TimestampMillis};
 use crate::model::{
-    Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, EntityRef, Predicate, Ttl,
+    Authority, AuthorityLevel, EntityRef, FactEvent, FactEventKind, FactValue, Predicate, Ttl,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ClaimLifecycle {
+pub enum FactLifecycle {
     Active,
     Contested,
     Superseded,
@@ -17,26 +17,26 @@ pub enum ClaimLifecycle {
     Retracted,
 }
 
-impl ClaimLifecycle {
+impl FactLifecycle {
     #[must_use]
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Superseded | Self::Expired | Self::Retracted)
     }
 }
 
-/// The current projected state of a claim — the fold of its event stream. Serializable so
+/// The current projected state of a fact — the fold of its event stream. Serializable so
 /// a backend may **materialize** it (cache it as a derived row) or transmit it; it remains a
 /// pure projection of the log, never an independent source of truth.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ClaimState {
-    pub claim_id: ClaimId,
+pub struct FactState {
+    pub fact_id: FactId,
     pub subject: EntityRef,
     pub predicate: Predicate,
-    pub value: ClaimValue,
-    /// Entrenchment of the incumbent claim, captured at assertion. Drives
+    pub value: FactValue,
+    /// Entrenchment of the incumbent fact, captured at assertion. Drives
     /// authority-weighted supersession arbitration; see `docs/belief-revision.md`.
     pub authority: Authority,
-    /// TTL captured at assertion, used by [`ClaimState::is_expired_at`] for
+    /// TTL captured at assertion, used by [`FactState::is_expired_at`] for
     /// read-time freshness evaluation.
     pub ttl: Ttl,
     /// Valid-time anchor for TTL freshness: `valid_from`, else `observed_at`, else
@@ -54,20 +54,20 @@ pub struct ClaimState {
     /// materialized before the field existed still deserialize.
     #[serde(default)]
     pub valid_to: Option<TimestampMillis>,
-    pub lifecycle: ClaimLifecycle,
+    pub lifecycle: FactLifecycle,
     pub created_at: TimestampMillis,
     pub updated_at: TimestampMillis,
-    pub last_event_id: ClaimEventId,
-    pub superseded_by: Option<ClaimId>,
-    pub contradicted_by: Vec<ClaimId>,
+    pub last_event_id: FactEventId,
+    pub superseded_by: Option<FactId>,
+    pub contradicted_by: Vec<FactId>,
     pub evidence_count: usize,
     /// The distinct provenance sources that have *asserted or reinforced this exact
     /// value*, each mapped to the highest authority it backed at. This measures
     /// same-value corroboration only — surviving a challenge is the *separate*
-    /// entrenchment signal tracked in [`ClaimState::survived_challenges`] (ADR 0015).
+    /// entrenchment signal tracked in [`FactState::survived_challenges`] (ADR 0015).
     /// The asserter is the first entry.
     pub corroborating_sources: BTreeMap<SourceId, AuthorityLevel>,
-    /// The distinct sources whose challenge against this claim the firewall rejected,
+    /// The distinct sources whose challenge against this fact the firewall rejected,
     /// each mapped to the highest *effective* authority it challenged at (ADR 0015) —
     /// the "attacked and stood" half of earned entrenchment. `#[serde(default)]` so
     /// projections materialized before the field existed still deserialize.
@@ -75,10 +75,10 @@ pub struct ClaimState {
     pub survived_challenges: BTreeMap<SourceId, AuthorityLevel>,
 }
 
-impl ClaimState {
+impl FactState {
     /// Raw earned-entrenchment degree: the number of distinct sources backing this
     /// value. **Sybil-inflatable** on its own (an attacker minting many sources raises
-    /// it), so security decisions should use [`ClaimState::corroboration_at_or_above`]
+    /// it), so security decisions should use [`FactState::corroboration_at_or_above`]
     /// to count only sufficiently-authoritative backers.
     #[must_use]
     pub fn corroboration(&self) -> usize {
@@ -96,9 +96,9 @@ impl ClaimState {
             .count()
     }
 
-    /// Raw survived-challenge degree: distinct sources whose challenge this claim
-    /// survived. **Sybil-inflatable** like [`ClaimState::corroboration`]; security
-    /// decisions should use [`ClaimState::survived_challenges_at_or_above`].
+    /// Raw survived-challenge degree: distinct sources whose challenge this fact
+    /// survived. **Sybil-inflatable** like [`FactState::corroboration`]; security
+    /// decisions should use [`FactState::survived_challenges_at_or_above`].
     #[must_use]
     pub fn survived_challenge_count(&self) -> usize {
         self.survived_challenges.len()
@@ -119,14 +119,14 @@ impl ClaimState {
     /// independent backing ([`Self::corroboration_at_or_above`]) plus
     /// having-been-attacked-and-held ([`Self::survived_challenges_at_or_above`]), each counted
     /// only at authority ≥ `min`. This is the measure the opt-in supersession gate and the
-    /// entity-level unearned-supersession audit compare, so a claim that survived challenges
+    /// entity-level unearned-supersession audit compare, so a fact that survived challenges
     /// resists an equal-authority replacement as much as one with extra backing does.
     #[must_use]
     pub fn earned_entrenchment_at_or_above(&self, min: AuthorityLevel) -> usize {
         self.corroboration_at_or_above(min) + self.survived_challenges_at_or_above(min)
     }
 
-    /// When this claim stops being fresh, if ever: the **earliest** of its TTL bound
+    /// When this fact stops being fresh, if ever: the **earliest** of its TTL bound
     /// (relative to the freshness anchor) and its asserted `valid_to` (ADR 0016).
     #[must_use]
     pub fn expires_at(&self) -> Option<TimestampMillis> {
@@ -136,7 +136,7 @@ impl ClaimState {
         }
     }
 
-    /// Whether the claim is **not yet valid** at `now` (ADR 0016): its asserted `valid_from`
+    /// Whether the fact is **not yet valid** at `now` (ADR 0016): its asserted `valid_from`
     /// is in the future. Distinct from expiry — a not-yet-valid fact reads as not-fresh
     /// because it has not started holding, not because it has stopped.
     #[must_use]
@@ -144,19 +144,19 @@ impl ClaimState {
         self.valid_from.is_some_and(|from| now < from)
     }
 
-    /// Whether the claim is **fresh** at `now`: within its validity window — at or after
+    /// Whether the fact is **fresh** at `now`: within its validity window — at or after
     /// `valid_from` (if set) and not past its TTL / `valid_to` upper bound. This is the
     /// read-time freshness predicate the receipt's `fresh` flag reports; it does not consult
-    /// lifecycle (a `superseded` claim can still be within its window).
+    /// lifecycle (a `superseded` fact can still be within its window).
     #[must_use]
     pub fn is_fresh_at(&self, now: TimestampMillis) -> bool {
         !self.is_not_yet_valid_at(now) && !self.is_expired_at(now)
     }
 
-    /// Whether the claim's freshness has elapsed at `now` — its TTL ran out **or** its
-    /// asserted validity ended. A claim with `Ttl::Never` and no `valid_to` is never
+    /// Whether the fact's freshness has elapsed at `now` — its TTL ran out **or** its
+    /// asserted validity ended. A fact with `Ttl::Never` and no `valid_to` is never
     /// expired. Purely the **upper** bound; the lower bound is [`Self::is_not_yet_valid_at`].
-    /// It does not consult lifecycle (a `superseded` claim can still be "unexpired" by TTL).
+    /// It does not consult lifecycle (a `superseded` fact can still be "unexpired" by TTL).
     #[must_use]
     pub fn is_expired_at(&self, now: TimestampMillis) -> bool {
         self.expires_at()
@@ -165,9 +165,9 @@ impl ClaimState {
 }
 
 pub fn apply_event(
-    current: Option<ClaimState>,
-    event: &ClaimEvent,
-) -> Result<ClaimState, TransitionError> {
+    current: Option<FactState>,
+    event: &FactEvent,
+) -> Result<FactState, TransitionError> {
     event.validate().map_err(TransitionError::InvalidEvent)?;
 
     match current {
@@ -176,8 +176,8 @@ pub fn apply_event(
     }
 }
 
-fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError> {
-    if !matches!(event.kind, ClaimEventKind::Asserted) {
+fn apply_initial_event(event: &FactEvent) -> Result<FactState, TransitionError> {
+    if !matches!(event.kind, FactEventKind::Asserted) {
         return Err(TransitionError::MissingInitialAssertion);
     }
 
@@ -191,8 +191,8 @@ fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError
         .or(event.observed_at)
         .unwrap_or(event.provenance.recorded_at);
 
-    Ok(ClaimState {
-        claim_id: event.claim_id.clone(),
+    Ok(FactState {
+        fact_id: event.fact_id.clone(),
         subject: event.subject.clone(),
         predicate: event.predicate.clone(),
         value,
@@ -201,7 +201,7 @@ fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError
         freshness_anchor,
         valid_from: event.valid_from,
         valid_to: event.valid_to,
-        lifecycle: ClaimLifecycle::Active,
+        lifecycle: FactLifecycle::Active,
         created_at: event.provenance.recorded_at,
         updated_at: event.provenance.recorded_at,
         last_event_id: event.event_id.clone(),
@@ -216,30 +216,27 @@ fn apply_initial_event(event: &ClaimEvent) -> Result<ClaimState, TransitionError
     })
 }
 
-fn apply_next_event(
-    mut state: ClaimState,
-    event: &ClaimEvent,
-) -> Result<ClaimState, TransitionError> {
-    if state.claim_id != event.claim_id {
-        return Err(TransitionError::ClaimIdMismatch);
+fn apply_next_event(mut state: FactState, event: &FactEvent) -> Result<FactState, TransitionError> {
+    if state.fact_id != event.fact_id {
+        return Err(TransitionError::FactIdMismatch);
     }
 
     if state.subject != event.subject || state.predicate != event.predicate {
-        return Err(TransitionError::ClaimShapeMismatch);
+        return Err(TransitionError::FactShapeMismatch);
     }
 
     if state.lifecycle.is_terminal()
         && !matches!(
             event.kind,
-            ClaimEventKind::Retrieved { .. } | ClaimEventKind::UsedInDecision { .. }
+            FactEventKind::Retrieved { .. } | FactEventKind::UsedInDecision { .. }
         )
     {
         return Err(TransitionError::TerminalStateMutation(state.lifecycle));
     }
 
     match &event.kind {
-        ClaimEventKind::Asserted => return Err(TransitionError::DuplicateAssertion),
-        ClaimEventKind::Reinforced { .. } => {
+        FactEventKind::Asserted => return Err(TransitionError::DuplicateAssertion),
+        FactEventKind::Reinforced { .. } => {
             if let Some(value) = &event.value
                 && value != &state.value
             {
@@ -254,21 +251,21 @@ fn apply_next_event(
                 .and_modify(|level| *level = (*level).max(event.authority.level))
                 .or_insert(event.authority.level);
         }
-        ClaimEventKind::Contradicted { by, .. } => {
+        FactEventKind::Contradicted { by, .. } => {
             // LFI "gentle explosion" tier: ordinary contradiction is tolerated and
-            // localized (-> Contested), but a contradiction against a canonical claim
+            // localized (-> Contested), but a contradiction against a canonical fact
             // is a hard alarm, not a soft contest. A canonical fact that genuinely
-            // changed must be superseded by an equal-authority claim, not contradicted.
+            // changed must be superseded by an equal-authority fact, not contradicted.
             if state.authority.level == AuthorityLevel::Canonical {
                 return Err(TransitionError::CanonicalContradiction);
             }
-            state.lifecycle = ClaimLifecycle::Contested;
+            state.lifecycle = FactLifecycle::Contested;
             if !state.contradicted_by.contains(by) {
                 state.contradicted_by.push(by.clone());
             }
         }
-        ClaimEventKind::Superseded { by, .. } => {
-            // Authority-as-entrenchment arbitration: a strictly lower-authority claim
+        FactEventKind::Superseded { by, .. } => {
+            // Authority-as-entrenchment arbitration: a strictly lower-authority fact
             // cannot supersede a higher-authority incumbent. This is the firewall's
             // mitigation for MINJA-style memory injection by a low-privilege actor.
             // Confidence is deliberately NOT consulted here (entrenchment != evidence).
@@ -278,10 +275,10 @@ fn apply_next_event(
                     challenger: event.authority.level,
                 });
             }
-            state.lifecycle = ClaimLifecycle::Superseded;
+            state.lifecycle = FactLifecycle::Superseded;
             state.superseded_by = Some(by.clone());
         }
-        ClaimEventKind::Expired { .. } => {
+        FactEventKind::Expired { .. } => {
             // Explicit expiration is a terminal close, so it is authority-gated like
             // retraction: a low-authority actor cannot make a trusted fact disappear by
             // calling it "stale." TTL freshness remains a separate read-time predicate.
@@ -291,14 +288,14 @@ fn apply_next_event(
                     challenger: event.authority.level,
                 });
             }
-            state.lifecycle = ClaimLifecycle::Expired;
+            state.lifecycle = FactLifecycle::Expired;
         }
-        ClaimEventKind::Retracted { .. } => {
+        FactEventKind::Retracted { .. } => {
             // Retraction terminally *removes* a belief, so — unlike a `Contradicted`
             // event, which is dissent and is deliberately not authority-gated — it is
             // gated exactly like supersession: a strictly lower-authority actor cannot
             // retract a higher-authority incumbent (ADR 0008). Retraction carries no
-            // backing claim, so there is no laundering indirection (the `arbitrate`
+            // backing fact, so there is no laundering indirection (the `arbitrate`
             // anti-laundering check is supersession-only); this stated-authority gate is
             // the complete check.
             if event.authority.level < state.authority.level {
@@ -307,10 +304,10 @@ fn apply_next_event(
                     challenger: event.authority.level,
                 });
             }
-            state.lifecycle = ClaimLifecycle::Retracted;
+            state.lifecycle = FactLifecycle::Retracted;
         }
-        ClaimEventKind::Retrieved { .. } | ClaimEventKind::UsedInDecision { .. } => {}
-        ClaimEventKind::ChallengeRejected { .. } => {
+        FactEventKind::Retrieved { .. } | FactEventKind::UsedInDecision { .. } => {}
+        FactEventKind::ChallengeRejected { .. } => {
             // Surviving a challenge is earned entrenchment (ADR 0015): record the
             // challenger at the highest effective authority it ever challenged and lost
             // at. Bookkeeping only — lifecycle, value, and authority are untouched, and
@@ -334,21 +331,21 @@ pub enum TransitionError {
     InvalidEvent(crate::model::ValidationError),
     MissingInitialAssertion,
     DuplicateAssertion,
-    ClaimIdMismatch,
-    ClaimShapeMismatch,
+    FactIdMismatch,
+    FactShapeMismatch,
     ReinforcementValueMismatch,
-    TerminalStateMutation(ClaimLifecycle),
+    TerminalStateMutation(FactLifecycle),
     /// A belief-changing event was rejected because its authority strictly under-ranks
     /// the incumbent's. Shared by **supersession** and **retraction** (ADR 0008): a
     /// replacement or a retraction must out-rank or tie the incumbent. (Supersession is
     /// additionally checked for laundering in `arbitrate`; retraction carries no backing
-    /// claim, so this authority gate is its complete check. Contradiction is *not* gated
+    /// fact, so this authority gate is its complete check. Contradiction is *not* gated
     /// — dissent is always admitted.)
     InsufficientAuthority {
         incumbent: AuthorityLevel,
         challenger: AuthorityLevel,
     },
-    /// A `claim.contradicted` event targeted a canonical claim. Canonical facts are
+    /// A `fact.contradicted` event targeted a canonical fact. Canonical facts are
     /// not softly contested; a genuine change must arrive as an equal-authority
     /// supersession. This is the LFI hard-alarm tier.
     CanonicalContradiction,
@@ -359,20 +356,20 @@ impl fmt::Display for TransitionError {
         match self {
             Self::InvalidEvent(error) => write!(f, "invalid event: {error}"),
             Self::MissingInitialAssertion => {
-                f.write_str("claim stream must start with claim.asserted")
+                f.write_str("fact stream must start with fact.asserted")
             }
             Self::DuplicateAssertion => {
-                f.write_str("claim stream cannot assert the same claim twice")
+                f.write_str("fact stream cannot assert the same fact twice")
             }
-            Self::ClaimIdMismatch => f.write_str("event claim_id does not match current state"),
-            Self::ClaimShapeMismatch => {
+            Self::FactIdMismatch => f.write_str("event fact_id does not match current state"),
+            Self::FactShapeMismatch => {
                 f.write_str("event subject or predicate does not match current state")
             }
             Self::ReinforcementValueMismatch => {
-                f.write_str("claim.reinforced cannot change the claim value")
+                f.write_str("fact.reinforced cannot change the fact value")
             }
             Self::TerminalStateMutation(state) => {
-                write!(f, "cannot mutate terminal claim state {state:?}")
+                write!(f, "cannot mutate terminal fact state {state:?}")
             }
             Self::InsufficientAuthority {
                 incumbent,
@@ -382,7 +379,7 @@ impl fmt::Display for TransitionError {
                 "insufficient authority: {challenger:?} may not override or remove an incumbent of {incumbent:?}"
             ),
             Self::CanonicalContradiction => {
-                f.write_str("a canonical claim cannot be contradicted; supersede it with equal authority instead")
+                f.write_str("a canonical fact cannot be contradicted; supersede it with equal authority instead")
             }
         }
     }
@@ -392,14 +389,14 @@ impl std::error::Error for TransitionError {}
 
 #[cfg(test)]
 mod tests {
-    use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
+    use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, Confidence,
-        ContradictionBasis, EntityRef, Evidence, EvidenceKind, ExpirationReason, Predicate,
-        Provenance, RetractionReason, SupersessionReason, Ttl,
+        Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+        EvidenceKind, ExpirationReason, FactEvent, FactEventKind, FactValue, Predicate, Provenance,
+        RetractionReason, SupersessionReason, Ttl,
     };
 
-    use super::{ClaimLifecycle, TransitionError, apply_event};
+    use super::{FactLifecycle, TransitionError, apply_event};
 
     const ALL_LEVELS: [AuthorityLevel; 5] = [
         AuthorityLevel::Unknown,
@@ -409,7 +406,7 @@ mod tests {
         AuthorityLevel::Canonical,
     ];
 
-    fn with_authority(mut event: ClaimEvent, level: AuthorityLevel) -> ClaimEvent {
+    fn with_authority(mut event: FactEvent, level: AuthorityLevel) -> FactEvent {
         event.authority = Authority {
             level,
             issuer: None,
@@ -418,22 +415,22 @@ mod tests {
         event
     }
 
-    fn asserted(level: AuthorityLevel) -> ClaimEvent {
+    fn asserted(level: AuthorityLevel) -> FactEvent {
         with_authority(
             base_event(
-                ClaimEventKind::Asserted,
+                FactEventKind::Asserted,
                 "event:1",
-                Some(ClaimValue::Text("postgres".to_string())),
+                Some(FactValue::Text("postgres".to_string())),
             ),
             level,
         )
     }
 
-    fn supersede(event_id: &str, level: AuthorityLevel) -> ClaimEvent {
+    fn supersede(event_id: &str, level: AuthorityLevel) -> FactEvent {
         with_authority(
             base_event(
-                ClaimEventKind::Superseded {
-                    by: claim_id("claim:2"),
+                FactEventKind::Superseded {
+                    by: fact_id("fact:2"),
                     reason: SupersessionReason::NewerObservation,
                 },
                 event_id,
@@ -443,10 +440,10 @@ mod tests {
         )
     }
 
-    fn retract(event_id: &str, level: AuthorityLevel) -> ClaimEvent {
+    fn retract(event_id: &str, level: AuthorityLevel) -> FactEvent {
         with_authority(
             base_event(
-                ClaimEventKind::Retracted {
+                FactEventKind::Retracted {
                     reason: RetractionReason::UserDeleted,
                 },
                 event_id,
@@ -456,10 +453,10 @@ mod tests {
         )
     }
 
-    fn expire(event_id: &str, level: AuthorityLevel) -> ClaimEvent {
+    fn expire(event_id: &str, level: AuthorityLevel) -> FactEvent {
         with_authority(
             base_event(
-                ClaimEventKind::Expired {
+                FactEventKind::Expired {
                     reason: ExpirationReason::PolicyRetention,
                 },
                 event_id,
@@ -469,14 +466,14 @@ mod tests {
         )
     }
 
-    fn claim_id(value: &str) -> ClaimId {
-        ClaimId::new(value).expect("valid claim id")
+    fn fact_id(value: &str) -> FactId {
+        FactId::new(value).expect("valid fact id")
     }
 
-    fn base_event(kind: ClaimEventKind, event_id: &str, value: Option<ClaimValue>) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("valid event id"),
-            claim_id: claim_id("claim:1"),
+    fn base_event(kind: FactEventKind, event_id: &str, value: Option<FactValue>) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("valid event id"),
+            fact_id: fact_id("fact:1"),
             kind,
             subject: EntityRef::new("repo", "dent8").expect("valid entity"),
             predicate: Predicate::new("uses_database").expect("valid predicate"),
@@ -506,12 +503,12 @@ mod tests {
         }
     }
 
-    fn challenge_rejected(event_id: &str, source: &str, level: AuthorityLevel) -> ClaimEvent {
+    fn challenge_rejected(event_id: &str, source: &str, level: AuthorityLevel) -> FactEvent {
         let mut event = with_authority(
             base_event(
-                ClaimEventKind::ChallengeRejected {
+                FactEventKind::ChallengeRejected {
                     challenge: crate::model::ChallengeKind::Supersession,
-                    by: Some(claim_id("claim:2")),
+                    by: Some(fact_id("fact:2")),
                     rejection: crate::model::ChallengeRejection::InsufficientAuthority,
                 },
                 event_id,
@@ -544,7 +541,7 @@ mod tests {
         .expect("recorded");
 
         // Bookkeeping only: the incumbent's belief state is untouched.
-        assert_eq!(state.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(state.lifecycle, FactLifecycle::Active);
         assert_eq!(state.authority.level, AuthorityLevel::High);
         // Distinct challengers, each at the strongest level they lost at.
         assert_eq!(state.survived_challenge_count(), 2);
@@ -589,8 +586,8 @@ mod tests {
             ),
             Err(TransitionError::MissingInitialAssertion)
         ));
-        // Cannot land on a fallen incumbent: a challenge against a terminal claim was not
-        // "survived" — the claim already fell.
+        // Cannot land on a fallen incumbent: a challenge against a terminal fact was not
+        // "survived" — the fact already fell.
         let state = apply_event(None, &asserted(AuthorityLevel::Low)).expect("asserted");
         let state = apply_event(Some(state), &supersede("event:2", AuthorityLevel::Low))
             .expect("superseded");
@@ -600,13 +597,13 @@ mod tests {
                 &challenge_rejected("event:3", "source:attacker", AuthorityLevel::Low)
             ),
             Err(TransitionError::TerminalStateMutation(
-                ClaimLifecycle::Superseded
+                FactLifecycle::Superseded
             ))
         ));
     }
 
     #[test]
-    fn claim_state_without_survived_challenges_field_still_deserializes() {
+    fn fact_state_without_survived_challenges_field_still_deserializes() {
         // Projections materialized before ADR 0015 lack the field; serde(default) admits them.
         let state = apply_event(None, &asserted(AuthorityLevel::High)).expect("asserted");
         let mut json = serde_json::to_value(&state).expect("serialize");
@@ -614,7 +611,7 @@ mod tests {
             .expect("object")
             .remove("survived_challenges")
             .expect("field present in new serialization");
-        let old: super::ClaimState = serde_json::from_value(json).expect("old shape deserializes");
+        let old: super::FactState = serde_json::from_value(json).expect("old shape deserializes");
         assert_eq!(old.survived_challenge_count(), 0);
     }
 
@@ -693,23 +690,23 @@ mod tests {
     #[test]
     fn assertion_creates_active_state() {
         let event = base_event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
         );
 
         let state = apply_event(None, &event).expect("assertion applies");
 
-        assert_eq!(state.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(state.lifecycle, FactLifecycle::Active);
         assert_eq!(state.evidence_count, 1);
     }
 
     #[test]
     fn duplicate_assertion_is_rejected() {
         let event = base_event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
         );
         let state = apply_event(None, &event).expect("assertion applies");
 
@@ -719,16 +716,16 @@ mod tests {
     }
 
     #[test]
-    fn contradiction_marks_claim_contested() {
+    fn contradiction_marks_fact_contested() {
         let asserted = base_event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
         );
         let state = apply_event(None, &asserted).expect("assertion applies");
         let contradicted = base_event(
-            ClaimEventKind::Contradicted {
-                by: claim_id("claim:2"),
+            FactEventKind::Contradicted {
+                by: fact_id("fact:2"),
                 basis: ContradictionBasis::SamePredicateDifferentValue,
             },
             "event:2",
@@ -737,21 +734,21 @@ mod tests {
 
         let state = apply_event(Some(state), &contradicted).expect("contradiction applies");
 
-        assert_eq!(state.lifecycle, ClaimLifecycle::Contested);
-        assert_eq!(state.contradicted_by, vec![claim_id("claim:2")]);
+        assert_eq!(state.lifecycle, FactLifecycle::Contested);
+        assert_eq!(state.contradicted_by, vec![fact_id("fact:2")]);
     }
 
     #[test]
     fn terminal_state_rejects_lifecycle_mutation() {
         let asserted = base_event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
         );
         let state = apply_event(None, &asserted).expect("assertion applies");
         let superseded = base_event(
-            ClaimEventKind::Superseded {
-                by: claim_id("claim:2"),
+            FactEventKind::Superseded {
+                by: fact_id("fact:2"),
                 reason: SupersessionReason::NewerObservation,
             },
             "event:2",
@@ -759,31 +756,31 @@ mod tests {
         );
         let state = apply_event(Some(state), &superseded).expect("supersession applies");
         let reinforced = base_event(
-            ClaimEventKind::Reinforced {
-                by: claim_id("claim:3"),
+            FactEventKind::Reinforced {
+                by: fact_id("fact:3"),
             },
             "event:3",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
         );
 
         let error = apply_event(Some(state), &reinforced).expect_err("terminal mutation rejected");
 
         assert_eq!(
             error,
-            TransitionError::TerminalStateMutation(ClaimLifecycle::Superseded)
+            TransitionError::TerminalStateMutation(FactLifecycle::Superseded)
         );
     }
 
     #[test]
     fn retrieval_does_not_change_lifecycle() {
         let asserted = base_event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
         );
         let state = apply_event(None, &asserted).expect("assertion applies");
         let retrieved = base_event(
-            ClaimEventKind::Retrieved {
+            FactEventKind::Retrieved {
                 purpose: "context".to_string(),
             },
             "event:2",
@@ -792,7 +789,7 @@ mod tests {
 
         let state = apply_event(Some(state), &retrieved).expect("retrieval applies");
 
-        assert_eq!(state.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(state.lifecycle, FactLifecycle::Active);
     }
 
     #[test]
@@ -819,7 +816,7 @@ mod tests {
         let state = apply_event(Some(state), &supersede("event:2", AuthorityLevel::Medium))
             .expect("equal-authority supersession applies");
 
-        assert_eq!(state.lifecycle, ClaimLifecycle::Superseded);
+        assert_eq!(state.lifecycle, FactLifecycle::Superseded);
     }
 
     #[test]
@@ -832,16 +829,16 @@ mod tests {
         )
         .expect("higher-authority supersession applies");
 
-        assert_eq!(state.lifecycle, ClaimLifecycle::Superseded);
+        assert_eq!(state.lifecycle, FactLifecycle::Superseded);
     }
 
     #[test]
-    fn contradicting_a_canonical_claim_hard_alarms() {
+    fn contradicting_a_canonical_fact_hard_alarms() {
         let state =
             apply_event(None, &asserted(AuthorityLevel::Canonical)).expect("assertion applies");
         let contradicted = base_event(
-            ClaimEventKind::Contradicted {
-                by: claim_id("claim:2"),
+            FactEventKind::Contradicted {
+                by: fact_id("fact:2"),
                 basis: ContradictionBasis::SamePredicateDifferentValue,
             },
             "event:2",
@@ -855,11 +852,11 @@ mod tests {
     }
 
     #[test]
-    fn contradicting_a_non_canonical_claim_still_contests() {
+    fn contradicting_a_non_canonical_fact_still_contests() {
         let state = apply_event(None, &asserted(AuthorityLevel::High)).expect("assertion applies");
         let contradicted = base_event(
-            ClaimEventKind::Contradicted {
-                by: claim_id("claim:2"),
+            FactEventKind::Contradicted {
+                by: fact_id("fact:2"),
                 basis: ContradictionBasis::SamePredicateDifferentValue,
             },
             "event:2",
@@ -869,12 +866,12 @@ mod tests {
         let state =
             apply_event(Some(state), &contradicted).expect("non-canonical contradiction applies");
 
-        assert_eq!(state.lifecycle, ClaimLifecycle::Contested);
+        assert_eq!(state.lifecycle, FactLifecycle::Contested);
     }
 
     /// Exhaustive bounded proof over the finite `AuthorityLevel` lattice: for every
     /// (incumbent, challenger) pair, a supersession is accepted iff the challenger does
-    /// not under-rank the incumbent; and once accepted, the claim is terminal and
+    /// not under-rank the incumbent; and once accepted, the fact is terminal and
     /// cannot be resurrected by any later event — even a canonical one. This is the
     /// runnable form of the rank-1 "verified non-resurrection" invariant; the
     /// `#[cfg(kani)]` harness in `proofs` checks the same property symbolically.
@@ -900,17 +897,17 @@ mod tests {
                 let superseded = result.expect("non-under-ranking supersession applies");
                 assert!(
                     superseded.lifecycle.is_terminal(),
-                    "supersession should make the claim terminal",
+                    "supersession should make the fact terminal",
                 );
 
                 // Non-resurrection: no later event, even a canonical supersession,
-                // returns a terminal claim to an active/believed state.
+                // returns a terminal fact to an active/believed state.
                 let resurrect = supersede("event:3", AuthorityLevel::Canonical);
                 let error = apply_event(Some(superseded), &resurrect)
-                    .expect_err("terminal claim cannot be resurrected");
+                    .expect_err("terminal fact cannot be resurrected");
                 assert_eq!(
                     error,
-                    TransitionError::TerminalStateMutation(ClaimLifecycle::Superseded)
+                    TransitionError::TerminalStateMutation(FactLifecycle::Superseded)
                 );
             }
         }
@@ -918,7 +915,7 @@ mod tests {
 
     /// The retraction counterpart of the supersession lattice (ADR 0008): a `Retracted`
     /// event is accepted iff the retractor does not under-rank the incumbent, and once
-    /// accepted the claim is terminally `Retracted` and cannot be resurrected. Retraction
+    /// accepted the fact is terminally `Retracted` and cannot be resurrected. Retraction
     /// removes a belief, so it is authority-gated like supersession — unlike a
     /// `Contradicted` event, which is dissent and is admitted at any authority.
     #[test]
@@ -941,22 +938,22 @@ mod tests {
                 }
 
                 let retracted = result.expect("non-under-ranking retraction applies");
-                assert_eq!(retracted.lifecycle, ClaimLifecycle::Retracted);
+                assert_eq!(retracted.lifecycle, FactLifecycle::Retracted);
                 assert!(retracted.lifecycle.is_terminal());
 
                 let resurrect = supersede("event:3", AuthorityLevel::Canonical);
                 let error = apply_event(Some(retracted), &resurrect)
-                    .expect_err("terminal claim cannot be resurrected");
+                    .expect_err("terminal fact cannot be resurrected");
                 assert_eq!(
                     error,
-                    TransitionError::TerminalStateMutation(ClaimLifecycle::Retracted)
+                    TransitionError::TerminalStateMutation(FactLifecycle::Retracted)
                 );
             }
         }
     }
 
     /// Explicit expiration is also a terminal close. TTL staleness is read-time and needs no
-    /// actor authority, but a `claim.expired` event changes the durable lifecycle, so it must
+    /// actor authority, but a `fact.expired` event changes the durable lifecycle, so it must
     /// not under-rank the incumbent.
     #[test]
     fn authority_monotone_expiration_and_non_resurrection() {
@@ -978,15 +975,15 @@ mod tests {
                 }
 
                 let expired = result.expect("non-under-ranking expiration applies");
-                assert_eq!(expired.lifecycle, ClaimLifecycle::Expired);
+                assert_eq!(expired.lifecycle, FactLifecycle::Expired);
                 assert!(expired.lifecycle.is_terminal());
 
                 let resurrect = supersede("event:3", AuthorityLevel::Canonical);
                 let error = apply_event(Some(expired), &resurrect)
-                    .expect_err("terminal claim cannot be resurrected");
+                    .expect_err("terminal fact cannot be resurrected");
                 assert_eq!(
                     error,
-                    TransitionError::TerminalStateMutation(ClaimLifecycle::Expired)
+                    TransitionError::TerminalStateMutation(FactLifecycle::Expired)
                 );
             }
         }
@@ -1000,10 +997,10 @@ mod tests {
 /// everything else is fixed, keeping the proof tractable.
 #[cfg(kani)]
 mod proofs {
-    use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
+    use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, Confidence, EntityRef,
-        Evidence, EvidenceKind, ExpirationReason, Predicate, Provenance, SupersessionReason, Ttl,
+        Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceKind, ExpirationReason,
+        FactEvent, FactEventKind, FactValue, Predicate, Provenance, SupersessionReason, Ttl,
     };
 
     use super::apply_event;
@@ -1019,14 +1016,14 @@ mod proofs {
     }
 
     fn event(
-        kind: ClaimEventKind,
+        kind: FactEventKind,
         event_id: &str,
-        value: Option<ClaimValue>,
+        value: Option<FactValue>,
         level: AuthorityLevel,
-    ) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).unwrap(),
-            claim_id: ClaimId::new("claim:1").unwrap(),
+    ) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).unwrap(),
+            fact_id: FactId::new("fact:1").unwrap(),
             kind,
             subject: EntityRef::new("repo", "dent8").unwrap(),
             predicate: Predicate::new("uses_database").unwrap(),
@@ -1070,16 +1067,16 @@ mod proofs {
         let challenger = level_from(b);
 
         let asserted = event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
             incumbent,
         );
         let state = apply_event(None, &asserted).unwrap();
 
         let superseded = event(
-            ClaimEventKind::Superseded {
-                by: ClaimId::new("claim:2").unwrap(),
+            FactEventKind::Superseded {
+                by: FactId::new("fact:2").unwrap(),
                 reason: SupersessionReason::NewerObservation,
             },
             "event:2",
@@ -1096,8 +1093,8 @@ mod proofs {
 
                 // Non-resurrection: even a canonical event cannot re-activate it.
                 let resurrect = event(
-                    ClaimEventKind::Superseded {
-                        by: ClaimId::new("claim:3").unwrap(),
+                    FactEventKind::Superseded {
+                        by: FactId::new("fact:3").unwrap(),
                         reason: SupersessionReason::NewerObservation,
                     },
                     "event:3",
@@ -1125,15 +1122,15 @@ mod proofs {
         let challenger = level_from(b);
 
         let asserted = event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
             incumbent,
         );
         let state = apply_event(None, &asserted).unwrap();
 
         let retracted = event(
-            ClaimEventKind::Retracted {
+            FactEventKind::Retracted {
                 reason: RetractionReason::UserDeleted,
             },
             "event:2",
@@ -1147,8 +1144,8 @@ mod proofs {
                 assert!(next.lifecycle.is_terminal());
 
                 let resurrect = event(
-                    ClaimEventKind::Superseded {
-                        by: ClaimId::new("claim:3").unwrap(),
+                    FactEventKind::Superseded {
+                        by: FactId::new("fact:3").unwrap(),
                         reason: SupersessionReason::NewerObservation,
                     },
                     "event:3",
@@ -1173,15 +1170,15 @@ mod proofs {
         let challenger = level_from(b);
 
         let asserted = event(
-            ClaimEventKind::Asserted,
+            FactEventKind::Asserted,
             "event:1",
-            Some(ClaimValue::Text("postgres".to_string())),
+            Some(FactValue::Text("postgres".to_string())),
             incumbent,
         );
         let state = apply_event(None, &asserted).unwrap();
 
         let expired = event(
-            ClaimEventKind::Expired {
+            FactEventKind::Expired {
                 reason: ExpirationReason::PolicyRetention,
             },
             "event:2",
@@ -1195,8 +1192,8 @@ mod proofs {
                 assert!(next.lifecycle.is_terminal());
 
                 let resurrect = event(
-                    ClaimEventKind::Superseded {
-                        by: ClaimId::new("claim:3").unwrap(),
+                    FactEventKind::Superseded {
+                        by: FactId::new("fact:3").unwrap(),
                         reason: SupersessionReason::NewerObservation,
                     },
                     "event:3",

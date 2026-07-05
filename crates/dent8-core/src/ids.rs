@@ -50,8 +50,8 @@ macro_rules! id_type {
 }
 
 id_type!(ActorId);
-id_type!(ClaimEventId);
-id_type!(ClaimId);
+id_type!(FactEventId);
+id_type!(FactId);
 id_type!(EvidenceId);
 id_type!(SourceId);
 

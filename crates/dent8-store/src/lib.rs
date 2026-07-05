@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use dent8_core::{
-    AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimState,
-    ClaimValue, EntityRef, EpistemicPolicy, Predicate, TransitionError, apply_event,
+    AuthorityLevel, EntityRef, EpistemicPolicy, FactEvent, FactEventId, FactEventKind, FactId,
+    FactLifecycle, FactState, FactValue, Predicate, TransitionError, apply_event,
 };
 
 pub mod firewall;
@@ -19,13 +19,13 @@ pub use registry::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppendReceipt {
     pub global_sequence: u64,
-    pub event_id: ClaimEventId,
+    pub event_id: FactEventId,
     pub event_hash: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct EventFilter {
-    pub claim_id: Option<ClaimId>,
+    pub fact_id: Option<FactId>,
     pub subject: Option<EntityRef>,
     pub predicate: Option<Predicate>,
     pub after_sequence: Option<u64>,
@@ -38,9 +38,9 @@ pub trait EventStore {
     /// inadmissible writes (`StoreError::Rejected` / `LaunderedAuthority` /
     /// `UnbackedSupersession`) *before* persisting. There is deliberately no
     /// un-arbitrated write path: a lower-authority override must not reach the log.
-    fn append(&mut self, event: ClaimEvent) -> Result<AppendReceipt, StoreError>;
-    fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError>;
-    fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError>;
+    fn append(&mut self, event: FactEvent) -> Result<AppendReceipt, StoreError>;
+    fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError>;
+    fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError>;
 }
 
 /// The **async** counterpart to [`EventStore`], for backends that do network or embedded-DB
@@ -50,7 +50,7 @@ pub trait EventStore {
 ///
 /// [`append_many`](AsyncEventStore::append_many) is the integrity-critical primitive: a
 /// multi-event operation (a supersession's replacement + its supersessions, a contradiction's
-/// opposing claim + edge) must commit **atomically** — all events arbitrate and land, or none
+/// opposing fact + edge) must commit **atomically** — all events arbitrate and land, or none
 /// do. The trait therefore *requires* it rather than deriving it from single `append`, so a
 /// backend cannot accidentally offer a non-atomic batch path.
 ///
@@ -69,63 +69,62 @@ pub trait AsyncEventStore {
     /// Deploy the schema this backend needs (idempotent).
     async fn migrate(&self) -> Result<(), StoreError>;
     /// Append one candidate through the firewall (a one-element [`append_many`](Self::append_many)).
-    async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError>;
+    async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError>;
     /// Append a whole operation **atomically**: every event arbitrates and commits, or none do.
-    async fn append_many(&self, events: Vec<ClaimEvent>) -> Result<Vec<AppendReceipt>, StoreError>;
-    /// Ordered events for one claim stream.
-    async fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError>;
+    async fn append_many(&self, events: Vec<FactEvent>) -> Result<Vec<AppendReceipt>, StoreError>;
+    /// Ordered events for one fact stream.
+    async fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError>;
     /// Events matching a filter, in global order.
-    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError>;
+    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError>;
     /// Re-verify the stored global hash chain — `false` if a stored event was altered.
     async fn verify_chain(&self) -> Result<bool, StoreError>;
 }
 
-/// Fold an ordered claim-event stream into its current projected state. Strict: a
-/// stream that does not start with `claim.asserted` surfaces the transition error.
-pub fn replay_claim(events: &[ClaimEvent]) -> Result<Option<ClaimState>, ReplayError> {
-    replay_claim_with_policy(events, &EpistemicPolicy::identity())
+/// Fold an ordered fact-event stream into its current projected state. Strict: a
+/// stream that does not start with `fact.asserted` surfaces the transition error.
+pub fn replay_fact(events: &[FactEvent]) -> Result<Option<FactState>, ReplayError> {
+    replay_fact_with_policy(events, &EpistemicPolicy::identity())
 }
 
-/// Re-fold a claim-event stream under an [`EpistemicPolicy`]. Non-admitted events are
+/// Re-fold a fact-event stream under an [`EpistemicPolicy`]. Non-admitted events are
 /// skipped as if they never occurred; if the *asserting* event is filtered out the
-/// claim is absent (`Ok(None)`) under this policy.
+/// fact is absent (`Ok(None)`) under this policy.
 ///
 /// Freshness is intentionally *not* applied here — it is a separate read-time axis
-/// ([`ClaimState::is_expired_at`]) so valid-time staleness is never conflated with the
+/// ([`FactState::is_expired_at`]) so valid-time staleness is never conflated with the
 /// event-driven lifecycle.
 ///
-/// With [`EpistemicPolicy::identity`] this is identical to [`replay_claim`], so it is
+/// With [`EpistemicPolicy::identity`] this is identical to [`replay_fact`], so it is
 /// a strict superset: callers can compare a baseline replay against a counterfactual
 /// one with [`diff_states`].
-pub fn replay_claim_with_policy(
-    events: &[ClaimEvent],
+pub fn replay_fact_with_policy(
+    events: &[FactEvent],
     policy: &EpistemicPolicy,
-) -> Result<Option<ClaimState>, ReplayError> {
-    let refs: Vec<&ClaimEvent> = events.iter().collect();
-    fold_claim(&refs, policy)
+) -> Result<Option<FactState>, ReplayError> {
+    let refs: Vec<&FactEvent> = events.iter().collect();
+    fold_fact(&refs, policy)
 }
 
-/// Fold a single claim stream (events for one `claim_id`, in order) under a policy.
-fn fold_claim(
-    events: &[&ClaimEvent],
+/// Fold a single fact stream (events for one `fact_id`, in order) under a policy.
+fn fold_fact(
+    events: &[&FactEvent],
     policy: &EpistemicPolicy,
-) -> Result<Option<ClaimState>, ReplayError> {
+) -> Result<Option<FactState>, ReplayError> {
     // True only when an asserting event exists but the policy filters it out. This
-    // distinguishes "the assertion was distrusted" (claim absent) from "the stream is
+    // distinguishes "the assertion was distrusted" (fact absent) from "the stream is
     // malformed and never had an assertion" (let the strict error surface, exactly as
     // plain replay would). Under the identity policy nothing is filtered, so this is
     // always false and behaviour is unchanged.
     let assertion_filtered = events
         .iter()
-        .any(|event| matches!(event.kind, ClaimEventKind::Asserted) && !policy.admits(event));
+        .any(|event| matches!(event.kind, FactEventKind::Asserted) && !policy.admits(event));
 
-    let mut state: Option<ClaimState> = None;
+    let mut state: Option<FactState> = None;
     for &event in events {
         if !policy.admits(event) {
             continue;
         }
-        if state.is_none() && assertion_filtered && !matches!(event.kind, ClaimEventKind::Asserted)
-        {
+        if state.is_none() && assertion_filtered && !matches!(event.kind, FactEventKind::Asserted) {
             return Ok(None);
         }
         state = Some(apply_event(state.take(), event).map_err(ReplayError::Transition)?);
@@ -134,78 +133,78 @@ fn fold_claim(
     Ok(state)
 }
 
-/// A projection of every claim stream for one entity, folded independently and keyed
-/// by `claim_id`. Built by [`replay_entity`] (or [`replay_entity_with_policy`]) from
-/// the entity's events in global order. Unlike per-claim replay, this view enables
+/// A projection of every fact stream for one entity, folded independently and keyed
+/// by `fact_id`. Built by [`replay_entity`] (or [`replay_entity_with_policy`]) from
+/// the entity's events in global order. Unlike per-fact replay, this view enables
 /// cross-stream checks such as [`EntityProjection::lineage_issues`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EntityProjection {
-    pub claims: BTreeMap<ClaimId, ClaimState>,
+    pub facts: BTreeMap<FactId, FactState>,
 }
 
 impl EntityProjection {
     #[must_use]
-    pub fn get(&self, claim_id: &ClaimId) -> Option<&ClaimState> {
-        self.claims.get(claim_id)
+    pub fn get(&self, fact_id: &FactId) -> Option<&FactState> {
+        self.facts.get(fact_id)
     }
 
-    /// The claims currently believed (lifecycle `Active` or `Contested`). Freshness
-    /// (TTL) is a separate read-time axis ([`ClaimState::is_expired_at`]) and is not
+    /// The facts currently believed (lifecycle `Active` or `Contested`). Freshness
+    /// (TTL) is a separate read-time axis ([`FactState::is_expired_at`]) and is not
     /// applied here.
-    pub fn believed(&self) -> impl Iterator<Item = &ClaimState> {
-        self.claims
+    pub fn believed(&self) -> impl Iterator<Item = &FactState> {
+        self.facts
             .values()
             .filter(|state| !state.lifecycle.is_terminal())
     }
 
-    /// The claims currently in conflict (lifecycle `Contested`).
-    pub fn contested(&self) -> impl Iterator<Item = &ClaimState> {
-        self.claims
+    /// The facts currently in conflict (lifecycle `Contested`).
+    pub fn contested(&self) -> impl Iterator<Item = &FactState> {
+        self.facts
             .values()
-            .filter(|state| state.lifecycle == ClaimLifecycle::Contested)
+            .filter(|state| state.lifecycle == FactLifecycle::Contested)
     }
 
     /// Cross-stream supersession-lineage problems:
     ///
-    /// - [`LineageIssue::DanglingSupersession`] — superseded by a claim absent from
+    /// - [`LineageIssue::DanglingSupersession`] — superseded by a fact absent from
     ///   the entity;
-    /// - [`LineageIssue::SupersededByInvalidated`] — superseded by a claim that has
-    ///   itself been retracted or closed by a `claim.expired` event (an intact
+    /// - [`LineageIssue::SupersededByInvalidated`] — superseded by a fact that has
+    ///   itself been retracted or closed by a `fact.expired` event (an intact
     ///   `A -> B -> C` chain where `B` is merely `Superseded` is *not* an issue);
-    /// - [`LineageIssue::SupersessionCycle`] — the claim lies on a supersession cycle
+    /// - [`LineageIssue::SupersessionCycle`] — the fact lies on a supersession cycle
     ///   (including self-supersession), so no terminal believed successor exists.
     ///
     /// Out of scope here: read-time TTL staleness of a successor is *not* flagged
-    /// (freshness is a separate axis — combine with [`ClaimState::is_expired_at`]), and
+    /// (freshness is a separate axis — combine with [`FactState::is_expired_at`]), and
     /// contradiction edges are not checked, because a contradictor may legitimately
     /// live in another entity.
     #[must_use]
     pub fn lineage_issues(&self) -> Vec<LineageIssue> {
         let on_cycle = self.supersession_cycle_members();
         let mut issues = Vec::new();
-        for state in self.claims.values() {
-            if on_cycle.contains(&state.claim_id) {
+        for state in self.facts.values() {
+            if on_cycle.contains(&state.fact_id) {
                 issues.push(LineageIssue::SupersessionCycle {
-                    claim: state.claim_id.clone(),
+                    fact: state.fact_id.clone(),
                 });
                 continue;
             }
             let Some(target) = &state.superseded_by else {
                 continue;
             };
-            match self.claims.get(target) {
+            match self.facts.get(target) {
                 None => issues.push(LineageIssue::DanglingSupersession {
-                    claim: state.claim_id.clone(),
+                    fact: state.fact_id.clone(),
                     target: target.clone(),
                 }),
                 Some(t)
                     if matches!(
                         t.lifecycle,
-                        ClaimLifecycle::Retracted | ClaimLifecycle::Expired
+                        FactLifecycle::Retracted | FactLifecycle::Expired
                     ) =>
                 {
                     issues.push(LineageIssue::SupersededByInvalidated {
-                        claim: state.claim_id.clone(),
+                        fact: state.fact_id.clone(),
                         target: target.clone(),
                         target_lifecycle: t.lifecycle,
                     });
@@ -217,24 +216,24 @@ impl EntityProjection {
     }
 
     /// Supersessions that did not *earn* their replacement, judged against the
-    /// replacing claim's actual state (not just the supersession event's stated
+    /// replacing fact's actual state (not just the supersession event's stated
     /// authority). This is the entity-level entrenchment audit — defense-in-depth over
     /// the per-stream authority gate in `apply_event`, which can only trust the
-    /// supersession event's claimed authority. Two cases:
+    /// supersession event's facted authority. Two cases:
     ///
-    /// - [`UnearnedSupersession::AuthorityDowngrade`] — the replacing claim is actually
+    /// - [`UnearnedSupersession::AuthorityDowngrade`] — the replacing fact is actually
     ///   *lower* authority than the one it replaced (the event must have overstated its
     ///   authority to pass the per-stream gate);
     /// - [`UnearnedSupersession::WeakerEntrenchment`] — at equal authority, the replacing
-    ///   claim has *less authority-weighted earned entrenchment* — corroboration plus
+    ///   fact has *less authority-weighted earned entrenchment* — corroboration plus
     ///   survived challenges (ADR 0017) — than the incumbent (measured by
-    ///   [`ClaimState::earned_entrenchment_at_or_above`] at their shared authority level, so
+    ///   [`FactState::earned_entrenchment_at_or_above`] at their shared authority level, so
     ///   a Sybil flood of low-authority sources or challenges cannot mask it). This is the
     ///   same measure the opt-in write-time gate uses, so the audit and the gate agree.
     ///
     /// Semantics: this is a **current-state advisory**, not a stable at-supersession
     /// verdict. The incumbent's entrenchment is frozen (the terminal guard blocks
-    /// reinforcing a superseded claim), but the replacement's keeps accruing, so a
+    /// reinforcing a superseded fact), but the replacement's keeps accruing, so a
     /// `WeakerEntrenchment` flag clears if the replacement later earns enough standing.
     /// Read it as "the replacement *still* has weaker entrenchment than what it displaced."
     ///
@@ -245,19 +244,19 @@ impl EntityProjection {
     pub fn unearned_supersessions(&self) -> Vec<UnearnedSupersession> {
         let on_cycle = self.supersession_cycle_members();
         let mut out = Vec::new();
-        for state in self.claims.values() {
-            if on_cycle.contains(&state.claim_id) {
+        for state in self.facts.values() {
+            if on_cycle.contains(&state.fact_id) {
                 continue;
             }
             let Some(target) = &state.superseded_by else {
                 continue;
             };
-            let Some(by) = self.claims.get(target) else {
+            let Some(by) = self.facts.get(target) else {
                 continue;
             };
             if by.authority.level < state.authority.level {
                 out.push(UnearnedSupersession::AuthorityDowngrade {
-                    superseded: state.claim_id.clone(),
+                    superseded: state.fact_id.clone(),
                     by: target.clone(),
                     incumbent: state.authority.level,
                     challenger: by.authority.level,
@@ -268,7 +267,7 @@ impl EntityProjection {
                 let challenger = by.earned_entrenchment_at_or_above(level);
                 if challenger < incumbent {
                     out.push(UnearnedSupersession::WeakerEntrenchment {
-                        superseded: state.claim_id.clone(),
+                        superseded: state.fact_id.clone(),
                         by: target.clone(),
                         incumbent_entrenchment: incumbent,
                         challenger_entrenchment: challenger,
@@ -279,17 +278,17 @@ impl EntityProjection {
         out
     }
 
-    /// The claims lying on a supersession cycle (including self-supersession), found by
+    /// The facts lying on a supersession cycle (including self-supersession), found by
     /// following `superseded_by` edges within the entity. Single traversal per start
     /// with a visited index, so cycles cannot loop.
-    fn supersession_cycle_members(&self) -> BTreeSet<ClaimId> {
+    fn supersession_cycle_members(&self) -> BTreeSet<FactId> {
         let mut on_cycle = BTreeSet::new();
-        for start in self.claims.keys() {
+        for start in self.facts.keys() {
             if on_cycle.contains(start) {
                 continue;
             }
-            let mut index: BTreeMap<ClaimId, usize> = BTreeMap::new();
-            let mut path: Vec<ClaimId> = Vec::new();
+            let mut index: BTreeMap<FactId, usize> = BTreeMap::new();
+            let mut path: Vec<FactId> = Vec::new();
             let mut node = start.clone();
             loop {
                 if let Some(&first) = index.get(&node) {
@@ -303,12 +302,8 @@ impl EntityProjection {
                 }
                 index.insert(node.clone(), path.len());
                 path.push(node.clone());
-                match self
-                    .claims
-                    .get(&node)
-                    .and_then(|s| s.superseded_by.as_ref())
-                {
-                    Some(next) if self.claims.contains_key(next) => node = next.clone(),
+                match self.facts.get(&node).and_then(|s| s.superseded_by.as_ref()) {
+                    Some(next) if self.facts.contains_key(next) => node = next.clone(),
                     _ => break,
                 }
             }
@@ -320,18 +315,18 @@ impl EntityProjection {
 /// A cross-stream supersession-lineage defect found by [`EntityProjection::lineage_issues`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LineageIssue {
-    /// `claim` is superseded by `target`, but no such claim exists in the entity.
-    DanglingSupersession { claim: ClaimId, target: ClaimId },
-    /// `claim` is superseded by `target`, but `target` has itself been invalidated by a
-    /// retraction or a `claim.expired` event, orphaning the lineage.
+    /// `fact` is superseded by `target`, but no such fact exists in the entity.
+    DanglingSupersession { fact: FactId, target: FactId },
+    /// `fact` is superseded by `target`, but `target` has itself been invalidated by a
+    /// retraction or a `fact.expired` event, orphaning the lineage.
     SupersededByInvalidated {
-        claim: ClaimId,
-        target: ClaimId,
-        target_lifecycle: ClaimLifecycle,
+        fact: FactId,
+        target: FactId,
+        target_lifecycle: FactLifecycle,
     },
-    /// `claim` lies on a supersession cycle (`A -> A`, `A -> B -> A`, …), so the
+    /// `fact` lies on a supersession cycle (`A -> A`, `A -> B -> A`, …), so the
     /// lineage never resolves to a believed successor.
-    SupersessionCycle { claim: ClaimId },
+    SupersessionCycle { fact: FactId },
 }
 
 /// A supersession that did not earn its replacement, found by
@@ -341,84 +336,84 @@ pub enum UnearnedSupersession {
     /// `superseded` was replaced by `by`, but `by` is actually lower authority — the
     /// supersession event must have overstated its authority to pass the per-stream gate.
     AuthorityDowngrade {
-        superseded: ClaimId,
-        by: ClaimId,
+        superseded: FactId,
+        by: FactId,
         incumbent: AuthorityLevel,
         challenger: AuthorityLevel,
     },
     /// `superseded` was replaced by `by` at equal authority, but `by` has weaker
     /// authority-weighted **earned entrenchment** — corroboration plus survived challenges,
-    /// at or above the shared authority level (ADR 0017) — than the claim it replaced.
+    /// at or above the shared authority level (ADR 0017) — than the fact it replaced.
     WeakerEntrenchment {
-        superseded: ClaimId,
-        by: ClaimId,
+        superseded: FactId,
+        by: FactId,
         incumbent_entrenchment: usize,
         challenger_entrenchment: usize,
     },
 }
 
-/// Replay every claim stream for one entity (events in global order) into an
-/// [`EntityProjection`]. Strict, like [`replay_claim`].
-pub fn replay_entity(events: &[ClaimEvent]) -> Result<EntityProjection, ReplayError> {
+/// Replay every fact stream for one entity (events in global order) into an
+/// [`EntityProjection`]. Strict, like [`replay_fact`].
+pub fn replay_entity(events: &[FactEvent]) -> Result<EntityProjection, ReplayError> {
     replay_entity_with_policy(events, &EpistemicPolicy::identity())
 }
 
-/// A still-believed claim that transitively derives (`EvidenceKind::DerivedFrom`, ADR 0010)
-/// from a claim now in a terminal *invalidated* lifecycle (`Retracted`/`Expired`) — i.e. poison
+/// A still-believed fact that transitively derives (`EvidenceKind::DerivedFrom`, ADR 0010)
+/// from a fact now in a terminal *invalidated* lifecycle (`Retracted`/`Expired`) — i.e. poison
 /// (or a removed source) that survived in a derivative. `root` is an invalidated source the
 /// taint traces to.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TaintedClaim {
-    pub claim: ClaimId,
-    pub root: ClaimId,
-    pub root_lifecycle: ClaimLifecycle,
+pub struct TaintedFact {
+    pub fact: FactId,
+    pub root: FactId,
+    pub root_lifecycle: FactLifecycle,
 }
 
-/// Cross-entity retraction-taint analysis over the **whole** log: fold every claim stream to
+/// Cross-entity retraction-taint analysis over the **whole** log: fold every fact stream to
 /// its lifecycle and collect its `DerivedFrom` dependency edges, then report each
-/// *still-believed* claim that transitively depends on an invalidated (`Retracted`/`Expired`)
+/// *still-believed* fact that transitively depends on an invalidated (`Retracted`/`Expired`)
 /// source. This is the read-side "poison does not survive in derivatives" check (ADR 0010) —
 /// computed on replay, never written, and cross-entity (a dependency may live in another
 /// subject's stream).
-pub fn tainted_claims(events: &[ClaimEvent]) -> Result<Vec<TaintedClaim>, ReplayError> {
-    // Group by claim id — independent of entity, since a dependency edge may cross entities.
-    let mut streams: BTreeMap<ClaimId, Vec<&ClaimEvent>> = BTreeMap::new();
+pub fn tainted_facts(events: &[FactEvent]) -> Result<Vec<TaintedFact>, ReplayError> {
+    // Group by fact id — independent of entity, since a dependency edge may cross entities.
+    let mut streams: BTreeMap<FactId, Vec<&FactEvent>> = BTreeMap::new();
     for event in events {
         streams
-            .entry(event.claim_id.clone())
+            .entry(event.fact_id.clone())
             .or_default()
             .push(event);
     }
-    let mut lifecycle: BTreeMap<ClaimId, ClaimLifecycle> = BTreeMap::new();
-    let mut deps: BTreeMap<ClaimId, Vec<ClaimId>> = BTreeMap::new();
-    for (claim, stream) in &streams {
-        let mut state: Option<ClaimState> = None;
+    let mut lifecycle: BTreeMap<FactId, FactLifecycle> = BTreeMap::new();
+    let mut deps: BTreeMap<FactId, Vec<FactId>> = BTreeMap::new();
+    for (fact, stream) in &streams {
+        let mut state: Option<FactState> = None;
         let mut edges = Vec::new();
         for &event in stream {
             edges.extend(event.dependency_edges());
             state = Some(apply_event(state.take(), event).map_err(ReplayError::Transition)?);
         }
         if let Some(state) = state {
-            lifecycle.insert(claim.clone(), state.lifecycle);
+            lifecycle.insert(fact.clone(), state.lifecycle);
         }
-        deps.insert(claim.clone(), edges);
+        deps.insert(fact.clone(), edges);
     }
-    let invalidated = |claim: &ClaimId| {
+    let invalidated = |fact: &FactId| {
         matches!(
-            lifecycle.get(claim),
-            Some(ClaimLifecycle::Retracted | ClaimLifecycle::Expired)
+            lifecycle.get(fact),
+            Some(FactLifecycle::Retracted | FactLifecycle::Expired)
         )
     };
     let mut tainted = Vec::new();
-    for (claim, life) in &lifecycle {
+    for (fact, life) in &lifecycle {
         // Only a *still-believed* derivative is surviving poison; a terminal one is fine.
         if life.is_terminal() {
             continue;
         }
-        if let Some(root) = an_invalidated_root(claim, &deps, &invalidated) {
+        if let Some(root) = an_invalidated_root(fact, &deps, &invalidated) {
             let root_lifecycle = lifecycle[&root];
-            tainted.push(TaintedClaim {
-                claim: claim.clone(),
+            tainted.push(TaintedFact {
+                fact: fact.clone(),
                 root,
                 root_lifecycle,
             });
@@ -427,15 +422,15 @@ pub fn tainted_claims(events: &[ClaimEvent]) -> Result<Vec<TaintedClaim>, Replay
     Ok(tainted)
 }
 
-/// Depth-first search from `claim` over `DerivedFrom` edges for an invalidated source.
+/// Depth-first search from `fact` over `DerivedFrom` edges for an invalidated source.
 /// Cycle-safe (a `seen` set), so a dependency cycle terminates.
 fn an_invalidated_root(
-    claim: &ClaimId,
-    deps: &BTreeMap<ClaimId, Vec<ClaimId>>,
-    invalidated: &impl Fn(&ClaimId) -> bool,
-) -> Option<ClaimId> {
+    fact: &FactId,
+    deps: &BTreeMap<FactId, Vec<FactId>>,
+    invalidated: &impl Fn(&FactId) -> bool,
+) -> Option<FactId> {
     let mut seen = BTreeSet::new();
-    let mut stack: Vec<ClaimId> = deps.get(claim).cloned().unwrap_or_default();
+    let mut stack: Vec<FactId> = deps.get(fact).cloned().unwrap_or_default();
     while let Some(next) = stack.pop() {
         if !seen.insert(next.clone()) {
             continue;
@@ -451,28 +446,28 @@ fn an_invalidated_root(
 }
 
 /// Entity-level [`replay_entity`] under an [`EpistemicPolicy`]: each stream is folded
-/// under the policy, so a distrusted source can make whole claims absent from the
-/// entity view — the multi-claim counterfactual surface.
+/// under the policy, so a distrusted source can make whole facts absent from the
+/// entity view — the multi-fact counterfactual surface.
 pub fn replay_entity_with_policy(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     policy: &EpistemicPolicy,
 ) -> Result<EntityProjection, ReplayError> {
-    let mut streams: BTreeMap<ClaimId, Vec<&ClaimEvent>> = BTreeMap::new();
+    let mut streams: BTreeMap<FactId, Vec<&FactEvent>> = BTreeMap::new();
     for event in events {
         streams
-            .entry(event.claim_id.clone())
+            .entry(event.fact_id.clone())
             .or_default()
             .push(event);
     }
 
-    let mut claims = BTreeMap::new();
-    for (claim_id, stream) in streams {
-        if let Some(state) = fold_claim(&stream, policy)? {
-            claims.insert(claim_id, state);
+    let mut facts = BTreeMap::new();
+    for (fact_id, stream) in streams {
+        if let Some(state) = fold_fact(&stream, policy)? {
+            facts.insert(fact_id, state);
         }
     }
 
-    Ok(EntityProjection { claims })
+    Ok(EntityProjection { facts })
 }
 
 /// The structural difference between a baseline projection and a counterfactual one,
@@ -480,25 +475,25 @@ pub fn replay_entity_with_policy(
 /// the authority or confidence floor" queries over the same log.
 ///
 /// The comparison covers the belief-relevant fields that can vary between two folds of
-/// the *same* claim stream: lifecycle, value, supersession target, contradiction
-/// edges, and evidence count. Fields invariant within a stream (claim id, subject,
+/// the *same* fact stream: lifecycle, value, supersession target, contradiction
+/// edges, and evidence count. Fields invariant within a stream (fact id, subject,
 /// predicate, authority, ttl) are not compared.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StateDiff {
     /// Both projections are absent, or equal on every compared field.
     Unchanged,
-    /// The claim is absent in the baseline but present in the counterfactual.
+    /// The fact is absent in the baseline but present in the counterfactual.
     Appeared,
-    /// The claim is present in the baseline but absent in the counterfactual (e.g. its
+    /// The fact is present in the baseline but absent in the counterfactual (e.g. its
     /// asserting source was distrusted).
     Disappeared,
-    /// The claim is present in both but differs. Each field is `Some((base, cf))` only
+    /// The fact is present in both but differs. Each field is `Some((base, cf))` only
     /// when it changed.
     Changed {
-        lifecycle: Option<(ClaimLifecycle, ClaimLifecycle)>,
-        value: Option<(ClaimValue, ClaimValue)>,
-        superseded_by: Option<(Option<ClaimId>, Option<ClaimId>)>,
-        contradicted_by: Option<(Vec<ClaimId>, Vec<ClaimId>)>,
+        lifecycle: Option<(FactLifecycle, FactLifecycle)>,
+        value: Option<(FactValue, FactValue)>,
+        superseded_by: Option<(Option<FactId>, Option<FactId>)>,
+        contradicted_by: Option<(Vec<FactId>, Vec<FactId>)>,
         evidence_count: Option<(usize, usize)>,
     },
 }
@@ -506,7 +501,7 @@ pub enum StateDiff {
 /// Compare a baseline projection against a counterfactual one (both folded from the
 /// same log, under different policies). The arguments read base-then-counterfactual.
 #[must_use]
-pub fn diff_states(base: Option<&ClaimState>, counterfactual: Option<&ClaimState>) -> StateDiff {
+pub fn diff_states(base: Option<&FactState>, counterfactual: Option<&FactState>) -> StateDiff {
     match (base, counterfactual) {
         (None, None) => StateDiff::Unchanged,
         (None, Some(_)) => StateDiff::Appeared,
@@ -548,20 +543,20 @@ pub enum StoreError {
     Unavailable(String),
     CorruptEvent(String),
     Canonicalization(String),
-    /// The firewall rejected the write: the per-claim transition was inadmissible
+    /// The firewall rejected the write: the per-fact transition was inadmissible
     /// (validation, insufficient *stated* authority, canonical contradiction, terminal
     /// mutation, duplicate assertion).
     Rejected(TransitionError),
-    /// The firewall rejected a supersession because the *replacing claim's actual*
+    /// The firewall rejected a supersession because the *replacing fact's actual*
     /// authority is below the incumbent's — i.e. an over-stated-authority supersession
     /// (authority laundering).
     LaunderedAuthority {
         incumbent: AuthorityLevel,
         challenger: AuthorityLevel,
     },
-    /// The firewall rejected a supersession whose replacing claim does not exist in the
+    /// The firewall rejected a supersession whose replacing fact does not exist in the
     /// store, so its authority cannot be verified.
-    UnbackedSupersession(ClaimId),
+    UnbackedSupersession(FactId),
     /// A registered predicate's policy rejected the write: its authority is below the
     /// predicate's floor.
     BelowAuthorityFloor {
@@ -569,12 +564,12 @@ pub enum StoreError {
         floor: AuthorityLevel,
         actual: AuthorityLevel,
     },
-    /// A registered predicate's uniqueness policy rejected the write: another claim about
+    /// A registered predicate's uniqueness policy rejected the write: another fact about
     /// this subject+predicate is already believed (supersede it instead of asserting).
     UniquenessViolation {
         predicate: String,
     },
-    /// Replaying the existing claim stream failed.
+    /// Replaying the existing fact stream failed.
     Replay(ReplayError),
 }
 
@@ -591,12 +586,12 @@ impl fmt::Display for StoreError {
                 challenger,
             } => write!(
                 f,
-                "firewall rejected the write: supersession by a weaker claim \
+                "firewall rejected the write: supersession by a weaker fact \
                  (challenger {challenger:?} is below incumbent {incumbent:?})"
             ),
-            Self::UnbackedSupersession(claim) => write!(
+            Self::UnbackedSupersession(fact) => write!(
                 f,
-                "firewall rejected the write: superseding claim {claim} does not exist"
+                "firewall rejected the write: superseding fact {fact} does not exist"
             ),
             Self::BelowAuthorityFloor {
                 predicate,
@@ -608,7 +603,7 @@ impl fmt::Display for StoreError {
             ),
             Self::UniquenessViolation { predicate } => write!(
                 f,
-                "policy rejected the write: {predicate} already has a believed claim (supersede it)"
+                "policy rejected the write: {predicate} already has a believed fact (supersede it)"
             ),
             Self::Replay(error) => write!(f, "{error}"),
         }
@@ -635,30 +630,30 @@ impl std::error::Error for ReplayError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        LineageIssue, StateDiff, UnearnedSupersession, diff_states, replay_claim,
-        replay_claim_with_policy, replay_entity, replay_entity_with_policy, tainted_claims,
+        LineageIssue, StateDiff, UnearnedSupersession, diff_states, replay_entity,
+        replay_entity_with_policy, replay_fact, replay_fact_with_policy, tainted_facts,
     };
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, ClaimEvent,
-        ClaimEventId, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimValue, Confidence, EntityRef,
-        EpistemicPolicy, Evidence, EvidenceId, EvidenceKind, Predicate, Provenance,
-        RetractionReason, SourceId, SupersessionReason, TimestampMillis, Ttl,
+        ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, Confidence,
+        EntityRef, EpistemicPolicy, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId,
+        FactEventKind, FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason,
+        SourceId, SupersessionReason, TimestampMillis, Ttl,
     };
 
     #[allow(clippy::too_many_arguments)]
     fn ev(
         event_id: &str,
-        kind: ClaimEventKind,
-        value: Option<ClaimValue>,
+        kind: FactEventKind,
+        value: Option<FactValue>,
         source: &str,
         authority: AuthorityLevel,
         confidence_millis: u16,
         ttl: Ttl,
         valid_from: Option<TimestampMillis>,
-    ) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new("claim:1").expect("claim id"),
+    ) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new("fact:1").expect("fact id"),
             kind,
             subject: EntityRef::new("repo", "dent8").expect("entity"),
             predicate: Predicate::new("uses_database").expect("predicate"),
@@ -692,11 +687,11 @@ mod tests {
         }
     }
 
-    fn assert_from(event_id: &str, source: &str, authority: AuthorityLevel) -> ClaimEvent {
+    fn assert_from(event_id: &str, source: &str, authority: AuthorityLevel) -> FactEvent {
         ev(
             event_id,
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".to_string())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".to_string())),
             source,
             authority,
             900,
@@ -705,14 +700,14 @@ mod tests {
         )
     }
 
-    /// An event on `claim_id` (its own subject `repo:{claim_id}`), carrying a `DerivedFrom`
+    /// An event on `fact_id` (its own subject `repo:{fact_id}`), carrying a `DerivedFrom`
     /// evidence item per id in `derived_from` (the dependency edges, ADR 0010).
     fn taint_ev(
         event_id: &str,
-        claim_id: &str,
-        kind: ClaimEventKind,
+        fact_id: &str,
+        kind: FactEventKind,
         derived_from: &[&str],
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         let mut evidence = vec![Evidence {
             id: EvidenceId::new("evidence:base").expect("evidence id"),
             kind: EvidenceKind::UserStatement,
@@ -729,13 +724,13 @@ mod tests {
                 summary: None,
             });
         }
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new(claim_id).expect("claim id"),
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
-            subject: EntityRef::new("repo", claim_id).expect("entity"),
+            subject: EntityRef::new("repo", fact_id).expect("entity"),
             predicate: Predicate::new("fact").expect("predicate"),
-            value: Some(ClaimValue::Text("v".to_string())),
+            value: Some(FactValue::Text("v".to_string())),
             confidence: Confidence::from_millis(900).expect("confidence"),
             authority: Authority {
                 level: AuthorityLevel::High,
@@ -761,68 +756,68 @@ mod tests {
 
     #[test]
     fn retracting_a_poisoned_source_taints_its_derivative() {
-        // claim:derived was derived from claim:source; retract the (poisoned) source.
-        let source = taint_ev("event:1", "claim:source", ClaimEventKind::Asserted, &[]);
+        // fact:derived was derived from fact:source; retract the (poisoned) source.
+        let source = taint_ev("event:1", "fact:source", FactEventKind::Asserted, &[]);
         let derived = taint_ev(
             "event:2",
-            "claim:derived",
-            ClaimEventKind::Asserted,
-            &["claim:source"],
+            "fact:derived",
+            FactEventKind::Asserted,
+            &["fact:source"],
         );
         let retract = taint_ev(
             "event:3",
-            "claim:source",
-            ClaimEventKind::Retracted {
+            "fact:source",
+            FactEventKind::Retracted {
                 reason: RetractionReason::PoisoningDetected,
             },
             &[],
         );
 
         // Before retraction: nothing tainted (the source is still believed).
-        let clean = tainted_claims(&[source.clone(), derived.clone()]).expect("taint");
+        let clean = tainted_facts(&[source.clone(), derived.clone()]).expect("taint");
         assert!(clean.is_empty(), "no taint while the source stands");
 
         // After retraction: the still-believed derivative is flagged, tracing to the source.
         let log = [source, derived, retract];
-        let tainted = tainted_claims(&log).expect("taint");
+        let tainted = tainted_facts(&log).expect("taint");
         assert_eq!(tainted.len(), 1, "the derivative is tainted");
-        assert_eq!(tainted[0].claim.as_str(), "claim:derived");
-        assert_eq!(tainted[0].root.as_str(), "claim:source");
-        assert_eq!(tainted[0].root_lifecycle, ClaimLifecycle::Retracted);
+        assert_eq!(tainted[0].fact.as_str(), "fact:derived");
+        assert_eq!(tainted[0].root.as_str(), "fact:source");
+        assert_eq!(tainted[0].root_lifecycle, FactLifecycle::Retracted);
     }
 
     #[test]
     fn taint_is_transitive_and_cycle_safe() {
         // c <- b <- a (a poisoned); c must be tainted transitively. Plus a self-edge to prove
         // the DFS terminates on a cycle.
-        let a = taint_ev("event:1", "claim:a", ClaimEventKind::Asserted, &[]);
-        let b = taint_ev("event:2", "claim:b", ClaimEventKind::Asserted, &["claim:a"]);
+        let a = taint_ev("event:1", "fact:a", FactEventKind::Asserted, &[]);
+        let b = taint_ev("event:2", "fact:b", FactEventKind::Asserted, &["fact:a"]);
         let c = taint_ev(
             "event:3",
-            "claim:c",
-            ClaimEventKind::Asserted,
-            &["claim:b", "claim:c"], // self-edge -> cycle guard
+            "fact:c",
+            FactEventKind::Asserted,
+            &["fact:b", "fact:c"], // self-edge -> cycle guard
         );
         let retract_a = taint_ev(
             "event:4",
-            "claim:a",
-            ClaimEventKind::Retracted {
+            "fact:a",
+            FactEventKind::Retracted {
                 reason: RetractionReason::SourceInvalidated,
             },
             &[],
         );
-        let tainted = tainted_claims(&[a, b, c, retract_a]).expect("taint");
+        let tainted = tainted_facts(&[a, b, c, retract_a]).expect("taint");
         let names: std::collections::BTreeSet<&str> =
-            tainted.iter().map(|t| t.claim.as_str()).collect();
-        assert!(names.contains("claim:b"), "direct derivative tainted");
-        assert!(names.contains("claim:c"), "transitive derivative tainted");
+            tainted.iter().map(|t| t.fact.as_str()).collect();
+        assert!(names.contains("fact:b"), "direct derivative tainted");
+        assert!(names.contains("fact:c"), "transitive derivative tainted");
     }
 
-    fn supersede_from(event_id: &str, source: &str, authority: AuthorityLevel) -> ClaimEvent {
+    fn supersede_from(event_id: &str, source: &str, authority: AuthorityLevel) -> FactEvent {
         ev(
             event_id,
-            ClaimEventKind::Superseded {
-                by: ClaimId::new("claim:2").expect("claim id"),
+            FactEventKind::Superseded {
+                by: FactId::new("fact:2").expect("fact id"),
                 reason: SupersessionReason::NewerObservation,
             },
             None,
@@ -834,11 +829,11 @@ mod tests {
         )
     }
 
-    fn contradict_from(event_id: &str, by: &str, source: &str) -> ClaimEvent {
+    fn contradict_from(event_id: &str, by: &str, source: &str) -> FactEvent {
         ev(
             event_id,
-            ClaimEventKind::Contradicted {
-                by: ClaimId::new(by).expect("claim id"),
+            FactEventKind::Contradicted {
+                by: FactId::new(by).expect("fact id"),
                 basis: dent8_core::ContradictionBasis::SamePredicateDifferentValue,
             },
             None,
@@ -865,39 +860,39 @@ mod tests {
             supersede_from("event:2", "source:owner", AuthorityLevel::High),
         ];
 
-        let plain = replay_claim(&events).expect("replay");
+        let plain = replay_fact(&events).expect("replay");
         let policied =
-            replay_claim_with_policy(&events, &EpistemicPolicy::identity()).expect("replay");
+            replay_fact_with_policy(&events, &EpistemicPolicy::identity()).expect("replay");
 
         assert_eq!(plain, policied);
-        assert_eq!(plain.expect("state").lifecycle, ClaimLifecycle::Superseded);
+        assert_eq!(plain.expect("state").lifecycle, FactLifecycle::Superseded);
     }
 
     #[test]
-    fn distrusting_the_superseding_source_keeps_the_claim_active() {
+    fn distrusting_the_superseding_source_keeps_the_fact_active() {
         let events = [
             assert_from("event:1", "source:owner", AuthorityLevel::High),
             supersede_from("event:2", "source:web-scrape", AuthorityLevel::High),
         ];
 
-        let base = replay_claim(&events).expect("replay");
-        let counterfactual = replay_claim_with_policy(&events, &distrust("source:web-scrape"))
+        let base = replay_fact(&events).expect("replay");
+        let counterfactual = replay_fact_with_policy(&events, &distrust("source:web-scrape"))
             .expect("counterfactual replay");
 
         assert_eq!(
             base.as_ref().expect("base").lifecycle,
-            ClaimLifecycle::Superseded
+            FactLifecycle::Superseded
         );
         assert_eq!(
             counterfactual.as_ref().expect("cf").lifecycle,
-            ClaimLifecycle::Active,
+            FactLifecycle::Active,
         );
         assert_eq!(
             diff_states(base.as_ref(), counterfactual.as_ref()),
             StateDiff::Changed {
-                lifecycle: Some((ClaimLifecycle::Superseded, ClaimLifecycle::Active)),
+                lifecycle: Some((FactLifecycle::Superseded, FactLifecycle::Active)),
                 value: None,
-                superseded_by: Some((Some(ClaimId::new("claim:2").unwrap()), None)),
+                superseded_by: Some((Some(FactId::new("fact:2").unwrap()), None)),
                 contradicted_by: None,
                 evidence_count: None,
             }
@@ -905,14 +900,14 @@ mod tests {
     }
 
     #[test]
-    fn distrusting_the_asserting_source_makes_the_claim_disappear() {
+    fn distrusting_the_asserting_source_makes_the_fact_disappear() {
         let events = [
             assert_from("event:1", "source:web-scrape", AuthorityLevel::High),
             supersede_from("event:2", "source:owner", AuthorityLevel::High),
         ];
 
-        let base = replay_claim(&events).expect("replay");
-        let counterfactual = replay_claim_with_policy(&events, &distrust("source:web-scrape"))
+        let base = replay_fact(&events).expect("replay");
+        let counterfactual = replay_fact_with_policy(&events, &distrust("source:web-scrape"))
             .expect("counterfactual replay");
 
         assert!(base.is_some());
@@ -932,9 +927,9 @@ mod tests {
             ..EpistemicPolicy::identity()
         };
 
-        assert!(replay_claim(&events).expect("replay").is_some());
+        assert!(replay_fact(&events).expect("replay").is_some());
         assert!(
-            replay_claim_with_policy(&events, &policy)
+            replay_fact_with_policy(&events, &policy)
                 .expect("policied replay")
                 .is_none()
         );
@@ -944,8 +939,8 @@ mod tests {
     fn raising_the_confidence_floor_filters_a_low_confidence_assertion() {
         let events = [ev(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".to_string())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".to_string())),
             "source:owner",
             AuthorityLevel::High,
             100,
@@ -958,9 +953,9 @@ mod tests {
             ..EpistemicPolicy::identity()
         };
 
-        assert!(replay_claim(&events).expect("replay").is_some());
+        assert!(replay_fact(&events).expect("replay").is_some());
         assert!(
-            replay_claim_with_policy(&events, &policy)
+            replay_fact_with_policy(&events, &policy)
                 .expect("policied replay")
                 .is_none()
         );
@@ -970,8 +965,8 @@ mod tests {
     fn freshness_is_a_read_time_predicate_separate_from_lifecycle() {
         let events = [ev(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".to_string())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".to_string())),
             "source:owner",
             AuthorityLevel::High,
             900,
@@ -979,10 +974,10 @@ mod tests {
             Some(TimestampMillis::from_unix_millis(10)),
         )];
 
-        let state = replay_claim(&events).expect("replay").expect("state");
+        let state = replay_fact(&events).expect("replay").expect("state");
 
         // Lifecycle is untouched by freshness — it stays Active (event-driven only).
-        assert_eq!(state.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(state.lifecycle, FactLifecycle::Active);
         // Freshness is a separate read-time verdict against a valid-time clock.
         assert!(!state.is_expired_at(TimestampMillis::from_unix_millis(50)));
         assert!(state.is_expired_at(TimestampMillis::from_unix_millis(200)));
@@ -992,13 +987,13 @@ mod tests {
     fn distrusting_a_contradictor_drops_the_contradiction_edge() {
         let events = [
             assert_from("event:1", "source:owner", AuthorityLevel::High),
-            contradict_from("event:2", "claim:2", "source:rumor"),
-            contradict_from("event:3", "claim:3", "source:owner"),
+            contradict_from("event:2", "fact:2", "source:rumor"),
+            contradict_from("event:3", "fact:3", "source:owner"),
         ];
 
-        let base = replay_claim(&events).expect("replay");
+        let base = replay_fact(&events).expect("replay");
         let counterfactual =
-            replay_claim_with_policy(&events, &distrust("source:rumor")).expect("counterfactual");
+            replay_fact_with_policy(&events, &distrust("source:rumor")).expect("counterfactual");
 
         // Both stay Contested, so only the contradiction-edge delta distinguishes them
         // — the diff must surface it (regression guard for diff completeness).
@@ -1010,10 +1005,10 @@ mod tests {
                 superseded_by: None,
                 contradicted_by: Some((
                     vec![
-                        ClaimId::new("claim:2").unwrap(),
-                        ClaimId::new("claim:3").unwrap()
+                        FactId::new("fact:2").unwrap(),
+                        FactId::new("fact:3").unwrap()
                     ],
-                    vec![ClaimId::new("claim:3").unwrap()],
+                    vec![FactId::new("fact:3").unwrap()],
                 )),
                 evidence_count: None,
             }
@@ -1023,31 +1018,28 @@ mod tests {
     #[test]
     fn diff_of_identical_projections_is_unchanged() {
         let events = [assert_from("event:1", "source:owner", AuthorityLevel::High)];
-        let a = replay_claim(&events).expect("replay");
-        let b = replay_claim_with_policy(&events, &EpistemicPolicy::identity()).expect("replay");
+        let a = replay_fact(&events).expect("replay");
+        let b = replay_fact_with_policy(&events, &EpistemicPolicy::identity()).expect("replay");
         assert_eq!(diff_states(a.as_ref(), b.as_ref()), StateDiff::Unchanged);
     }
 
     // ---- entity-level replay & cross-stream lineage ----
 
-    fn with_claim(mut event: ClaimEvent, claim_id: &str) -> ClaimEvent {
-        event.claim_id = ClaimId::new(claim_id).expect("claim id");
+    fn with_fact(mut event: FactEvent, fact_id: &str) -> FactEvent {
+        event.fact_id = FactId::new(fact_id).expect("fact id");
         event
     }
 
-    fn assert_in(event_id: &str, claim_id: &str, source: &str) -> ClaimEvent {
-        with_claim(
-            assert_from(event_id, source, AuthorityLevel::High),
-            claim_id,
-        )
+    fn assert_in(event_id: &str, fact_id: &str, source: &str) -> FactEvent {
+        with_fact(assert_from(event_id, source, AuthorityLevel::High), fact_id)
     }
 
-    fn supersede_in(event_id: &str, claim_id: &str, by: &str, source: &str) -> ClaimEvent {
-        with_claim(
+    fn supersede_in(event_id: &str, fact_id: &str, by: &str, source: &str) -> FactEvent {
+        with_fact(
             ev(
                 event_id,
-                ClaimEventKind::Superseded {
-                    by: ClaimId::new(by).expect("claim id"),
+                FactEventKind::Superseded {
+                    by: FactId::new(by).expect("fact id"),
                     reason: SupersessionReason::NewerObservation,
                 },
                 None,
@@ -1057,15 +1049,15 @@ mod tests {
                 Ttl::Never,
                 None,
             ),
-            claim_id,
+            fact_id,
         )
     }
 
-    fn retract_in(event_id: &str, claim_id: &str) -> ClaimEvent {
-        with_claim(
+    fn retract_in(event_id: &str, fact_id: &str) -> FactEvent {
+        with_fact(
             ev(
                 event_id,
-                ClaimEventKind::Retracted {
+                FactEventKind::Retracted {
                     reason: RetractionReason::SourceInvalidated,
                 },
                 None,
@@ -1075,20 +1067,20 @@ mod tests {
                 Ttl::Never,
                 None,
             ),
-            claim_id,
+            fact_id,
         )
     }
 
     fn challenge_rejected_in(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        with_claim(
+    ) -> FactEvent {
+        with_fact(
             ev(
                 event_id,
-                ClaimEventKind::ChallengeRejected {
+                FactEventKind::ChallengeRejected {
                     challenge: ChallengeKind::Supersession,
                     by: None,
                     rejection: ChallengeRejection::InsufficientAuthority,
@@ -1100,38 +1092,38 @@ mod tests {
                 Ttl::Never,
                 None,
             ),
-            claim_id,
+            fact_id,
         )
     }
 
-    fn claim(id: &str) -> ClaimId {
-        ClaimId::new(id).expect("claim id")
+    fn fact(id: &str) -> FactId {
+        FactId::new(id).expect("fact id")
     }
 
     fn assert_in_auth(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        with_claim(assert_from(event_id, source, authority), claim_id)
+    ) -> FactEvent {
+        with_fact(assert_from(event_id, source, authority), fact_id)
     }
 
-    fn reinforce_in(event_id: &str, claim_id: &str, source: &str) -> ClaimEvent {
-        reinforce_in_auth(event_id, claim_id, source, AuthorityLevel::High)
+    fn reinforce_in(event_id: &str, fact_id: &str, source: &str) -> FactEvent {
+        reinforce_in_auth(event_id, fact_id, source, AuthorityLevel::High)
     }
 
     fn reinforce_in_auth(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        with_claim(
+    ) -> FactEvent {
+        with_fact(
             ev(
                 event_id,
-                ClaimEventKind::Reinforced {
-                    by: ClaimId::new("claim:evidence").expect("claim id"),
+                FactEventKind::Reinforced {
+                    by: FactId::new("fact:evidence").expect("fact id"),
                 },
                 None,
                 source,
@@ -1140,23 +1132,23 @@ mod tests {
                 Ttl::Never,
                 None,
             ),
-            claim_id,
+            fact_id,
         )
     }
 
     #[test]
     fn replay_entity_folds_each_stream_independently() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in("event:2", "claim:B", "source:owner"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in("event:2", "fact:B", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
 
-        assert_eq!(entity.claims.len(), 2);
+        assert_eq!(entity.facts.len(), 2);
         assert_eq!(
-            entity.get(&claim("claim:A")).unwrap().lifecycle,
-            ClaimLifecycle::Active
+            entity.get(&fact("fact:A")).unwrap().lifecycle,
+            FactLifecycle::Active
         );
         assert_eq!(entity.believed().count(), 2);
         assert!(entity.lineage_issues().is_empty());
@@ -1165,29 +1157,29 @@ mod tests {
     #[test]
     fn intact_supersession_lineage_has_no_issues() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in("event:2", "claim:B", "source:owner"),
-            supersede_in("event:3", "claim:A", "claim:B", "source:owner"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in("event:2", "fact:B", "source:owner"),
+            supersede_in("event:3", "fact:A", "fact:B", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
 
         assert_eq!(
-            entity.get(&claim("claim:A")).unwrap().lifecycle,
-            ClaimLifecycle::Superseded
+            entity.get(&fact("fact:A")).unwrap().lifecycle,
+            FactLifecycle::Superseded
         );
         assert_eq!(
-            entity.get(&claim("claim:B")).unwrap().lifecycle,
-            ClaimLifecycle::Active
+            entity.get(&fact("fact:B")).unwrap().lifecycle,
+            FactLifecycle::Active
         );
         assert!(entity.lineage_issues().is_empty());
     }
 
     #[test]
-    fn supersession_to_a_missing_claim_is_dangling() {
+    fn supersession_to_a_missing_fact_is_dangling() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            supersede_in("event:2", "claim:A", "claim:ghost", "source:owner"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            supersede_in("event:2", "fact:A", "fact:ghost", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1195,19 +1187,19 @@ mod tests {
         assert_eq!(
             entity.lineage_issues(),
             vec![LineageIssue::DanglingSupersession {
-                claim: claim("claim:A"),
-                target: claim("claim:ghost"),
+                fact: fact("fact:A"),
+                target: fact("fact:ghost"),
             }]
         );
     }
 
     #[test]
-    fn supersession_by_a_retracted_claim_orphans_the_lineage() {
+    fn supersession_by_a_retracted_fact_orphans_the_lineage() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in("event:2", "claim:B", "source:owner"),
-            supersede_in("event:3", "claim:A", "claim:B", "source:owner"),
-            retract_in("event:4", "claim:B"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in("event:2", "fact:B", "source:owner"),
+            supersede_in("event:3", "fact:A", "fact:B", "source:owner"),
+            retract_in("event:4", "fact:B"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1215,9 +1207,9 @@ mod tests {
         assert_eq!(
             entity.lineage_issues(),
             vec![LineageIssue::SupersededByInvalidated {
-                claim: claim("claim:A"),
-                target: claim("claim:B"),
-                target_lifecycle: ClaimLifecycle::Retracted,
+                fact: fact("fact:A"),
+                target: fact("fact:B"),
+                target_lifecycle: FactLifecycle::Retracted,
             }]
         );
     }
@@ -1225,23 +1217,23 @@ mod tests {
     #[test]
     fn entity_level_distrust_drops_a_whole_stream() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in("event:2", "claim:B", "source:web-scrape"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in("event:2", "fact:B", "source:web-scrape"),
         ];
 
         let entity = replay_entity_with_policy(&events, &distrust("source:web-scrape"))
             .expect("entity replay");
 
-        assert_eq!(entity.claims.len(), 1);
-        assert!(entity.get(&claim("claim:A")).is_some());
-        assert!(entity.get(&claim("claim:B")).is_none());
+        assert_eq!(entity.facts.len(), 1);
+        assert!(entity.get(&fact("fact:A")).is_some());
+        assert!(entity.get(&fact("fact:B")).is_none());
     }
 
     #[test]
     fn self_supersession_is_flagged_as_a_cycle() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            supersede_in("event:2", "claim:A", "claim:A", "source:owner"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            supersede_in("event:2", "fact:A", "fact:A", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1249,18 +1241,18 @@ mod tests {
         assert_eq!(
             entity.lineage_issues(),
             vec![LineageIssue::SupersessionCycle {
-                claim: claim("claim:A"),
+                fact: fact("fact:A"),
             }]
         );
     }
 
     #[test]
-    fn a_two_claim_supersession_cycle_is_flagged() {
+    fn a_two_fact_supersession_cycle_is_flagged() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in("event:2", "claim:B", "source:owner"),
-            supersede_in("event:3", "claim:A", "claim:B", "source:owner"),
-            supersede_in("event:4", "claim:B", "claim:A", "source:owner"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in("event:2", "fact:B", "source:owner"),
+            supersede_in("event:3", "fact:A", "fact:B", "source:owner"),
+            supersede_in("event:4", "fact:B", "fact:A", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1269,23 +1261,23 @@ mod tests {
             entity.lineage_issues(),
             vec![
                 LineageIssue::SupersessionCycle {
-                    claim: claim("claim:A"),
+                    fact: fact("fact:A"),
                 },
                 LineageIssue::SupersessionCycle {
-                    claim: claim("claim:B"),
+                    fact: fact("fact:B"),
                 },
             ]
         );
     }
 
     #[test]
-    fn an_intact_three_claim_chain_has_no_issues() {
+    fn an_intact_three_fact_chain_has_no_issues() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in("event:2", "claim:B", "source:owner"),
-            assert_in("event:3", "claim:C", "source:owner"),
-            supersede_in("event:4", "claim:A", "claim:B", "source:owner"),
-            supersede_in("event:5", "claim:B", "claim:C", "source:owner"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in("event:2", "fact:B", "source:owner"),
+            assert_in("event:3", "fact:C", "source:owner"),
+            supersede_in("event:4", "fact:A", "fact:B", "source:owner"),
+            supersede_in("event:5", "fact:B", "fact:C", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1293,8 +1285,8 @@ mod tests {
         assert!(entity.lineage_issues().is_empty());
         assert_eq!(entity.believed().count(), 1); // only C
         assert_eq!(
-            entity.get(&claim("claim:C")).unwrap().lifecycle,
-            ClaimLifecycle::Active
+            entity.get(&fact("fact:C")).unwrap().lifecycle,
+            FactLifecycle::Active
         );
     }
 
@@ -1303,23 +1295,23 @@ mod tests {
     #[test]
     fn corroboration_counts_distinct_backing_sources() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            reinforce_in("event:2", "claim:A", "source:peer"),
-            reinforce_in("event:3", "claim:A", "source:owner"), // same source: no new corroboration
+            assert_in("event:1", "fact:A", "source:owner"),
+            reinforce_in("event:2", "fact:A", "source:peer"),
+            reinforce_in("event:3", "fact:A", "source:owner"), // same source: no new corroboration
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
 
-        assert_eq!(entity.get(&claim("claim:A")).unwrap().corroboration(), 2);
+        assert_eq!(entity.get(&fact("fact:A")).unwrap().corroboration(), 2);
     }
 
     #[test]
     fn a_weaker_corroborated_supersession_is_unearned() {
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            reinforce_in("event:2", "claim:A", "source:peer"), // A corroboration = 2
-            assert_in("event:3", "claim:B", "source:rumor"),   // B corroboration = 1
-            supersede_in("event:4", "claim:A", "claim:B", "source:rumor"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            reinforce_in("event:2", "fact:A", "source:peer"), // A corroboration = 2
+            assert_in("event:3", "fact:B", "source:rumor"),   // B corroboration = 1
+            supersede_in("event:4", "fact:A", "fact:B", "source:rumor"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1330,8 +1322,8 @@ mod tests {
         assert_eq!(
             entity.unearned_supersessions(),
             vec![UnearnedSupersession::WeakerEntrenchment {
-                superseded: claim("claim:A"),
-                by: claim("claim:B"),
+                superseded: fact("fact:A"),
+                by: fact("fact:B"),
                 incumbent_entrenchment: 2,
                 challenger_entrenchment: 1,
             }]
@@ -1341,11 +1333,11 @@ mod tests {
     #[test]
     fn an_authority_downgrade_supersession_is_unearned() {
         // The supersession event overstates its authority (High) to clear the
-        // per-stream gate, but the replacing claim B is actually Low authority.
+        // per-stream gate, but the replacing fact B is actually Low authority.
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            assert_in_auth("event:2", "claim:B", "source:rumor", AuthorityLevel::Low),
-            supersede_in("event:3", "claim:A", "claim:B", "source:rumor"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            assert_in_auth("event:2", "fact:B", "source:rumor", AuthorityLevel::Low),
+            supersede_in("event:3", "fact:A", "fact:B", "source:rumor"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
@@ -1353,8 +1345,8 @@ mod tests {
         assert_eq!(
             entity.unearned_supersessions(),
             vec![UnearnedSupersession::AuthorityDowngrade {
-                superseded: claim("claim:A"),
-                by: claim("claim:B"),
+                superseded: fact("fact:A"),
+                by: fact("fact:B"),
                 incumbent: AuthorityLevel::High,
                 challenger: AuthorityLevel::Low,
             }]
@@ -1368,23 +1360,23 @@ mod tests {
         // corroboration (4) exceeds A's (2), but at the shared High authority level B
         // has only 1 qualified backer vs A's 2 — so the supersession is still unearned.
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            reinforce_in("event:2", "claim:A", "source:peer"),
-            assert_in("event:3", "claim:B", "source:attacker"),
-            reinforce_in_auth("event:4", "claim:B", "source:sybil-1", AuthorityLevel::Low),
-            reinforce_in_auth("event:5", "claim:B", "source:sybil-2", AuthorityLevel::Low),
-            reinforce_in_auth("event:6", "claim:B", "source:sybil-3", AuthorityLevel::Low),
-            supersede_in("event:7", "claim:A", "claim:B", "source:attacker"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            reinforce_in("event:2", "fact:A", "source:peer"),
+            assert_in("event:3", "fact:B", "source:attacker"),
+            reinforce_in_auth("event:4", "fact:B", "source:sybil-1", AuthorityLevel::Low),
+            reinforce_in_auth("event:5", "fact:B", "source:sybil-2", AuthorityLevel::Low),
+            reinforce_in_auth("event:6", "fact:B", "source:sybil-3", AuthorityLevel::Low),
+            supersede_in("event:7", "fact:A", "fact:B", "source:attacker"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
 
-        assert_eq!(entity.get(&claim("claim:B")).unwrap().corroboration(), 4); // raw, inflated
+        assert_eq!(entity.get(&fact("fact:B")).unwrap().corroboration(), 4); // raw, inflated
         assert_eq!(
             entity.unearned_supersessions(),
             vec![UnearnedSupersession::WeakerEntrenchment {
-                superseded: claim("claim:A"),
-                by: claim("claim:B"),
+                superseded: fact("fact:A"),
+                by: fact("fact:B"),
                 incumbent_entrenchment: 2,  // High-authority backers of A
                 challenger_entrenchment: 1, // High-authority backers of B (Sybils don't count)
             }]
@@ -1398,23 +1390,18 @@ mod tests {
         // 1 + 1 = 2) while B has survived nothing (entrenchment 1) — so, per ADR 0017, the
         // supersession is unearned: survived challenges now count in the audit.
         let events = [
-            assert_in("event:1", "claim:A", "source:owner"),
-            challenge_rejected_in(
-                "event:2",
-                "claim:A",
-                "source:attacker",
-                AuthorityLevel::High,
-            ),
-            assert_in("event:3", "claim:B", "source:rumor"),
-            supersede_in("event:4", "claim:A", "claim:B", "source:rumor"),
+            assert_in("event:1", "fact:A", "source:owner"),
+            challenge_rejected_in("event:2", "fact:A", "source:attacker", AuthorityLevel::High),
+            assert_in("event:3", "fact:B", "source:rumor"),
+            supersede_in("event:4", "fact:A", "fact:B", "source:rumor"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");
 
-        assert_eq!(entity.get(&claim("claim:A")).unwrap().corroboration(), 1);
+        assert_eq!(entity.get(&fact("fact:A")).unwrap().corroboration(), 1);
         assert_eq!(
             entity
-                .get(&claim("claim:A"))
+                .get(&fact("fact:A"))
                 .unwrap()
                 .survived_challenges_at_or_above(AuthorityLevel::High),
             1
@@ -1422,8 +1409,8 @@ mod tests {
         assert_eq!(
             entity.unearned_supersessions(),
             vec![UnearnedSupersession::WeakerEntrenchment {
-                superseded: claim("claim:A"),
-                by: claim("claim:B"),
+                superseded: fact("fact:A"),
+                by: fact("fact:B"),
                 incumbent_entrenchment: 2, // 1 backer + 1 survived challenge
                 challenger_entrenchment: 1,
             }]
@@ -1433,14 +1420,14 @@ mod tests {
     #[test]
     fn a_higher_authority_supersession_is_earned() {
         let events = [
-            assert_in_auth("event:1", "claim:A", "source:owner", AuthorityLevel::Medium),
+            assert_in_auth("event:1", "fact:A", "source:owner", AuthorityLevel::Medium),
             assert_in_auth(
                 "event:2",
-                "claim:B",
+                "fact:B",
                 "source:owner",
                 AuthorityLevel::Canonical,
             ),
-            supersede_in("event:3", "claim:A", "claim:B", "source:owner"),
+            supersede_in("event:3", "fact:A", "fact:B", "source:owner"),
         ];
 
         let entity = replay_entity(&events).expect("entity replay");

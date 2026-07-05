@@ -236,7 +236,7 @@ pub(crate) enum Entitlement {
 
 /// Resolve entitlement of (`source`, `public_key`) for a write at `at_ms` against the grant
 /// history: the latest issuance at or before the write must not be revoked before it, not
-/// expired at it, and must cover the claimed authority and subject scope.
+/// expired at it, and must cover the facted authority and subject scope.
 pub(crate) fn entitlement_at(
     records: &[GrantRecord],
     source: &str,
@@ -284,7 +284,7 @@ pub(crate) fn entitlement_at(
     }
     if authority > grant.max_authority {
         return Entitlement::Unentitled(format!(
-            "the write claims {authority:?} but the active grant for {source} caps at {:?}",
+            "the write asserts {authority:?} but the active grant for {source} caps at {:?}",
             grant.max_authority
         ));
     }

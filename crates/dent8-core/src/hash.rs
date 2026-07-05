@@ -1,6 +1,6 @@
-//! Canonical serialization and tamper-evident hashing for claim events.
+//! Canonical serialization and tamper-evident hashing for fact events.
 //!
-//! [`canonical_bytes`] produces a deterministic byte encoding of a [`ClaimEvent`] by
+//! [`canonical_bytes`] produces a deterministic byte encoding of a [`FactEvent`] by
 //! serializing through `serde_json`'s default (`BTreeMap`-backed) `Value`, which emits
 //! object keys in sorted order and compact output. This is a sorted-key canonical form
 //! produced by `serde_json`, **not RFC 8785 (JCS)**: keys sort by Rust `String` order (UTF-8 byte
@@ -8,14 +8,14 @@
 //! two coincide here only because every *dent8* object key is an ASCII field/variant name
 //! and every *dent8* number is an integer (`Confidence` is `u16`, `TimestampMillis` is
 //! `i64`). No dent8 field may introduce a non-ASCII or dynamic object key without bumping
-//! [`CANON_VERSION`] and revisiting this. (Embedded JSON inside `ClaimValue::Json` is
+//! [`CANON_VERSION`] and revisiting this. (Embedded JSON inside `FactValue::Json` is
 //! exempt: its keys *may* be non-ASCII/dynamic and its numbers `f64` — they are sorted and
 //! emitted deterministically and idempotently, enough for the hash chain, but not in JCS
 //! order; see [`crate::model::CanonicalJson`].) See
 //! `docs/decisions/0004-canonicalization-and-hash-chain.md`.
 //!
 //! The "logically-equal events produce identical bytes" invariant holds for every field,
-//! **including** `ClaimValue::Json`: that variant is [`crate::model::CanonicalJson`], which
+//! **including** `FactValue::Json`: that variant is [`crate::model::CanonicalJson`], which
 //! is canonical by construction (parsed and re-emitted with sorted keys and no whitespace,
 //! re-applied on deserialize), so two semantically-equal JSON blobs that differ only in key
 //! order or whitespace hash identically (ADR 0004 item 6, resolved).
@@ -38,18 +38,23 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::model::ClaimEvent;
+use crate::model::FactEvent;
 
 /// Version of the canonical encoding. Mixed into every leaf hash so events under
 /// different encodings never collide. (This is dent8's `schema_version`, realized as an
 /// out-of-band constant rather than a per-event field — see ADR 0004 item 7.)
 ///
-/// DO NOT bump this constant on its own to introduce a second encoding: it would re-hash
-/// every existing event and raise a false tamper alarm on the whole log. To add a v2,
-/// first introduce a per-event `schema_version` field (serde-default 1, excluded from
-/// `canonical_bytes`) and mix *that* into the leaf — existing events then backfill to 1
-/// for free and keep verifying. See ADR 0004 item 7 for the full procedure.
-pub const CANON_VERSION: u8 = 1;
+/// **v2 (pre-1.0 fact-vocabulary format break).** Version 2 renamed the wire fields to the
+/// `fact` vocabulary (`claim_id` → `fact_id`) and lowercased `authority` (`"High"` → `"high"`),
+/// so every event's canonical bytes — and therefore its hash — differ from v1. This is a
+/// deliberate one-time break: **a v1 log will not verify against this build**, and there is no
+/// in-place migration (re-ingest from source). Bumping the constant also re-domain-separates the
+/// leaf so a v1 and v2 encoding of the "same" event can never collide.
+///
+/// Do not bump this again casually: a *backward-compatible* addition (a new optional field) must
+/// NOT bump it — add the field serde-default and exclude it from `canonical_bytes` so existing
+/// events keep verifying (ADR 0004 item 7). Only a breaking re-encoding like this one bumps.
+pub const CANON_VERSION: u8 = 2;
 
 /// Domain-separation prefix for a leaf (event) hash, RFC 6962 style. Interior/Merkle
 /// nodes would use `0x01`, reserved for a future inclusion/consistency-proof layer.
@@ -58,10 +63,10 @@ const LEAF_PREFIX: u8 = 0x00;
 /// Byte width of a SHA-256 digest.
 const DIGEST_LEN: usize = 32;
 
-/// Canonical, deterministic byte encoding of a claim event: two logically-equal events
+/// Canonical, deterministic byte encoding of a fact event: two logically-equal events
 /// produce identical bytes regardless of struct field order, map ordering, or — for a
-/// `ClaimValue::Json` value — the embedded JSON's key order and whitespace.
-pub fn canonical_bytes(event: &ClaimEvent) -> Result<Vec<u8>, CanonError> {
+/// `FactValue::Json` value — the embedded JSON's key order and whitespace.
+pub fn canonical_bytes(event: &FactEvent) -> Result<Vec<u8>, CanonError> {
     // Route through a Value so object keys are emitted in sorted order (serde_json's
     // default Map is BTreeMap-backed); to_vec is compact (no insignificant whitespace).
     let value = serde_json::to_value(event).map_err(CanonError::Serialize)?;
@@ -79,7 +84,7 @@ const ATTESTATION_DOMAIN: &[u8] = b"dent8.event-attestation.v1\0";
 /// from the event alone, so an attested event is offline-re-verifiable: recompute this
 /// message from the stored event and check the embedded signature against the embedded
 /// public key.
-pub fn attestation_message(event: &ClaimEvent) -> Result<Vec<u8>, CanonError> {
+pub fn attestation_message(event: &FactEvent) -> Result<Vec<u8>, CanonError> {
     let mut unattested = event.clone();
     unattested.provenance.attestation = None;
     let body = canonical_bytes(&unattested)?;
@@ -93,7 +98,7 @@ pub fn attestation_message(event: &ClaimEvent) -> Result<Vec<u8>, CanonError> {
 /// The tamper-evident hash of an event, chained to `previous` (the prior event's hash
 /// as lowercase hex, or `None` for the first event in a stream). Returns lowercase hex
 /// of a SHA-256. Errors if `previous` is not a valid 64-char hex digest.
-pub fn event_hash(event: &ClaimEvent, previous: Option<&str>) -> Result<String, CanonError> {
+pub fn event_hash(event: &FactEvent, previous: Option<&str>) -> Result<String, CanonError> {
     let canonical = canonical_bytes(event)?;
     let previous = previous.map(decode_digest).transpose()?;
     Ok(hash_leaf(&canonical, previous.as_ref()))
@@ -131,7 +136,7 @@ fn hash_leaf(canonical: &[u8], previous: Option<&[u8; DIGEST_LEN]>) -> String {
 /// Compute the hash chain for an ordered event stream: each event's hash links to the
 /// previous one. Returns one hash per event, in order. Altering any event changes its
 /// hash and every subsequent hash, so a stored chain can be reverified on replay.
-pub fn hash_chain(events: &[ClaimEvent]) -> Result<Vec<String>, CanonError> {
+pub fn hash_chain(events: &[FactEvent]) -> Result<Vec<String>, CanonError> {
     let mut hashes = Vec::with_capacity(events.len());
     let mut previous: Option<String> = None;
     for event in events {
@@ -175,16 +180,16 @@ impl std::error::Error for CanonError {
 #[cfg(test)]
 mod tests {
     use super::{CanonError, canonical_bytes, event_hash, hash_chain};
-    use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
+    use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, Confidence, EntityRef,
-        Evidence, EvidenceKind, Predicate, Provenance, SupersessionReason, Ttl,
+        Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceKind, FactEvent,
+        FactEventKind, FactValue, Predicate, Provenance, SupersessionReason, Ttl,
     };
 
-    fn event(event_id: &str, kind: ClaimEventKind, value: Option<ClaimValue>) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new("claim:1").expect("claim id"),
+    fn event(event_id: &str, kind: FactEventKind, value: Option<FactValue>) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new("fact:1").expect("fact id"),
             kind,
             subject: EntityRef::new("repo", "dent8").expect("entity"),
             predicate: Predicate::new("uses_database").expect("predicate"),
@@ -218,11 +223,11 @@ mod tests {
         }
     }
 
-    fn asserted(event_id: &str) -> ClaimEvent {
+    fn asserted(event_id: &str) -> FactEvent {
         event(
             event_id,
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".to_string())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".to_string())),
         )
     }
 
@@ -247,7 +252,7 @@ mod tests {
             "to_value did not reorder keys"
         );
 
-        let reparsed: ClaimEvent = serde_json::from_slice(&declaration_order).expect("deserialize");
+        let reparsed: FactEvent = serde_json::from_slice(&declaration_order).expect("deserialize");
         assert_eq!(
             canonical_bytes(&reparsed).expect("re-canonicalize"),
             canonical
@@ -259,8 +264,8 @@ mod tests {
         let json_event = |raw: &str| {
             event(
                 "event:1",
-                ClaimEventKind::Asserted,
-                Some(ClaimValue::json(raw).expect("valid json")),
+                FactEventKind::Asserted,
+                Some(FactValue::json(raw).expect("valid json")),
             )
         };
         // Same JSON, different key order *and* whitespace.
@@ -282,11 +287,11 @@ mod tests {
         // `float_roundtrip` feature.
         let e = event(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::json(r#"{"ratio": 13e300, "p": 0.1}"#).expect("json")),
+            FactEventKind::Asserted,
+            Some(FactValue::json(r#"{"ratio": 13e300, "p": 0.1}"#).expect("json")),
         );
         let original = canonical_bytes(&e).expect("canonicalize");
-        let reloaded: ClaimEvent = serde_json::from_slice(&original).expect("deserialize");
+        let reloaded: FactEvent = serde_json::from_slice(&original).expect("deserialize");
         assert_eq!(
             canonical_bytes(&reloaded).expect("re-canonicalize"),
             original
@@ -302,7 +307,7 @@ mod tests {
         // canonicalize(deserialize(canonicalize(e))) == canonicalize(e)
         let e = asserted("event:1");
         let bytes = canonical_bytes(&e).expect("canonicalize");
-        let decoded: ClaimEvent = serde_json::from_slice(&bytes).expect("deserialize");
+        let decoded: FactEvent = serde_json::from_slice(&bytes).expect("deserialize");
         assert_eq!(decoded, e);
         assert_eq!(canonical_bytes(&decoded).expect("re-canonicalize"), bytes);
     }
@@ -342,8 +347,8 @@ mod tests {
         let first = asserted("event:1");
         let second = event(
             "event:2",
-            ClaimEventKind::Superseded {
-                by: ClaimId::new("claim:2").expect("claim id"),
+            FactEventKind::Superseded {
+                by: FactId::new("fact:2").expect("fact id"),
                 reason: SupersessionReason::NewerObservation,
             },
             None,
@@ -383,8 +388,8 @@ mod tests {
         // hash keeps verifying without a CANON_VERSION bump.
         let unattested = event(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".into())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".into())),
         );
         let bytes = canonical_bytes(&unattested).expect("canonical bytes");
         assert!(
@@ -418,8 +423,8 @@ mod tests {
         // forms of the same event produce the identical message.
         let unattested = event(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".into())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".into())),
         );
         let mut attested = unattested.clone();
         attested.provenance.attestation = Some(crate::model::WriteAttestation {
@@ -435,8 +440,8 @@ mod tests {
         // …but the message is bound to the event *content*: changing the value changes it.
         let other = event(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("mysql".into())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("mysql".into())),
         );
         assert_ne!(
             super::attestation_message(&other).expect("attestation message"),
@@ -451,8 +456,8 @@ mod tests {
     fn attestation_round_trips_through_serde() {
         let mut attested = event(
             "event:1",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text("postgres".into())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text("postgres".into())),
         );
         attested.provenance.attestation = Some(crate::model::WriteAttestation {
             algorithm: crate::model::AttestationAlgorithm::Ed25519,
@@ -461,11 +466,11 @@ mod tests {
         });
         let json = serde_json::to_string(&attested).expect("serialize");
         assert!(json.contains("\"algorithm\":\"ed25519\""));
-        let back: ClaimEvent = serde_json::from_str(&json).expect("deserialize");
+        let back: FactEvent = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, attested);
 
         // An unknown algorithm fails loudly instead of silently "verifying".
         let forged = json.replace("\"ed25519\"", "\"none\"");
-        assert!(serde_json::from_str::<ClaimEvent>(&forged).is_err());
+        assert!(serde_json::from_str::<FactEvent>(&forged).is_err());
     }
 }

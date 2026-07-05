@@ -1,6 +1,6 @@
 //! Signed source identity for the CLI/MCP write boundary.
 //!
-//! The authority registry answers "what may this source claim?" Signed identity answers
+//! The authority registry answers "what may this source fact?" Signed identity answers
 //! "is this caller actually holding the key for that source?" The model is deliberately
 //! small: a trusted issuer public key verifies a signed grant binding a source id to a
 //! source public key and authority ceiling; the write boundary checks the caller holds the
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use dent8_core::{AuthorityLevel, ClaimEvent, TimestampMillis};
+use dent8_core::{AuthorityLevel, FactEvent, TimestampMillis};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
@@ -538,7 +538,7 @@ pub(crate) fn enforce_write(
 /// source key and embeds the public key + signature in `provenance.attestation`.
 pub(crate) fn attest_events(
     ctx: &IdentityContext,
-    events: &mut [ClaimEvent],
+    events: &mut [FactEvent],
 ) -> Result<bool, String> {
     if !ctx.configured() {
         return Ok(false);
@@ -574,9 +574,9 @@ pub(crate) fn attest_events(
 /// `Ok(false)` = the event carries no attestation (a pre-attestation or dev-mode write).
 ///
 /// This proves the event content is exactly what the holder of `public_key` signed. Whether
-/// that key was *entitled* to the claimed source/authority at write time is a trust question
+/// that key was *entitled* to the facted source/authority at write time is a trust question
 /// (grant history) deliberately out of scope here — see ADR 0013.
-pub(crate) fn verify_event_attestation(event: &ClaimEvent) -> Result<bool, String> {
+pub(crate) fn verify_event_attestation(event: &FactEvent) -> Result<bool, String> {
     let Some(attestation) = event.provenance.attestation.as_ref() else {
         return Ok(false);
     };
@@ -1790,14 +1790,14 @@ pub(crate) fn session_nonce() -> Result<String, String> {
 pub(crate) fn verify_session_hello(
     ctx: &IdentityContext,
     grant_json: &serde_json::Value,
-    claimed_source: &str,
+    facted_source: &str,
     now: TimestampMillis,
 ) -> Result<VerifiedHello, String> {
     let grant: SignedSourceGrant = serde_json::from_value(grant_json.clone())
         .map_err(|error| format!("invalid grant in hello: {error}"))?;
-    if grant.grant.source != claimed_source {
+    if grant.grant.source != facted_source {
         return Err(format!(
-            "hello source {claimed_source:?} does not match the presented grant's source {:?}",
+            "hello source {facted_source:?} does not match the presented grant's source {:?}",
             grant.grant.source
         ));
     }

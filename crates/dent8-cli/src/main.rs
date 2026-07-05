@@ -10,18 +10,18 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 #[cfg(test)]
 use dent8_core::{
-    ActorId, Authority, ClaimEventId, ClaimEventKind, Confidence, Evidence, EvidenceId,
-    EvidenceKind, Provenance, Ttl,
+    ActorId, Authority, Confidence, Evidence, EvidenceId, EvidenceKind, FactEventId, FactEventKind,
+    Provenance, Ttl,
 };
 use dent8_core::{
-    AuthorityLevel, ClaimEvent, ClaimId, ClaimLifecycle, ClaimValue, EntityRef, Predicate,
-    SourceId, TimestampMillis,
+    AuthorityLevel, EntityRef, FactEvent, FactId, FactLifecycle, FactValue, Predicate, SourceId,
+    TimestampMillis,
 };
 #[cfg(test)]
 use dent8_store::StoreError;
 use dent8_store::{
     EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt, LineageIssue, PredicateRegistry,
-    UnearnedSupersession, replay_entity, tainted_claims,
+    UnearnedSupersession, replay_entity, tainted_facts,
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
@@ -350,7 +350,7 @@ struct ValueWriteArgs {
     predicate: String,
     /// Text value to assert.
     value: String,
-    /// Claimed authority level.
+    /// Facted authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,
     /// Provenance source for this write.
@@ -373,7 +373,7 @@ struct FactWriteArgs {
     /// Predicate within the subject's fact stream.
     #[arg(value_parser = parse_predicate)]
     predicate: String,
-    /// Claimed authority level.
+    /// Facted authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,
     /// Provenance source for this write.
@@ -393,7 +393,7 @@ struct DeriveWriteArgs {
     /// Source fact to derive from: <source-subject> <source-predicate>.
     #[arg(long, required = true, num_args = 2, value_names = ["SOURCE_SUBJECT", "SOURCE_PREDICATE"])]
     from: Vec<String>,
-    /// Claimed authority level.
+    /// Facted authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,
     /// Provenance source for this write.
@@ -800,7 +800,7 @@ struct IdentityBootstrapArgs {
     /// Operator issuer signing-key path. Defaults outside the project bundle.
     #[arg(long, value_name = "PATH")]
     issuer_key: Option<String>,
-    /// Maximum authority this source key may claim.
+    /// Maximum authority this source key may assert.
     #[arg(long, value_enum, default_value = "high")]
     max: CliAuthority,
     /// Subject scope: "*" or exact <kind>:<key>.
@@ -916,7 +916,7 @@ struct IdentityGrantIssueArgs {
     /// Source/agent public-key file.
     #[arg(long, value_name = "SOURCE_PUBKEY")]
     public_key: String,
-    /// Maximum authority this source key may claim.
+    /// Maximum authority this source key may assert.
     #[arg(long, value_enum)]
     max: CliAuthority,
     /// Issuer name. Must match a trusted issuer name on verification.
@@ -1445,11 +1445,11 @@ fn cmd_schema_postgres(output: CliOutput) -> i32 {
     }
 }
 
-fn display_value(value: &ClaimValue) -> String {
+fn display_value(value: &FactValue) -> String {
     match value {
-        ClaimValue::Text(text) => format!("\"{text}\""),
-        ClaimValue::Json(json) => format!("json:{}", json.as_str()),
-        ClaimValue::Redacted => "<redacted>".to_string(),
+        FactValue::Text(text) => format!("\"{text}\""),
+        FactValue::Json(json) => format!("json:{}", json.as_str()),
+        FactValue::Redacted => "<redacted>".to_string(),
     }
 }
 
@@ -1458,7 +1458,7 @@ fn display_value(value: &ClaimValue) -> String {
 /// a fact past its TTL or `valid_to` is **stale** (threat-model T4) — an agent must not act
 /// on either as current. Fresh `Active` facts get no annotation. The receipt body (value,
 /// `valid_from`, `expires_at`) is always shown for the audit trail.
-fn read_annotation(lifecycle: ClaimLifecycle, fresh: bool, not_yet_valid: bool) -> String {
+fn read_annotation(lifecycle: FactLifecycle, fresh: bool, not_yet_valid: bool) -> String {
     if lifecycle.is_terminal() {
         format!("  [no longer believed — {lifecycle:?}]")
     } else if not_yet_valid {
@@ -1518,19 +1518,19 @@ fn format_receipt(r: &IntegrityReceipt) -> String {
     )
 }
 
-fn claim_value_json(value: &ClaimValue) -> serde_json::Value {
+fn fact_value_json(value: &FactValue) -> serde_json::Value {
     match value {
-        ClaimValue::Text(text) => serde_json::json!({
+        FactValue::Text(text) => serde_json::json!({
             "kind": "text",
             "text": text,
             "display": display_value(value),
         }),
-        ClaimValue::Json(json) => serde_json::json!({
+        FactValue::Json(json) => serde_json::json!({
             "kind": "json",
             "json": json.as_str(),
             "display": display_value(value),
         }),
-        ClaimValue::Redacted => serde_json::json!({
+        FactValue::Redacted => serde_json::json!({
             "kind": "redacted",
             "display": display_value(value),
         }),
@@ -1544,8 +1544,8 @@ fn receipt_fields_json(receipt: &IntegrityReceipt) -> serde_json::Value {
             "key": receipt.subject.key(),
         },
         "predicate": receipt.predicate.as_str(),
-        "claim_id": receipt.claim_id.as_str(),
-        "value": claim_value_json(&receipt.value),
+        "fact_id": receipt.fact_id.as_str(),
+        "value": fact_value_json(&receipt.value),
         "lifecycle": format!("{:?}", receipt.lifecycle),
         "authority": receipt.authority.name(),
         "fresh": receipt.fresh,
@@ -1555,11 +1555,11 @@ fn receipt_fields_json(receipt: &IntegrityReceipt) -> serde_json::Value {
         "evidence_count": receipt.evidence_count,
         "corroboration": receipt.corroboration,
         "survived_challenges": receipt.survived_challenges,
-        "superseded_by": receipt.superseded_by.as_ref().map(ClaimId::as_str),
+        "superseded_by": receipt.superseded_by.as_ref().map(FactId::as_str),
         "contradicted_by": receipt
             .contradicted_by
             .iter()
-            .map(ClaimId::as_str)
+            .map(FactId::as_str)
             .collect::<Vec<_>>(),
         "replay_position": receipt.replay_position,
         "event_hash": receipt.event_hash,
@@ -1584,7 +1584,7 @@ fn short(hash: &str) -> String {
 // ---- Persistent file-backed commands -------------------------------------------------
 //
 // `dent8 assert …` and `dent8 explain …` persist to a JSON-lines event log (one
-// serialized `ClaimEvent` per line) so commands compose across separate invocations.
+// serialized `FactEvent` per line) so commands compose across separate invocations.
 // Each invocation rehydrates the store via the trusted-reload path, runs the firewall +
 // registry on a new write, and appends the admitted event. This is a *local* dev store;
 // operational, transactional backends are selected by DENT8_STORE_URL.
@@ -1596,7 +1596,7 @@ fn log_path() -> String {
     std::env::var("DENT8_LOG").unwrap_or_else(|_| DEFAULT_LOG.to_string())
 }
 
-// ---- Source authority registry (authz: cap what a source may *claim*) ----------------
+// ---- Source authority registry (authz: cap what a source may *fact*) ----------------
 //
 // dent8 otherwise trusts the caller-supplied `authority` argument. The registry maps a
 // `source` to the highest authority it may assert; a write above that ceiling is **rejected**
@@ -1639,7 +1639,7 @@ fn authority_registry_path() -> String {
 }
 
 /// What the write-boundary auth gate needs to know about a write: the subject (for grant
-/// scope checks), the claimed authority (for ceiling checks), and the source. The full write
+/// scope checks), the facted authority (for ceiling checks), and the source. The full write
 /// *content* is no longer carried here — the persisted per-event attestation (ADR 0013) signs
 /// the whole event at the append boundary, which covers strictly more than any summary could.
 #[derive(Clone, Copy, Debug)]
@@ -2149,8 +2149,8 @@ fn now_millis() -> TimestampMillis {
 /// already-admitted events). A missing file is an empty log.
 ///
 /// Because the trusted path performs no policy checks, this *also* re-validates the
-/// invariant the writer is supposed to maintain — at most one fresh believed claim per
-/// unique predicate — so a torn write or external edit that orphaned a believed claim is
+/// invariant the writer is supposed to maintain — at most one fresh believed fact per
+/// unique predicate — so a torn write or external edit that orphaned a believed fact is
 /// rejected loudly rather than silently masked by `explain`.
 fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
     // Backend selection lives here (and in `append_events`) so every `op_*` is backend-aware
@@ -2179,7 +2179,7 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
         if line.is_empty() {
             continue;
         }
-        let event: ClaimEvent = serde_json::from_str(line)
+        let event: FactEvent = serde_json::from_str(line)
             .map_err(|error| format!("{path}:{}: corrupt event: {error}", line_no + 1))?;
         events.push(event);
     }
@@ -2189,14 +2189,14 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
     Ok(store)
 }
 
-/// The event log as a raw, ordered `Vec<ClaimEvent>` — the same global append order
+/// The event log as a raw, ordered `Vec<FactEvent>` — the same global append order
 /// [`load_store`] reads, but **without** the trusted-reload integrity gate
 /// (`validate_unique_log`). The witness must be the *authoritative* tamper oracle: it has to
 /// render its own `TAMPER`/`ROLLBACK` verdict even on a log the integrity gate would reject,
 /// rather than be preempted by that gate's error. A genuinely unparseable line is still a hard
 /// error (nothing to witness).
 #[cfg(feature = "witness")]
-fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
+fn load_raw_events(path: &str) -> Result<Vec<FactEvent>, String> {
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
         return backend_scan_raw(&url);
@@ -2220,7 +2220,7 @@ fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
         if line.is_empty() {
             continue;
         }
-        let event: ClaimEvent = serde_json::from_str(line)
+        let event: FactEvent = serde_json::from_str(line)
             .map_err(|error| format!("{path}:{}: corrupt event: {error}", line_no + 1))?;
         events.push(event);
     }
@@ -2230,7 +2230,7 @@ fn load_raw_events(path: &str) -> Result<Vec<ClaimEvent>, String> {
 /// Raw ordered backend log for the witness: connect + self-migrate + scan, with **no**
 /// integrity gate (see [`load_raw_events`]). Backend-agnostic via [`connect_backend`].
 #[cfg(all(feature = "witness", feature = "async-store"))]
-fn backend_scan_raw(url: &str) -> Result<Vec<ClaimEvent>, String> {
+fn backend_scan_raw(url: &str) -> Result<Vec<FactEvent>, String> {
     use dent8_store::EventFilter;
     store_runtime()?.block_on(async {
         let store = connect_backend(url).await?;
@@ -2291,7 +2291,7 @@ impl AttestationSummary {
 /// when a grant log is present (ADR 0014) — resolve each attested event's **entitlement at
 /// write time** against the issuer-signed grant history.
 #[cfg(feature = "identity")]
-fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
+fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
     let mut summary = AttestationSummary {
         attested: 0,
         verifiable: true,
@@ -2348,9 +2348,9 @@ fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
 }
 
 /// Without the `identity` feature there is no Ed25519 verifier — count the attestations and
-/// let the caller report them as present-but-unverified rather than silently claiming "OK".
+/// let the caller report them as present-but-unverified rather than silently facting "OK".
 #[cfg(not(feature = "identity"))]
-fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
+fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
     AttestationSummary {
         attested: events
             .iter()
@@ -2365,16 +2365,16 @@ fn check_attestations(events: &[ClaimEvent]) -> AttestationSummary {
 }
 
 /// Unearned-supersession **advisories** (ADR 0007/0015/0017), grouped from a flat event set
-/// by claim stream. Unlike lineage breaks, retraction taint, or a broken attestation, these
+/// by fact stream. Unlike lineage breaks, retraction taint, or a broken attestation, these
 /// are **not** integrity failures — the base firewall admitted the supersession (the
 /// earned-supersession gate is opt-in and off by default). They surface a replacement that
 /// did not out-*entrench* what it displaced (a downgraded authority, or weaker earned
 /// entrenchment = corroboration + survived challenges at equal authority), so `verify` reports
 /// them as advisories and stays `OK`. Turn on `DENT8_ENTRENCHMENT_GATE` to reject them at
 /// write time instead.
-fn unearned_supersession_advisories(events: &[ClaimEvent]) -> Vec<String> {
+fn unearned_supersession_advisories(events: &[FactEvent]) -> Vec<String> {
     use std::collections::BTreeMap;
-    let mut streams: BTreeMap<(String, String, String), Vec<ClaimEvent>> = BTreeMap::new();
+    let mut streams: BTreeMap<(String, String, String), Vec<FactEvent>> = BTreeMap::new();
     for event in events {
         streams
             .entry((
@@ -2480,15 +2480,15 @@ fn verify_log(path: &str) -> Result<String, String> {
             }
         }
     }
-    // Retraction taint (ADR 0010): a still-believed claim deriving from a retracted/expired
+    // Retraction taint (ADR 0010): a still-believed fact deriving from a retracted/expired
     // source is surviving poison — flag it across all entities.
     let all_events = store
         .scan_events(&EventFilter::default())
         .map_err(|error| error.to_string())?;
-    for taint in tainted_claims(&all_events).map_err(|error| error.to_string())? {
+    for taint in tainted_facts(&all_events).map_err(|error| error.to_string())? {
         issues.push(format!(
             "TAINTED: {} derives from {} (now {:?})",
-            taint.claim.as_str(),
+            taint.fact.as_str(),
             taint.root.as_str(),
             taint.root_lifecycle
         ));
@@ -2544,15 +2544,15 @@ fn backend_verify(url: &str) -> Result<String, String> {
             .scan_events(&EventFilter::default())
             .await
             .map_err(|error| error.to_string())?;
-        // Retraction taint (ADR 0010): surviving poison — a believed claim deriving from a
+        // Retraction taint (ADR 0010): surviving poison — a believed fact deriving from a
         // retracted/expired source.
-        let tainted = tainted_claims(&events).map_err(|error| error.to_string())?;
+        let tainted = tainted_facts(&events).map_err(|error| error.to_string())?;
         let mut lines: Vec<String> = tainted
             .iter()
             .map(|taint| {
                 format!(
                     "TAINTED: {} derives from {} (now {:?})",
-                    taint.claim.as_str(),
+                    taint.fact.as_str(),
                     taint.root.as_str(),
                     taint.root_lifecycle
                 )
@@ -2771,7 +2771,7 @@ fn export_message(out: &str, event_count: usize) -> String {
     format!(
         "exported {event_count} event(s) to {out}\n  query it with DuckDB, e.g.:\n    \
          duckdb -c \"SELECT source, count(*) AS writes FROM '{out}' GROUP BY 1 ORDER BY 2 DESC\"\n    \
-         duckdb -c \"SELECT claim_id, UNNEST(derived_from) AS source_claim FROM '{out}' WHERE derived_from IS NOT NULL\"",
+         duckdb -c \"SELECT fact_id, UNNEST(derived_from) AS source_fact FROM '{out}' WHERE derived_from IS NOT NULL\"",
     )
 }
 
@@ -2785,7 +2785,7 @@ fn export_error_json(out: &str, message: &str) -> serde_json::Value {
     })
 }
 
-/// The next event/claim sequence: one past the **highest** `event:{n}` id actually
+/// The next event/fact sequence: one past the **highest** `event:{n}` id actually
 /// present, not the log line-count — so a lost or surgically-removed line cannot make a
 /// later command mint a colliding id (which would wedge the command and the reload).
 fn next_seq(store: &InMemoryEventStore) -> usize {
@@ -2803,8 +2803,8 @@ fn next_seq(store: &InMemoryEventStore) -> usize {
 }
 
 /// Reject a log that already violates per-predicate uniqueness (more than one *fresh*
-/// believed claim for a `unique` predicate). A legitimate stale + fresh pair is allowed
-/// (only one is fresh); two fresh believed claims signal corruption (a torn write or an
+/// believed fact for a `unique` predicate). A legitimate stale + fresh pair is allowed
+/// (only one is fresh); two fresh believed facts signal corruption (a torn write or an
 /// external edit), which the trusted-reload path would otherwise accept silently.
 fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Result<(), String> {
     let registry = PredicateRegistry::coding_agent();
@@ -2855,25 +2855,25 @@ fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Resu
             {
                 continue;
             }
-            // A *surfaced* conflict (ADR 0009) is exactly the `Contested` claims plus the
+            // A *surfaced* conflict (ADR 0009) is exactly the `Contested` facts plus the
             // contradictors they name; everything in that set is audited. Any *other*
-            // believed claim is silent duplication — corruption a single contradiction must
-            // not launder. So account for the contested claims + their contradictors, and
-            // reject if any believed claim is left unaccounted-for.
-            let mut accounted: Vec<&ClaimId> = Vec::new();
+            // believed fact is silent duplication — corruption a single contradiction must
+            // not launder. So account for the contested facts + their contradictors, and
+            // reject if any believed fact is left unaccounted-for.
+            let mut accounted: Vec<&FactId> = Vec::new();
             for s in &group {
-                if s.lifecycle == ClaimLifecycle::Contested {
-                    accounted.push(&s.claim_id);
+                if s.lifecycle == FactLifecycle::Contested {
+                    accounted.push(&s.fact_id);
                     accounted.extend(s.contradicted_by.iter());
                 }
             }
             let unaccounted = group
                 .iter()
-                .filter(|s| !accounted.contains(&&s.claim_id))
+                .filter(|s| !accounted.contains(&&s.fact_id))
                 .count();
             if unaccounted > 0 {
                 return Err(format!(
-                    "corrupt log: {}.{} has {unaccounted} fresh believed claim(s) not \
+                    "corrupt log: {}.{} has {unaccounted} fresh believed fact(s) not \
                      explained by a contest for a unique predicate (possible torn write or \
                      external edit)",
                     event.subject.kind(),
@@ -2901,7 +2901,7 @@ enum WriteError {
 /// store; true transactional atomicity belongs to the async backends.
 fn append_events(
     path: &str,
-    events: &mut [ClaimEvent],
+    events: &mut [FactEvent],
     identity: &WriteIdentity,
 ) -> Result<(), WriteError> {
     use std::io::Write;
@@ -2915,7 +2915,7 @@ fn append_events(
     // `load_store`.)
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
-        let refs: Vec<&ClaimEvent> = events.iter().collect();
+        let refs: Vec<&FactEvent> = events.iter().collect();
         return backend_append(&url, &refs);
     }
     let mut buffer = String::new();
@@ -2937,7 +2937,7 @@ fn append_events(
 /// Sign per-event write attestations when signed identity is configured (ADR 0013); a no-op
 /// in unconfigured dev mode.
 #[cfg(feature = "identity")]
-fn attest_events(events: &mut [ClaimEvent], identity: &WriteIdentity) -> Result<(), String> {
+fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(), String> {
     match identity {
         WriteIdentity::Env => {
             let ctx = identity::IdentityContext::from_env()?;
@@ -2954,7 +2954,7 @@ fn attest_events(events: &mut [ClaimEvent], identity: &WriteIdentity) -> Result<
 /// unauthenticated daemon connection), so reaching here means dev mode — events are simply
 /// written unattested.
 #[cfg(not(feature = "identity"))]
-fn attest_events(_events: &mut [ClaimEvent], identity: &WriteIdentity) -> Result<(), String> {
+fn attest_events(_events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(), String> {
     if matches!(identity, WriteIdentity::Unauthenticated) {
         return Err(UNAUTHENTICATED_WRITE_ERROR.to_string());
     }
@@ -3061,13 +3061,13 @@ fn backend_load(url: &str) -> Result<InMemoryEventStore, String> {
 ///
 /// v0 concurrency: commits are serialized by the backend (Postgres' advisory lock; `SQLite`'s
 /// `BEGIN IMMEDIATE` + `busy_timeout`), so concurrent writers wait rather than corrupt — but
-/// event/claim ids are minted optimistically from a snapshot, so two writers racing the same
+/// event/fact ids are minted optimistically from a snapshot, so two writers racing the same
 /// backend can collide. The loser gets a **retryable** conflict (a duplicate id, or — on
 /// `SQLite` — a lock still held past the timeout), which [`with_write_retry`] re-runs.
 #[cfg(feature = "async-store")]
-fn backend_append(url: &str, events: &[&ClaimEvent]) -> Result<(), WriteError> {
+fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
     use dent8_store::StoreError;
-    let owned: Vec<ClaimEvent> = events.iter().map(|&event| event.clone()).collect();
+    let owned: Vec<FactEvent> = events.iter().map(|&event| event.clone()).collect();
     store_runtime().map_err(WriteError::Other)?.block_on(async {
         let store = connect_backend(url).await.map_err(WriteError::Other)?;
         store
@@ -3107,42 +3107,42 @@ fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
 #[allow(clippy::too_many_arguments)]
 fn assert_event(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
     value: &str,
     source: &str,
     authority: AuthorityLevel,
-) -> ClaimEvent {
+) -> FactEvent {
     let mut event = base(
         event_id,
-        claim_id,
+        fact_id,
         subject_kind,
         subject_key,
         predicate,
         source,
         authority,
     );
-    event.kind = ClaimEventKind::Asserted;
-    event.value = Some(ClaimValue::Text(value.to_string()));
+    event.kind = FactEventKind::Asserted;
+    event.value = Some(FactValue::Text(value.to_string()));
     event
 }
 
 #[cfg(test)]
 fn base(
     event_id: &str,
-    claim_id: &str,
+    fact_id: &str,
     subject_kind: &str,
     subject_key: &str,
     predicate: &str,
     source: &str,
     authority: AuthorityLevel,
-) -> ClaimEvent {
-    ClaimEvent {
-        event_id: ClaimEventId::new(event_id).expect("event id"),
-        claim_id: ClaimId::new(claim_id).expect("claim id"),
-        kind: ClaimEventKind::Asserted,
+) -> FactEvent {
+    FactEvent {
+        event_id: FactEventId::new(event_id).expect("event id"),
+        fact_id: FactId::new(fact_id).expect("fact id"),
+        kind: FactEventKind::Asserted,
         subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
         predicate: Predicate::new(predicate).expect("predicate"),
         value: None,
@@ -3272,28 +3272,28 @@ mod tests {
     #[test]
     fn the_read_annotation_flags_stale_and_terminal_facts() {
         // A fresh, believed fact gets no annotation.
-        assert!(read_annotation(ClaimLifecycle::Active, true, false).is_empty());
+        assert!(read_annotation(FactLifecycle::Active, true, false).is_empty());
         // An Active fact past its TTL is flagged stale (the T4 read-surface verdict).
-        assert!(read_annotation(ClaimLifecycle::Active, false, false).contains("stale"));
-        assert!(read_annotation(ClaimLifecycle::Active, false, true).contains("not yet valid"));
+        assert!(read_annotation(FactLifecycle::Active, false, false).contains("stale"));
+        assert!(read_annotation(FactLifecycle::Active, false, true).contains("not yet valid"));
         // A terminal fact is flagged no-longer-believed...
         assert!(
-            read_annotation(ClaimLifecycle::Superseded, true, false).contains("no longer believed")
+            read_annotation(FactLifecycle::Superseded, true, false).contains("no longer believed")
         );
         // ...and that verdict wins even if it is also stale.
         assert!(
-            read_annotation(ClaimLifecycle::Retracted, false, false).contains("no longer believed")
+            read_annotation(FactLifecycle::Retracted, false, false).contains("no longer believed")
         );
     }
 
     /// A durable log with a hole at `event:2` — a line lost to a torn write or to manual /
     /// tool log surgery. The highest id present (`3`) and the line-count (`3`) coincide,
     /// which is exactly the case the old `seq = store.len()` got wrong.
-    fn gapped_log() -> Vec<ClaimEvent> {
+    fn gapped_log() -> Vec<FactEvent> {
         vec![
             assert_event(
                 "event:0",
-                "claim:repo:a:database:0",
+                "fact:repo:a:database:0",
                 "repo",
                 "a",
                 "database",
@@ -3303,7 +3303,7 @@ mod tests {
             ),
             assert_event(
                 "event:1",
-                "claim:repo:b:lang:1",
+                "fact:repo:b:lang:1",
                 "repo",
                 "b",
                 "lang",
@@ -3314,7 +3314,7 @@ mod tests {
             // event:2 is missing — the gap.
             assert_event(
                 "event:3",
-                "claim:repo:c:ci:3",
+                "fact:repo:c:ci:3",
                 "repo",
                 "c",
                 "ci",
@@ -3355,7 +3355,7 @@ mod tests {
         let seq = next_seq(&store);
         events.push(assert_event(
             &format!("event:{seq}"),
-            &format!("claim:repo:a:database:{seq}"),
+            &format!("fact:repo:a:database:{seq}"),
             "repo",
             "a",
             "database",
@@ -3383,7 +3383,7 @@ mod tests {
         let buggy_seq = store.len(); // the pre-fix computation: 3
         events.push(assert_event(
             &format!("event:{buggy_seq}"),
-            &format!("claim:repo:a:database:{buggy_seq}"),
+            &format!("fact:repo:a:database:{buggy_seq}"),
             "repo",
             "a",
             "database",
@@ -3411,7 +3411,7 @@ mod tests {
             InMemoryEventStore::from_trusted_events(events.clone()).expect("reload gap log");
 
         let seq = next_seq(&store);
-        let incumbents = vec![ClaimId::new("claim:repo:a:database:0").expect("claim id")];
+        let incumbents = vec![FactId::new("fact:repo:a:database:0").expect("fact id")];
         let (revision, _replacement) = ops::build_revision(
             seq,
             &incumbents,

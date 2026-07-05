@@ -15,9 +15,9 @@
 use std::sync::{Arc, Barrier};
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-    ClaimValue, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind, Predicate, Provenance,
-    SourceId, TimestampMillis, Ttl,
+    ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind,
+    FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance, SourceId,
+    TimestampMillis, Ttl,
 };
 use dent8_store::EventFilter;
 use dent8_store_sqlite::SqliteEventStore;
@@ -25,16 +25,16 @@ use dent8_store_sqlite::SqliteEventStore;
 const WRITERS: usize = 8;
 const EVENTS_PER_WRITER: usize = 3;
 
-fn asserted(writer: usize, sequence: usize) -> ClaimEvent {
-    ClaimEvent {
-        event_id: ClaimEventId::new(format!("event:w{writer}-{sequence}")).unwrap(),
-        claim_id: ClaimId::new(format!("claim:w{writer}-{sequence}")).unwrap(),
-        kind: ClaimEventKind::Asserted,
+fn asserted(writer: usize, sequence: usize) -> FactEvent {
+    FactEvent {
+        event_id: FactEventId::new(format!("event:w{writer}-{sequence}")).unwrap(),
+        fact_id: FactId::new(format!("fact:w{writer}-{sequence}")).unwrap(),
+        kind: FactEventKind::Asserted,
         // Distinct subjects per event: the race under test is the *global chain head*, not
-        // firewall arbitration between competing claims.
+        // firewall arbitration between competing facts.
         subject: EntityRef::new("repo", format!("proj-w{writer}-{sequence}")).unwrap(),
         predicate: Predicate::new("database").unwrap(),
-        value: Some(ClaimValue::Text("postgres".to_string())),
+        value: Some(FactValue::Text("postgres".to_string())),
         confidence: Confidence::from_millis(900).unwrap(),
         authority: Authority {
             level: AuthorityLevel::High,

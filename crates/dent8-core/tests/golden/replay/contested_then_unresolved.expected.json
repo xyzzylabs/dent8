@@ -1,11 +1,11 @@
 {
-  "chain_head": "7ce74484d09344677a4bf613986384b24e541b59fcd980b08f49874385285f7e",
+  "chain_head": "753b8b9dab4cd48d1bd871495817d7dd44334e8a24f87698c1f6574d145a7cb3",
   "lifecycle": "Contested",
   "value": "text:postgres",
   "authority": "Medium",
   "superseded_by": null,
   "contradicted_by": [
-    "claim:replacement"
+    "fact:replacement"
   ],
   "corroboration": 1
 }

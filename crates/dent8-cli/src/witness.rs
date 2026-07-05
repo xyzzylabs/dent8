@@ -31,7 +31,7 @@
 use std::io::Write;
 
 use crate::{CliOutput, print_json_stderr, print_json_stdout};
-use dent8_core::{ClaimEvent, SignedTreeHead, sign_head, verify_signed_head};
+use dent8_core::{FactEvent, SignedTreeHead, sign_head, verify_signed_head};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
 const DEFAULT_KEY: &str = "dent8-witness.key";
@@ -160,7 +160,7 @@ fn coverage_status(witnessed: u64, current: u64) -> &'static str {
 /// commit to. Backend-aware (file dev store or Postgres). Loaded **raw**, without the
 /// trusted-reload integrity gate, so the witness renders its own tamper verdict on a log that
 /// gate would reject rather than being preempted by it.
-fn load_events() -> Result<Vec<ClaimEvent>, String> {
+fn load_events() -> Result<Vec<FactEvent>, String> {
     crate::load_raw_events(&crate::log_path())
 }
 
@@ -509,7 +509,7 @@ pub fn serve(args: &[String], output: CliOutput) -> i32 {
 /// signs the new growth; the stale head remains the evidence at `verify` time.
 fn prior_head_warning(
     previous: Option<&SignedTreeHead>,
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     verifying: &VerifyingKey,
 ) -> Option<String> {
     let previous = previous?;
@@ -743,7 +743,7 @@ fn empty_witness_log_message() -> String {
 }
 
 fn verify_heads_for_publish(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     heads: &[SignedTreeHead],
     verifying: &VerifyingKey,
     label: &str,
@@ -1532,7 +1532,7 @@ enum WitnessFault {
 /// rewrite of already-witnessed history, under the witness's public key). Returns the first
 /// fault, or `Ok(())` if all heads are consistent.
 fn verify_heads(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     heads: &[SignedTreeHead],
     verifying: &VerifyingKey,
 ) -> Result<(), WitnessFault> {
@@ -2109,20 +2109,20 @@ fn grants_publish_json(path: &str, outcome: &GrantsPublishOutcome) -> serde_json
 mod tests {
     use super::{WitnessFault, WitnessVerdict, verify_heads};
     use dent8_core::{
-        AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, SignedTreeHead, TimestampMillis,
+        AuthorityLevel, FactEvent, FactEventKind, FactValue, SignedTreeHead, TimestampMillis,
         sign_head,
     };
     use ed25519_dalek::SigningKey;
 
-    fn event(event_id: &str, claim_id: &str, value: &str) -> ClaimEvent {
+    fn event(event_id: &str, fact_id: &str, value: &str) -> FactEvent {
         crate::ops::build_event(
             event_id,
-            claim_id,
+            fact_id,
             "repo",
             "myproj",
             "database",
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text(value.to_string())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text(value.to_string())),
             "source:owner",
             AuthorityLevel::High,
             TimestampMillis::from_unix_millis(1),
@@ -2130,7 +2130,7 @@ mod tests {
         .expect("event")
     }
 
-    fn signed(events: &[ClaimEvent], key: &SigningKey) -> SignedTreeHead {
+    fn signed(events: &[FactEvent], key: &SigningKey) -> SignedTreeHead {
         sign_head(events, key).expect("sign")
     }
 
@@ -2139,9 +2139,9 @@ mod tests {
         let key = SigningKey::from_bytes(&[7u8; 32]);
         let verifying = key.verifying_key();
         let log = vec![
-            event("event:0", "claim:a", "postgres"),
-            event("event:1", "claim:b", "redis"),
-            event("event:2", "claim:c", "kafka"),
+            event("event:0", "fact:a", "postgres"),
+            event("event:1", "fact:b", "redis"),
+            event("event:2", "fact:c", "kafka"),
         ];
 
         // A witness signs at count 1, then again at count 3 (the log grew, append-only).
@@ -2155,7 +2155,7 @@ mod tests {
         // TAMPER: rewrite an already-witnessed event (event:1 redis -> mysql). The prefix at
         // count 3 no longer matches sth3's signature.
         let mut rewritten = log.clone();
-        rewritten[1] = event("event:1", "claim:b", "mysql");
+        rewritten[1] = event("event:1", "fact:b", "mysql");
         assert!(matches!(
             verify_heads(&rewritten, &heads, &verifying),
             Err(WitnessFault::Detected(WitnessVerdict::Tamper, message)) if message.contains("TAMPER")

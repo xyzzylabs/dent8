@@ -1,9 +1,9 @@
 //! Stateful property-based tests for the `apply_event` fold — the heart of the firewall.
 //!
-//! A random *coherent* event stream (all events on one claim) is folded through the real
+//! A random *coherent* event stream (all events on one fact) is folded through the real
 //! `apply_event`, and every step is checked against an **independent reference model** that
 //! re-implements the lifecycle algebra in a deliberately simpler shape. The model tracks
-//! nearly the whole `ClaimState` — lifecycle, authority, value, `created_at`,
+//! nearly the whole `FactState` — lifecycle, authority, value, `created_at`,
 //! `corroborating_sources`, `contradicted_by`, `superseded_by`, `evidence_count` — so the
 //! comparison is a near-complete state-machine equivalence, not just a lifecycle check.
 //!
@@ -16,7 +16,7 @@
 //! - **Value immutability** — no event ever changes the asserted value.
 //! - **`created_at` stability / `updated_at` tracking.**
 //! - **Replay determinism** — folding the same events twice yields an identical state.
-//! - **Claim isolation** — an event for a different claim id / subject / predicate is rejected.
+//! - **Fact isolation** — an event for a different fact id / subject / predicate is rejected.
 //!
 //! Two forced-prefix properties guarantee the rarer deep paths every case: resolution *out
 //! of* `Contested`, and absorption of every op kind by a terminal state.
@@ -24,9 +24,9 @@
 use std::collections::BTreeMap;
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-    ClaimLifecycle, ClaimState, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, ExpirationReason, Predicate, Provenance, RetractionReason, SourceId,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+    EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId,
+    FactLifecycle, FactState, FactValue, Predicate, Provenance, RetractionReason, SourceId,
     SupersessionReason, TimestampMillis, TransitionError, Ttl, apply_event,
 };
 use proptest::prelude::*;
@@ -38,12 +38,12 @@ use proptest::test_runner::TestCaseError;
 #[derive(Clone, Debug)]
 enum Op {
     Assert {
-        value: ClaimValue,
+        value: FactValue,
         authority: AuthorityLevel,
         source: u8,
     },
     Reinforce {
-        value: Option<ClaimValue>,
+        value: Option<FactValue>,
         authority: AuthorityLevel,
         source: u8,
     },
@@ -98,12 +98,12 @@ fn source_id(index: u8) -> SourceId {
     SourceId::new(format!("source:{index}")).expect("source id")
 }
 
-fn by_claim(index: u8) -> ClaimId {
-    ClaimId::new(format!("by:{index}")).expect("claim id")
+fn by_fact(index: u8) -> FactId {
+    FactId::new(format!("by:{index}")).expect("fact id")
 }
 
 /// The reason the model expects a step to be rejected. `Other` is never produced by the
-/// model, so an unexpected real error (a stray `InvalidEvent`/`ClaimIdMismatch`) fails the
+/// model, so an unexpected real error (a stray `InvalidEvent`/`FactIdMismatch`) fails the
 /// equality loudly.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Reject {
@@ -128,16 +128,16 @@ fn classify(error: &TransitionError) -> Reject {
     }
 }
 
-/// The independent reference model — nearly the whole projected `ClaimState`.
+/// The independent reference model — nearly the whole projected `FactState`.
 #[derive(Clone, Debug)]
 struct Model {
-    lifecycle: ClaimLifecycle,
+    lifecycle: FactLifecycle,
     authority: AuthorityLevel,
-    value: ClaimValue,
+    value: FactValue,
     created_at: TimestampMillis,
     corroborating: BTreeMap<SourceId, AuthorityLevel>,
-    contradicted_by: Vec<ClaimId>,
-    superseded_by: Option<ClaimId>,
+    contradicted_by: Vec<FactId>,
+    superseded_by: Option<FactId>,
     evidence_count: usize,
 }
 
@@ -145,14 +145,14 @@ struct Model {
 /// the documented rules in a flatter shape than `apply_event`.
 fn model_apply(state: Option<&Model>, op: &Op, at: TimestampMillis) -> Result<Model, Reject> {
     let Some(model) = state else {
-        // No claim yet: only an assertion starts a stream.
+        // No fact yet: only an assertion starts a stream.
         return match op {
             Op::Assert {
                 value,
                 authority,
                 source,
             } => Ok(Model {
-                lifecycle: ClaimLifecycle::Active,
+                lifecycle: FactLifecycle::Active,
                 authority: *authority,
                 value: value.clone(),
                 created_at: at,
@@ -193,8 +193,8 @@ fn model_apply(state: Option<&Model>, op: &Op, at: TimestampMillis) -> Result<Mo
             if model.authority == AuthorityLevel::Canonical {
                 return Err(Reject::CanonicalContradiction);
             }
-            next.lifecycle = ClaimLifecycle::Contested;
-            let by = by_claim(*by);
+            next.lifecycle = FactLifecycle::Contested;
+            let by = by_fact(*by);
             if !next.contradicted_by.contains(&by) {
                 next.contradicted_by.push(by);
             }
@@ -203,20 +203,20 @@ fn model_apply(state: Option<&Model>, op: &Op, at: TimestampMillis) -> Result<Mo
             if *authority < model.authority {
                 return Err(Reject::InsufficientAuthority);
             }
-            next.lifecycle = ClaimLifecycle::Superseded;
-            next.superseded_by = Some(by_claim(*by));
+            next.lifecycle = FactLifecycle::Superseded;
+            next.superseded_by = Some(by_fact(*by));
         }
         Op::Expire { authority } => {
             if *authority < model.authority {
                 return Err(Reject::InsufficientAuthority);
             }
-            next.lifecycle = ClaimLifecycle::Expired;
+            next.lifecycle = FactLifecycle::Expired;
         }
         Op::Retract { authority } => {
             if *authority < model.authority {
                 return Err(Reject::InsufficientAuthority);
             }
-            next.lifecycle = ClaimLifecycle::Retracted;
+            next.lifecycle = FactLifecycle::Retracted;
         }
         Op::Retrieve | Op::UseInDecision => {}
     }
@@ -224,69 +224,68 @@ fn model_apply(state: Option<&Model>, op: &Op, at: TimestampMillis) -> Result<Mo
 }
 
 struct Base {
-    claim: ClaimId,
+    fact: FactId,
     subject: EntityRef,
     predicate: Predicate,
 }
 
 fn base() -> Base {
     Base {
-        claim: ClaimId::new("claim:subject").expect("claim id"),
+        fact: FactId::new("fact:subject").expect("fact id"),
         subject: EntityRef::new("repo", "dent8").expect("entity"),
         predicate: Predicate::new("database").expect("predicate"),
     }
 }
 
-/// Build a structurally-valid `ClaimEvent` for `op` at position `index` on the shared claim.
-fn build_event(base: &Base, index: usize, op: &Op) -> ClaimEvent {
+/// Build a structurally-valid `FactEvent` for `op` at position `index` on the shared fact.
+fn build_event(base: &Base, index: usize, op: &Op) -> FactEvent {
     let (kind, value) = match op {
-        Op::Assert { value, .. } => (ClaimEventKind::Asserted, Some(value.clone())),
-        Op::Reinforce { value, .. } => (
-            ClaimEventKind::Reinforced { by: by_claim(0) },
-            value.clone(),
-        ),
+        Op::Assert { value, .. } => (FactEventKind::Asserted, Some(value.clone())),
+        Op::Reinforce { value, .. } => {
+            (FactEventKind::Reinforced { by: by_fact(0) }, value.clone())
+        }
         Op::Contradict { .. } => (
-            ClaimEventKind::Contradicted {
-                by: by_claim(op.by()),
+            FactEventKind::Contradicted {
+                by: by_fact(op.by()),
                 basis: ContradictionBasis::SamePredicateDifferentValue,
             },
             None,
         ),
         Op::Supersede { .. } => (
-            ClaimEventKind::Superseded {
-                by: by_claim(op.by()),
+            FactEventKind::Superseded {
+                by: by_fact(op.by()),
                 reason: SupersessionReason::NewerObservation,
             },
             None,
         ),
         Op::Expire { .. } => (
-            ClaimEventKind::Expired {
+            FactEventKind::Expired {
                 reason: ExpirationReason::TtlElapsed,
             },
             None,
         ),
         Op::Retract { .. } => (
-            ClaimEventKind::Retracted {
+            FactEventKind::Retracted {
                 reason: RetractionReason::UserDeleted,
             },
             None,
         ),
         Op::Retrieve => (
-            ClaimEventKind::Retrieved {
+            FactEventKind::Retrieved {
                 purpose: "audit".to_string(),
             },
             None,
         ),
         Op::UseInDecision => (
-            ClaimEventKind::UsedInDecision {
+            FactEventKind::UsedInDecision {
                 decision_id: "decision".to_string(),
             },
             None,
         ),
     };
-    ClaimEvent {
-        event_id: ClaimEventId::new(format!("event:{index}")).expect("event id"),
-        claim_id: base.claim.clone(),
+    FactEvent {
+        event_id: FactEventId::new(format!("event:{index}")).expect("event id"),
+        fact_id: base.fact.clone(),
         kind,
         subject: base.subject.clone(),
         predicate: base.predicate.clone(),
@@ -322,8 +321,8 @@ fn build_event(base: &Base, index: usize, op: &Op) -> ClaimEvent {
 }
 
 /// Fold an event stream through `apply_event`, advancing state only on accepted events.
-fn fold(events: &[ClaimEvent]) -> Option<ClaimState> {
-    let mut state: Option<ClaimState> = None;
+fn fold(events: &[FactEvent]) -> Option<FactState> {
+    let mut state: Option<FactState> = None;
     for event in events {
         if let Ok(next) = apply_event(state.clone(), event) {
             state = Some(next);
@@ -337,7 +336,7 @@ fn fold(events: &[ClaimEvent]) -> Option<ClaimState> {
 /// forced-prefix properties.
 fn check_stream(ops: &[Op]) -> Result<(), TestCaseError> {
     let base = base();
-    let mut real: Option<ClaimState> = None;
+    let mut real: Option<FactState> = None;
     let mut model: Option<Model> = None;
     let mut was_terminal = false;
 
@@ -403,11 +402,11 @@ fn arb_level() -> impl Strategy<Value = AuthorityLevel> {
 }
 
 /// A small set of distinct values, so reinforcement value-match vs mismatch both occur.
-fn arb_small_value() -> impl Strategy<Value = ClaimValue> {
+fn arb_small_value() -> impl Strategy<Value = FactValue> {
     prop_oneof![
-        Just(ClaimValue::Text("alpha".to_string())),
-        Just(ClaimValue::Text("beta".to_string())),
-        Just(ClaimValue::Redacted),
+        Just(FactValue::Text("alpha".to_string())),
+        Just(FactValue::Text("beta".to_string())),
+        Just(FactValue::Redacted),
     ]
 }
 
@@ -440,7 +439,7 @@ proptest! {
 
         // Replay determinism: folding the same stream twice yields an identical state.
         let base = base();
-        let events: Vec<ClaimEvent> = ops
+        let events: Vec<FactEvent> = ops
             .iter()
             .enumerate()
             .map(|(index, op)| build_event(&base, index, op))
@@ -448,13 +447,13 @@ proptest! {
         prop_assert_eq!(fold(&events), fold(&events));
     }
 
-    /// A `Contested` claim is reached every case (forced `Assert(High)` + `Contradict`
+    /// A `Contested` fact is reached every case (forced `Assert(High)` + `Contradict`
     /// prefix), then a random tail exercises resolution *out of* `Contested` against the
     /// full model.
     #[test]
-    fn a_contested_claim_still_obeys_the_model(tail in prop::collection::vec(arb_op(), 0..14)) {
+    fn a_contested_fact_still_obeys_the_model(tail in prop::collection::vec(arb_op(), 0..14)) {
         let mut ops = vec![
-            Op::Assert { value: ClaimValue::Text("alpha".to_string()), authority: AuthorityLevel::High, source: 0 },
+            Op::Assert { value: FactValue::Text("alpha".to_string()), authority: AuthorityLevel::High, source: 0 },
             Op::Contradict { authority: AuthorityLevel::Low, by: 0 },
         ];
         ops.extend(tail);
@@ -470,7 +469,7 @@ proptest! {
         let base = base();
         let asserted = build_event(
             &base, 0,
-            &Op::Assert { value: ClaimValue::Text("alpha".to_string()), authority: AuthorityLevel::High, source: 0 },
+            &Op::Assert { value: FactValue::Text("alpha".to_string()), authority: AuthorityLevel::High, source: 0 },
         );
         let expired = build_event(&base, 1, &Op::Expire { authority: AuthorityLevel::High });
         let mut state = apply_event(None, &asserted).expect("assert");
@@ -497,30 +496,30 @@ proptest! {
         }
     }
 
-    /// Claim isolation: once a claim is live, an event bearing a different claim id, subject,
-    /// or predicate is rejected (it can never perturb this claim's state).
+    /// Fact isolation: once a fact is live, an event bearing a different fact id, subject,
+    /// or predicate is rejected (it can never perturb this fact's state).
     #[test]
-    fn a_foreign_claim_id_or_shape_is_rejected(first in arb_level(), which in 0u8..3) {
+    fn a_foreign_fact_id_or_shape_is_rejected(first in arb_level(), which in 0u8..3) {
         let base = base();
         let asserted = build_event(
             &base, 0,
-            &Op::Assert { value: ClaimValue::Text("alpha".to_string()), authority: first, source: 0 },
+            &Op::Assert { value: FactValue::Text("alpha".to_string()), authority: first, source: 0 },
         );
         let state = apply_event(None, &asserted).expect("initial assertion");
 
         let mut foreign = build_event(
             &base, 1,
-            &Op::Reinforce { value: Some(ClaimValue::Text("alpha".to_string())), authority: first, source: 0 },
+            &Op::Reinforce { value: Some(FactValue::Text("alpha".to_string())), authority: first, source: 0 },
         );
         match which {
-            0 => foreign.claim_id = ClaimId::new("claim:foreign").expect("claim id"),
+            0 => foreign.fact_id = FactId::new("fact:foreign").expect("fact id"),
             1 => foreign.subject = EntityRef::new("repo", "other").expect("entity"),
             _ => foreign.predicate = Predicate::new("other_predicate").expect("predicate"),
         }
         let result = apply_event(Some(state), &foreign);
         prop_assert!(matches!(
             result,
-            Err(TransitionError::ClaimIdMismatch | TransitionError::ClaimShapeMismatch)
+            Err(TransitionError::FactIdMismatch | TransitionError::FactShapeMismatch)
         ));
     }
 }

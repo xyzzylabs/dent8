@@ -1,8 +1,8 @@
 {
-  "chain_head": "68de4b1b5b3c4a34aac5ee71c86869669dd2b01c4df43a144efcb03e31ce70d5",
-  "claims": [
+  "chain_head": "66912f181d9194d83f37f15bee0389306d2e3739896a97445975a6644615188c",
+  "facts": [
     {
-      "claim_id": "claim:source",
+      "fact_id": "fact:source",
       "lifecycle": "Retracted",
       "value": "text:postgres",
       "authority": "High",
@@ -10,7 +10,7 @@
       "fresh": true
     },
     {
-      "claim_id": "claim:summary",
+      "fact_id": "fact:summary",
       "lifecycle": "Active",
       "value": "text:the project uses postgres",
       "authority": "Medium",
@@ -21,8 +21,8 @@
   "rejected": [],
   "tainted": [
     {
-      "claim": "claim:summary",
-      "root": "claim:source",
+      "fact": "fact:summary",
+      "root": "fact:source",
       "root_lifecycle": "Retracted"
     }
   ]

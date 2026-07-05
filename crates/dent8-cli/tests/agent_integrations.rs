@@ -268,10 +268,10 @@ fn assert_accepted_assert_structured(response: &Value) {
     let structured = tool_structured(response);
     assert_eq!(structured["status"], "accepted");
     assert_eq!(structured["tool"], "assert");
-    assert_eq!(structured["claim_id"], "claim:repo:myproj:database:0");
+    assert_eq!(structured["fact_id"], "fact:repo:myproj:database:0");
     assert_eq!(structured["current_value"]["text"], "postgres");
     assert_eq!(structured["receipt"]["lifecycle"], "Active");
-    assert_eq!(structured["receipt"]["authority"], "High");
+    assert_eq!(structured["receipt"]["authority"], "high");
     assert_eq!(structured["receipt"]["chain_verified"], true);
     assert_eq!(structured["receipt_kind"], "current_state");
     assert_eq!(structured["event_hash_kind"], "current_state_latest_event");

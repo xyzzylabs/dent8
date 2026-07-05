@@ -20,7 +20,7 @@
 
 use std::str::FromStr;
 
-use dent8_core::{ClaimEvent, ClaimEventKind, ClaimId, event_hash, hash_chain};
+use dent8_core::{FactEvent, FactEventKind, FactId, event_hash, hash_chain};
 use dent8_store::{AppendReceipt, AsyncEventStore, EventFilter, StoreError, arbitrate_events};
 use sqlx::SqliteConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
@@ -32,7 +32,7 @@ pub const SCHEMA_SQL: &str = "\
 CREATE TABLE IF NOT EXISTS dent8_event_log (
     global_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL UNIQUE,
-    claim_id TEXT NOT NULL,
+    fact_id TEXT NOT NULL,
     subject_type TEXT NOT NULL,
     subject_key TEXT NOT NULL,
     predicate TEXT NOT NULL,
@@ -40,8 +40,8 @@ CREATE TABLE IF NOT EXISTS dent8_event_log (
     event_hash TEXT NOT NULL UNIQUE,
     event_json TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS dent8_event_log_claim_seq_idx
-    ON dent8_event_log (claim_id, global_sequence);
+CREATE INDEX IF NOT EXISTS dent8_event_log_fact_seq_idx
+    ON dent8_event_log (fact_id, global_sequence);
 CREATE INDEX IF NOT EXISTS dent8_event_log_subject_idx
     ON dent8_event_log (subject_type, subject_key, predicate, global_sequence);
 ";
@@ -94,7 +94,7 @@ impl SqliteEventStore {
     }
 
     /// Append one candidate through the firewall (a one-event [`Self::append_many`]).
-    pub async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+    pub async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         let mut receipts = self.append_many(vec![event]).await?;
         Ok(receipts.pop().expect("one event -> one receipt"))
     }
@@ -107,7 +107,7 @@ impl SqliteEventStore {
     /// retryable [`StoreError::Conflict`] so the CLI's write-retry loop re-runs it.
     pub async fn append_many(
         &self,
-        events: Vec<ClaimEvent>,
+        events: Vec<FactEvent>,
     ) -> Result<Vec<AppendReceipt>, StoreError> {
         let mut conn = self.pool.acquire().await.map_err(map_busy)?;
         sqlx::query("BEGIN IMMEDIATE")
@@ -133,15 +133,12 @@ impl SqliteEventStore {
         Ok(receipts)
     }
 
-    /// Ordered events for one claim stream.
-    pub async fn load_claim_events(
-        &self,
-        claim_id: &ClaimId,
-    ) -> Result<Vec<ClaimEvent>, StoreError> {
+    /// Ordered events for one fact stream.
+    pub async fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError> {
         let rows: Vec<String> = sqlx::query_scalar(
-            "SELECT event_json FROM dent8_event_log WHERE claim_id = ?1 ORDER BY global_sequence",
+            "SELECT event_json FROM dent8_event_log WHERE fact_id = ?1 ORDER BY global_sequence",
         )
-        .bind(claim_id.as_str())
+        .bind(fact_id.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(unavailable)?;
@@ -149,8 +146,8 @@ impl SqliteEventStore {
     }
 
     /// Events matching a filter, in global order.
-    pub async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError> {
-        let claim_id = filter.claim_id.as_ref().map(ClaimId::as_str);
+    pub async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
+        let fact_id = filter.fact_id.as_ref().map(FactId::as_str);
         let subject_type = filter.subject.as_ref().map(dent8_core::EntityRef::kind);
         let subject_key = filter.subject.as_ref().map(dent8_core::EntityRef::key);
         let predicate = filter.predicate.as_ref().map(dent8_core::Predicate::as_str);
@@ -161,14 +158,14 @@ impl SqliteEventStore {
 
         let rows: Vec<String> = sqlx::query_scalar(
             "SELECT event_json FROM dent8_event_log \
-             WHERE (?1 IS NULL OR claim_id = ?1) \
+             WHERE (?1 IS NULL OR fact_id = ?1) \
                AND (?2 IS NULL OR subject_type = ?2) \
                AND (?3 IS NULL OR subject_key = ?3) \
                AND (?4 IS NULL OR predicate = ?4) \
                AND (?5 IS NULL OR global_sequence > ?5) \
              ORDER BY global_sequence LIMIT ?6",
         )
-        .bind(claim_id)
+        .bind(fact_id)
         .bind(subject_type)
         .bind(subject_key)
         .bind(predicate)
@@ -206,12 +203,12 @@ impl SqliteEventStore {
 /// fails with the firewall's error, not `Conflict`), with `SQLite`-native primitives.
 async fn append_event_in_tx(
     conn: &mut SqliteConnection,
-    event: &ClaimEvent,
+    event: &FactEvent,
 ) -> Result<AppendReceipt, StoreError> {
-    let existing = load_claim_in_tx(&mut *conn, event.claim_id.as_str()).await?;
+    let existing = load_fact_in_tx(&mut *conn, event.fact_id.as_str()).await?;
     let replacing = match &event.kind {
-        ClaimEventKind::Superseded { by, .. } => {
-            Some(load_claim_in_tx(&mut *conn, by.as_str()).await?)
+        FactEventKind::Superseded { by, .. } => {
+            Some(load_fact_in_tx(&mut *conn, by.as_str()).await?)
         }
         _ => None,
     };
@@ -246,11 +243,11 @@ async fn append_event_in_tx(
 
     let global_sequence: i64 = sqlx::query_scalar(
         "INSERT INTO dent8_event_log \
-         (event_id, claim_id, subject_type, subject_key, predicate, previous_event_hash, event_hash, event_json) \
+         (event_id, fact_id, subject_type, subject_key, predicate, previous_event_hash, event_hash, event_json) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING global_sequence",
     )
     .bind(event.event_id.as_str())
-    .bind(event.claim_id.as_str())
+    .bind(event.fact_id.as_str())
     .bind(event.subject.kind())
     .bind(event.subject.key())
     .bind(event.predicate.as_str())
@@ -271,21 +268,21 @@ async fn append_event_in_tx(
     })
 }
 
-async fn load_claim_in_tx(
+async fn load_fact_in_tx(
     conn: &mut SqliteConnection,
-    claim_id: &str,
-) -> Result<Vec<ClaimEvent>, StoreError> {
+    fact_id: &str,
+) -> Result<Vec<FactEvent>, StoreError> {
     let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT event_json FROM dent8_event_log WHERE claim_id = ?1 ORDER BY global_sequence",
+        "SELECT event_json FROM dent8_event_log WHERE fact_id = ?1 ORDER BY global_sequence",
     )
-    .bind(claim_id)
+    .bind(fact_id)
     .fetch_all(&mut *conn)
     .await
     .map_err(map_busy)?;
     rows.iter().map(|json| event_from_json(json)).collect()
 }
 
-fn event_from_json(value: &str) -> Result<ClaimEvent, StoreError> {
+fn event_from_json(value: &str) -> Result<FactEvent, StoreError> {
     serde_json::from_str(value).map_err(|error| StoreError::CorruptEvent(error.to_string()))
 }
 
@@ -319,19 +316,19 @@ impl AsyncEventStore for SqliteEventStore {
         self.migrate().await
     }
 
-    async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+    async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         self.append(event).await
     }
 
-    async fn append_many(&self, events: Vec<ClaimEvent>) -> Result<Vec<AppendReceipt>, StoreError> {
+    async fn append_many(&self, events: Vec<FactEvent>) -> Result<Vec<AppendReceipt>, StoreError> {
         self.append_many(events).await
     }
 
-    async fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError> {
-        self.load_claim_events(claim_id).await
+    async fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError> {
+        self.load_fact_events(fact_id).await
     }
 
-    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError> {
+    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
         self.scan_events(filter).await
     }
 
@@ -344,19 +341,19 @@ impl AsyncEventStore for SqliteEventStore {
 mod tests {
     use super::*;
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEventId, ClaimValue, Confidence, EntityRef,
-        Evidence, EvidenceId, EvidenceKind, Predicate, Provenance, SourceId, SupersessionReason,
+        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
+        EvidenceKind, FactEventId, FactValue, Predicate, Provenance, SourceId, SupersessionReason,
         TimestampMillis, Ttl,
     };
 
-    fn asserted(event_id: &str, claim: &str, value: &str, authority: AuthorityLevel) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).unwrap(),
-            claim_id: ClaimId::new(claim).unwrap(),
-            kind: ClaimEventKind::Asserted,
+    fn asserted(event_id: &str, fact: &str, value: &str, authority: AuthorityLevel) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).unwrap(),
+            fact_id: FactId::new(fact).unwrap(),
+            kind: FactEventKind::Asserted,
             subject: EntityRef::new("repo", "dent8").unwrap(),
             predicate: Predicate::new("database").unwrap(),
-            value: Some(ClaimValue::Text(value.to_string())),
+            value: Some(FactValue::Text(value.to_string())),
             confidence: Confidence::from_millis(900).unwrap(),
             authority: Authority {
                 level: authority,
@@ -394,7 +391,7 @@ mod tests {
         let receipt = store
             .append(asserted(
                 "event:0",
-                "claim:a",
+                "fact:a",
                 "postgres",
                 AuthorityLevel::High,
             ))
@@ -416,7 +413,7 @@ mod tests {
         store
             .append(asserted(
                 "event:0",
-                "claim:a",
+                "fact:a",
                 "postgres",
                 AuthorityLevel::High,
             ))
@@ -424,16 +421,16 @@ mod tests {
             .unwrap();
         // A low-authority replacement asserted, then a supersession of the High incumbent by it.
         store
-            .append(asserted("event:1", "claim:b", "mysql", AuthorityLevel::Low))
+            .append(asserted("event:1", "fact:b", "mysql", AuthorityLevel::Low))
             .await
             .unwrap();
-        let supersede = ClaimEvent {
-            kind: ClaimEventKind::Superseded {
-                by: ClaimId::new("claim:b").unwrap(),
+        let supersede = FactEvent {
+            kind: FactEventKind::Superseded {
+                by: FactId::new("fact:b").unwrap(),
                 reason: SupersessionReason::UserCorrection,
             },
             value: None,
-            ..asserted("event:2", "claim:a", "ignored", AuthorityLevel::Low)
+            ..asserted("event:2", "fact:a", "ignored", AuthorityLevel::Low)
         };
         let result = store.append(supersede).await;
         assert!(

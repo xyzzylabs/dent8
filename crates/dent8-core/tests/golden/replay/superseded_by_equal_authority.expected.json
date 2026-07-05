@@ -1,9 +1,9 @@
 {
-  "chain_head": "4e72341b7650c245136eb8b77e54fbc5e2df2f514294e6bc40628fa01ea71a0a",
+  "chain_head": "cef6b1d4967d4c2d7156d4121bb28029317296dfe3dc2abd28aa8724df15e520",
   "lifecycle": "Superseded",
   "value": "text:postgres",
   "authority": "High",
-  "superseded_by": "claim:replacement",
+  "superseded_by": "fact:replacement",
   "contradicted_by": [],
   "corroboration": 1
 }

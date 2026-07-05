@@ -1,8 +1,8 @@
 {
-  "chain_head": "fe2d8c7439490eb63e9dcf88b9b8d6e1433ddee7926f89ae5d8ea237f0b40561",
-  "claims": [
+  "chain_head": "d20876579316272cc1f76c463f65138fed18f1e75f6b9173c85fc089664abbf5",
+  "facts": [
     {
-      "claim_id": "claim:canon",
+      "fact_id": "fact:canon",
       "lifecycle": "Active",
       "value": "text:MIT",
       "authority": "Canonical",

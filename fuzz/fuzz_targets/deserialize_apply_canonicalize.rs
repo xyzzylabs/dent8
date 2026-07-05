@@ -1,4 +1,4 @@
-//! Fuzz the most attacker-exposed path in dent8: **untrusted bytes → `ClaimEvent`
+//! Fuzz the most attacker-exposed path in dent8: **untrusted bytes → `FactEvent`
 //! deserialize → firewall fold → canonicalize/hash/attest**.
 //!
 //! Every stored log line, Postgres/SQLite `event_json` row, and MCP payload takes this path,
@@ -9,20 +9,20 @@
 //!    identical bytes (otherwise a stored hash would fail after a round-trip).
 //! 2. `event_hash` is deterministic over those bytes.
 //! 3. `attestation_message` never panics and is independent of any carried attestation.
-//! 4. The pure fold (`replay_claim`) accepts or rejects — it must never panic.
+//! 4. The pure fold (`replay_fact`) accepts or rejects — it must never panic.
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let Ok(event) = serde_json::from_slice::<dent8_core::ClaimEvent>(data) else {
+    let Ok(event) = serde_json::from_slice::<dent8_core::FactEvent>(data) else {
         return;
     };
 
     // (1) Reload stability: canonical form must be a fixed point through serde.
     let canonical = dent8_core::canonical_bytes(&event).expect("canonicalize accepted event");
-    let reparsed: dent8_core::ClaimEvent =
+    let reparsed: dent8_core::FactEvent =
         serde_json::from_slice(&canonical).expect("canonical bytes re-parse");
     let recanonical = dent8_core::canonical_bytes(&reparsed).expect("re-canonicalize");
     assert_eq!(canonical, recanonical, "canonical bytes are not a fixed point");
@@ -43,5 +43,5 @@ fuzz_target!(|data: &[u8]| {
     );
 
     // (4) The pure firewall fold is total: accept or reject, never panic.
-    let _ = dent8_store::replay_claim(std::slice::from_ref(&event));
+    let _ = dent8_store::replay_fact(std::slice::from_ref(&event));
 });

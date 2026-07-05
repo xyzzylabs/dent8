@@ -13,11 +13,10 @@
 //! - **The external anchor accepts its own log and rejects any change.**
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, CanonicalJson, ClaimEvent, ClaimEventId, ClaimEventKind,
-    ClaimId, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId,
-    EvidenceKind, ExpirationReason, Predicate, Provenance, RetractionReason, SourceId,
-    SupersessionReason, TimestampMillis, Ttl, anchor_head, canonical_bytes, event_hash, hash_chain,
-    verify_anchor,
+    ActorId, Authority, AuthorityLevel, CanonicalJson, Confidence, ContradictionBasis, EntityRef,
+    Evidence, EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind,
+    FactId, FactValue, Predicate, Provenance, RetractionReason, SourceId, SupersessionReason,
+    TimestampMillis, Ttl, anchor_head, canonical_bytes, event_hash, hash_chain, verify_anchor,
 };
 use proptest::prelude::*;
 use serde_json::Value as JsonValue;
@@ -100,16 +99,16 @@ fn arb_ttl() -> impl Strategy<Value = Ttl> {
     ]
 }
 
-fn arb_value() -> impl Strategy<Value = Option<ClaimValue>> {
+fn arb_value() -> impl Strategy<Value = Option<FactValue>> {
     prop_oneof![
         Just(None),
-        any::<String>().prop_map(|s| Some(ClaimValue::Text(s))),
-        arb_json().prop_map(|v| Some(ClaimValue::json(&v.to_string()).expect("valid json"))),
-        Just(Some(ClaimValue::Redacted)),
+        any::<String>().prop_map(|s| Some(FactValue::Text(s))),
+        arb_json().prop_map(|v| Some(FactValue::json(&v.to_string()).expect("valid json"))),
+        Just(Some(FactValue::Redacted)),
     ]
 }
 
-fn arb_kind() -> impl Strategy<Value = ClaimEventKind> {
+fn arb_kind() -> impl Strategy<Value = FactEventKind> {
     let sup_reason = prop_oneof![
         Just(SupersessionReason::NewerObservation),
         Just(SupersessionReason::HigherAuthority),
@@ -134,22 +133,22 @@ fn arb_kind() -> impl Strategy<Value = ClaimEventKind> {
     ];
     // All eight variants, so every embedded reason/basis enum is round-trip-tested.
     prop_oneof![
-        Just(ClaimEventKind::Asserted),
-        arb_id().prop_map(|by| ClaimEventKind::Reinforced {
-            by: ClaimId::new(by).expect("claim id"),
+        Just(FactEventKind::Asserted),
+        arb_id().prop_map(|by| FactEventKind::Reinforced {
+            by: FactId::new(by).expect("fact id"),
         }),
-        (arb_id(), basis).prop_map(|(by, basis)| ClaimEventKind::Contradicted {
-            by: ClaimId::new(by).expect("claim id"),
+        (arb_id(), basis).prop_map(|(by, basis)| FactEventKind::Contradicted {
+            by: FactId::new(by).expect("fact id"),
             basis,
         }),
-        (arb_id(), sup_reason).prop_map(|(by, reason)| ClaimEventKind::Superseded {
-            by: ClaimId::new(by).expect("claim id"),
+        (arb_id(), sup_reason).prop_map(|(by, reason)| FactEventKind::Superseded {
+            by: FactId::new(by).expect("fact id"),
             reason,
         }),
-        expiration.prop_map(|reason| ClaimEventKind::Expired { reason }),
-        retraction.prop_map(|reason| ClaimEventKind::Retracted { reason }),
-        any::<String>().prop_map(|purpose| ClaimEventKind::Retrieved { purpose }),
-        any::<String>().prop_map(|decision_id| ClaimEventKind::UsedInDecision { decision_id }),
+        expiration.prop_map(|reason| FactEventKind::Expired { reason }),
+        retraction.prop_map(|reason| FactEventKind::Retracted { reason }),
+        any::<String>().prop_map(|purpose| FactEventKind::Retrieved { purpose }),
+        any::<String>().prop_map(|decision_id| FactEventKind::UsedInDecision { decision_id }),
     ]
 }
 
@@ -201,10 +200,10 @@ fn arb_provenance() -> impl Strategy<Value = Provenance> {
         )
 }
 
-/// An arbitrary, structurally-valid [`ClaimEvent`]. Semantic validity (a coherent event
+/// An arbitrary, structurally-valid [`FactEvent`]. Semantic validity (a coherent event
 /// *sequence*) is irrelevant here — these properties exercise canonicalization, hashing,
 /// and anchoring, which operate on individual events as opaque records.
-fn arb_event() -> impl Strategy<Value = ClaimEvent> {
+fn arb_event() -> impl Strategy<Value = FactEvent> {
     (
         arb_id(),
         arb_id(),
@@ -225,7 +224,7 @@ fn arb_event() -> impl Strategy<Value = ClaimEvent> {
         .prop_map(
             |(
                 event_id,
-                claim_id,
+                fact_id,
                 kind,
                 (subject_kind, subject_key),
                 (predicate, value, observed_at, valid_from),
@@ -234,9 +233,9 @@ fn arb_event() -> impl Strategy<Value = ClaimEvent> {
                 ttl,
                 provenance,
                 evidence,
-            )| ClaimEvent {
-                event_id: ClaimEventId::new(event_id).expect("event id"),
-                claim_id: ClaimId::new(claim_id).expect("claim id"),
+            )| FactEvent {
+                event_id: FactEventId::new(event_id).expect("event id"),
+                fact_id: FactId::new(fact_id).expect("fact id"),
                 kind,
                 subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
                 predicate: Predicate::new(predicate).expect("predicate"),
@@ -265,9 +264,9 @@ proptest! {
         let twice = CanonicalJson::new(once.as_str()).expect("valid json");
         prop_assert_eq!(&once, &twice);
 
-        let value = ClaimValue::Json(once.clone());
+        let value = FactValue::Json(once.clone());
         let bytes = serde_json::to_string(&value).expect("serialize");
-        let reloaded: ClaimValue = serde_json::from_str(&bytes).expect("deserialize");
+        let reloaded: FactValue = serde_json::from_str(&bytes).expect("deserialize");
         prop_assert_eq!(value, reloaded);
     }
 
@@ -306,7 +305,7 @@ proptest! {
     #[test]
     fn event_canonical_bytes_round_trips_through_serde(e in arb_event()) {
         let canon = canonical_bytes(&e).expect("canonicalize");
-        let reloaded: ClaimEvent = serde_json::from_slice(&canon).expect("deserialize");
+        let reloaded: FactEvent = serde_json::from_slice(&canon).expect("deserialize");
         prop_assert_eq!(canonical_bytes(&reloaded).expect("re-canonicalize"), canon);
     }
 
@@ -315,7 +314,7 @@ proptest! {
     fn event_hash_is_reload_stable(e in arb_event()) {
         let original = event_hash(&e, None).expect("hash");
         let canon = canonical_bytes(&e).expect("canonicalize");
-        let reloaded: ClaimEvent = serde_json::from_slice(&canon).expect("deserialize");
+        let reloaded: FactEvent = serde_json::from_slice(&canon).expect("deserialize");
         prop_assert_eq!(event_hash(&reloaded, None).expect("hash"), original);
     }
 

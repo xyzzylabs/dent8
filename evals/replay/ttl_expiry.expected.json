@@ -1,8 +1,8 @@
 {
-  "chain_head": "89e28b32cc65ad84ea9995a33875836e2f463a49f2bcf97b0fdacdcc3354ad11",
-  "claims": [
+  "chain_head": "385cf8a2b30b22c2d202a2f0348cd5adbb6848fd18fdeac84e8a92fef9308377",
+  "facts": [
     {
-      "claim_id": "claim:flag",
+      "fact_id": "fact:flag",
       "lifecycle": "Active",
       "value": "text:beta-x",
       "authority": "Medium",

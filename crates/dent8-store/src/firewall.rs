@@ -4,30 +4,30 @@
 //! It is *not* an optional wrapper — `append` itself calls it, so there is no
 //! un-arbitrated write path. It enforces two layers:
 //!
-//! 1. **Per-claim** ([`apply_event`]): schema validation, the *stated* authority gate,
+//! 1. **Per-fact** ([`apply_event`]): schema validation, the *stated* authority gate,
 //!    the canonical-contradiction hard-alarm, terminal immutability, duplicate detection.
-//! 2. **Entity-aware** (anti-laundering): a `Superseded` event names a *replacing claim*;
-//!    the firewall resolves that claim's **actual** authority and rejects the write if it
+//! 2. **Entity-aware** (anti-laundering): a `Superseded` event names a *replacing fact*;
+//!    the firewall resolves that fact's **actual** authority and rejects the write if it
 //!    is below the incumbent's. This closes the over-stated-authority hole that the
-//!    per-claim gate alone cannot see, because a supersession event can claim any
-//!    authority while the claim behind it is weak.
+//!    per-fact gate alone cannot see, because a supersession event can assert any
+//!    authority while the fact behind it is weak.
 
-use dent8_core::{ClaimEvent, ClaimEventKind, apply_event};
+use dent8_core::{FactEvent, FactEventKind, apply_event};
 
-use crate::{EventStore, StoreError, replay_claim};
+use crate::{EventStore, StoreError, replay_fact};
 
 /// Arbitrate `candidate` against the store's current state. Returns `Ok(())` if the
 /// write is admissible; otherwise a [`StoreError`] describing the rejection. Called by
 /// every `EventStore::append` implementation before it persists. Thin I/O wrapper around
-/// [`arbitrate_events`]: it loads the candidate's claim stream (and, for a supersession,
-/// the replacing claim's stream) and delegates the decision.
-pub fn arbitrate<S>(store: &S, candidate: &ClaimEvent) -> Result<(), StoreError>
+/// [`arbitrate_events`]: it loads the candidate's fact stream (and, for a supersession,
+/// the replacing fact's stream) and delegates the decision.
+pub fn arbitrate<S>(store: &S, candidate: &FactEvent) -> Result<(), StoreError>
 where
     S: EventStore + ?Sized,
 {
-    let existing = store.load_claim_events(&candidate.claim_id)?;
+    let existing = store.load_fact_events(&candidate.fact_id)?;
     let replacing = match &candidate.kind {
-        ClaimEventKind::Superseded { by, .. } => Some(store.load_claim_events(by)?),
+        FactEventKind::Superseded { by, .. } => Some(store.load_fact_events(by)?),
         _ => None,
     };
     arbitrate_events(candidate, &existing, replacing.as_deref())
@@ -35,31 +35,31 @@ where
 
 /// The **pure, I/O-free firewall decision** over already-loaded event streams — the single
 /// security decision shared by every backend (the synchronous [`crate::InMemoryEventStore`]
-/// and any async adapter), so they cannot diverge. `existing` is the candidate's own claim
-/// stream in order; `replacing` is the stream of the claim a `Superseded` candidate names
-/// (ignored for other kinds; `None` is treated as an absent claim).
+/// and any async adapter), so they cannot diverge. `existing` is the candidate's own fact
+/// stream in order; `replacing` is the stream of the fact a `Superseded` candidate names
+/// (ignored for other kinds; `None` is treated as an absent fact).
 ///
-/// Enforces both firewall layers: the per-claim stated-authority gate, terminal/shape
+/// Enforces both firewall layers: the per-fact stated-authority gate, terminal/shape
 /// invariants and the canonical hard-alarm (via [`apply_event`]); and the entity-aware
-/// anti-laundering check (a supersession must be backed by a *real* claim that out-ranks
+/// anti-laundering check (a supersession must be backed by a *real* fact that out-ranks
 /// the incumbent).
 pub fn arbitrate_events(
-    candidate: &ClaimEvent,
-    existing: &[ClaimEvent],
-    replacing: Option<&[ClaimEvent]>,
+    candidate: &FactEvent,
+    existing: &[FactEvent],
+    replacing: Option<&[FactEvent]>,
 ) -> Result<(), StoreError> {
-    let current = replay_claim(existing).map_err(StoreError::Replay)?;
+    let current = replay_fact(existing).map_err(StoreError::Replay)?;
     let incumbent_authority = current.as_ref().map(|state| state.authority.level);
 
-    // Per-claim arbitration (gates on the event's own stated authority).
+    // Per-fact arbitration (gates on the event's own stated authority).
     apply_event(current, candidate).map_err(StoreError::Rejected)?;
 
-    // Entity-aware anti-laundering: a supersession must be backed by a *real* claim that
-    // out-ranks the incumbent, not merely by an event that claims high authority.
-    if let ClaimEventKind::Superseded { by, .. } = &candidate.kind {
+    // Entity-aware anti-laundering: a supersession must be backed by a *real* fact that
+    // out-ranks the incumbent, not merely by an event that asserts high authority.
+    if let FactEventKind::Superseded { by, .. } = &candidate.kind {
         let incumbent = incumbent_authority.expect("a supersession has an incumbent");
         let target = match replacing {
-            Some(events) => replay_claim(events).map_err(StoreError::Replay)?,
+            Some(events) => replay_fact(events).map_err(StoreError::Replay)?,
             None => None,
         };
         match target {
@@ -81,23 +81,23 @@ pub fn arbitrate_events(
 mod tests {
     use crate::{EventStore, InMemoryEventStore, StoreError};
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-        ClaimLifecycle, ClaimValue, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind,
+        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
+        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue,
         Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis, TransitionError, Ttl,
     };
 
     fn assert_event(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         value: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         base(
             event_id,
-            claim_id,
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text(value.to_string())),
+            fact_id,
+            FactEventKind::Asserted,
+            Some(FactValue::Text(value.to_string())),
             source,
             authority,
         )
@@ -105,16 +105,16 @@ mod tests {
 
     fn supersede_event(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         by: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         base(
             event_id,
-            claim_id,
-            ClaimEventKind::Superseded {
-                by: ClaimId::new(by).expect("claim id"),
+            fact_id,
+            FactEventKind::Superseded {
+                by: FactId::new(by).expect("fact id"),
                 reason: SupersessionReason::NewerObservation,
             },
             None,
@@ -125,15 +125,15 @@ mod tests {
 
     fn base(
         event_id: &str,
-        claim_id: &str,
-        kind: ClaimEventKind,
-        value: Option<ClaimValue>,
+        fact_id: &str,
+        kind: FactEventKind,
+        value: Option<FactValue>,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new(claim_id).expect("claim id"),
+    ) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
             subject: EntityRef::new("repo", "myproj").expect("entity"),
             predicate: Predicate::new("database").expect("predicate"),
@@ -173,7 +173,7 @@ mod tests {
         let receipt = store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -189,28 +189,28 @@ mod tests {
         store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
             ))
             .expect("admitted");
-        // Claim B exists at Low so the supersession is "backed" — the rejection here is
-        // purely the per-claim stated-authority gate.
+        // Fact B exists at Low so the supersession is "backed" — the rejection here is
+        // purely the per-fact stated-authority gate.
         store
             .append(assert_event(
                 "e2",
-                "claim:B",
+                "fact:B",
                 "mysql",
                 "source:web-scrape",
                 AuthorityLevel::Low,
             ))
-            .expect("low claim may exist");
+            .expect("low fact may exist");
 
         let rejected = store.append(supersede_event(
             "e3",
-            "claim:A",
-            "claim:B",
+            "fact:A",
+            "fact:B",
             "source:web-scrape",
             AuthorityLevel::Low,
         ));
@@ -229,29 +229,29 @@ mod tests {
         store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
             ))
             .expect("admitted");
-        // The attacker's actual claim is Low authority...
+        // The attacker's actual fact is Low authority...
         store
             .append(assert_event(
                 "e2",
-                "claim:B",
+                "fact:B",
                 "mysql",
                 "source:web-scrape",
                 AuthorityLevel::Low,
             ))
-            .expect("low claim may exist");
+            .expect("low fact may exist");
 
-        // ...but the supersession EVENT claims High authority. The per-claim gate would
+        // ...but the supersession EVENT facts High authority. The per-fact gate would
         // pass; the entity-aware firewall must reject it.
         let rejected = store.append(supersede_event(
             "e3",
-            "claim:A",
-            "claim:B",
+            "fact:A",
+            "fact:B",
             "source:web-scrape",
             AuthorityLevel::High,
         ));
@@ -266,12 +266,12 @@ mod tests {
     }
 
     #[test]
-    fn a_supersession_by_a_genuinely_stronger_claim_is_admitted() {
+    fn a_supersession_by_a_genuinely_stronger_fact_is_admitted() {
         let mut store = InMemoryEventStore::new();
         store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -280,7 +280,7 @@ mod tests {
         store
             .append(assert_event(
                 "e2",
-                "claim:B",
+                "fact:B",
                 "mariadb",
                 "source:owner",
                 AuthorityLevel::High,
@@ -289,8 +289,8 @@ mod tests {
         store
             .append(supersede_event(
                 "e3",
-                "claim:A",
-                "claim:B",
+                "fact:A",
+                "fact:B",
                 "source:owner",
                 AuthorityLevel::High,
             ))
@@ -298,22 +298,22 @@ mod tests {
 
         let receipt = store
             .explain(
-                &ClaimId::new("claim:A").unwrap(),
+                &FactId::new("fact:A").unwrap(),
                 TimestampMillis::from_unix_millis(100),
             )
             .expect("explain")
             .expect("present");
-        assert_eq!(receipt.lifecycle, ClaimLifecycle::Superseded);
+        assert_eq!(receipt.lifecycle, FactLifecycle::Superseded);
         assert!(receipt.chain_verified);
     }
 
     #[test]
-    fn a_supersession_by_a_nonexistent_claim_is_rejected() {
+    fn a_supersession_by_a_nonexistent_fact_is_rejected() {
         let mut store = InMemoryEventStore::new();
         store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -321,8 +321,8 @@ mod tests {
             .expect("admitted");
         let rejected = store.append(supersede_event(
             "e2",
-            "claim:A",
-            "claim:ghost",
+            "fact:A",
+            "fact:ghost",
             "source:owner",
             AuthorityLevel::High,
         ));

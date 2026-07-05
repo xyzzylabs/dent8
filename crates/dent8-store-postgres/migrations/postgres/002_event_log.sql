@@ -15,7 +15,7 @@
 CREATE TABLE IF NOT EXISTS dent8_event_log (
     global_sequence BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     event_id TEXT NOT NULL UNIQUE,
-    claim_id TEXT NOT NULL,
+    fact_id TEXT NOT NULL,
     subject_type TEXT NOT NULL,
     subject_key TEXT NOT NULL,
     predicate TEXT NOT NULL,
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS dent8_event_log (
 );
 
 CREATE INDEX IF NOT EXISTS dent8_event_log_claim_seq_idx
-    ON dent8_event_log (claim_id, global_sequence);
+    ON dent8_event_log (fact_id, global_sequence);
 
 CREATE INDEX IF NOT EXISTS dent8_event_log_subject_idx
     ON dent8_event_log (subject_type, subject_key, predicate, global_sequence);

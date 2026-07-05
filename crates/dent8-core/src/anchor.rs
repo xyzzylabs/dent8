@@ -28,7 +28,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::hash::{CANON_VERSION, CanonError, hash_chain};
-use crate::model::ClaimEvent;
+use crate::model::FactEvent;
 
 /// Domain-separation prefix for an anchor (tree-head) commitment — distinct from the
 /// `0x00` leaf and `0x01` interior-node prefixes used in [`crate::hash`].
@@ -53,7 +53,7 @@ pub struct ChainAnchor {
 /// Commit to the current chain head under `witness_key`. For the anchor to add
 /// tamper-*resistance* (not just evidence), the key must be held by a party **other than**
 /// the log writer — a writer who also holds the key can simply re-anchor a rewrite.
-pub fn anchor_head(events: &[ClaimEvent], witness_key: &[u8]) -> Result<ChainAnchor, CanonError> {
+pub fn anchor_head(events: &[FactEvent], witness_key: &[u8]) -> Result<ChainAnchor, CanonError> {
     let head = hash_chain(events)?.pop();
     let event_count = events.len() as u64;
     let mac = hex::encode(hmac_sha256(
@@ -76,7 +76,7 @@ pub fn anchor_head(events: &[ClaimEvent], witness_key: &[u8]) -> Result<ChainAnc
 /// that the anchor is valid — treat it as **not verified**. Never collapse the result with
 /// `.is_ok()` or `.unwrap_or(true)`: only `Ok(true)` means verified.
 pub fn verify_anchor(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     anchor: &ChainAnchor,
     witness_key: &[u8],
 ) -> Result<bool, CanonError> {
@@ -180,7 +180,7 @@ pub struct SignedTreeHead {
 /// domain-separated message the HMAC anchor uses, so the framings cannot be confused.
 #[cfg(feature = "signed-anchor")]
 pub fn sign_head(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     signing_key: &ed25519_dalek::SigningKey,
 ) -> Result<SignedTreeHead, CanonError> {
     use ed25519_dalek::Signer;
@@ -204,7 +204,7 @@ pub fn sign_head(
 /// `.is_ok()` or `.unwrap_or(true)`: only `Ok(true)` means verified.
 #[cfg(feature = "signed-anchor")]
 pub fn verify_signed_head(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     head: &SignedTreeHead,
     verifying_key: &ed25519_dalek::VerifyingKey,
 ) -> Result<bool, CanonError> {
@@ -237,22 +237,22 @@ pub fn verify_signed_head(
 #[cfg(test)]
 mod tests {
     use super::{ChainAnchor, anchor_head, hmac_sha256, verify_anchor};
-    use crate::ids::{ActorId, ClaimEventId, ClaimId, EvidenceId, SourceId, TimestampMillis};
+    use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, ClaimEvent, ClaimEventKind, ClaimValue, Confidence, EntityRef,
-        Evidence, EvidenceKind, Predicate, Provenance, Ttl,
+        Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceKind, FactEvent,
+        FactEventKind, FactValue, Predicate, Provenance, Ttl,
     };
 
     const KEY: &[u8] = b"witness-secret-held-off-the-writer";
 
-    fn asserted(event_id: &str, value: &str) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new("claim:1").expect("claim id"),
-            kind: ClaimEventKind::Asserted,
+    fn asserted(event_id: &str, value: &str) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new("fact:1").expect("fact id"),
+            kind: FactEventKind::Asserted,
             subject: EntityRef::new("repo", "dent8").expect("entity"),
             predicate: Predicate::new("database").expect("predicate"),
-            value: Some(ClaimValue::Text(value.to_string())),
+            value: Some(FactValue::Text(value.to_string())),
             confidence: Confidence::from_millis(900).expect("confidence"),
             authority: Authority {
                 level: AuthorityLevel::High,
@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn an_empty_log_anchors_and_verifies() {
-        let events: [ClaimEvent; 0] = [];
+        let events: [FactEvent; 0] = [];
         let anchor = anchor_head(&events, KEY).expect("anchor");
         assert_eq!(anchor.event_count, 0);
         assert!(anchor.head.is_none());

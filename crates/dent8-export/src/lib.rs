@@ -6,9 +6,9 @@
 //! with the queryable scalars promoted to columns (the value carries an explicit `value_kind`
 //! discriminator so redacted is never confused with absent; `authority` is a stable name, not a
 //! debug string) *and* the `DerivedFrom` dependency edges as a `derived_from` **list** column
-//! (`UNNEST` it — a claim id may contain any character, so it is not delimiter-packed). So
+//! (`UNNEST` it — a fact id may contain any character, so it is not delimiter-packed). So
 //! forensic/audit/replay questions ("every write by `source:web-scrape`", "what was derived from
-//! `claim:X`", "events per predicate over time") are plain SQL. The full canonical event is
+//! `fact:X`", "events per predicate over time") are plain SQL. The full canonical event is
 //! retained in `event_json` for anything the columns omit.
 //!
 //! This is **read-only export**, not a runtime store (see `docs/storage.md`). The log remains
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, ListBuilder, StringArray, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use dent8_core::{ClaimEvent, ClaimValue};
+use dent8_core::{FactEvent, FactValue};
 use parquet::arrow::ArrowWriter;
 
 /// A failure to build or write the Parquet export.
@@ -53,7 +53,7 @@ fn event_schema(derived_from_type: DataType) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new("sequence", DataType::Int64, false),
         Field::new("event_id", DataType::Utf8, false),
-        Field::new("claim_id", DataType::Utf8, false),
+        Field::new("fact_id", DataType::Utf8, false),
         Field::new("kind", DataType::Utf8, false),
         Field::new("subject_kind", DataType::Utf8, false),
         Field::new("subject_key", DataType::Utf8, false),
@@ -72,16 +72,16 @@ fn event_schema(derived_from_type: DataType) -> Arc<Schema> {
     ]))
 }
 
-/// Split a claim value into `(value, value_kind)`: the raw string plus a discriminator
+/// Split a fact value into `(value, value_kind)`: the raw string plus a discriminator
 /// (`"text"` / `"json"` / `"redacted"`), or `(None, None)` for a genuinely absent value (the
 /// lifecycle events — retract/supersede/expire — carry no value). Keeping the kind explicit
 /// avoids the two lossy collapses a bare `value` column would have: redacted-vs-absent, and
 /// inferring Text-vs-Json from the string's shape.
-fn value_parts(value: Option<&ClaimValue>) -> (Option<String>, Option<&'static str>) {
+fn value_parts(value: Option<&FactValue>) -> (Option<String>, Option<&'static str>) {
     match value {
-        Some(ClaimValue::Text(text)) => (Some(text.clone()), Some("text")),
-        Some(ClaimValue::Json(json)) => (Some(json.as_str().to_string()), Some("json")),
-        Some(ClaimValue::Redacted) => (None, Some("redacted")),
+        Some(FactValue::Text(text)) => (Some(text.clone()), Some("text")),
+        Some(FactValue::Json(json)) => (Some(json.as_str().to_string()), Some("json")),
+        Some(FactValue::Redacted) => (None, Some("redacted")),
         None => (None, None),
     }
 }
@@ -91,13 +91,13 @@ fn value_parts(value: Option<&ClaimValue>) -> (Option<String>, Option<&'static s
 /// `writer` is any `Write` sink — a `File` for `dent8 export`, or a buffer in tests. The row
 /// order is the slice order, captured in the `sequence` column.
 pub fn export_events<W: std::io::Write + Send>(
-    events: &[ClaimEvent],
+    events: &[FactEvent],
     writer: W,
 ) -> Result<(), ExportError> {
     let len = events.len();
     let mut sequence = Vec::with_capacity(len);
     let mut event_id = Vec::with_capacity(len);
-    let mut claim_id = Vec::with_capacity(len);
+    let mut fact_id = Vec::with_capacity(len);
     let mut kind = Vec::with_capacity(len);
     let mut subject_kind = Vec::with_capacity(len);
     let mut subject_key = Vec::with_capacity(len);
@@ -108,8 +108,8 @@ pub fn export_events<W: std::io::Write + Send>(
     let mut source = Vec::with_capacity(len);
     let mut actor = Vec::with_capacity(len);
     let mut recorded_at = Vec::with_capacity(len);
-    // `derived_from` is a genuine list column (one row → zero-or-more source claim ids), not a
-    // delimiter-packed string: a claim id may legally contain a comma, so a join would be
+    // `derived_from` is a genuine list column (one row → zero-or-more source fact ids), not a
+    // delimiter-packed string: a fact id may legally contain a comma, so a join would be
     // ambiguous. A null list means "no DerivedFrom edges".
     let mut derived_from = ListBuilder::new(StringBuilder::new());
     let mut event_json = Vec::with_capacity(len);
@@ -117,7 +117,7 @@ pub fn export_events<W: std::io::Write + Send>(
     for (index, event) in events.iter().enumerate() {
         sequence.push(i64::try_from(index).unwrap_or(i64::MAX));
         event_id.push(event.event_id.as_str().to_string());
-        claim_id.push(event.claim_id.as_str().to_string());
+        fact_id.push(event.fact_id.as_str().to_string());
         kind.push(event.kind.name().to_string());
         subject_kind.push(event.subject.kind().to_string());
         subject_key.push(event.subject.key().to_string());
@@ -146,7 +146,7 @@ pub fn export_events<W: std::io::Write + Send>(
     let columns: Vec<ArrayRef> = vec![
         Arc::new(Int64Array::from(sequence)),
         Arc::new(StringArray::from(event_id)),
-        Arc::new(StringArray::from(claim_id)),
+        Arc::new(StringArray::from(fact_id)),
         Arc::new(StringArray::from(kind)),
         Arc::new(StringArray::from(subject_kind)),
         Arc::new(StringArray::from(subject_key)),
@@ -173,13 +173,13 @@ mod tests {
     use super::export_events;
     use arrow::array::{Array, StringArray};
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-        ClaimValue, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind, Predicate,
+        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
+        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate,
         Provenance, SourceId, TimestampMillis, Ttl,
     };
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-    fn asserted(event_id: &str, claim_id: &str, derived_from: &[&str]) -> ClaimEvent {
+    fn asserted(event_id: &str, fact_id: &str, derived_from: &[&str]) -> FactEvent {
         let mut evidence = vec![Evidence {
             id: EvidenceId::new("evidence:base").unwrap(),
             kind: EvidenceKind::UserStatement,
@@ -196,13 +196,13 @@ mod tests {
                 summary: None,
             });
         }
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).unwrap(),
-            claim_id: ClaimId::new(claim_id).unwrap(),
-            kind: ClaimEventKind::Asserted,
+        FactEvent {
+            event_id: FactEventId::new(event_id).unwrap(),
+            fact_id: FactId::new(fact_id).unwrap(),
+            kind: FactEventKind::Asserted,
             subject: EntityRef::new("repo", "proj").unwrap(),
             predicate: Predicate::new("database").unwrap(),
-            value: Some(ClaimValue::Text("postgres".to_string())),
+            value: Some(FactValue::Text("postgres".to_string())),
             confidence: Confidence::from_millis(900).unwrap(),
             authority: Authority {
                 level: AuthorityLevel::High,
@@ -229,8 +229,8 @@ mod tests {
     #[test]
     fn events_round_trip_through_parquet_with_columns_and_edges() {
         let events = vec![
-            asserted("event:0", "claim:source", &[]),
-            asserted("event:1", "claim:derived", &["claim:source"]),
+            asserted("event:0", "fact:source", &[]),
+            asserted("event:1", "fact:derived", &["fact:source"]),
         ];
         let mut buffer: Vec<u8> = Vec::new();
         export_events(&events, &mut buffer).expect("export");
@@ -255,7 +255,7 @@ mod tests {
         let event_id = col("event_id");
         assert_eq!(event_id.value(0), "event:0");
         let kind = col("kind");
-        assert_eq!(kind.value(0), "claim.asserted");
+        assert_eq!(kind.value(0), "fact.asserted");
         let source = col("source");
         assert_eq!(source.value(1), "source:owner");
         // The value carries its kind discriminator (text/json/redacted), not an inferred shape.
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(value_kind.value(0), "text");
         // The authority column uses the stable name(), not Debug.
         let authority = col("authority");
-        assert_eq!(authority.value(0), "High");
+        assert_eq!(authority.value(0), "high");
         // The dependency edges are a real list: a null list for the source row, a one-element
         // list for the derived row (no delimiter ambiguity even if an id contained a comma).
         let derived_idx = batch.schema().index_of("derived_from").unwrap();
@@ -276,6 +276,6 @@ mod tests {
         let row1 = derived.value(1);
         let row1 = row1.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(row1.len(), 1);
-        assert_eq!(row1.value(0), "claim:source");
+        assert_eq!(row1.value(0), "fact:source");
     }
 }

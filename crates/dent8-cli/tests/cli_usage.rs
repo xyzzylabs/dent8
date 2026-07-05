@@ -189,7 +189,7 @@ fn read_audit_commands_emit_machine_readable_json() {
     assert_eq!(explain["predicate"], "favorite_drink");
     assert_eq!(explain["value"]["kind"], "text");
     assert_eq!(explain["value"]["text"], "tea");
-    assert_eq!(explain["authority"], "High");
+    assert_eq!(explain["authority"], "high");
     assert!(
         explain["event_hash"]
             .as_str()
@@ -307,7 +307,7 @@ fn replay_and_conflicts_emit_machine_readable_json() {
     assert_eq!(replay["status"], "ok");
     assert_eq!(replay["tool"], "replay");
     assert_eq!(replay["event_count"], 1);
-    assert_eq!(replay["events"][0]["kind"], "claim.asserted");
+    assert_eq!(replay["events"][0]["kind"], "fact.asserted");
     assert_eq!(replay["events"][0]["source"], "user:alice");
     assert_eq!(replay["events"][0]["value"]["text"], "tea");
     assert_eq!(replay["current"]["value"]["text"], "tea");
@@ -429,7 +429,7 @@ fn write_commands_emit_machine_readable_json() {
     assert_eq!(asserted["subject"]["key"], "alice");
     assert_eq!(asserted["predicate"], "favorite_drink");
     assert_eq!(asserted["value"]["text"], "tea");
-    assert_eq!(asserted["authority"], "High");
+    assert_eq!(asserted["authority"], "high");
     assert_eq!(asserted["source"], "user:alice");
 
     let rejected = run_dent8(
@@ -554,7 +554,7 @@ fn authority_commands_emit_machine_readable_json() {
     assert_eq!(add["status"], "ok");
     assert_eq!(add["tool"], "authority add");
     assert_eq!(add["source"], "source:codex");
-    assert_eq!(add["max_authority"], "High");
+    assert_eq!(add["max_authority"], "high");
     assert_eq!(add["issuer"], "owner");
     assert_eq!(add["scope"], "project:dent8");
     assert_eq!(add["issuer_enforced"], false);
@@ -567,7 +567,7 @@ fn authority_commands_emit_machine_readable_json() {
     assert_eq!(listed["enforcement"], "deny_by_default");
     assert_eq!(listed["count"], 1);
     assert_eq!(listed["sources"][0]["source"], "source:codex");
-    assert_eq!(listed["sources"][0]["max_authority"], "High");
+    assert_eq!(listed["sources"][0]["max_authority"], "high");
     assert_eq!(listed["sources"][0]["issuer"], "owner");
     assert_eq!(listed["sources"][0]["scope"], "project:dent8");
 
@@ -1575,7 +1575,7 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
 
     let authority = fs::read_to_string(&authority_path).expect("authority registry");
     assert!(authority.contains("source:local"));
-    assert!(authority.contains("High"));
+    assert!(authority.contains("high"));
     assert!(log_path.exists(), "init should create the file dev log");
 
     let log = log_path.to_string_lossy().into_owned();
@@ -2497,7 +2497,7 @@ fn init_emits_machine_readable_json() {
     );
     assert_eq!(init["identity"]["source"], "source:codex");
     assert_eq!(init["identity"]["issuer"], "owner");
-    assert_eq!(init["identity"]["max_authority"], "High");
+    assert_eq!(init["identity"]["max_authority"], "high");
     assert_eq!(
         init["identity"]["issuer_key_path"],
         fs::canonicalize(&issuer_key)
@@ -3604,7 +3604,7 @@ fn agent_add_emits_machine_readable_json() {
         added["store_url"],
         format!("sqlite://{}", temp.file(".dent8/dent8.db").display())
     );
-    assert_eq!(added["authority"]["max_authority"], "High");
+    assert_eq!(added["authority"]["max_authority"], "high");
     assert_eq!(added["identity"]["reused"], false);
     assert_eq!(
         added["identity"]["env_file"],
@@ -3706,7 +3706,7 @@ fn agent_add_preserves_existing_authority_ceiling_when_reused() {
         serde_json::from_str(&fs::read_to_string(&authority).expect("authority registry"))
             .expect("authority registry json");
     assert_eq!(
-        registry["sources"]["source:claude-code"]["max_authority"], "Medium",
+        registry["sources"]["source:claude-code"]["max_authority"], "medium",
         "repeat agent add must not silently raise an existing authority ceiling"
     );
 }
@@ -4723,7 +4723,7 @@ fn identity_lifecycle_commands_emit_machine_readable_json() {
     assert_eq!(bootstrapped["dir"], canonical_dir);
     assert_eq!(bootstrapped["source"], "source:codex");
     assert_eq!(bootstrapped["issuer"], "owner");
-    assert_eq!(bootstrapped["max_authority"], "High");
+    assert_eq!(bootstrapped["max_authority"], "high");
     assert_eq!(
         bootstrapped["env_file"],
         fs::canonicalize(dir.join("identity-codex.env"))
@@ -4911,7 +4911,7 @@ fn identity_artifact_commands_emit_machine_readable_json() {
     assert_eq!(grant_issued["tool"], "identity grant-issue");
     assert_eq!(grant_issued["source"], "source:codex");
     assert_eq!(grant_issued["issuer"], "owner");
-    assert_eq!(grant_issued["max_authority"], "High");
+    assert_eq!(grant_issued["max_authority"], "high");
     assert!(temp.file("codex.grant.json").exists());
 
     let verified = run_dent8(
@@ -4925,7 +4925,7 @@ fn identity_artifact_commands_emit_machine_readable_json() {
     assert_eq!(verified["tool"], "identity grant-verify");
     assert_eq!(verified["path"], grant);
     assert_eq!(verified["source"], "source:codex");
-    assert_eq!(verified["max_authority"], "High");
+    assert_eq!(verified["max_authority"], "high");
 }
 
 #[cfg(feature = "identity")]
@@ -6599,7 +6599,7 @@ fn security_artifacts_reject_unknown_fields() {
     let authority = temp.file("authority.json").to_string_lossy().into_owned();
     fs::write(
         &authority,
-        r#"{"sources":{"source:codex":{"max_authority":"High","backdoor":true}}}"#,
+        r#"{"sources":{"source:codex":{"max_authority":"high","backdoor":true}}}"#,
     )
     .expect("write authority");
     let write = run_dent8(

@@ -11,7 +11,7 @@
 
 -- The current folded `ClaimState` per claim. Upserted on every accepted append.
 CREATE TABLE IF NOT EXISTS dent8_claim_projection (
-    claim_id TEXT PRIMARY KEY,
+    fact_id TEXT PRIMARY KEY,
     subject_type TEXT NOT NULL,
     subject_key TEXT NOT NULL,
     predicate TEXT NOT NULL,

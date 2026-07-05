@@ -44,10 +44,10 @@ echo "## writes by source"
 duckdb -c "SELECT source, count(*) AS writes FROM '$OUT' GROUP BY 1 ORDER BY 2 DESC"
 
 echo "## event timeline (kind per claim, in order)"
-duckdb -c "SELECT sequence, kind, claim_id FROM '$OUT' ORDER BY sequence"
+duckdb -c "SELECT sequence, kind, fact_id FROM '$OUT' ORDER BY sequence"
 
 echo "## the dependency graph — what was derived from what (derived_from is a LIST; UNNEST it)"
-duckdb -c "SELECT claim_id, UNNEST(derived_from) AS source_claim FROM '$OUT' WHERE derived_from IS NOT NULL"
+duckdb -c "SELECT fact_id, UNNEST(derived_from) AS source_claim FROM '$OUT' WHERE derived_from IS NOT NULL"
 
 echo "## re-emit as JSON (DuckDB is the bridge to other tools)"
 # LIMIT 1 in SQL rather than \`| head -1\`: piping to head would close the pipe early and, under

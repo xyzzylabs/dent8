@@ -7,7 +7,7 @@
 use crate::{env_flag, log_path, verify_log};
 
 /// Built-in helper for provider hook systems. It intentionally does not write native memory
-/// files; it only runs `verify` or blocks writes that would bypass the claim-event firewall.
+/// files; it only runs `verify` or blocks writes that would bypass the fact-event firewall.
 pub(crate) fn cmd_hook_native_memory_guard() -> i32 {
     let mode = std::env::var("DENT8_HOOK_MODE")
         .unwrap_or_else(|_| "guard-native-memory-write".to_string());
@@ -54,7 +54,7 @@ pub(crate) fn cmd_hook_native_memory_guard() -> i32 {
     }
 
     eprintln!(
-        "dent8 native memory/rules guard: direct writes to {} bypass the claim-event firewall. \
+        "dent8 native memory/rules guard: direct writes to {} bypass the fact-event firewall. \
          Use dent8 MCP tools or an explicit reviewed export from dent8. Set \
          DENT8_ALLOW_NATIVE_MEMORY_WRITE=1 to bypass this local guard.",
         touched.join(", ")

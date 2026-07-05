@@ -124,12 +124,15 @@ daemon are future work.
 
 ## Status
 
-dent8 is **pre-1.0 and experimental** — the CLI and library API, and the Postgres storage
-schema, may still change between minor versions. The **event log format itself is stable**:
-fields are only ever added, and optionally, so existing events keep their exact bytes and
-hashes and an upgrade never rewrites your history. [docs/STATUS.md](docs/STATUS.md) is the
-single source of truth for what is runnable vs. library-only vs. design-only. In brief,
-runnable today:
+dent8 is **pre-1.0 and experimental** — the CLI, the library API, the on-disk event format, and
+the Postgres storage schema may all still change between minor versions. The event format is
+**versioned** by `CANON_VERSION`, mixed into every hash so encodings can never collide. v0.3
+introduces **format v2** (the `fact` vocabulary — `claim_id` → `fact_id`, lowercase `authority`);
+this is a deliberate one-time pre-1.0 break, so a v1 log does not carry forward and must be
+re-ingested from source. From v2 onward the intent is again additive-only (new fields stay
+optional and out of the hash), but that stability is not guaranteed until 1.0.
+[docs/STATUS.md](docs/STATUS.md) is the single source of truth for what is runnable vs.
+library-only vs. design-only. In brief, runnable today:
 
 - The full belief lifecycle — `assert` / `supersede` / `retract` / `contradict` / `reinforce`
   / `expire` / `derive` / `explain` / `replay` — plus the operator surfaces `facts list`,

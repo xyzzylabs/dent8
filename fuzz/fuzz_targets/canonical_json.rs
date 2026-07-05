@@ -1,4 +1,4 @@
-//! Fuzz `CanonicalJson` — the one place arbitrary *user* JSON (`ClaimValue::Json`) enters the
+//! Fuzz `CanonicalJson` — the one place arbitrary *user* JSON (`FactValue::Json`) enters the
 //! hashed payload. Its contract: canonical **by construction** (sorted keys, compact) and
 //! **idempotent** (re-canonicalizing the canonical form is the identity), for any JSON text —
 //! including non-ASCII keys, deep nesting, and pathological numbers. A violation would let two

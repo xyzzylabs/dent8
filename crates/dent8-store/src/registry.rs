@@ -5,7 +5,7 @@
 //! `branch.status`, `user.preference`. The policy lets the firewall enforce
 //! predicate-specific rules the generic core cannot know: a **minimum authority to
 //! *assert* the fact**, a **default freshness** (TTL) so volatile facts expire on their
-//! own, and **uniqueness** (at most one *fresh* believed claim per subject+predicate).
+//! own, and **uniqueness** (at most one *fresh* believed fact per subject+predicate).
 //!
 //! ## Layering and scope
 //!
@@ -18,14 +18,14 @@
 //! The authority floor gates **assertion only** — creating a new authoritative fact. It
 //! deliberately does **not** gate contradiction or reinforcement: a low-authority agent
 //! must always be able to *dissent* (file a contradiction), and that dissent must reach
-//! the core firewall so a contradiction against a canonical claim still trips the
+//! the core firewall so a contradiction against a canonical fact still trips the
 //! hard-alarm. Revising an existing fact goes through supersession, which the base
-//! firewall already gates (the replacing claim must out-rank the incumbent).
+//! firewall already gates (the replacing fact must out-rank the incumbent).
 
 use std::collections::BTreeMap;
 
 use dent8_core::{
-    AuthorityLevel, ClaimEvent, ClaimEventKind, EntityRef, Predicate, TimestampMillis, Ttl,
+    AuthorityLevel, EntityRef, FactEvent, FactEventKind, Predicate, TimestampMillis, Ttl,
 };
 
 use crate::{EventFilter, EventStore, StoreError, replay_entity};
@@ -41,14 +41,14 @@ pub enum Volatility {
 /// The policy for one kind of project fact.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PredicatePolicy {
-    /// The minimum authority required to *assert* a new claim of this fact.
+    /// The minimum authority required to *assert* a new fact of this fact.
     pub authority_floor: AuthorityLevel,
     /// The freshness applied to an assertion that does not set its own TTL. **Note:**
     /// `Ttl::Never` on an assertion is treated as "unset" and is replaced by this default
     /// when it is non-`Never` — there is currently no way for a caller to opt out of a
     /// default TTL (a known limitation; an explicit "never" sentinel is future work).
     pub default_ttl: Ttl,
-    /// Whether at most one *fresh* claim about a given subject+predicate may be believed.
+    /// Whether at most one *fresh* fact about a given subject+predicate may be believed.
     pub unique: bool,
     pub volatility: Volatility,
 }
@@ -108,7 +108,7 @@ impl PredicateRegistry {
         );
     }
 
-    /// The policy for a claim's `(subject.kind, predicate)`, if registered.
+    /// The policy for a fact's `(subject.kind, predicate)`, if registered.
     #[must_use]
     pub fn policy_for(
         &self,
@@ -128,9 +128,9 @@ fn display_key(subject: &EntityRef, predicate: &Predicate) -> String {
 /// (`Ttl::Never`). A no-op for unregistered predicates, non-assertions, or predicates
 /// whose default is itself `Never`. See [`PredicatePolicy::default_ttl`] for the
 /// `Never`-as-unset caveat.
-pub fn apply_policy_defaults(registry: &PredicateRegistry, candidate: &mut ClaimEvent) {
+pub fn apply_policy_defaults(registry: &PredicateRegistry, candidate: &mut FactEvent) {
     if let Some(policy) = registry.policy_for(&candidate.subject, &candidate.predicate)
-        && matches!(candidate.kind, ClaimEventKind::Asserted)
+        && matches!(candidate.kind, FactEventKind::Asserted)
         && candidate.ttl == Ttl::Never
     {
         candidate.ttl = policy.default_ttl.clone();
@@ -141,14 +141,14 @@ pub fn apply_policy_defaults(registry: &PredicateRegistry, candidate: &mut Claim
 ///
 /// - **Authority floor** — an *assertion* below the predicate's floor is rejected.
 ///   Contradiction and reinforcement are *not* gated (dissent must always be possible).
-/// - **Uniqueness** — a new assertion may not create a second *fresh* believed claim for
-///   the same subject+predicate; stale (TTL-expired at `now`) claims do not block it.
+/// - **Uniqueness** — a new assertion may not create a second *fresh* believed fact for
+///   the same subject+predicate; stale (TTL-expired at `now`) facts do not block it.
 ///
 /// Unregistered predicates pass. Run *before* the base firewall (`EventStore::append`).
 pub fn enforce_policy<S>(
     registry: &PredicateRegistry,
     store: &S,
-    candidate: &ClaimEvent,
+    candidate: &FactEvent,
     now: TimestampMillis,
 ) -> Result<(), StoreError>
 where
@@ -159,7 +159,7 @@ where
     };
 
     // The floor gates assertion of a new authoritative fact only — never dissent.
-    if matches!(candidate.kind, ClaimEventKind::Asserted)
+    if matches!(candidate.kind, FactEventKind::Asserted)
         && candidate.authority.level < policy.authority_floor
     {
         return Err(StoreError::BelowAuthorityFloor {
@@ -169,7 +169,7 @@ where
         });
     }
 
-    if policy.unique && matches!(candidate.kind, ClaimEventKind::Asserted) {
+    if policy.unique && matches!(candidate.kind, FactEventKind::Asserted) {
         let filter = EventFilter {
             subject: Some(candidate.subject.clone()),
             predicate: Some(candidate.predicate.clone()),
@@ -179,7 +179,7 @@ where
         let conflict = entity
             .believed()
             .filter(|state| !state.is_expired_at(now))
-            .any(|state| state.claim_id != candidate.claim_id);
+            .any(|state| state.fact_id != candidate.fact_id);
         if conflict {
             return Err(StoreError::UniquenessViolation {
                 predicate: display_key(&candidate.subject, &candidate.predicate),
@@ -195,8 +195,8 @@ mod tests {
     use super::{PredicateRegistry, Volatility, apply_policy_defaults, enforce_policy};
     use crate::{EventStore, InMemoryEventStore, StoreError};
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-        ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind,
+        ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+        EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue,
         Predicate, Provenance, SourceId, TimestampMillis, TransitionError, Ttl,
     };
 
@@ -205,17 +205,17 @@ mod tests {
     #[allow(clippy::too_many_arguments)]
     fn event(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         subject_kind: &str,
         subject_key: &str,
         predicate: &str,
-        kind: ClaimEventKind,
-        value: Option<ClaimValue>,
+        kind: FactEventKind,
+        value: Option<FactValue>,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new(claim_id).expect("claim id"),
+    ) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
             subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
             predicate: Predicate::new(predicate).expect("predicate"),
@@ -251,21 +251,21 @@ mod tests {
 
     fn assertion(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         subject_kind: &str,
         subject_key: &str,
         predicate: &str,
         value: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         event(
             event_id,
-            claim_id,
+            fact_id,
             subject_kind,
             subject_key,
             predicate,
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text(value.to_string())),
+            FactEventKind::Asserted,
+            Some(FactValue::Text(value.to_string())),
             authority,
         )
     }
@@ -273,7 +273,7 @@ mod tests {
     fn admit(
         store: &mut InMemoryEventStore,
         registry: &PredicateRegistry,
-        mut candidate: ClaimEvent,
+        mut candidate: FactEvent,
         now: TimestampMillis,
     ) -> Result<(), StoreError> {
         apply_policy_defaults(registry, &mut candidate);
@@ -290,7 +290,7 @@ mod tests {
             &registry,
             assertion(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "repo",
                 "myproj",
                 "database",
@@ -319,7 +319,7 @@ mod tests {
             &registry,
             assertion(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "repo",
                 "myproj",
                 "database",
@@ -333,12 +333,12 @@ mod tests {
         // A Low-authority agent contradicts the High fact — the floor must NOT block it.
         let contradiction = event(
             "e2",
-            "claim:A",
+            "fact:A",
             "repo",
             "myproj",
             "database",
-            ClaimEventKind::Contradicted {
-                by: ClaimId::new("claim:rumor").expect("claim id"),
+            FactEventKind::Contradicted {
+                by: FactId::new("fact:rumor").expect("fact id"),
                 basis: ContradictionBasis::SamePredicateDifferentValue,
             },
             None,
@@ -366,7 +366,7 @@ mod tests {
             &registry,
             assertion(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "repo",
                 "myproj",
                 "database",
@@ -381,12 +381,12 @@ mod tests {
         // NOT be masked as a routine BelowAuthorityFloor policy denial.
         let contradiction = event(
             "e2",
-            "claim:A",
+            "fact:A",
             "repo",
             "myproj",
             "database",
-            ClaimEventKind::Contradicted {
-                by: ClaimId::new("claim:rumor").expect("claim id"),
+            FactEventKind::Contradicted {
+                by: FactId::new("fact:rumor").expect("fact id"),
                 basis: ContradictionBasis::SamePredicateDifferentValue,
             },
             None,
@@ -410,7 +410,7 @@ mod tests {
             &registry,
             assertion(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "repo",
                 "myproj",
                 "database",
@@ -419,14 +419,14 @@ mod tests {
             ),
             NOW,
         )
-        .expect("first claim admitted");
+        .expect("first fact admitted");
 
         let result = admit(
             &mut store,
             &registry,
             assertion(
                 "e2",
-                "claim:B",
+                "fact:B",
                 "repo",
                 "myproj",
                 "database",
@@ -443,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stale_unique_claim_does_not_block_a_fresh_assertion() {
+    fn a_stale_unique_fact_does_not_block_a_fresh_assertion() {
         let registry = PredicateRegistry::coding_agent();
         let mut store = InMemoryEventStore::new();
         // branch.status carries a 1h default TTL; assert at recorded_at=1.
@@ -452,7 +452,7 @@ mod tests {
             &registry,
             assertion(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "branch",
                 "main",
                 "status",
@@ -470,7 +470,7 @@ mod tests {
             &registry,
             assertion(
                 "e2",
-                "claim:B",
+                "fact:B",
                 "branch",
                 "main",
                 "status",
@@ -488,7 +488,7 @@ mod tests {
         let registry = PredicateRegistry::coding_agent();
         let mut candidate = assertion(
             "e1",
-            "claim:A",
+            "fact:A",
             "branch",
             "main",
             "status",
@@ -509,7 +509,7 @@ mod tests {
             &registry,
             assertion(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "repo",
                 "myproj",
                 "note",

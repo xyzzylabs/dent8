@@ -3,7 +3,7 @@
 //!
 //! The firewall ingests untrusted, possibly hand-edited or hostile data — a file JSONL log,
 //! MCP JSON-RPC arguments, Postgres JSONB — and every one of those routes through
-//! `serde_json` deserialization into a [`ClaimEvent`], then through `event_hash` /
+//! `serde_json` deserialization into a [`FactEvent`], then through `event_hash` /
 //! `hash_chain` / `canonical_bytes` / `apply_event`. A panic on any of them is a
 //! denial-of-service / availability break, not just a wrong answer. These properties assert
 //! *robustness* (clean `Ok`/`Err`, never a crash), complementing `proptest_fold.rs` (which
@@ -16,23 +16,23 @@
 //! can all enter through a crafted log line. The pipeline must absorb them without crashing.
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, CanonicalJson, ClaimEvent, ClaimEventId, ClaimEventKind,
-    ClaimId, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind, Predicate, Provenance,
-    SourceId, TimestampMillis, Ttl, apply_event, canonical_bytes, event_hash, hash_chain,
+    ActorId, Authority, AuthorityLevel, CanonicalJson, Confidence, EntityRef, Evidence, EvidenceId,
+    EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, Predicate, Provenance, SourceId,
+    TimestampMillis, Ttl, apply_event, canonical_bytes, event_hash, hash_chain,
 };
 use proptest::prelude::*;
 
 /// A valid event used only as a *shape-correct skeleton*: the property then overrides
 /// individual fields in its JSON form with adversarial values, so the serde representation is
 /// always right and only the values under test are hostile.
-fn skeleton_event() -> ClaimEvent {
-    ClaimEvent {
-        event_id: ClaimEventId::new("event:1").unwrap(),
-        claim_id: ClaimId::new("claim:1").unwrap(),
-        kind: ClaimEventKind::Asserted,
+fn skeleton_event() -> FactEvent {
+    FactEvent {
+        event_id: FactEventId::new("event:1").unwrap(),
+        fact_id: FactId::new("fact:1").unwrap(),
+        kind: FactEventKind::Asserted,
         subject: EntityRef::new("repo", "dent8").unwrap(),
         predicate: Predicate::new("database").unwrap(),
-        value: Some(dent8_core::ClaimValue::Text("postgres".to_string())),
+        value: Some(dent8_core::FactValue::Text("postgres".to_string())),
         confidence: Confidence::from_millis(900).unwrap(),
         authority: Authority {
             level: AuthorityLevel::High,
@@ -85,7 +85,7 @@ fn arb_json() -> impl Strategy<Value = serde_json::Value> {
 }
 
 /// Run the whole untrusted-input pipeline on `event`. None of these may panic.
-fn exercise_pipeline(event: &ClaimEvent) {
+fn exercise_pipeline(event: &FactEvent) {
     let _ = event_hash(event, None);
     let _ = event_hash(event, Some("00"));
     let _ = canonical_bytes(event);
@@ -100,7 +100,7 @@ proptest! {
     /// fine; the point is no crash on either path.)
     #[test]
     fn arbitrary_bytes_never_panic_the_pipeline(raw in prop::collection::vec(any::<u8>(), 0..1024)) {
-        if let Ok(event) = serde_json::from_slice::<ClaimEvent>(&raw) {
+        if let Ok(event) = serde_json::from_slice::<FactEvent>(&raw) {
             exercise_pipeline(&event);
         }
     }
@@ -129,14 +129,14 @@ proptest! {
         });
 
         let text = serde_json::to_string(&doc).expect("doc to string");
-        if let Ok(event) = serde_json::from_str::<ClaimEvent>(&text) {
+        if let Ok(event) = serde_json::from_str::<FactEvent>(&text) {
             exercise_pipeline(&event);
             // Determinism.
             prop_assert_eq!(event_hash(&event, None).ok(), event_hash(&event, None).ok());
             // Canonical idempotence: re-parsing the canonical bytes and re-canonicalizing is a
             // fixpoint (no drift that would read as tamper).
             if let Ok(bytes) = canonical_bytes(&event) {
-                let reparsed: ClaimEvent =
+                let reparsed: FactEvent =
                     serde_json::from_slice(&bytes).expect("canonical bytes re-parse");
                 prop_assert_eq!(canonical_bytes(&reparsed).ok(), Some(bytes));
             }
@@ -166,11 +166,11 @@ fn an_out_of_range_event_deserializes_and_the_pipeline_absorbs_it() {
     let mut doc = serde_json::to_value(skeleton_event()).expect("serialize skeleton");
     doc["confidence"] = serde_json::json!(u16::MAX); // 65535 — far above Confidence::MAX (1000)
     doc["predicate"] = serde_json::json!(""); // empty — bypasses Predicate::new
-    doc["event_id"] = serde_json::json!("   "); // whitespace — bypasses ClaimEventId::new
+    doc["event_id"] = serde_json::json!("   "); // whitespace — bypasses FactEventId::new
     doc["ttl"] = serde_json::to_value(Ttl::DurationMillis(u64::MAX)).expect("ttl");
     let text = serde_json::to_string(&doc).expect("doc to string");
 
-    let event: ClaimEvent = serde_json::from_str(&text).expect("adversarial event deserializes");
+    let event: FactEvent = serde_json::from_str(&text).expect("adversarial event deserializes");
     assert_eq!(
         event.confidence.as_millis(),
         u16::MAX,
@@ -189,6 +189,6 @@ fn an_out_of_range_event_deserializes_and_the_pipeline_absorbs_it() {
 
     // Canonical idempotence holds even for the out-of-range value (no false tamper on reload).
     let bytes = canonical_bytes(&event).expect("canonicalize");
-    let reparsed: ClaimEvent = serde_json::from_slice(&bytes).expect("re-parse canonical");
+    let reparsed: FactEvent = serde_json::from_slice(&bytes).expect("re-parse canonical");
     assert_eq!(canonical_bytes(&reparsed).expect("re-canonicalize"), bytes);
 }

@@ -1,8 +1,8 @@
 {
-  "chain_head": "a58d9fe33c1be83d9ca0c8b9599f1622708b896923f7657ef7078161ca1f9bb7",
-  "claims": [
+  "chain_head": "306a7b25a52316669f4fa448ee87cd05aabdc4918d8472aac86762555ab22461",
+  "facts": [
     {
-      "claim_id": "claim:attacker",
+      "fact_id": "fact:attacker",
       "lifecycle": "Active",
       "value": "text:mysql",
       "authority": "Low",
@@ -10,7 +10,7 @@
       "fresh": true
     },
     {
-      "claim_id": "claim:trusted",
+      "fact_id": "fact:trusted",
       "lifecycle": "Active",
       "value": "text:postgres",
       "authority": "High",

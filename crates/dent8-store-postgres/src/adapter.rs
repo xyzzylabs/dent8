@@ -17,17 +17,16 @@
 //!   `Box<dyn AsyncEventStore>` alongside other async backends.
 //! - **Global hash chain:** each `event_hash` links to the previous event across the whole
 //!   log; appends are serialized by a transaction-scoped advisory lock so the chain has one
-//!   consistent head with no per-claim race.
-//! - **Materialized projection + edges:** on every accepted append the folded `ClaimState`
-//!   is upserted into `dent8_claim_projection` and the claim->claim relationship into
-//!   `dent8_claim_edge`, inside the same transaction (migration 003). These are derived
+//!   consistent head with no per-fact race.
+//! - **Materialized projection + edges:** on every accepted append the folded `FactState`
+//!   is upserted into `dent8_fact_projection` and the fact->fact relationship into
+//!   `dent8_fact_edge`, inside the same transaction (migration 003). These are derived
 //!   caches — the log stays the source of truth, and `verify_projection` checks the
-//!   `projection == fold(log)` invariant. `load_claim_events`/`scan_events` still fold from
+//!   `projection == fold(log)` invariant. `load_fact_events`/`scan_events` still fold from
 //!   the log; `materialized_projection` reads the cache without re-folding.
 
 use dent8_core::{
-    ClaimEvent, ClaimEventKind, ClaimId, ClaimLifecycle, ClaimState, apply_event, event_hash,
-    hash_chain,
+    FactEvent, FactEventKind, FactId, FactLifecycle, FactState, apply_event, event_hash, hash_chain,
 };
 use dent8_store::{AppendReceipt, AsyncEventStore, EventFilter, StoreError, arbitrate_events};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
@@ -93,7 +92,7 @@ impl PostgresEventStore {
     /// laundered write), chains the `event_hash` to the global head, and persists — all under
     /// one advisory-lock-serialized transaction so the chain stays consistent and the append
     /// is atomic.
-    pub async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+    pub async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         let mut receipts = self.append_many(vec![event]).await?;
         Ok(receipts.pop().expect("one event -> one receipt"))
     }
@@ -103,9 +102,9 @@ impl PostgresEventStore {
     /// supersessions/retractions/contradiction commit together or not at all. Each event is
     /// firewalled, chained, and materialized in order under a single advisory-lock-serialized
     /// transaction, and later events see the earlier ones' in-transaction writes (so a
-    /// supersession resolves the replacement claim asserted just before it).
+    /// supersession resolves the replacement fact asserted just before it).
     ///
-    /// Trust boundary: the base claim-stream firewall (authority arbitration,
+    /// Trust boundary: the base fact-stream firewall (authority arbitration,
     /// anti-laundering, canonical hard alarms, terminal-state rules) runs here. The
     /// source→authority *ceiling* (`dent8 authority`) and predicate registry policy
     /// (authority floors, default TTLs, uniqueness) are enforced one layer up, at the CLI/MCP
@@ -113,7 +112,7 @@ impl PostgresEventStore {
     /// product-policy checks itself.
     pub async fn append_many(
         &self,
-        events: Vec<ClaimEvent>,
+        events: Vec<FactEvent>,
     ) -> Result<Vec<AppendReceipt>, StoreError> {
         let mut tx = self.pool.begin().await.map_err(unavailable)?;
         // One advisory lock for the whole batch: the global chain head is read-modify-written
@@ -131,24 +130,21 @@ impl PostgresEventStore {
         Ok(receipts)
     }
 
-    /// Ordered events for one claim stream.
-    pub async fn load_claim_events(
-        &self,
-        claim_id: &ClaimId,
-    ) -> Result<Vec<ClaimEvent>, StoreError> {
+    /// Ordered events for one fact stream.
+    pub async fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError> {
         let rows: Vec<serde_json::Value> = sqlx::query_scalar(
-            "SELECT event_json FROM dent8_event_log WHERE claim_id = $1 ORDER BY global_sequence",
+            "SELECT event_json FROM dent8_event_log WHERE fact_id = $1 ORDER BY global_sequence",
         )
-        .bind(claim_id.as_str())
+        .bind(fact_id.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(unavailable)?;
         rows.into_iter().map(event_from_json).collect()
     }
 
-    /// Ordered events matching a filter (by claim / subject+predicate / sequence).
-    pub async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError> {
-        let claim_id = filter.claim_id.as_ref().map(ClaimId::as_str);
+    /// Ordered events matching a filter (by fact / subject+predicate / sequence).
+    pub async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
+        let fact_id = filter.fact_id.as_ref().map(FactId::as_str);
         let subject_type = filter.subject.as_ref().map(dent8_core::EntityRef::kind);
         let subject_key = filter.subject.as_ref().map(dent8_core::EntityRef::key);
         let predicate = filter.predicate.as_ref().map(dent8_core::Predicate::as_str);
@@ -159,14 +155,14 @@ impl PostgresEventStore {
 
         let rows: Vec<serde_json::Value> = sqlx::query_scalar(
             "SELECT event_json FROM dent8_event_log \
-             WHERE ($1::text IS NULL OR claim_id = $1) \
+             WHERE ($1::text IS NULL OR fact_id = $1) \
                AND ($2::text IS NULL OR subject_type = $2) \
                AND ($3::text IS NULL OR subject_key = $3) \
                AND ($4::text IS NULL OR predicate = $4) \
                AND ($5::bigint IS NULL OR global_sequence > $5) \
              ORDER BY global_sequence LIMIT $6",
         )
-        .bind(claim_id)
+        .bind(fact_id)
         .bind(subject_type)
         .bind(subject_key)
         .bind(predicate)
@@ -204,16 +200,16 @@ impl PostgresEventStore {
         Ok(recomputed == stored)
     }
 
-    /// Read the **materialized** projection for a claim without re-folding the log (`None`
-    /// if the claim has no events). The exact `ClaimState` is reconstructed from the cached
+    /// Read the **materialized** projection for a fact without re-folding the log (`None`
+    /// if the fact has no events). The exact `FactState` is reconstructed from the cached
     /// `state_json`.
     pub async fn materialized_projection(
         &self,
-        claim_id: &ClaimId,
-    ) -> Result<Option<ClaimState>, StoreError> {
+        fact_id: &FactId,
+    ) -> Result<Option<FactState>, StoreError> {
         let row: Option<serde_json::Value> =
-            sqlx::query_scalar("SELECT state_json FROM dent8_claim_projection WHERE claim_id = $1")
-                .bind(claim_id.as_str())
+            sqlx::query_scalar("SELECT state_json FROM dent8_fact_projection WHERE fact_id = $1")
+                .bind(fact_id.as_str())
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(unavailable)?;
@@ -224,23 +220,23 @@ impl PostgresEventStore {
         .transpose()
     }
 
-    /// The outgoing relationship edges recorded *from* a claim (its supersession /
+    /// The outgoing relationship edges recorded *from* a fact (its supersession /
     /// contradiction / reinforcement links), ordered by the originating event.
-    pub async fn edges_from(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEdge>, StoreError> {
+    pub async fn edges_from(&self, fact_id: &FactId) -> Result<Vec<FactEdge>, StoreError> {
         let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
-            "SELECT from_claim_id, to_claim_id, edge_type, event_id, recorded_at \
-             FROM dent8_claim_edge WHERE from_claim_id = $1 ORDER BY recorded_at, event_id",
+            "SELECT from_fact_id, to_fact_id, edge_type, event_id, recorded_at \
+             FROM dent8_fact_edge WHERE from_fact_id = $1 ORDER BY recorded_at, event_id",
         )
-        .bind(claim_id.as_str())
+        .bind(fact_id.as_str())
         .fetch_all(&self.pool)
         .await
         .map_err(unavailable)?;
         Ok(rows
             .into_iter()
             .map(
-                |(from_claim_id, to_claim_id, edge_type, event_id, recorded_at)| ClaimEdge {
-                    from_claim_id,
-                    to_claim_id,
+                |(from_fact_id, to_fact_id, edge_type, event_id, recorded_at)| FactEdge {
+                    from_fact_id,
+                    to_fact_id,
                     edge_type,
                     event_id,
                     recorded_at,
@@ -249,12 +245,12 @@ impl PostgresEventStore {
             .collect())
     }
 
-    /// Confirm the materialized projection equals an independent fold of the claim's log —
+    /// Confirm the materialized projection equals an independent fold of the fact's log —
     /// the `projection == fold(log)` invariant. The materialization is a derived cache, so
     /// this must always hold for an untampered store.
-    pub async fn verify_projection(&self, claim_id: &ClaimId) -> Result<bool, StoreError> {
-        let folded = fold_state(&self.load_claim_events(claim_id).await?)?;
-        let materialized = self.materialized_projection(claim_id).await?;
+    pub async fn verify_projection(&self, fact_id: &FactId) -> Result<bool, StoreError> {
+        let folded = fold_state(&self.load_fact_events(fact_id).await?)?;
+        let materialized = self.materialized_projection(fact_id).await?;
         Ok(folded == materialized)
     }
 }
@@ -271,19 +267,19 @@ impl AsyncEventStore for PostgresEventStore {
         self.migrate().await
     }
 
-    async fn append(&self, event: ClaimEvent) -> Result<AppendReceipt, StoreError> {
+    async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         self.append(event).await
     }
 
-    async fn append_many(&self, events: Vec<ClaimEvent>) -> Result<Vec<AppendReceipt>, StoreError> {
+    async fn append_many(&self, events: Vec<FactEvent>) -> Result<Vec<AppendReceipt>, StoreError> {
         self.append_many(events).await
     }
 
-    async fn load_claim_events(&self, claim_id: &ClaimId) -> Result<Vec<ClaimEvent>, StoreError> {
-        self.load_claim_events(claim_id).await
+    async fn load_fact_events(&self, fact_id: &FactId) -> Result<Vec<FactEvent>, StoreError> {
+        self.load_fact_events(fact_id).await
     }
 
-    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<ClaimEvent>, StoreError> {
+    async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
         self.scan_events(filter).await
     }
 
@@ -292,21 +288,21 @@ impl AsyncEventStore for PostgresEventStore {
     }
 }
 
-/// A claim->claim relationship edge (see migration 003 for direction semantics).
+/// A fact->fact relationship edge (see migration 003 for direction semantics).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClaimEdge {
-    pub from_claim_id: String,
-    pub to_claim_id: String,
+pub struct FactEdge {
+    pub from_fact_id: String,
+    pub to_fact_id: String,
     pub edge_type: String,
     pub event_id: String,
     pub recorded_at: i64,
 }
 
-/// Fold an ordered claim stream into its current state via the shared `apply_event` (the
+/// Fold an ordered fact stream into its current state via the shared `apply_event` (the
 /// same projection the in-memory backend computes). A persisted log is already admitted, so
 /// a fold failure means corruption.
-fn fold_state(events: &[ClaimEvent]) -> Result<Option<ClaimState>, StoreError> {
-    let mut state: Option<ClaimState> = None;
+fn fold_state(events: &[FactEvent]) -> Result<Option<FactState>, StoreError> {
+    let mut state: Option<FactState> = None;
     for event in events {
         state = Some(
             apply_event(state, event)
@@ -316,36 +312,36 @@ fn fold_state(events: &[ClaimEvent]) -> Result<Option<ClaimState>, StoreError> {
     Ok(state)
 }
 
-/// Lifecycle as the lowercase tag the `dent8_claim_projection.lifecycle` CHECK expects.
-fn lifecycle_tag(lifecycle: ClaimLifecycle) -> &'static str {
+/// Lifecycle as the lowercase tag the `dent8_fact_projection.lifecycle` CHECK expects.
+fn lifecycle_tag(lifecycle: FactLifecycle) -> &'static str {
     match lifecycle {
-        ClaimLifecycle::Active => "active",
-        ClaimLifecycle::Contested => "contested",
-        ClaimLifecycle::Superseded => "superseded",
-        ClaimLifecycle::Expired => "expired",
-        ClaimLifecycle::Retracted => "retracted",
+        FactLifecycle::Active => "active",
+        FactLifecycle::Contested => "contested",
+        FactLifecycle::Superseded => "superseded",
+        FactLifecycle::Expired => "expired",
+        FactLifecycle::Retracted => "retracted",
     }
 }
 
 /// Upsert the folded `state` into the materialized projection cache.
 async fn upsert_projection(
     tx: &mut Transaction<'_, Postgres>,
-    state: &ClaimState,
+    state: &FactState,
 ) -> Result<(), StoreError> {
     let contradicted_by: Vec<String> = state
         .contradicted_by
         .iter()
-        .map(|claim| claim.as_str().to_string())
+        .map(|fact| fact.as_str().to_string())
         .collect();
     let state_json = serde_json::to_value(state)
         .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
     let conn: &mut PgConnection = tx;
     sqlx::query(
-        "INSERT INTO dent8_claim_projection \
-         (claim_id, subject_type, subject_key, predicate, lifecycle, superseded_by, \
+        "INSERT INTO dent8_fact_projection \
+         (fact_id, subject_type, subject_key, predicate, lifecycle, superseded_by, \
           contradicted_by, corroboration, created_at, updated_at, last_event_id, state_json) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-         ON CONFLICT (claim_id) DO UPDATE SET \
+         ON CONFLICT (fact_id) DO UPDATE SET \
            lifecycle = EXCLUDED.lifecycle, \
            superseded_by = EXCLUDED.superseded_by, \
            contradicted_by = EXCLUDED.contradicted_by, \
@@ -354,12 +350,12 @@ async fn upsert_projection(
            last_event_id = EXCLUDED.last_event_id, \
            state_json = EXCLUDED.state_json",
     )
-    .bind(state.claim_id.as_str())
+    .bind(state.fact_id.as_str())
     .bind(state.subject.kind())
     .bind(state.subject.key())
     .bind(state.predicate.as_str())
     .bind(lifecycle_tag(state.lifecycle))
-    .bind(state.superseded_by.as_ref().map(ClaimId::as_str))
+    .bind(state.superseded_by.as_ref().map(FactId::as_str))
     .bind(&contradicted_by)
     .bind(i64::try_from(state.corroboration()).unwrap_or(i64::MAX))
     .bind(state.created_at.as_unix_millis())
@@ -372,27 +368,27 @@ async fn upsert_projection(
     Ok(())
 }
 
-/// Record the claim->claim edge an event implies, if any (idempotent).
+/// Record the fact->fact edge an event implies, if any (idempotent).
 async fn insert_edge(
     tx: &mut Transaction<'_, Postgres>,
-    event: &ClaimEvent,
+    event: &FactEvent,
 ) -> Result<(), StoreError> {
     let edge = match &event.kind {
-        ClaimEventKind::Reinforced { by } => Some(("reinforces", by.as_str())),
-        ClaimEventKind::Contradicted { by, .. } => Some(("contradicts", by.as_str())),
-        ClaimEventKind::Superseded { by, .. } => Some(("supersedes", by.as_str())),
+        FactEventKind::Reinforced { by } => Some(("reinforces", by.as_str())),
+        FactEventKind::Contradicted { by, .. } => Some(("contradicts", by.as_str())),
+        FactEventKind::Superseded { by, .. } => Some(("supersedes", by.as_str())),
         _ => None,
     };
-    let Some((edge_type, to_claim)) = edge else {
+    let Some((edge_type, to_fact)) = edge else {
         return Ok(());
     };
     let conn: &mut PgConnection = tx;
     sqlx::query(
-        "INSERT INTO dent8_claim_edge (from_claim_id, to_claim_id, edge_type, event_id, recorded_at) \
+        "INSERT INTO dent8_fact_edge (from_fact_id, to_fact_id, edge_type, event_id, recorded_at) \
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
     )
-    .bind(event.claim_id.as_str())
-    .bind(to_claim)
+    .bind(event.fact_id.as_str())
+    .bind(to_fact)
     .bind(edge_type)
     .bind(event.event_id.as_str())
     .bind(event.provenance.recorded_at.as_unix_millis())
@@ -402,21 +398,19 @@ async fn insert_edge(
     Ok(())
 }
 
-/// Load one claim stream inside an in-flight transaction (for the firewall's read).
+/// Load one fact stream inside an in-flight transaction (for the firewall's read).
 /// Firewall + chain + persist + materialize **one** event inside an in-flight transaction
 /// (no begin/commit/lock of its own — the caller holds them, so a batch commits atomically).
 async fn append_event_in_tx(
     tx: &mut Transaction<'_, Postgres>,
-    event: &ClaimEvent,
+    event: &FactEvent,
 ) -> Result<AppendReceipt, StoreError> {
     // The firewall: the SAME pure decision the in-memory backend uses — run FIRST so a
     // candidate that is both inadmissible and a duplicate fails with the firewall's error
     // (matching the in-memory backend's arbitrate-before-dedup precedence), not Conflict.
-    let existing = load_claim_in_tx(&mut *tx, event.claim_id.as_str()).await?;
+    let existing = load_fact_in_tx(&mut *tx, event.fact_id.as_str()).await?;
     let replacing = match &event.kind {
-        ClaimEventKind::Superseded { by, .. } => {
-            Some(load_claim_in_tx(&mut *tx, by.as_str()).await?)
-        }
+        FactEventKind::Superseded { by, .. } => Some(load_fact_in_tx(&mut *tx, by.as_str()).await?),
         _ => None,
     };
     arbitrate_events(event, &existing, replacing.as_deref())?;
@@ -451,11 +445,11 @@ async fn append_event_in_tx(
 
     let global_sequence: i64 = sqlx::query_scalar(
         "INSERT INTO dent8_event_log \
-         (event_id, claim_id, subject_type, subject_key, predicate, previous_event_hash, event_hash, event_json) \
+         (event_id, fact_id, subject_type, subject_key, predicate, previous_event_hash, event_hash, event_json) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING global_sequence",
     )
     .bind(event.event_id.as_str())
-    .bind(event.claim_id.as_str())
+    .bind(event.fact_id.as_str())
     .bind(event.subject.kind())
     .bind(event.subject.key())
     .bind(event.predicate.as_str())
@@ -485,22 +479,22 @@ async fn append_event_in_tx(
     })
 }
 
-async fn load_claim_in_tx(
+async fn load_fact_in_tx(
     tx: &mut Transaction<'_, Postgres>,
-    claim_id: &str,
-) -> Result<Vec<ClaimEvent>, StoreError> {
+    fact_id: &str,
+) -> Result<Vec<FactEvent>, StoreError> {
     let conn: &mut PgConnection = tx;
     let rows: Vec<serde_json::Value> = sqlx::query_scalar(
-        "SELECT event_json FROM dent8_event_log WHERE claim_id = $1 ORDER BY global_sequence",
+        "SELECT event_json FROM dent8_event_log WHERE fact_id = $1 ORDER BY global_sequence",
     )
-    .bind(claim_id)
+    .bind(fact_id)
     .fetch_all(&mut *conn)
     .await
     .map_err(unavailable)?;
     rows.into_iter().map(event_from_json).collect()
 }
 
-fn event_from_json(value: serde_json::Value) -> Result<ClaimEvent, StoreError> {
+fn event_from_json(value: serde_json::Value) -> Result<FactEvent, StoreError> {
     serde_json::from_value(value).map_err(|error| StoreError::CorruptEvent(error.to_string()))
 }
 
@@ -515,8 +509,8 @@ fn unavailable(error: sqlx::Error) -> StoreError {
 mod tests {
     use super::PostgresEventStore;
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-        ClaimLifecycle, ClaimValue, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind,
+        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
+        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue,
         Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis, Ttl,
     };
     use dent8_store::StoreError;
@@ -559,7 +553,7 @@ mod tests {
         store.migrate().await.expect("migrate");
         // Isolate each run (all three tables: log + the derived caches).
         sqlx::query(
-            "TRUNCATE dent8_event_log, dent8_claim_projection, dent8_claim_edge RESTART IDENTITY",
+            "TRUNCATE dent8_event_log, dent8_fact_projection, dent8_fact_edge RESTART IDENTITY",
         )
         .execute(store.pool())
         .await
@@ -569,16 +563,16 @@ mod tests {
 
     fn assert_event(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         value: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         base(
             event_id,
-            claim_id,
-            ClaimEventKind::Asserted,
-            Some(ClaimValue::Text(value.to_string())),
+            fact_id,
+            FactEventKind::Asserted,
+            Some(FactValue::Text(value.to_string())),
             source,
             authority,
         )
@@ -586,16 +580,16 @@ mod tests {
 
     fn supersede_event(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         by: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         base(
             event_id,
-            claim_id,
-            ClaimEventKind::Superseded {
-                by: ClaimId::new(by).expect("by"),
+            fact_id,
+            FactEventKind::Superseded {
+                by: FactId::new(by).expect("by"),
                 reason: SupersessionReason::NewerObservation,
             },
             None,
@@ -606,19 +600,19 @@ mod tests {
 
     fn reinforce_event(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         by: &str,
         value: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
+    ) -> FactEvent {
         base(
             event_id,
-            claim_id,
-            ClaimEventKind::Reinforced {
-                by: ClaimId::new(by).expect("by"),
+            fact_id,
+            FactEventKind::Reinforced {
+                by: FactId::new(by).expect("by"),
             },
-            Some(ClaimValue::Text(value.to_string())),
+            Some(FactValue::Text(value.to_string())),
             source,
             authority,
         )
@@ -626,15 +620,15 @@ mod tests {
 
     fn base(
         event_id: &str,
-        claim_id: &str,
-        kind: ClaimEventKind,
-        value: Option<ClaimValue>,
+        fact_id: &str,
+        kind: FactEventKind,
+        value: Option<FactValue>,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(event_id).expect("event id"),
-            claim_id: ClaimId::new(claim_id).expect("claim id"),
+    ) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(event_id).expect("event id"),
+            fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
             subject: EntityRef::new("repo", "myproj").expect("entity"),
             predicate: Predicate::new("database").expect("predicate"),
@@ -680,7 +674,7 @@ mod tests {
         let receipt = store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -689,24 +683,24 @@ mod tests {
             .expect("admitted");
         assert_eq!(receipt.global_sequence, 1); // identity starts at 1
 
-        // A low-authority backing claim may exist...
+        // A low-authority backing fact may exist...
         store
             .append(assert_event(
                 "e2",
-                "claim:B",
+                "fact:B",
                 "mysql",
                 "source:web-scrape",
                 AuthorityLevel::Low,
             ))
             .await
-            .expect("low claim may exist");
+            .expect("low fact may exist");
 
         // ...but an over-stated (laundered) supersession is rejected by the SAME firewall.
         let laundered = store
             .append(supersede_event(
                 "e3",
-                "claim:A",
-                "claim:B",
+                "fact:A",
+                "fact:B",
                 "source:web-scrape",
                 AuthorityLevel::High,
             ))
@@ -718,7 +712,7 @@ mod tests {
 
         // The trusted fact stands and the chain verifies.
         let events = store
-            .load_claim_events(&ClaimId::new("claim:A").unwrap())
+            .load_fact_events(&FactId::new("fact:A").unwrap())
             .await
             .expect("load");
         assert_eq!(events.len(), 1);
@@ -728,7 +722,7 @@ mod tests {
         let dup = store
             .append(assert_event(
                 "e1",
-                "claim:C",
+                "fact:C",
                 "redis",
                 "source:owner",
                 AuthorityLevel::High,
@@ -741,12 +735,12 @@ mod tests {
     /// admissible (no per-predicate uniqueness conflict between them).
     fn assert_on_subject(
         event_id: &str,
-        claim_id: &str,
+        fact_id: &str,
         subject_key: &str,
         source: &str,
         authority: AuthorityLevel,
-    ) -> ClaimEvent {
-        let mut event = assert_event(event_id, claim_id, "v", source, authority);
+    ) -> FactEvent {
+        let mut event = assert_event(event_id, fact_id, "v", source, authority);
         event.subject = EntityRef::new("repo", subject_key).expect("subject");
         event
     }
@@ -754,7 +748,7 @@ mod tests {
     /// Genuinely concurrent appends (each its own transaction on the shared pool) must
     /// serialize into ONE consistent global hash chain: the transaction-scoped advisory lock
     /// makes the chain-head read-modify-write atomic, so the assigned `global_sequence`s are a
-    /// gap-free, duplicate-free `1..=N`, the whole chain verifies, and every claim's
+    /// gap-free, duplicate-free `1..=N`, the whole chain verifies, and every fact's
     /// projection equals the fold of its log. This is the adapter's multi-writer guarantee
     /// (the CLI's snapshot-minted `event:{n}` ids are a separate, documented single-writer
     /// caveat — here every event id is distinct, the case the adapter must handle cleanly).
@@ -774,7 +768,7 @@ mod tests {
                 store
                     .append(assert_on_subject(
                         &format!("e{i}"),
-                        &format!("claim:{i}"),
+                        &format!("fact:{i}"),
                         &format!("proj{i}"),
                         "source:owner",
                         AuthorityLevel::High,
@@ -797,15 +791,15 @@ mod tests {
         assert_eq!(sequences, (1..=N as u64).collect::<Vec<_>>());
         // The single global chain verifies end-to-end under the concurrent interleaving.
         assert!(store.verify_chain().await.expect("verify chain"));
-        // And every claim's materialized projection still equals the fold of its log.
+        // And every fact's materialized projection still equals the fold of its log.
         for i in 0..N {
-            let claim = ClaimId::new(format!("claim:{i}")).unwrap();
+            let fact = FactId::new(format!("fact:{i}")).unwrap();
             assert!(
                 store
-                    .verify_projection(&claim)
+                    .verify_projection(&fact)
                     .await
                     .expect("verify projection"),
-                "projection != fold for claim:{i}"
+                "projection != fold for fact:{i}"
             );
         }
     }
@@ -817,15 +811,15 @@ mod tests {
             return;
         };
         let (_guard, store) = fresh_store().await;
-        let a = ClaimId::new("claim:A").unwrap();
-        let b = ClaimId::new("claim:B").unwrap();
+        let a = FactId::new("fact:A").unwrap();
+        let b = FactId::new("fact:B").unwrap();
 
         // Assert A, corroborate it from a second source, assert the replacement B, then
         // supersede A by B at equal authority (admitted, not laundered).
         store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -835,8 +829,8 @@ mod tests {
         store
             .append(reinforce_event(
                 "e2",
-                "claim:A",
-                "claim:R",
+                "fact:A",
+                "fact:R",
                 "postgres",
                 "source:scanner",
                 AuthorityLevel::Medium,
@@ -846,7 +840,7 @@ mod tests {
         store
             .append(assert_event(
                 "e3",
-                "claim:B",
+                "fact:B",
                 "mysql",
                 "source:owner",
                 AuthorityLevel::High,
@@ -856,8 +850,8 @@ mod tests {
         store
             .append(supersede_event(
                 "e4",
-                "claim:A",
-                "claim:B",
+                "fact:A",
+                "fact:B",
                 "source:owner",
                 AuthorityLevel::High,
             ))
@@ -871,12 +865,12 @@ mod tests {
             .await
             .expect("read")
             .expect("A has a projection");
-        assert_eq!(projection.lifecycle, ClaimLifecycle::Superseded);
+        assert_eq!(projection.lifecycle, FactLifecycle::Superseded);
         assert_eq!(
-            projection.superseded_by.as_ref().map(ClaimId::as_str),
-            Some("claim:B")
+            projection.superseded_by.as_ref().map(FactId::as_str),
+            Some("fact:B")
         );
-        assert_eq!(projection.value, ClaimValue::Text("postgres".to_string()));
+        assert_eq!(projection.value, FactValue::Text("postgres".to_string()));
         assert_eq!(projection.corroboration(), 2);
 
         // The replacement stands on its own.
@@ -885,7 +879,7 @@ mod tests {
             .await
             .expect("read")
             .expect("B has a projection");
-        assert_eq!(projection_b.lifecycle, ClaimLifecycle::Active);
+        assert_eq!(projection_b.lifecycle, FactLifecycle::Active);
 
         // The materialized cache equals an independent fold of the log.
         assert!(store.verify_projection(&a).await.expect("verify A"));
@@ -897,18 +891,18 @@ mod tests {
         assert!(
             edges
                 .iter()
-                .any(|e| e.edge_type == "supersedes" && e.to_claim_id == "claim:B")
+                .any(|e| e.edge_type == "supersedes" && e.to_fact_id == "fact:B")
         );
         assert!(
             edges
                 .iter()
-                .any(|e| e.edge_type == "reinforces" && e.to_claim_id == "claim:R")
+                .any(|e| e.edge_type == "reinforces" && e.to_fact_id == "fact:R")
         );
 
-        // A claim with no events has no materialized projection.
+        // A fact with no events has no materialized projection.
         assert!(
             store
-                .materialized_projection(&ClaimId::new("claim:none").unwrap())
+                .materialized_projection(&FactId::new("fact:none").unwrap())
                 .await
                 .expect("read")
                 .is_none()
@@ -922,13 +916,13 @@ mod tests {
             return;
         };
         let (_guard, store) = fresh_store().await;
-        let a = ClaimId::new("claim:A").unwrap();
-        let r = ClaimId::new("claim:R").unwrap();
+        let a = FactId::new("fact:A").unwrap();
+        let r = FactId::new("fact:R").unwrap();
 
         store
             .append(assert_event(
                 "a1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -943,15 +937,15 @@ mod tests {
             .append_many(vec![
                 assert_event(
                     "r1",
-                    "claim:R",
+                    "fact:R",
                     "mysql",
                     "source:owner",
                     AuthorityLevel::High,
                 ),
                 supersede_event(
                     "s1",
-                    "claim:A",
-                    "claim:R",
+                    "fact:A",
+                    "fact:R",
                     "source:owner",
                     AuthorityLevel::High,
                 ),
@@ -966,7 +960,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .lifecycle,
-            ClaimLifecycle::Superseded
+            FactLifecycle::Superseded
         );
         assert_eq!(
             store
@@ -975,7 +969,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .value,
-            ClaimValue::Text("mysql".to_string())
+            FactValue::Text("mysql".to_string())
         );
         assert!(store.verify_projection(&a).await.unwrap());
         assert!(store.verify_chain().await.unwrap());
@@ -986,15 +980,15 @@ mod tests {
             .append_many(vec![
                 assert_event(
                     "r2",
-                    "claim:R2",
+                    "fact:R2",
                     "redis",
                     "source:owner",
                     AuthorityLevel::High,
                 ),
                 supersede_event(
                     "s2",
-                    "claim:A",
-                    "claim:R2",
+                    "fact:A",
+                    "fact:R2",
                     "source:owner",
                     AuthorityLevel::High,
                 ),
@@ -1003,7 +997,7 @@ mod tests {
         assert!(bad.is_err());
         assert!(
             store
-                .materialized_projection(&ClaimId::new("claim:R2").unwrap())
+                .materialized_projection(&FactId::new("fact:R2").unwrap())
                 .await
                 .unwrap()
                 .is_none()
@@ -1020,12 +1014,12 @@ mod tests {
             return;
         };
         let (_guard, store) = fresh_store().await;
-        let a = ClaimId::new("claim:A").unwrap();
+        let a = FactId::new("fact:A").unwrap();
 
         store
             .append(assert_event(
                 "e1",
-                "claim:A",
+                "fact:A",
                 "postgres",
                 "source:owner",
                 AuthorityLevel::High,
@@ -1035,8 +1029,8 @@ mod tests {
         store
             .append(reinforce_event(
                 "e2",
-                "claim:A",
-                "claim:R",
+                "fact:A",
+                "fact:R",
                 "postgres",
                 "source:scanner",
                 AuthorityLevel::Medium,
@@ -1046,7 +1040,7 @@ mod tests {
         store
             .append(assert_event(
                 "e3",
-                "claim:B",
+                "fact:B",
                 "mysql",
                 "source:owner",
                 AuthorityLevel::High,
@@ -1056,8 +1050,8 @@ mod tests {
         store
             .append(supersede_event(
                 "e4",
-                "claim:A",
-                "claim:B",
+                "fact:A",
+                "fact:B",
                 "source:owner",
                 AuthorityLevel::High,
             ))
@@ -1082,7 +1076,7 @@ mod tests {
             last_event_id,
         ): (String, Option<String>, Vec<String>, i64, i64, i64, String) = sqlx::query_as(
             "SELECT lifecycle, superseded_by, contradicted_by, corroboration, created_at, \
-             updated_at, last_event_id FROM dent8_claim_projection WHERE claim_id = $1",
+             updated_at, last_event_id FROM dent8_fact_projection WHERE fact_id = $1",
         )
         .bind(a.as_str())
         .fetch_one(store.pool())
@@ -1092,7 +1086,7 @@ mod tests {
         assert_eq!(lifecycle, "superseded");
         assert_eq!(
             superseded_by.as_deref(),
-            state.superseded_by.as_ref().map(ClaimId::as_str)
+            state.superseded_by.as_ref().map(FactId::as_str)
         );
         let expected_contradicted: Vec<String> = state
             .contradicted_by

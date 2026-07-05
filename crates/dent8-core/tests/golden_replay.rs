@@ -4,7 +4,7 @@
 //! mismatch.
 //!
 //! Each scenario owns two files under `tests/golden/replay/`:
-//!   - `<name>.events.jsonl` — the canonical event stream (one `ClaimEvent` per line, the
+//!   - `<name>.events.jsonl` — the canonical event stream (one `FactEvent` per line, the
 //!     same format the CLI's `DENT8_LOG` uses), and
 //!   - `<name>.expected.json` — the frozen `chain_head` plus the replayed-state summary.
 //!
@@ -18,10 +18,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, ClaimEvent, ClaimEventId, ClaimEventKind, ClaimId,
-    ClaimState, ClaimValue, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceId,
-    EvidenceKind, ExpirationReason, Predicate, Provenance, SourceId, SupersessionReason,
-    TimestampMillis, Ttl, apply_event, hash_chain,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
+    EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId,
+    FactState, FactValue, Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis,
+    Ttl, apply_event, hash_chain,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,15 +43,15 @@ struct Expected {
 struct Scenario {
     name: &'static str,
     description: &'static str,
-    events: Vec<ClaimEvent>,
+    events: Vec<FactEvent>,
     /// Independent (code-free) assertion of the headline outcome, so a wrong regeneration
     /// cannot silently bless a wrong lifecycle.
     expect_lifecycle: &'static str,
 }
 
-/// Compact builder for one event on a shared claim, stamped at `seq`.
+/// Compact builder for one event on a shared fact, stamped at `seq`.
 struct Stream {
-    claim: ClaimId,
+    fact: FactId,
     subject: EntityRef,
     predicate: Predicate,
 }
@@ -59,7 +59,7 @@ struct Stream {
 impl Stream {
     fn new() -> Self {
         Self {
-            claim: ClaimId::new("claim:repo:dent8:database").expect("claim id"),
+            fact: FactId::new("fact:repo:dent8:database").expect("fact id"),
             subject: EntityRef::new("repo", "dent8").expect("entity"),
             predicate: Predicate::new("database").expect("predicate"),
         }
@@ -68,15 +68,15 @@ impl Stream {
     fn event(
         &self,
         seq: usize,
-        kind: ClaimEventKind,
-        value: Option<ClaimValue>,
+        kind: FactEventKind,
+        value: Option<FactValue>,
         authority: AuthorityLevel,
         source: &str,
         ttl: Ttl,
-    ) -> ClaimEvent {
-        ClaimEvent {
-            event_id: ClaimEventId::new(format!("event:{seq}")).expect("event id"),
-            claim_id: self.claim.clone(),
+    ) -> FactEvent {
+        FactEvent {
+            event_id: FactEventId::new(format!("event:{seq}")).expect("event id"),
+            fact_id: self.fact.clone(),
             kind,
             subject: self.subject.clone(),
             predicate: self.predicate.clone(),
@@ -111,14 +111,14 @@ impl Stream {
     }
 }
 
-fn text(value: &str) -> ClaimValue {
-    ClaimValue::Text(value.to_string())
+fn text(value: &str) -> FactValue {
+    FactValue::Text(value.to_string())
 }
 
 #[allow(clippy::too_many_lines)] // a flat scenario data table; splitting it would obscure it
 fn scenarios() -> Vec<Scenario> {
     let s = Stream::new();
-    let other = ClaimId::new("claim:replacement").expect("claim id");
+    let other = FactId::new("fact:replacement").expect("fact id");
     vec![
         Scenario {
             name: "asserted_then_reinforced",
@@ -126,7 +126,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("postgres")),
                     AuthorityLevel::High,
                     "source:owner",
@@ -134,9 +134,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Reinforced {
-                        by: s.claim.clone(),
-                    },
+                    FactEventKind::Reinforced { by: s.fact.clone() },
                     Some(text("postgres")),
                     AuthorityLevel::Medium,
                     "source:scanner",
@@ -151,7 +149,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("postgres")),
                     AuthorityLevel::High,
                     "source:owner",
@@ -159,7 +157,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Superseded {
+                    FactEventKind::Superseded {
                         by: other.clone(),
                         reason: SupersessionReason::UserCorrection,
                     },
@@ -177,7 +175,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("postgres")),
                     AuthorityLevel::Medium,
                     "source:owner",
@@ -185,7 +183,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Contradicted {
+                    FactEventKind::Contradicted {
                         by: other.clone(),
                         basis: ContradictionBasis::SamePredicateDifferentValue,
                     },
@@ -203,7 +201,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("postgres")),
                     AuthorityLevel::High,
                     "source:owner",
@@ -211,7 +209,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Retracted {
+                    FactEventKind::Retracted {
                         reason: dent8_core::RetractionReason::UserDeleted,
                     },
                     None,
@@ -228,7 +226,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("feature-x")),
                     AuthorityLevel::Medium,
                     "source:agent",
@@ -236,7 +234,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Expired {
+                    FactEventKind::Expired {
                         reason: ExpirationReason::TtlElapsed,
                     },
                     None,
@@ -253,7 +251,7 @@ fn scenarios() -> Vec<Scenario> {
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("postgres")),
                     AuthorityLevel::Medium,
                     "source:a",
@@ -261,9 +259,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Reinforced {
-                        by: s.claim.clone(),
-                    },
+                    FactEventKind::Reinforced { by: s.fact.clone() },
                     Some(text("postgres")),
                     AuthorityLevel::High,
                     "source:b",
@@ -271,9 +267,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     2,
-                    ClaimEventKind::Reinforced {
-                        by: s.claim.clone(),
-                    },
+                    FactEventKind::Reinforced { by: s.fact.clone() },
                     // Restates the value, so it is a genuine same-value corroborator.
                     Some(text("postgres")),
                     AuthorityLevel::Canonical,
@@ -286,11 +280,11 @@ fn scenarios() -> Vec<Scenario> {
         Scenario {
             name: "retrieved_after_terminal",
             description: "A retracted fact still admits audit reads: a Retrieved event is \
-                          accepted after the claim is terminal, leaving the lifecycle frozen.",
+                          accepted after the fact is terminal, leaving the lifecycle frozen.",
             events: vec![
                 s.event(
                     0,
-                    ClaimEventKind::Asserted,
+                    FactEventKind::Asserted,
                     Some(text("postgres")),
                     AuthorityLevel::High,
                     "source:owner",
@@ -298,7 +292,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     1,
-                    ClaimEventKind::Retracted {
+                    FactEventKind::Retracted {
                         reason: dent8_core::RetractionReason::UserDeleted,
                     },
                     None,
@@ -308,7 +302,7 @@ fn scenarios() -> Vec<Scenario> {
                 ),
                 s.event(
                     2,
-                    ClaimEventKind::Retrieved {
+                    FactEventKind::Retrieved {
                         purpose: "audit".to_string(),
                     },
                     None,
@@ -322,19 +316,19 @@ fn scenarios() -> Vec<Scenario> {
     ]
 }
 
-fn render_value(value: &ClaimValue) -> String {
+fn render_value(value: &FactValue) -> String {
     match value {
-        ClaimValue::Text(text) => format!("text:{text}"),
-        ClaimValue::Json(json) => format!("json:{}", json.as_str()),
-        ClaimValue::Redacted => "<redacted>".to_string(),
+        FactValue::Text(text) => format!("text:{text}"),
+        FactValue::Json(json) => format!("json:{}", json.as_str()),
+        FactValue::Redacted => "<redacted>".to_string(),
     }
 }
 
 /// Replay an event stream and summarize the head + projected state. Every event in a golden
 /// fixture must be accepted (a persisted log only contains admitted events).
-fn replay(events: &[ClaimEvent]) -> Expected {
+fn replay(events: &[FactEvent]) -> Expected {
     let chain = hash_chain(events).expect("hash chain");
-    let mut state: Option<ClaimState> = None;
+    let mut state: Option<FactState> = None;
     for event in events {
         state = Some(apply_event(state.clone(), event).expect("every fixture event must apply"));
     }
@@ -358,7 +352,7 @@ fn golden_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/replay")
 }
 
-fn serialize_events(events: &[ClaimEvent]) -> String {
+fn serialize_events(events: &[FactEvent]) -> String {
     let mut out = String::new();
     for event in events {
         out.push_str(&serde_json::to_string(event).expect("serialize event"));
@@ -367,7 +361,7 @@ fn serialize_events(events: &[ClaimEvent]) -> String {
     out
 }
 
-fn read_events(path: &Path) -> Vec<ClaimEvent> {
+fn read_events(path: &Path) -> Vec<FactEvent> {
     let contents = fs::read_to_string(path).unwrap_or_else(|error| {
         panic!(
             "read {}: {error} (run with UPDATE_GOLDEN=1 to generate)",
