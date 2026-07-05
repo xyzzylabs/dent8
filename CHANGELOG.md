@@ -30,7 +30,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   writes route through a running daemon at that socket — the CLI does the handshake with its
   `DENT8_GRANT`/`DENT8_IDENTITY_KEY` and the daemon attests the write — so several agents (and the
   CLI) dogfood one shared belief base on a box. Reads stay local; output is identical to a local
-  write.
+  write. `dent8 doctor` reports the daemon's reachability + handshake when `DENT8_DAEMON_SOCKET`
+  is set, and [examples/daemon/](examples/daemon/) is a runnable walkthrough.
 - **Freshness on the list surfaces** (threat-model T4): `dent8 facts list`, the MCP
   `list_facts` tool, and `resources/list` now flag each fact stream's freshness
   (`fresh`/`stale`/`not_yet_valid`/`no_longer_believed`) from a single store load — a stale

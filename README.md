@@ -102,6 +102,26 @@ Shortcuts exist for `codex`, `claude-code`, `cursor`, `gemini`, `grok-build`, `c
 [examples/mcp/](examples/mcp/) and the per-agent example directories, or wire dent8 in over
 MCP from [LangChain](examples/langchain/) / the [Vercel AI SDK](examples/vercel-ai-sdk/).
 
+### Share one belief base over a daemon
+
+Instead of one dent8 process per agent, run a **per-user daemon** and point writes at it:
+
+```sh
+dent8 mcp serve --daemon                 # Unix socket at $XDG_RUNTIME_DIR/dent8/dent8.sock
+export DENT8_DAEMON_SOCKET="$XDG_RUNTIME_DIR/dent8/dent8.sock"
+dent8 doctor                             # check the daemon is reachable and you authenticate
+dent8 assert repo:app deploy_target production --authority high --source you
+```
+
+Every connection proves its identity with a signed session challenge, and the daemon arbitrates
+and **attests each write as that source** — so a daemon-written fact re-verifies offline exactly
+like a local one, and many processes build one firewalled belief base over one transport. Reads
+stay local. Run the whole path with
+**`DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh`** (see
+[examples/daemon/](examples/daemon/)). Today the daemon is single-source (it attests with its own
+key), so this shares *one* identity across processes; distinct per-agent identities over one
+daemon are future work.
+
 ## Status
 
 dent8 is **pre-1.0 and experimental** — the CLI and library API, and the Postgres storage

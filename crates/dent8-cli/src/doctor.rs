@@ -156,6 +156,10 @@ pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
         "mcp: `dent8 mcp serve` is available over stdio",
     );
 
+    if !doctor_daemon(&mut output) {
+        ok = false;
+    }
+
     if args.write_check {
         match doctor_write_check(source) {
             Ok(message) => doctor_line(&mut output, "OK", &message),
@@ -173,6 +177,47 @@ pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
     }
 
     DoctorReport { output, ok }
+}
+
+/// Probe the local daemon (ADR 0018) when `DENT8_DAEMON_SOCKET` is set: connect and complete the
+/// session-challenge handshake without writing, confirming the daemon is reachable and that this
+/// caller's identity authenticates. A no-op when the var is unset (writes go to the local store).
+#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+fn doctor_daemon(output: &mut String) -> bool {
+    let socket = std::env::var("DENT8_DAEMON_SOCKET")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let Some(socket) = socket else {
+        doctor_line(
+            output,
+            "SKIP",
+            "daemon: DENT8_DAEMON_SOCKET not set (CLI writes go to the local store)",
+        );
+        return true;
+    };
+    match crate::mcp_client::daemon_health(&socket) {
+        Ok(source) => {
+            doctor_line(
+                output,
+                "OK",
+                &format!("daemon: reachable at {socket}, authenticated as {source}"),
+            );
+            true
+        }
+        Err(error) => {
+            doctor_line(output, "FAIL", &format!("daemon: {error}"));
+            false
+        }
+    }
+}
+
+/// Builds without the daemon client (non-Unix, or no `async-store`/`identity`) cannot route to a
+/// daemon, so there is nothing to probe.
+#[cfg(not(all(unix, feature = "async-store", feature = "identity")))]
+#[allow(clippy::ptr_arg)] // signature mirrors the daemon-capable variant
+fn doctor_daemon(_output: &mut String) -> bool {
+    true
 }
 
 pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> DoctorReport {

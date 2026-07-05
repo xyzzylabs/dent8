@@ -23,59 +23,84 @@ pub(crate) fn daemon_write(
     tool: &str,
     arguments: &Value,
 ) -> Result<Result<String, OpError>, String> {
-    let stream = UnixStream::connect(socket_path)
-        .map_err(|error| format!("cannot reach the dent8 daemon at {socket_path}: {error}"))?;
-    let mut writer = stream
-        .try_clone()
-        .map_err(|error| format!("dent8 daemon socket: {error}"))?;
-    let mut reader = BufReader::new(stream);
-
-    let grant = load_local_grant()?;
-    let source = grant_field(&grant, &["grant", "source"])?;
-    let public_key = grant_field(&grant, &["grant", "public_key"])?;
-    let grant_signature = grant_field(&grant, &["signature"])?;
-
-    // 1. hello -> single-use nonce.
-    let hello = request(
-        1,
-        "dent8/hello",
-        json!({ "source": source, "grant": grant }),
-    );
-    let reply = round_trip(&mut writer, &mut reader, &hello)?;
-    let nonce = reply
-        .get("result")
-        .and_then(|result| result.get("nonce"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| handshake_failure("dent8/hello", &reply))?;
-
-    // 2. prove possession by signing the nonce with the source key.
-    let key_path = env_path("DENT8_IDENTITY_KEY")?;
-    let signature = crate::identity::sign_session_challenge(
-        nonce,
-        &source,
-        &public_key,
-        &grant_signature,
-        &key_path,
-    )?;
-    let prove = request(2, "dent8/prove", json!({ "signature": signature }));
-    let reply = round_trip(&mut writer, &mut reader, &prove)?;
-    let authenticated = reply
-        .get("result")
-        .and_then(|result| result.get("authenticated"))
-        .and_then(Value::as_bool)
-        == Some(true);
-    if !authenticated {
-        return Err(handshake_failure("dent8/prove", &reply));
-    }
-
-    // 3. the write itself, as a tools/call.
+    let mut session = Session::connect(socket_path)?;
     let call = request(
         3,
         "tools/call",
         json!({ "name": tool, "arguments": arguments }),
     );
-    let reply = round_trip(&mut writer, &mut reader, &call)?;
+    let reply = round_trip(&mut session.writer, &mut session.reader, &call)?;
     Ok(map_tool_reply(&reply))
+}
+
+/// Prove identity to the daemon *without* writing — the health probe behind `dent8 doctor`.
+/// Returns the source the connection authenticated as; `Err` if the daemon is unreachable or
+/// the handshake fails.
+pub(crate) fn daemon_health(socket_path: &str) -> Result<String, String> {
+    Ok(Session::connect(socket_path)?.source)
+}
+
+/// An authenticated daemon connection: the socket halves plus the source it proved possession
+/// of. Built by completing the session-challenge handshake with the caller's own identity.
+struct Session {
+    writer: UnixStream,
+    reader: BufReader<UnixStream>,
+    source: String,
+}
+
+impl Session {
+    fn connect(socket_path: &str) -> Result<Self, String> {
+        let stream = UnixStream::connect(socket_path)
+            .map_err(|error| format!("cannot reach the dent8 daemon at {socket_path}: {error}"))?;
+        let mut writer = stream
+            .try_clone()
+            .map_err(|error| format!("dent8 daemon socket: {error}"))?;
+        let mut reader = BufReader::new(stream);
+
+        let grant = load_local_grant()?;
+        let source = grant_field(&grant, &["grant", "source"])?;
+        let public_key = grant_field(&grant, &["grant", "public_key"])?;
+        let grant_signature = grant_field(&grant, &["signature"])?;
+
+        // 1. hello -> single-use nonce.
+        let hello = request(
+            1,
+            "dent8/hello",
+            json!({ "source": source, "grant": grant }),
+        );
+        let reply = round_trip(&mut writer, &mut reader, &hello)?;
+        let nonce = reply
+            .get("result")
+            .and_then(|result| result.get("nonce"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| handshake_failure("dent8/hello", &reply))?;
+
+        // 2. prove possession by signing the nonce with the source key.
+        let key_path = env_path("DENT8_IDENTITY_KEY")?;
+        let signature = crate::identity::sign_session_challenge(
+            nonce,
+            &source,
+            &public_key,
+            &grant_signature,
+            &key_path,
+        )?;
+        let prove = request(2, "dent8/prove", json!({ "signature": signature }));
+        let reply = round_trip(&mut writer, &mut reader, &prove)?;
+        let authenticated = reply
+            .get("result")
+            .and_then(|result| result.get("authenticated"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        if !authenticated {
+            return Err(handshake_failure("dent8/prove", &reply));
+        }
+
+        Ok(Self {
+            writer,
+            reader,
+            source,
+        })
+    }
 }
 
 fn request(id: u32, method: &str, params: Value) -> Value {
