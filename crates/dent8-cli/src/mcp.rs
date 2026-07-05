@@ -1354,8 +1354,13 @@ fn run_write_tool(
 ) -> Result<ToolOutput, ToolError> {
     let before = all_events(path)?;
     let text = with_write_retry(&mut op).map_err(into_tool_error)?;
-    let after = all_events(path)?;
-    let accepted_events = accepted_events_since(&after, before.len())?;
+    // `op` has durably committed the write (via `append_events`). The accepted-events list is a
+    // receipt enrichment only, so a transient re-read/hash failure here must NOT flip a committed
+    // write to `failed` — degrade to an empty list, matching the local CLI path, which returns the
+    // accepted receipt from `admit` in memory and never re-reads the store.
+    let accepted_events = all_events(path)
+        .and_then(|after| accepted_events_since(&after, before.len()))
+        .unwrap_or_default();
     Ok(write_output(
         tool,
         status,
