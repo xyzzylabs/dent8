@@ -51,7 +51,7 @@ pub(crate) fn build_event(
         subject: EntityRef::new(subject_kind, subject_key).map_err(|e| format!("subject: {e}"))?,
         predicate: Predicate::new(predicate).map_err(|e| format!("predicate: {e}"))?,
         value,
-        confidence: Confidence::from_millis(900).map_err(|e| format!("confidence: {e}"))?,
+        confidence: Confidence::ASSERTED,
         authority: Authority {
             level: authority,
             issuer: None,

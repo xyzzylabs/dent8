@@ -8,14 +8,14 @@ use std::{
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
-use dent8_core::{
-    ActorId, AuthorityLevel, ClaimEvent, ClaimId, ClaimLifecycle, ClaimValue, EntityRef, Predicate,
-    TimestampMillis,
-};
 #[cfg(test)]
 use dent8_core::{
-    Authority, ClaimEventId, ClaimEventKind, Confidence, Evidence, EvidenceId, EvidenceKind,
-    Provenance, Ttl,
+    ActorId, Authority, ClaimEventId, ClaimEventKind, Confidence, Evidence, EvidenceId,
+    EvidenceKind, Provenance, Ttl,
+};
+use dent8_core::{
+    AuthorityLevel, ClaimEvent, ClaimId, ClaimLifecycle, ClaimValue, EntityRef, Predicate,
+    SourceId, TimestampMillis,
 };
 #[cfg(test)]
 use dent8_store::StoreError;
@@ -195,7 +195,7 @@ struct Cli {
     #[arg(long, global = true, value_enum, default_value_t = CliColor::Auto)]
     color: CliColor,
     /// Output format for supported read/audit commands.
-    #[arg(long, global = true, value_enum, default_value_t = CliOutput::Text)]
+    #[arg(long, short = 'o', global = true, value_enum, default_value_t = CliOutput::Text)]
     output: CliOutput,
     #[command(subcommand)]
     command: Option<CliCommand>,
@@ -1188,7 +1188,7 @@ fn parse_non_empty_filter(raw: &str) -> Result<String, String> {
 }
 
 fn parse_source(raw: &str) -> Result<String, String> {
-    ActorId::new(raw).map_err(|error| format!("invalid source '{raw}': {error}"))?;
+    SourceId::new(raw).map_err(|error| format!("invalid source '{raw}': {error}"))?;
     Ok(raw.to_string())
 }
 

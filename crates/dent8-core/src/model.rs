@@ -128,6 +128,11 @@ impl Confidence {
     /// [`crate::policy::EpistemicPolicy`].
     pub const ZERO: Self = Self(0);
 
+    /// The confidence a fresh assertion carries (0.9). High but not certain, leaving headroom for
+    /// corroboration. This is the common construction, so it is a named infallible constant
+    /// rather than `from_millis(900).unwrap()` repeated at every call site.
+    pub const ASSERTED: Self = Self(900);
+
     pub fn from_millis(value: u16) -> Result<Self, ValidationError> {
         if value > Self::MAX {
             return Err(ValidationError::ConfidenceOutOfRange(value));
@@ -138,6 +143,13 @@ impl Confidence {
     #[must_use]
     pub const fn as_millis(self) -> u16 {
         self.0
+    }
+}
+
+impl Default for Confidence {
+    /// A fresh assertion's confidence ([`Confidence::ASSERTED`]).
+    fn default() -> Self {
+        Self::ASSERTED
     }
 }
 
