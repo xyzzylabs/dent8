@@ -3,7 +3,7 @@
 dent8 is configured by **environment variables** (for paths and the backend) and **Cargo
 features** (for opt-in backends/capabilities). This is the single source of truth for both;
 the stock binary needs no services (it uses a local file log by default) and includes signed
-source identity plus the embedded SQLite backend for local multi-agent use.
+source identity, witness commands, and the embedded SQLite backend for local multi-agent use.
 
 For a project-local setup, run `dent8 init`, then load the generated env file:
 
@@ -63,11 +63,9 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 
 | Feature | Adds | Default? |
 |---|---|---|
-| *(default)* | the full firewall + lifecycle over the **file dev store**, embedded SQLite, plus `facts list`, `eval`, `verify`, `conflicts`, `authority`, signed identity, MCP | yes |
+| *(default)* | the full firewall + lifecycle over the **file dev store**, embedded SQLite, plus `facts list`, `eval`, `verify`, `conflicts`, `authority`, signed identity, witness, MCP, and the local daemon | yes |
 | `postgres` | the operational **transactional Postgres backend** (sqlx + a tokio bridge), selected by a `postgres://` `DENT8_STORE_URL` | no |
 | `sqlite` | the embedded **SQLite backend** (sqlx + bundled libsqlite3, no server), selected by a `sqlite://` `DENT8_STORE_URL` | yes |
-| `identity` | Ed25519 signed source identity commands and write-boundary grant verification | yes |
-| `witness` | the `dent8 witness` Ed25519 signed-tree-head commands | no |
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
 ```sh
@@ -79,9 +77,10 @@ cargo build -p dent8 --features export                  # + Parquet export for D
 cargo build -p dent8 --features postgres,sqlite,export  # all backends + export
 ```
 
-Postgres, export, and witness stay off by default so the stock binary stays free of the
-Postgres, Arrow/Parquet, and witness stacks. SQLite is default because it is the no-server
-shared backend for local multi-agent dogfooding. The authority registry, identity
+Postgres and export stay off by default so the stock binary stays free of the Postgres and
+Arrow/Parquet stacks. SQLite is default because it is the no-server shared backend for local
+multi-agent dogfooding, and witness is always on because it reuses the signed-identity crypto
+already required by the threat model. The authority registry, identity
 trust/grants/keys, and witness keys are **host-local config**, independent of the event backend
 — a Postgres deployment still reads these from the local filesystem, so provision them per
 instance. Set `DENT8_REQUIRE_AUTHORITY=1` and `DENT8_REQUIRE_IDENTITY=1` for deployments that
@@ -163,10 +162,11 @@ Each agent should have a distinct source key and grant. Multiple agents can use 
 globally installed `dent8` binary, and their stdio server subprocesses can share the same
 belief base by pointing at the same `DENT8_STORE_URL` and authority/trust registries. A shared
 stdio MCP process can only prove the single identity whose private key it holds. The local
-Unix-socket daemon adds a per-connection session challenge, but still requires each connection
-to prove the same source key the daemon process holds; run separate daemon instances if you
-need distinct local source identities over sockets. Future remote HTTP transport needs
-per-request source authentication without service-held source keys. See
+Unix-socket daemon adds a per-connection session challenge and supports authenticated writes,
+but still requires each connection to prove the same source key the daemon process holds; run
+separate daemon instances if you need distinct local source identities over sockets. Future
+remote HTTP transport needs per-request source authentication without service-held source
+keys. See
 [ADR 0012](decisions/0012-signed-source-identity.md) and
 [ADR 0018](decisions/0018-local-daemon-and-per-connection-identity.md) for the security model
 and limits.

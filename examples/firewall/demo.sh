@@ -3,8 +3,8 @@
 # dent8 belief base, assert a trusted everyday fact, reject a low-authority override, then
 # explain and verify the retained fact.
 #
-# Requires the `dent8` binary. Either install it (`cargo install --git
-# https://github.com/xyzzylabs/dent8 dent8`) and run `./demo.sh`, or from a clone:
+# Requires the `dent8` binary. Either install it (`cargo install dent8 --locked`) and run
+# `./demo.sh`, or from a clone:
 #   DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh
 set -euo pipefail
 

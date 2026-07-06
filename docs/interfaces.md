@@ -112,8 +112,10 @@ writes configs that launch the globally installed `dent8` binary (`command = "de
 default, overrideable with `--command`). Several agents can share one belief base either by
 pointing separate stdio server subprocesses at the same backend and registries, while keeping
 distinct grant/key env values for provenance, or by connecting to one local daemon that
-requires the session-challenge handshake before writes. A remote HTTP/streamable transport
-remains design-only today.
+requires the session-challenge handshake before writes. The daemon supports authenticated
+writes, but each daemon process is still single-source: use separate stdio subprocesses or
+separate daemon instances when per-agent provenance matters. A remote HTTP/streamable
+transport remains design-only today.
 
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.

@@ -17,7 +17,7 @@ against what is already believed.
 ## The 30-second proof
 
 ```sh
-cargo install dent8
+cargo install dent8 --locked
 dent8 eval
 ```
 
@@ -59,7 +59,8 @@ dent8 retract repo:myproj deploy_target
 dent8 verify
 ```
 
-No services required — dent8 uses a local file log by default. From a clone, watch the whole
+No services required — dent8 uses a local file log by default. For binaries, pinned installs,
+and feature builds, see [Installation](docs/installation.md). From a clone, watch the whole
 firewall path run through the real CLI:
 **`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`**.
 
@@ -100,25 +101,45 @@ dent8 doctor --all-agents --write-check    # check every installed agent profile
 ```
 
 Shortcuts exist for `codex`, `claude-code`, `cursor`, `gemini`, `grok-build`, `cascade`, and
-`hecate`, and several agents can share one belief base over a common backend. See
-[examples/mcp/](examples/mcp/) and the per-agent example directories, or wire dent8 in over
-MCP from [LangChain](examples/langchain/) / the [Vercel AI SDK](examples/vercel-ai-sdk/).
+`hecate`. Several agents can share one belief base by using one globally installed `dent8`
+binary and one shared `DENT8_STORE_URL`, while each profile keeps its own signed source
+identity:
+
+```sh
+dent8 init --agent codex --store sqlite --install-mcp
+dent8 agent add --agent claude-code
+dent8 agent add --agent cursor
+dent8 doctor --all-agents --write-check
+```
+
+See [examples/mcp/](examples/mcp/) and the per-agent example directories, or wire dent8 in
+over MCP from [LangChain](examples/langchain/) / the
+[Vercel AI SDK](examples/vercel-ai-sdk/).
 
 ### Share one belief base over a daemon
 
 Instead of one dent8 process per agent, run a **per-user daemon** and point writes at it:
 
 ```sh
-dent8 mcp serve --daemon                 # Unix socket at $XDG_RUNTIME_DIR/dent8/dent8.sock
-export DENT8_DAEMON_SOCKET="$XDG_RUNTIME_DIR/dent8/dent8.sock"
-dent8 doctor                             # check the daemon is reachable and you authenticate
+set -a
+. .dent8/env
+. .dent8/identity-codex.env
+set +a
+dent8 mcp serve --daemon                 # default per-user Unix socket
+```
+
+In another shell with the same env loaded:
+
+```sh
+export DENT8_DAEMON_SOCKET="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/dent8/dent8.sock"
+dent8 doctor --source source:codex       # check the daemon is reachable and you authenticate
 dent8 assert repo:app deploy_target production
 ```
 
 Every connection proves the daemon-configured source identity with a signed session challenge,
 and the daemon arbitrates and **attests each write as that source** — so a daemon-written fact
-re-verifies offline exactly like a local one, and many processes build one firewalled belief base
-over one transport. Reads stay local. Run the whole path with
+re-verifies offline exactly like a local one, and many processes build one firewalled belief
+base over one transport. Reads stay local. Run the whole path with
 **`DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh`** (see
 [examples/daemon/](examples/daemon/)). Today each daemon process is single-source: every
 client connection must prove the same source key the daemon holds, so this shares *one*
@@ -165,6 +186,7 @@ keeping similar memories distinct.)*
 ## Documentation
 
 **Start here**
+- [Installation](docs/installation.md) — cargo, release binaries, and first setup
 - [Implementation Status](docs/STATUS.md) — single source of truth for what is built
 - [Configuration](docs/configuration.md) — every env var and Cargo feature
 - [Changelog](CHANGELOG.md)

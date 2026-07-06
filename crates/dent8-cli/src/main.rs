@@ -1041,8 +1041,9 @@ enum McpCommand {
 
 #[derive(Args, Debug)]
 struct McpServeArgs {
-    /// Serve on a local Unix-domain socket instead of stdio: a per-user daemon many agents
-    /// share over one transport. Reads only for now; writes await per-connection identity.
+    /// Serve on a local Unix-domain socket instead of stdio: a per-user daemon many processes
+    /// share over one transport. Authenticated connections can write; unauthenticated
+    /// connections are read-only.
     #[arg(long)]
     daemon: bool,
     /// Socket path for `--daemon`. Defaults to `$XDG_RUNTIME_DIR/dent8/dent8.sock` (a per-user

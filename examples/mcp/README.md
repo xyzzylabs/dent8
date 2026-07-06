@@ -8,6 +8,12 @@ receipt.
 
 ## Wire it into an MCP client
 
+Install dent8 first:
+
+```sh
+cargo install dent8 --locked
+```
+
 For a known agent, initialize a protected local profile and let dent8 patch the MCP config:
 
 ```sh
@@ -60,8 +66,14 @@ The installed stdio config reuses one `dent8` binary, but each MCP client usuall
 own server subprocess. To share memory across Codex, Claude Code, Cursor, Gemini, Grok Build,
 Cascade, and Hecate, point those subprocesses at the same backend and authority/trust
 registries, while keeping distinct per-agent `DENT8_GRANT` and `DENT8_IDENTITY_KEY` values.
-For production multi-agent concurrency, prefer Postgres over the file dev store. A single
-long-lived local or remote HTTP MCP server is a future transport, not part of v0.
+For production multi-agent concurrency, prefer Postgres over the file dev store.
+
+The local daemon (`dent8 mcp serve --daemon`) is available when many local processes should
+share one transport and one source identity. It authenticates each connection with a signed
+session challenge before writes, then attests accepted events daemon-side. It is still
+single-source in v0, so distinct per-agent provenance should use separate stdio subprocesses
+against the same backend, or separate daemon instances. A remote HTTP/streamable transport is
+future work, not part of v0.
 
 Client-specific examples:
 

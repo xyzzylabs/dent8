@@ -14,14 +14,15 @@ correct, installable memory-integrity tool, not to add new mechanisms during rel
 Install commands:
 
 ```sh
-cargo install dent8
-cargo install dent8 --features postgres
+cargo install dent8 --locked
+cargo install dent8 --features postgres --locked
+cargo install dent8 --features export --locked
 ```
 
 To test unreleased `main` ahead of a release, use the Git source:
 
 ```sh
-cargo install --git https://github.com/xyzzylabs/dent8 dent8
+cargo install --git https://github.com/xyzzylabs/dent8 dent8 --locked
 ```
 
 ## Preflight
@@ -92,7 +93,7 @@ cargo publish -p dent8
 After publishing, verify the install path in a clean temp directory:
 
 ```sh
-cargo install dent8
+cargo install dent8 --version 0.3.1 --locked
 dent8 --version
 ```
 

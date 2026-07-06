@@ -5,7 +5,7 @@
  * Requires:
  *   npm i ai @ai-sdk/mcp @ai-sdk/openai @modelcontextprotocol/sdk tsx
  *   export OPENAI_API_KEY=...          # only needed for the model call
- *   # the `dent8` binary on PATH (e.g. cargo install --path crates/dent8-cli --bin dent8)
+ *   # the `dent8` binary on PATH (e.g. cargo install dent8 --locked)
  *
  * Run:
  *   npx tsx dent8_memory_agent.ts
