@@ -55,6 +55,8 @@ Current v0 MCP tools:
 - `list_facts`
 - `verify`
 - `conflicts`
+- `native_scan`
+- `native_reconcile`
 - `assert`
 - `supersede`
 - `retract`
@@ -115,6 +117,9 @@ known native files/rules, hashes them, flags dent8 receipt markers, and reports 
 `dent8://<kind>/<key>/<predicate>` references: it resolves each through the same receipt
 path as `explain` and fails on stale, contested, no-longer-believed, missing, or malformed
 references. It still does not import prose or write native files.
+The MCP server exposes the same read-only audits as `native_scan` and `native_reconcile`
+with the same agent profiles and optional `dir` / `root` / time-travel arguments, so an
+agent can inspect bypass-prone native memory before trusting it.
 The adapter design is tracked in
 [`agent-adapters.md`](agent-adapters.md).
 

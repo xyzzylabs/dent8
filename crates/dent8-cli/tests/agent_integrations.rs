@@ -13,6 +13,8 @@ const MCP_TOOLS: &[&str] = &[
     "list_facts",
     "verify",
     "conflicts",
+    "native_scan",
+    "native_reconcile",
     "assert",
     "supersede",
     "retract",
@@ -188,6 +190,7 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
         .expect("server instructions");
     assert!(instructions.contains("memory integrity firewall"));
     assert!(instructions.contains("list_facts"));
+    assert!(instructions.contains("native_scan"));
 
     let tools = response_with_id(&responses, 2)["result"]["tools"]
         .as_array()

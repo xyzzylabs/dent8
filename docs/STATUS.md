@@ -196,7 +196,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   binary — for offline forensics/audit/replay. Read-only export; the log stays the source of
   truth. ([examples/duckdb/](../examples/duckdb/), [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing read/audit tools
-  (`list_facts` / `verify` / `conflicts`) and the **full belief surface** as tools to agent
+  (`list_facts` / `verify` / `conflicts` / `native_scan` / `native_reconcile`) and the
+  **full belief surface** as tools to agent
   clients — `assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
   `derive` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
   The initialize response includes server instructions that tell MCP-aware agents to inspect
@@ -214,8 +215,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   Grok Build, and Hecate under `examples/`; they are client wiring only, not alternate
   semantics. Optional hook guard profiles under `examples/agent-hooks/` call the built-in
   `dent8 hook native-memory-guard` to protect provider-native memory/rules files from
-  bypassing dent8, but they are examples around the MCP/CLI surfaces, not a separate dent8
-  runtime.
+  bypassing dent8, while `native_scan` / `native_reconcile` let MCP agents audit those
+  native files and receipt references without writing state. They are examples around the
+  MCP/CLI surfaces, not a separate dent8 runtime.
   Every tool dispatches
   to the *same* `op_*` firewall path as the CLI, so a low-authority, laundered, or
   non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,

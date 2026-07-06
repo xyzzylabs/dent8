@@ -165,31 +165,51 @@ pub(crate) fn cmd_native_reconcile(args: &NativeReconcileArgs, output: CliOutput
 }
 
 pub(crate) fn scan_from_args(args: &NativeScanArgs) -> Result<NativeScan, String> {
-    let dent8_dir = absolute_path(&PathBuf::from(&args.dir))?;
-    let root = match &args.root {
+    scan_from_options(args.agent, &args.dir, args.root.as_deref())
+}
+
+pub(crate) fn scan_from_options(
+    agent: InitAgent,
+    dent8_dir: &str,
+    root: Option<&str>,
+) -> Result<NativeScan, String> {
+    let dent8_dir = absolute_path(&PathBuf::from(dent8_dir))?;
+    let root = match root {
         Some(root) => absolute_path(&PathBuf::from(root))?,
         None => native_scan_root_for_dir(&dent8_dir)?,
     };
-    scan_agent_native_memory(args.agent, &dent8_dir, &root)
+    scan_agent_native_memory(agent, &dent8_dir, &root)
 }
 
 fn reconcile_from_args(args: &NativeReconcileArgs) -> Result<NativeReconcile, String> {
-    let dent8_dir = absolute_path(&PathBuf::from(&args.dir))?;
-    let root = match &args.root {
-        Some(root) => absolute_path(&PathBuf::from(root))?,
-        None => native_scan_root_for_dir(&dent8_dir)?,
-    };
-    let scan = scan_agent_native_memory(args.agent, &dent8_dir, &root)?;
-    reconcile_scan(
-        scan,
+    reconcile_from_options(
+        args.agent,
+        &args.dir,
+        args.root.as_deref(),
         ReadClock {
             as_of: args.as_of,
             valid_at: args.valid_at,
         },
+        &log_path(),
     )
 }
 
-fn reconcile_scan(scan: NativeScan, clock: ReadClock) -> Result<NativeReconcile, String> {
+pub(crate) fn reconcile_from_options(
+    agent: InitAgent,
+    dent8_dir: &str,
+    root: Option<&str>,
+    clock: ReadClock,
+    store_path: &str,
+) -> Result<NativeReconcile, String> {
+    let scan = scan_from_options(agent, dent8_dir, root)?;
+    reconcile_scan(scan, clock, store_path)
+}
+
+fn reconcile_scan(
+    scan: NativeScan,
+    clock: ReadClock,
+    store_path: &str,
+) -> Result<NativeReconcile, String> {
     let mut references = Vec::new();
     for file in &scan.files {
         let Some(text) = read_native_file_text(&file.path)? else {
@@ -200,7 +220,12 @@ fn reconcile_scan(scan: NativeScan, clock: ReadClock) -> Result<NativeReconcile,
             kind: file.kind,
         };
         for reference in extract_receipt_references(&text) {
-            references.push(reconcile_reference(file_ref.clone(), reference, clock));
+            references.push(reconcile_reference(
+                file_ref.clone(),
+                reference,
+                clock,
+                store_path,
+            ));
         }
     }
     Ok(NativeReconcile { scan, references })
@@ -460,6 +485,7 @@ fn reconcile_reference(
     file: NativeFileRef,
     reference: NativeReceiptReference,
     clock: ReadClock,
+    store_path: &str,
 ) -> NativeReconcileReference {
     if let Some(error) = reference.parse_error.clone() {
         return NativeReconcileReference {
@@ -482,7 +508,7 @@ fn reconcile_reference(
         .predicate
         .as_deref()
         .expect("validated reference has predicate");
-    match ops::op_explain_receipt(&log_path(), subject_kind, subject_key, predicate, clock) {
+    match ops::op_explain_receipt(store_path, subject_kind, subject_key, predicate, clock) {
         Ok(receipt) => {
             let status = receipt_status(&receipt);
             let message = match status {
@@ -568,7 +594,7 @@ fn native_memory_kind(path: &Path) -> &'static str {
     }
 }
 
-fn native_scan_text(scan: &NativeScan) -> String {
+pub(crate) fn native_scan_text(scan: &NativeScan) -> String {
     let mut out = format!(
         "dent8 native scan\n  agent: {}\n  root: {}\n  guard: {} ({})\n",
         scan.agent.cli_name(),
@@ -615,7 +641,7 @@ fn native_scan_text(scan: &NativeScan) -> String {
     out
 }
 
-fn native_scan_json(scan: &NativeScan) -> serde_json::Value {
+pub(crate) fn native_scan_json(scan: &NativeScan) -> serde_json::Value {
     serde_json::json!({
         "status": "ok",
         "tool": "native scan",
@@ -638,7 +664,7 @@ fn native_scan_json(scan: &NativeScan) -> serde_json::Value {
     })
 }
 
-fn native_reconcile_text(reconcile: &NativeReconcile) -> String {
+pub(crate) fn native_reconcile_text(reconcile: &NativeReconcile) -> String {
     let summary = reconcile_summary(reconcile);
     let status = if summary.failures == 0 {
         "ok"
@@ -683,7 +709,7 @@ fn native_reconcile_text(reconcile: &NativeReconcile) -> String {
     out
 }
 
-fn native_reconcile_json(reconcile: &NativeReconcile) -> serde_json::Value {
+pub(crate) fn native_reconcile_json(reconcile: &NativeReconcile) -> serde_json::Value {
     let summary = reconcile_summary(reconcile);
     serde_json::json!({
         "status": if summary.failures == 0 { "ok" } else { "failed" },
@@ -798,7 +824,7 @@ fn reconcile_summary(reconcile: &NativeReconcile) -> NativeReconcileSummary {
     summary
 }
 
-fn reconcile_has_failures(reconcile: &NativeReconcile) -> bool {
+pub(crate) fn reconcile_has_failures(reconcile: &NativeReconcile) -> bool {
     reconcile
         .references
         .iter()

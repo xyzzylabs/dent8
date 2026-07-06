@@ -5,7 +5,8 @@
 //! It speaks just enough MCP to be useful:
 //! - `initialize`, `tools/list`, and `tools/call` for the full belief surface — `assert` /
 //!   `supersede` / `retract` / `contradict` / `explain` / `replay` — plus read/audit tools
-//!   (`list_facts`, `verify`, `conflicts`) which dispatch to the same shared `op_*`
+//!   (`list_facts`, `verify`, `conflicts`, `native_scan`, `native_reconcile`) which dispatch
+//!   to the same shared `op_*`
 //!   functions the CLI uses, so the firewall decision is identical on both surfaces;
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
 //!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt);
@@ -16,6 +17,7 @@
 
 use std::io::{BufRead, Write};
 
+use clap::ValueEnum;
 use dent8_core::{AuthorityLevel, FactEvent, FactEventKind, FactLifecycle, FactValue};
 use dent8_store::{EventFilter, EventStore, IntegrityReceipt};
 use serde_json::{Value, json};
@@ -25,8 +27,8 @@ use crate::ops::{
     op_explain_receipt, op_reinforce, op_replay, op_retract, op_supersede, with_write_retry,
 };
 use crate::{
-    WriteIdentity, display_value, load_store, log_path, parse_authority, short, status::Status,
-    verify_log,
+    InitAgent, WriteIdentity, display_value, load_store, log_path, native, parse_authority, short,
+    status::Status, verify_log,
 };
 
 /// The latest MCP protocol revision this server prefers.
@@ -40,6 +42,7 @@ dent8 is a memory integrity firewall for durable agent facts. Before relying on 
 call list_facts or explain. Record stable facts with assert using truthful source and authority. \
 When the connection has a signed source grant, write tools may omit source and authority. \
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
+Use native_scan/native_reconcile to audit provider-native memory/rules files when available. \
 Treat rejected writes as safety signals; do not silently overwrite.";
 
 /// Run the stdio server loop until EOF. Returns a process exit code.
@@ -972,6 +975,8 @@ fn dispatch_tool(
                 }),
             ))
         }
+        "native_scan" => native_scan(arguments),
+        "native_reconcile" => native_reconcile(path, arguments),
         "assert" => {
             let meta = resolve_write_meta(arguments, identity)?;
             let (kind, key, predicate, value) =
@@ -1229,6 +1234,43 @@ fn dispatch_tool(
         }
         other => Err(ToolError::Unknown(format!("unknown tool: {other}"))),
     }
+}
+
+fn native_scan(arguments: &Value) -> Result<ToolOutput, ToolError> {
+    let (agent, dent8_dir, root) = native_args(arguments)?;
+    let scan = native::scan_from_options(agent, &dent8_dir, root.as_deref())
+        .map_err(ToolError::Invalid)?;
+    let structured = mcp_tool_structured(native::native_scan_json(&scan), "native_scan");
+    Ok(ToolOutput::new(native::native_scan_text(&scan), structured))
+}
+
+fn native_reconcile(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
+    let (agent, dent8_dir, root) = native_args(arguments)?;
+    let clock = arg_read_clock(arguments)?;
+    let reconcile = native::reconcile_from_options(agent, &dent8_dir, root.as_deref(), clock, path)
+        .map_err(ToolError::Invalid)?;
+    let structured = mcp_tool_structured(
+        native::native_reconcile_json(&reconcile),
+        "native_reconcile",
+    );
+    Ok(ToolOutput::new(
+        native::native_reconcile_text(&reconcile),
+        structured,
+    ))
+}
+
+fn native_args(arguments: &Value) -> Result<(InitAgent, String, Option<String>), ToolError> {
+    let agent = arg_agent(arguments)?;
+    let dent8_dir = optional_string(arguments, "dir")?.unwrap_or_else(|| ".dent8".to_string());
+    let root = optional_string(arguments, "root")?;
+    Ok((agent, dent8_dir, root))
+}
+
+fn mcp_tool_structured(mut value: Value, tool: &str) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert("tool".to_string(), json!(tool));
+    }
+    value
 }
 
 fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
@@ -1674,6 +1716,15 @@ fn optional_string(arguments: &Value, name: &str) -> Result<Option<String>, Tool
     }
 }
 
+fn arg_agent(arguments: &Value) -> Result<InitAgent, ToolError> {
+    let raw = arg(arguments, "agent")?;
+    InitAgent::from_str(&raw, true).map_err(|_| {
+        ToolError::Invalid(format!(
+            "unknown agent '{raw}' (expected: codex | claude-code | cursor | grok-build | gemini | cascade | hecate)"
+        ))
+    })
+}
+
 /// Parse a `"kind:key"` subject argument into its kind and key, mirroring the CLI's
 /// `person:alice` grammar exactly (split on the first `:`, then validate via [`Subject::new`]).
 /// `name` is the argument name, so a `derive` basis and the primary subject give distinct errors.
@@ -1782,6 +1833,22 @@ fn tool_list() -> Vec<Value> {
         "as_of": { "type": "integer", "description": "fold only events recorded at or before this instant (unix millis) — the store as it stood then" },
         "valid_at": { "type": "integer", "description": "evaluate freshness/validity at this instant (unix millis) instead of now" },
     });
+    let native_common = json!({
+        "agent": {
+            "type": "string",
+            "enum": ["codex", "claude-code", "cursor", "grok-build", "gemini", "cascade", "hecate"],
+            "description": "agent profile whose native memory/rules files should be audited"
+        },
+        "dir": {
+            "type": "string",
+            "description": "dent8 config directory; defaults to .dent8"
+        },
+        "root": {
+            "type": "string",
+            "description": "project root to scan; defaults to the parent of dir when dir is .dent8"
+        },
+    });
+    let native_reconcile_props = merge(&native_common, &clock);
     let valued = merge(&subject, &merge(&value, &write));
     // Every assertion-creating tool takes the validity interval: assert/supersede/contradict
     // via `valued_vt`, and derive via `derive_props` (which merges it in) — matching the CLI's
@@ -1816,6 +1883,18 @@ fn tool_list() -> Vec<Value> {
             "List contested facts that are currently in dispute and need resolution.",
             &empty,
             &[],
+        ),
+        tool(
+            "native_scan",
+            "Read-only audit of provider-native memory/rules files, including guard status and dent8 receipt markers.",
+            &native_common,
+            &["agent"],
+        ),
+        tool(
+            "native_reconcile",
+            "Read-only audit that reconciles dent8:// receipt references in provider-native memory/rules files against current dent8 state. Optional as_of/valid_at time-travel the read.",
+            &native_reconcile_props,
+            &["agent"],
         ),
         tool(
             "assert",
@@ -1893,6 +1972,8 @@ fn output_schema_for(name: &str) -> Value {
         "list_facts" => with_tool_error_schema(name, list_facts_output_schema()),
         "verify" => with_tool_error_schema(name, verify_output_schema()),
         "conflicts" => with_tool_error_schema(name, conflicts_output_schema()),
+        "native_scan" => with_tool_error_schema(name, native_scan_output_schema()),
+        "native_reconcile" => with_tool_error_schema(name, native_reconcile_output_schema()),
         "assert" | "supersede" | "retract" | "reinforce" | "expire" => {
             with_tool_error_schema(name, write_output_schema(name, &["accepted"]))
         }
@@ -1994,6 +2075,300 @@ fn conflicts_output_schema() -> Value {
         }),
         &["status", "tool", "message"],
     )
+}
+
+fn native_scan_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "const": "ok" },
+            "tool": { "const": "native_scan" },
+            "agent": native_agent_schema(),
+            "root": { "type": "string" },
+            "dent8_dir": { "type": "string" },
+            "guard": native_guard_output_schema(),
+            "files": {
+                "type": "array",
+                "items": native_file_output_schema(),
+            },
+            "summary": object_schema(
+                json!({
+                    "files": { "type": "integer", "minimum": 0 },
+                    "with_receipt_markers": { "type": "integer", "minimum": 0 },
+                    "without_receipt_markers": { "type": "integer", "minimum": 0 },
+                    "guard_protected": { "type": "boolean" },
+                }),
+                &["files", "with_receipt_markers", "without_receipt_markers", "guard_protected"],
+            ),
+        }),
+        &[
+            "status",
+            "tool",
+            "agent",
+            "root",
+            "dent8_dir",
+            "guard",
+            "files",
+            "summary",
+        ],
+    )
+}
+
+fn native_reconcile_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "failed"] },
+            "tool": { "const": "native_reconcile" },
+            "agent": native_agent_schema(),
+            "root": { "type": "string" },
+            "dent8_dir": { "type": "string" },
+            "guard": native_guard_output_schema(),
+            "files": {
+                "type": "array",
+                "items": native_file_output_schema(),
+            },
+            "references": {
+                "type": "array",
+                "items": native_reconcile_reference_output_schema(),
+            },
+            "summary": object_schema(
+                json!({
+                    "files": { "type": "integer", "minimum": 0 },
+                    "files_with_references": { "type": "integer", "minimum": 0 },
+                    "unreferenced_files": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                    },
+                    "references": { "type": "integer", "minimum": 0 },
+                    "ok": { "type": "integer", "minimum": 0 },
+                    "failures": { "type": "integer", "minimum": 0 },
+                    "stale": { "type": "integer", "minimum": 0 },
+                    "not_yet_valid": { "type": "integer", "minimum": 0 },
+                    "contested": { "type": "integer", "minimum": 0 },
+                    "no_longer_believed": { "type": "integer", "minimum": 0 },
+                    "missing": { "type": "integer", "minimum": 0 },
+                    "invalid": { "type": "integer", "minimum": 0 },
+                    "guard_protected": { "type": "boolean" },
+                }),
+                &[
+                    "files",
+                    "files_with_references",
+                    "unreferenced_files",
+                    "references",
+                    "ok",
+                    "failures",
+                    "stale",
+                    "not_yet_valid",
+                    "contested",
+                    "no_longer_believed",
+                    "missing",
+                    "invalid",
+                    "guard_protected",
+                ],
+            ),
+        }),
+        &[
+            "status",
+            "tool",
+            "agent",
+            "root",
+            "dent8_dir",
+            "guard",
+            "files",
+            "references",
+            "summary",
+        ],
+    )
+}
+
+fn native_agent_schema() -> Value {
+    json!({ "enum": ["codex", "claude-code", "cursor", "grok-build", "gemini", "cascade", "hecate"] })
+}
+
+fn native_guard_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["enforced", "advisory", "missing", "unreadable", "unvalidated"] },
+            "protected": { "type": "boolean" },
+            "path": nullable_string_schema(),
+            "message": { "type": "string" },
+        }),
+        &["status", "protected", "path", "message"],
+    )
+}
+
+fn native_file_output_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string" },
+            "relative_path": { "type": "string" },
+            "kind": { "type": "string" },
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "modified_unix_ms": {
+                "anyOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                ]
+            },
+            "sha256": {
+                "anyOf": [
+                    digest_schema(),
+                    { "type": "null" }
+                ]
+            },
+            "has_receipt_marker": { "type": "boolean" },
+            "read_error": nullable_string_schema(),
+        }),
+        &[
+            "path",
+            "relative_path",
+            "kind",
+            "size_bytes",
+            "modified_unix_ms",
+            "sha256",
+            "has_receipt_marker",
+            "read_error",
+        ],
+    )
+}
+
+fn native_reconcile_reference_output_schema() -> Value {
+    object_schema(
+        json!({
+            "file": object_schema(
+                json!({
+                    "relative_path": { "type": "string" },
+                    "kind": { "type": "string" },
+                }),
+                &["relative_path", "kind"],
+            ),
+            "reference": object_schema(
+                json!({
+                    "uri": { "type": "string" },
+                    "line": { "type": "integer", "minimum": 0 },
+                    "column": { "type": "integer", "minimum": 0 },
+                    "subject": {
+                        "anyOf": [
+                            subject_output_schema(),
+                            { "type": "null" }
+                        ]
+                    },
+                    "predicate": nullable_string_schema(),
+                    "parse_error": nullable_string_schema(),
+                }),
+                &["uri", "line", "column", "subject", "predicate", "parse_error"],
+            ),
+            "status": {
+                "enum": [
+                    "ok",
+                    "stale",
+                    "not_yet_valid",
+                    "contested",
+                    "no_longer_believed",
+                    "missing",
+                    "invalid"
+                ]
+            },
+            "ok": { "type": "boolean" },
+            "message": { "type": "string" },
+            "receipt": {
+                "anyOf": [
+                    native_receipt_output_schema(),
+                    { "type": "null" }
+                ]
+            },
+        }),
+        &["file", "reference", "status", "ok", "message", "receipt"],
+    )
+}
+
+fn native_receipt_output_schema() -> Value {
+    object_schema(
+        json!({
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "fact_id": { "type": "string" },
+            "value": cli_fact_value_output_schema(),
+            "lifecycle": {
+                "enum": ["Active", "Contested", "Superseded", "Retracted", "Expired"]
+            },
+            "authority": authority_schema(),
+            "fresh": { "type": "boolean" },
+            "not_yet_valid": { "type": "boolean" },
+            "valid_from": {
+                "anyOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                ]
+            },
+            "expires_at": {
+                "anyOf": [
+                    { "type": "integer" },
+                    { "type": "null" }
+                ]
+            },
+            "evidence_count": { "type": "integer", "minimum": 0 },
+            "corroboration": { "type": "integer", "minimum": 0 },
+            "survived_challenges": { "type": "integer", "minimum": 0 },
+            "superseded_by": nullable_string_schema(),
+            "contradicted_by": {
+                "type": "array",
+                "items": { "type": "string" },
+            },
+            "replay_position": { "type": "integer", "minimum": 0 },
+            "event_hash": digest_schema(),
+            "chain_verified": { "type": "boolean" },
+        }),
+        &[
+            "subject",
+            "predicate",
+            "fact_id",
+            "value",
+            "lifecycle",
+            "authority",
+            "fresh",
+            "not_yet_valid",
+            "valid_from",
+            "expires_at",
+            "evidence_count",
+            "corroboration",
+            "survived_challenges",
+            "superseded_by",
+            "contradicted_by",
+            "replay_position",
+            "event_hash",
+            "chain_verified",
+        ],
+    )
+}
+
+fn cli_fact_value_output_schema() -> Value {
+    json!({
+        "oneOf": [
+            object_schema(
+                json!({
+                    "kind": { "const": "text" },
+                    "text": { "type": "string" },
+                    "display": { "type": "string" },
+                }),
+                &["kind", "text", "display"],
+            ),
+            object_schema(
+                json!({
+                    "kind": { "const": "json" },
+                    "json": { "type": "string" },
+                    "display": { "type": "string" },
+                }),
+                &["kind", "json", "display"],
+            ),
+            object_schema(
+                json!({
+                    "kind": { "const": "redacted" },
+                    "display": { "type": "string" },
+                }),
+                &["kind", "display"],
+            ),
+        ]
+    })
 }
 
 fn write_output_schema(tool: &str, statuses: &[&str]) -> Value {
@@ -2330,6 +2705,16 @@ mod tests {
         let dir = tempdir::Guard::new();
         let path = format!("{}/log.jsonl", dir.path());
         (dir, path)
+    }
+
+    fn native_project(path: &str, contents: &str) -> String {
+        let root = std::path::Path::new(path)
+            .parent()
+            .expect("temp log parent");
+        let dent8_dir = root.join(".dent8");
+        std::fs::create_dir_all(&dent8_dir).expect("create dent8 dir");
+        std::fs::write(root.join("AGENTS.md"), contents).expect("write native memory");
+        dent8_dir.to_string_lossy().into_owned()
     }
 
     #[test]
@@ -3176,6 +3561,8 @@ mod tests {
                 "list_facts",
                 "verify",
                 "conflicts",
+                "native_scan",
+                "native_reconcile",
                 "assert",
                 "supersede",
                 "retract",
@@ -3238,6 +3625,20 @@ mod tests {
         assert_tool_output_matches_schema(&path, "list_facts", json!({}));
         assert_tool_output_matches_schema(&path, "verify", json!({}));
         assert_tool_output_matches_schema(&path, "conflicts", json!({}));
+
+        let (_guard, path) = temp_log();
+        let dent8_dir = native_project(&path, "repo database receipt: dent8://repo/p/database\n");
+        assert_tool_output_matches_schema(
+            &path,
+            "native_scan",
+            json!({ "agent": "codex", "dir": dent8_dir.clone() }),
+        );
+        assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
+        assert_tool_output_matches_schema(
+            &path,
+            "native_reconcile",
+            json!({ "agent": "codex", "dir": dent8_dir }),
+        );
 
         let (_guard, path) = temp_log();
         assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
@@ -3385,6 +3786,41 @@ mod tests {
         let (err, text) = call_tool(&path, "conflicts", json!({}));
         assert!(!err, "{text}");
         assert!(text.contains("no contested facts"), "{text}");
+    }
+
+    #[test]
+    fn native_audit_tools_resolve_receipts_against_the_mcp_store() {
+        let (_guard, path) = temp_log();
+        let dent8_dir = native_project(&path, "Project note: dent8://repo/p/database\n");
+
+        let scan = call_tool_result(
+            &path,
+            "native_scan",
+            json!({ "agent": "codex", "dir": dent8_dir.clone() }),
+        );
+        assert_eq!(scan["isError"], false, "{scan}");
+        assert_eq!(scan["structuredContent"]["status"], "ok");
+        assert_eq!(scan["structuredContent"]["summary"]["files"], 1);
+        assert_eq!(
+            scan["structuredContent"]["files"][0]["has_receipt_marker"],
+            true
+        );
+
+        let (err, text) = call_tool(&path, "assert", database("postgres", "high"));
+        assert!(!err, "{text}");
+        let reconcile = call_tool_result(
+            &path,
+            "native_reconcile",
+            json!({ "agent": "codex", "dir": dent8_dir }),
+        );
+        assert_eq!(reconcile["isError"], false, "{reconcile}");
+        assert_eq!(reconcile["structuredContent"]["status"], "ok");
+        assert_eq!(reconcile["structuredContent"]["summary"]["references"], 1);
+        assert_eq!(reconcile["structuredContent"]["summary"]["ok"], 1);
+        assert_eq!(
+            reconcile["structuredContent"]["references"][0]["receipt"]["value"]["text"],
+            "postgres"
+        );
     }
 
     #[test]
@@ -3568,9 +4004,27 @@ mod tests {
         assert!(read.get("error").is_none(), "read must not error: {read}");
         assert_eq!(read["result"]["isError"], Value::Bool(false));
 
+        let dent8_dir = native_project(
+            &path,
+            "Project note: dent8://repo/myproj/database should resolve through dent8.\n",
+        );
+        for name in ["native_scan", "native_reconcile"] {
+            let native_read = json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": { "name": name, "arguments": {
+                    "agent": "codex",
+                    "dir": dent8_dir.clone(),
+                }},
+            });
+            let read = raw_dispatch(&native_read, &path, &WriteIdentity::Unauthenticated)
+                .expect("native read reply");
+            assert!(read.get("error").is_none(), "{name} must not error: {read}");
+            assert_eq!(read["result"]["isError"], Value::Bool(false), "{read}");
+        }
+
         // A write is refused *before* dispatch, as a protocol error, so nothing is persisted.
         let write = json!({
-            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": { "name": "supersede", "arguments": {
                 "subject": "repo:myproj", "predicate": "database",
                 "value": "mysql", "authority": "high", "source": "source:owner",
@@ -3589,7 +4043,7 @@ mod tests {
 
         // The refusal did not mutate belief: the seeded value still stands under Full.
         let explain = json!({
-            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
             "params": { "name": "explain", "arguments": {
                 "subject": "repo:myproj", "predicate": "database",
             }},
