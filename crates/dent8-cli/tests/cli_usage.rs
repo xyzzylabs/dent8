@@ -3055,7 +3055,7 @@ fn doctor_agent_accepts_local_bin_install() {
     let stdout = stdout(&doctor);
     assert!(stdout.contains("local MCP wrapper:"));
     assert!(stdout.contains("local MCP binary: installed command can load the configured store"));
-    assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+    assert!(stdout.contains("mcp smoke: initialize + tools/list + runtime_status OK"));
 }
 
 #[test]
@@ -3145,7 +3145,7 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     assert!(stdout.contains("agent mcp config: up to date"));
     assert!(stdout.contains("source:codex max=high"));
     assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
-    assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+    assert!(stdout.contains("mcp smoke: initialize + tools/list + runtime_status OK"));
     assert!(stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"));
     assert!(stdout.contains("dent8.write_check=ok"));
     assert!(
@@ -4169,7 +4169,67 @@ fn doctor_agent_smokes_installed_cwd_and_custom_env() {
     assert!(stdout.contains(&format!("command={wrapper_command}")));
     assert!(stdout.contains(&format!("cwd={}", temp.path.display())));
     assert!(stdout.contains("agent mcp config: up to date"));
-    assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
+    assert!(stdout.contains("mcp smoke: initialize + tools/list + runtime_status OK"));
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_agent_mcp_smoke_rejects_wrong_runtime_store() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let wrong_log = temp.file("wrong-memory.jsonl");
+    let wrapper = temp.file("dent8-wrong-store-wrapper.sh");
+    fs::write(
+        &wrapper,
+        "#!/bin/sh\nset -eu\nexport DENT8_LOG=\"$DENT8_WRONG_LOG\"\nunset DENT8_STORE_URL\nexec \"$DENT8_REAL\" \"$@\"\n",
+    )
+    .expect("write wrapper");
+    make_executable(&wrapper);
+
+    let wrapper_command = wrapper.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--store",
+                "file",
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &wrapper_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --store file --install-mcp with wrapper",
+    );
+
+    let config_path = temp.file(".codex/config.toml");
+    let config = fs::read_to_string(&config_path).expect("codex config");
+    let real_bin = format!(
+        "\nDENT8_REAL = \"{}\"\nDENT8_WRONG_LOG = \"{}\"\n",
+        toml_basic_string(&dent8_bin().to_string_lossy()),
+        toml_basic_string(&wrong_log.to_string_lossy()),
+    );
+    fs::write(&config_path, config + &real_bin).expect("rewrite codex config with wrapper env");
+
+    let doctor = run_dent8(&["doctor", "--agent", "codex", "--dir", &dir], &[]);
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = stdout(&doctor);
+    assert!(stdout.contains("agent mcp config: up to date"), "{stdout}");
+    assert!(
+        stdout.contains("mcp smoke: runtime_status file log mismatch"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&wrong_log.to_string_lossy().to_string()),
+        "{stdout}"
+    );
 }
 
 #[cfg(unix)]
@@ -6997,7 +7057,7 @@ fn assert_installed_agent_doctor_ok(output: &Output, agent: &str, source: &str, 
         "{stdout}"
     );
     assert!(
-        stdout.contains("mcp smoke: initialize + tools/list OK"),
+        stdout.contains("mcp smoke: initialize + tools/list + runtime_status OK"),
         "{stdout}"
     );
     assert!(

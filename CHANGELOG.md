@@ -10,6 +10,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- `dent8 doctor --agent` now calls the MCP `runtime_status` tool during its smoke check and
+  fails when the installed server starts against a different store or source than the agent
+  bundle declares.
 - Added a read-only MCP `runtime_status` tool that reports the live server binary, cwd,
   selected store URL/path, event count, authority registry, signed identity, and witness
   configuration before an agent trusts project memory.

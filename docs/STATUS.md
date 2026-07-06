@@ -60,7 +60,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   it loads the generated `.dent8/env` plus the selected source's identity env
   (`.dent8/identity-<source>.env`) without requiring the shell to source it, parses the selected
   agent's installed MCP config, checks that it is up to date, then smokes the exact installed
-  `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` and a bounded timeout.
+  `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` + `runtime_status` and
+  a bounded timeout. The runtime-status smoke fails if the live MCP server starts against a
+  different store backend/path or source identity than the installed agent bundle declares.
   If `--mcp-command` is omitted,
   the expected command is read from the installed config; pass it only to assert a specific
   expected command. By default it is read-only; with `--repair`, it first repairs the

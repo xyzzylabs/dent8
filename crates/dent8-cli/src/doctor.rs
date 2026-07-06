@@ -300,7 +300,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
         }
     }
 
-    match mcp_smoke_with_server(&installed) {
+    match mcp_smoke_with_server(&installed, source) {
         Ok(message) => doctor_line(&mut output, "OK", &message),
         Err(error) => {
             ok = false;
@@ -1089,6 +1089,7 @@ pub(crate) fn run_doctor_with_env(
 
 pub(crate) fn mcp_smoke_with_server(
     server: &mcp_config::InstalledServer,
+    expected_source: &str,
 ) -> Result<String, String> {
     let responses = mcp_exchange_with_server(
         server,
@@ -1100,12 +1101,13 @@ pub(crate) fn mcp_smoke_with_server(
                 "id": 2,
                 "method": "tools/list",
             }),
+            mcp_tool_call(3, "runtime_status", &serde_json::json!({})),
         ],
         "mcp smoke",
     )?;
-    if responses.len() != 2 {
+    if responses.len() != 3 {
         return Err(format!(
-            "expected 2 JSON-RPC responses, got {}",
+            "expected 3 JSON-RPC responses, got {}",
             responses.len()
         ));
     }
@@ -1115,7 +1117,7 @@ pub(crate) fn mcp_smoke_with_server(
     let tools = responses[1]["result"]["tools"]
         .as_array()
         .ok_or_else(|| "tools/list did not return a tools array".to_string())?;
-    for expected in ["assert", "explain", "verify"] {
+    for expected in ["runtime_status", "assert", "explain", "verify"] {
         if !tools
             .iter()
             .any(|tool| tool["name"].as_str() == Some(expected))
@@ -1123,10 +1125,130 @@ pub(crate) fn mcp_smoke_with_server(
             return Err(format!("tools/list is missing {expected}"));
         }
     }
+    let runtime_status = mcp_runtime_status_result(&responses[2], server, expected_source)?;
+    let backend = runtime_status["store"]["backend"]
+        .as_str()
+        .unwrap_or("unknown");
+    let events = runtime_status["store"]["event_count"]
+        .as_u64()
+        .map_or_else(|| "unknown".to_string(), |count| count.to_string());
     Ok(format!(
-        "mcp smoke: initialize + tools/list OK ({} tool(s))",
-        tools.len()
+        "mcp smoke: initialize + tools/list + runtime_status OK ({} tool(s), store={backend}, events={events})",
+        tools.len(),
     ))
+}
+
+pub(crate) fn mcp_runtime_status_result<'a>(
+    response: &'a serde_json::Value,
+    server: &mcp_config::InstalledServer,
+    expected_source: &str,
+) -> Result<&'a serde_json::Value, String> {
+    let result = mcp_tool_result(response, "runtime_status")?;
+    if result["isError"].as_bool() != Some(false) {
+        return Err(format!("runtime_status returned a tool error: {result}"));
+    }
+    let structured = result
+        .get("structuredContent")
+        .ok_or_else(|| format!("runtime_status missing structuredContent: {result}"))?;
+    if structured["tool"] != "runtime_status" {
+        return Err(format!(
+            "runtime_status returned wrong tool payload: {structured}"
+        ));
+    }
+    if structured["status"] != "ok" {
+        return Err(format!(
+            "runtime_status reported degraded runtime: {structured}"
+        ));
+    }
+    validate_mcp_runtime_store(server, structured)?;
+    validate_mcp_runtime_identity(structured, expected_source)?;
+    Ok(structured)
+}
+
+pub(crate) fn validate_mcp_runtime_store(
+    server: &mcp_config::InstalledServer,
+    runtime_status: &serde_json::Value,
+) -> Result<(), String> {
+    let store = &runtime_status["store"];
+    let actual_backend = store["backend"].as_str().unwrap_or("unknown");
+    if let Some(url) = installed_env_value(server, "DENT8_STORE_URL") {
+        let expected_backend = url.split_once(':').map_or(url, |(scheme, _)| scheme);
+        if actual_backend != expected_backend {
+            return Err(format!(
+                "runtime_status store backend mismatch: expected {expected_backend} from DENT8_STORE_URL, got {actual_backend}"
+            ));
+        }
+        let expected_url = redact_runtime_url(url);
+        let actual_url = store["url"].as_str().unwrap_or("<missing>");
+        if actual_url != expected_url {
+            return Err(format!(
+                "runtime_status store URL mismatch: expected {expected_url}, got {actual_url}"
+            ));
+        }
+        if let Some(expected_path) = url.strip_prefix("sqlite://") {
+            let actual_path = store["path"].as_str().unwrap_or("<missing>");
+            if actual_path != expected_path {
+                return Err(format!(
+                    "runtime_status sqlite path mismatch: expected {expected_path}, got {actual_path}"
+                ));
+            }
+        }
+        return Ok(());
+    }
+    if let Some(expected_log) = installed_env_value(server, "DENT8_LOG") {
+        if actual_backend != "file" {
+            return Err(format!(
+                "runtime_status store backend mismatch: expected file from DENT8_LOG, got {actual_backend}"
+            ));
+        }
+        let actual_log = store["file_log_path"].as_str().unwrap_or("<missing>");
+        if actual_log != expected_log {
+            return Err(format!(
+                "runtime_status file log mismatch: expected {expected_log}, got {actual_log}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_mcp_runtime_identity(
+    runtime_status: &serde_json::Value,
+    expected_source: &str,
+) -> Result<(), String> {
+    let actual_source = runtime_status["identity"]["source"]
+        .as_str()
+        .unwrap_or("<missing>");
+    if actual_source != expected_source {
+        return Err(format!(
+            "runtime_status identity source mismatch: expected {expected_source}, got {actual_source}"
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn installed_env_value<'a>(
+    server: &'a mcp_config::InstalledServer,
+    key: &str,
+) -> Option<&'a str> {
+    server
+        .env
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn redact_runtime_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some((userinfo, host_and_path)) = rest.split_once('@') else {
+        return url.to_string();
+    };
+    if userinfo.is_empty() {
+        url.to_string()
+    } else {
+        format!("{scheme}://<redacted>@{host_and_path}")
+    }
 }
 
 pub(crate) fn mcp_write_check_with_server(
