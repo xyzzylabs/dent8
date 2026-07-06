@@ -82,8 +82,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   inverted interval is rejected. Subjects are written as `<kind>:<key>` (for example,
   `person:alice` or `repo:dent8`); authority/source are provenance metadata, not part of
   the fact. They can be passed explicitly, or omitted when `DENT8_GRANT` is configured:
-  the CLI then defaults to the grant's source and maximum authority before the normal
-  authority-ceiling and signed-identity checks run.
+  the CLI and stdio MCP then default to the grant's source and maximum authority before the
+  normal authority-ceiling and signed-identity checks run. Authenticated daemon connections
+  use the same defaults from their proven connection identity.
 - **`dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>]
   [--valid-from MILLIS] [--valid-to MILLIS]`** — revises
   the believed fact via the sanctioned supersession path: it asserts a replacement (stamped

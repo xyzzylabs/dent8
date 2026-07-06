@@ -1,7 +1,8 @@
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
     sync::atomic::{AtomicU32, Ordering},
 };
 
@@ -4524,6 +4525,7 @@ fn identity_bootstrap_rejects_project_local_issuer_key() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
     let temp = TempDir::new();
     let dir = temp.file("dent8");
@@ -4627,6 +4629,36 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
     let defaulted_json = stdout_json(&defaulted_json);
     assert_eq!(defaulted_json["source"], "source:codex");
     assert_eq!(defaulted_json["authority"], "high");
+
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "assert",
+            "arguments": {
+                "subject": "repo:myproj",
+                "predicate": "database",
+                "value": "sqlite"
+            }
+        }
+    });
+    let mcp = run_dent8_mcp(&format!("{request}\n"), &identity_env);
+    assert_success(&mcp, "stdio MCP signed write defaults source and authority");
+    let response: Value = serde_json::from_str(stdout(&mcp).trim()).unwrap_or_else(|error| {
+        panic!(
+            "mcp stdout is not one JSON response: {error}\nstdout:\n{}\nstderr:\n{}",
+            stdout(&mcp),
+            stderr(&mcp)
+        )
+    });
+    assert!(response.get("error").is_none(), "{response:#}");
+    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(
+        response["result"]["structuredContent"]["source"],
+        "source:codex"
+    );
+    assert_eq!(response["result"]["structuredContent"]["authority"], "high");
 }
 
 #[test]
@@ -6638,6 +6670,40 @@ fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         command.env(key, value);
     }
     command.output().expect("run dent8")
+}
+
+fn run_dent8_mcp(input: &str, envs: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(dent8_bin());
+    command
+        .args(["mcp", "serve"])
+        .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
+        .env_remove("DENT8_AUTHORITY")
+        .env_remove("DENT8_REQUIRE_AUTHORITY")
+        .env_remove("DENT8_TRUST")
+        .env_remove("DENT8_ACTIVE_GRANTS")
+        .env_remove("DENT8_GRANT")
+        .env_remove("DENT8_IDENTITY_KEY")
+        .env_remove("DENT8_ISSUER_KEY")
+        .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_WITNESS_KEY")
+        .env_remove("DENT8_WITNESS_PUBKEY")
+        .env_remove("DENT8_WITNESS_LOG")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn dent8 mcp serve");
+    child
+        .stdin
+        .as_mut()
+        .expect("mcp stdin")
+        .write_all(input.as_bytes())
+        .expect("write mcp request");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("run dent8 mcp serve")
 }
 
 fn assert_success(output: &Output, context: &str) {

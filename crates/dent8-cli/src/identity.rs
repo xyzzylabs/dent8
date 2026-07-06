@@ -465,6 +465,22 @@ impl IdentityContext {
         })
     }
 
+    #[cfg(all(test, unix, feature = "async-store"))]
+    pub(crate) fn from_test_parts(
+        trust_path: String,
+        grant_path: String,
+        identity_key_path: String,
+    ) -> Self {
+        Self {
+            trust_path,
+            trust_explicit: true,
+            grant_path: Some(grant_path),
+            identity_key_path: Some(identity_key_path),
+            active_grants_override: None,
+            required: true,
+        }
+    }
+
     /// Whether signed identity is *configured*: a missing or invalid grant is then a hard
     /// error rather than unconfigured dev mode (in which writes pass unattested).
     pub(crate) fn configured(&self) -> bool {

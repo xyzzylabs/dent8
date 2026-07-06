@@ -23,8 +23,9 @@ Initial command groups:
 - `dent8 mcp serve`
 
 `<subject>` is written as `<kind>:<key>`, for example `person:alice` or `repo:dent8`.
-Authority and source are explicit flags so provenance metadata is not confused with the
-fact's subject/predicate/value.
+Authority and source are provenance metadata, not part of the fact's
+subject/predicate/value. They can be passed explicitly or defaulted from the active signed
+source grant.
 
 The CLI should show integrity metadata by default: lifecycle, freshness (TTL *and* asserted
 `valid_to`), authority, evidence count, contradiction count, survived-challenge count,
@@ -79,7 +80,8 @@ as a second text content block.
 Recommended behavior:
 
 - Treat writes as candidate events through the firewall.
-- Require evidence/provenance fields for assertions.
+- Carry evidence/provenance fields for assertions; signed identity may provide source and
+  authority defaults, but explicit fields must still satisfy the same grant/ceiling checks.
 - Make stale, contested, expired, or superseded facts visible to clients.
 - Put the core usage workflow in MCP server instructions so Codex, Claude Code, Gemini CLI,
   Devin/Cascade, Cursor, Grok Build, Hecate, and other MCP-aware agent hosts know to inspect
@@ -95,12 +97,13 @@ Client setup examples live under [`examples/mcp/`](../examples/mcp/):
 [`examples/vercel-ai-sdk/`](../examples/vercel-ai-sdk/). These are integration profiles, not
 separate memory semantics; every write still enters through the shared firewall path.
 
-Transport status: v0 is stdio only. `dent8 mcp install` writes configs that launch the
-globally installed `dent8` binary (`command = "dent8"` by default, overrideable with
-`--command`). Several agents can share one belief base by pointing their separate stdio
-server subprocesses at the same backend and registries, while keeping distinct grant/key env
-values for provenance. A single long-lived local or remote MCP server should use HTTP/streamable
-transport and per-request source authentication; that is design-only today.
+Transport status: v0 supports stdio plus a local Unix-socket daemon. `dent8 mcp install`
+writes configs that launch the globally installed `dent8` binary (`command = "dent8"` by
+default, overrideable with `--command`). Several agents can share one belief base either by
+pointing separate stdio server subprocesses at the same backend and registries, while keeping
+distinct grant/key env values for provenance, or by connecting to one local daemon that
+requires the session-challenge handshake before writes. A remote HTTP/streamable transport
+remains design-only today.
 
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.

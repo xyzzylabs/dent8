@@ -47,11 +47,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   JSON-capable by default.
 
 ### Added
-- **Signed identity defaults for CLI writes.** When `DENT8_GRANT` is configured, CLI write
-  commands can omit `--source` and/or `--authority`: dent8 defaults them from the active grant's
-  source and maximum authority, then runs the same authority-ceiling, grant, and source-key
-  possession checks before appending anything. Explicit flags still work and still have to satisfy
-  the signed identity policy.
+- **Signed identity defaults for CLI/MCP writes.** When `DENT8_GRANT` is configured, CLI and
+  stdio MCP write commands can omit `--source` and/or `--authority`: dent8 defaults them from the
+  active grant's source and maximum authority, then runs the same authority-ceiling, grant, and
+  source-key possession checks before appending anything. Authenticated daemon connections use the
+  same defaults from their proven connection identity. Explicit fields still work and still have to
+  satisfy the signed identity policy.
 - **`schema_version` on every machine payload.** Each `--output json` object and every MCP
   `structuredContent` now carries a top-level `schema_version` (currently `1`) from one shared
   constant, so a consumer can branch when the (still pre-1.0) output shape changes. The MCP tools'

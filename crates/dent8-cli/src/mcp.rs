@@ -38,6 +38,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, "2025-06
 const SERVER_INSTRUCTIONS: &str = "\
 dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, \
 call list_facts or explain. Record stable facts with assert using truthful source and authority. \
+When the connection has a signed source grant, write tools may omit source and authority. \
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
 Treat rejected writes as safety signals; do not silently overwrite.";
 
@@ -973,14 +974,9 @@ fn dispatch_tool(
             ))
         }
         "assert" => {
-            let (kind, key, predicate, value, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg(arguments, "value")?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate, value) =
+                (kind()?, key()?, predicate()?, arg(arguments, "value")?);
             let validity = arg_validity(arguments)?;
             run_write_tool(
                 "assert",
@@ -991,26 +987,28 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: Some(&value),
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
                 || {
                     op_assert(
-                        path, &kind, &key, &predicate, &value, authority, &source, validity,
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        meta.authority,
+                        &meta.source,
+                        validity,
                         identity,
                     )
                 },
             )
         }
         "supersede" => {
-            let (kind, key, predicate, value, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg(arguments, "value")?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate, value) =
+                (kind()?, key()?, predicate()?, arg(arguments, "value")?);
             let validity = arg_validity(arguments)?;
             run_write_tool(
                 "supersede",
@@ -1021,25 +1019,27 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: Some(&value),
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
                 || {
                     op_supersede(
-                        path, &kind, &key, &predicate, &value, authority, &source, validity,
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        meta.authority,
+                        &meta.source,
+                        validity,
                         identity,
                     )
                 },
             )
         }
         "retract" => {
-            let (kind, key, predicate, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
             run_write_tool(
                 "retract",
                 Status::Accepted,
@@ -1049,20 +1049,25 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: None,
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
-                || op_retract(path, &kind, &key, &predicate, authority, &source, identity),
+                || {
+                    op_retract(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        meta.authority,
+                        &meta.source,
+                        identity,
+                    )
+                },
             )
         }
         "reinforce" => {
-            let (kind, key, predicate, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
             run_write_tool(
                 "reinforce",
                 Status::Accepted,
@@ -1072,20 +1077,25 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: None,
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
-                || op_reinforce(path, &kind, &key, &predicate, authority, &source, identity),
+                || {
+                    op_reinforce(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        meta.authority,
+                        &meta.source,
+                        identity,
+                    )
+                },
             )
         }
         "expire" => {
-            let (kind, key, predicate, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
             run_write_tool(
                 "expire",
                 Status::Accepted,
@@ -1095,21 +1105,26 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: None,
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
-                || op_expire(path, &kind, &key, &predicate, authority, &source, identity),
+                || {
+                    op_expire(
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        meta.authority,
+                        &meta.source,
+                        identity,
+                    )
+                },
             )
         }
         "derive" => {
-            let (kind, key, predicate, value, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg(arguments, "value")?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate, value) =
+                (kind()?, key()?, predicate()?, arg(arguments, "value")?);
             // The basis fact this derivative depends on: one `basis` subject (`"kind:key"`) plus
             // its predicate — mirrors the CLI's `--basis <subject> <predicate>`.
             let (from_kind, from_key) = arg_subject(arguments, "basis")?;
@@ -1124,8 +1139,8 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: Some(&value),
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
                 || {
                     op_derive(
@@ -1134,8 +1149,8 @@ fn dispatch_tool(
                         &key,
                         &predicate,
                         &value,
-                        authority,
-                        &source,
+                        meta.authority,
+                        &meta.source,
                         &from_kind,
                         &from_key,
                         &from_predicate,
@@ -1156,14 +1171,9 @@ fn dispatch_tool(
             Ok(output)
         }
         "contradict" => {
-            let (kind, key, predicate, value, authority, source) = (
-                kind()?,
-                key()?,
-                predicate()?,
-                arg(arguments, "value")?,
-                arg_authority(arguments)?,
-                arg(arguments, "source")?,
-            );
+            let meta = resolve_write_meta(arguments, identity)?;
+            let (kind, key, predicate, value) =
+                (kind()?, key()?, predicate()?, arg(arguments, "value")?);
             let validity = arg_validity(arguments)?;
             run_write_tool(
                 "contradict",
@@ -1174,12 +1184,19 @@ fn dispatch_tool(
                     subject_key: &key,
                     predicate: &predicate,
                     attempted_value: Some(&value),
-                    authority,
-                    source: &source,
+                    authority: meta.authority,
+                    source: &meta.source,
                 },
                 || {
                     op_contradict(
-                        path, &kind, &key, &predicate, &value, authority, &source, validity,
+                        path,
+                        &kind,
+                        &key,
+                        &predicate,
+                        &value,
+                        meta.authority,
+                        &meta.source,
+                        validity,
                         identity,
                     )
                 },
@@ -1591,6 +1608,73 @@ fn arg(arguments: &Value, name: &str) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::Invalid(format!("missing required string argument: {name}")))
 }
 
+#[derive(Clone, Debug)]
+struct ResolvedWriteMeta {
+    authority: AuthorityLevel,
+    source: String,
+}
+
+/// Resolve provenance metadata for MCP writes. Explicit `authority` / `source` still work; if
+/// either is omitted, a signed identity may provide the default (stdio env identity, or the
+/// authenticated daemon connection identity). The final values still pass through the same
+/// authority-ceiling and signed-identity checks in `op_*`.
+fn resolve_write_meta(
+    arguments: &Value,
+    identity: &WriteIdentity,
+) -> Result<ResolvedWriteMeta, ToolError> {
+    let authority = optional_authority(arguments)?;
+    let source = optional_string(arguments, "source")?;
+    if let (Some(authority), Some(source)) = (authority, source.as_deref()) {
+        return Ok(ResolvedWriteMeta {
+            authority,
+            source: source.to_string(),
+        });
+    }
+
+    let defaults = write_defaults(identity)?;
+    let authority = authority
+        .or_else(|| defaults.as_ref().map(|defaults| defaults.authority))
+        .ok_or_else(|| {
+            ToolError::Invalid(
+                "missing authority (or configure a signed source grant with DENT8_GRANT)"
+                    .to_string(),
+            )
+        })?;
+    let source = source
+        .or_else(|| defaults.map(|defaults| defaults.source))
+        .ok_or_else(|| {
+            ToolError::Invalid(
+                "missing source (or configure a signed source grant with DENT8_GRANT)".to_string(),
+            )
+        })?;
+
+    Ok(ResolvedWriteMeta { authority, source })
+}
+
+fn write_defaults(
+    identity: &WriteIdentity,
+) -> Result<Option<crate::identity::WriteDefaults>, ToolError> {
+    match identity {
+        WriteIdentity::Env => crate::identity::IdentityContext::from_env()
+            .map_err(ToolError::Invalid)?
+            .write_defaults()
+            .map_err(ToolError::Invalid),
+        #[cfg(all(unix, feature = "async-store"))]
+        WriteIdentity::Connection(ctx) => ctx.write_defaults().map_err(ToolError::Invalid),
+        WriteIdentity::Unauthenticated => Ok(None),
+    }
+}
+
+fn optional_string(arguments: &Value, name: &str) -> Result<Option<String>, ToolError> {
+    match arguments.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(ToolError::Invalid(format!(
+            "optional argument {name} must be a string"
+        ))),
+    }
+}
+
 /// Parse a `"kind:key"` subject argument into its kind and key, mirroring the CLI's
 /// `person:alice` grammar exactly (split on the first `:`, then validate via [`Subject::new`]).
 /// `name` is the argument name, so a `derive` basis and the primary subject give distinct errors.
@@ -1648,14 +1732,16 @@ fn arg_read_clock(arguments: &Value) -> Result<crate::ops::ReadClock, ToolError>
     })
 }
 
-/// The required `authority` argument, parsed to a level.
-fn arg_authority(arguments: &Value) -> Result<dent8_core::AuthorityLevel, ToolError> {
-    let raw = arg(arguments, "authority")?;
-    parse_authority(&raw).ok_or_else(|| {
-        ToolError::Invalid(format!(
-            "unknown authority '{raw}' (expected: low | medium | high | canonical)"
-        ))
-    })
+fn optional_authority(arguments: &Value) -> Result<Option<AuthorityLevel>, ToolError> {
+    optional_string(arguments, "authority")?
+        .map(|raw| {
+            parse_authority(&raw).ok_or_else(|| {
+                ToolError::Invalid(format!(
+                    "unknown authority '{raw}' (expected: low | medium | high | canonical)"
+                ))
+            })
+        })
+        .transpose()
 }
 
 // By-value so it works as `map_err(into_tool_error)`.
@@ -1683,8 +1769,8 @@ fn tool_list() -> Vec<Value> {
         "predicate": { "type": "string", "description": "fact name, e.g. database" },
     });
     let write = json!({
-        "authority": { "type": "string", "enum": ["low", "medium", "high", "canonical"] },
-        "source": { "type": "string", "description": "the writing source id" },
+        "authority": { "type": "string", "enum": ["low", "medium", "high", "canonical"], "description": "optional authority level; defaults from the active signed grant when omitted" },
+        "source": { "type": "string", "description": "optional writing source id; defaults from the active signed grant when omitted" },
     });
     let value = json!({ "value": { "type": "string", "description": "the fact's value" } });
     // Valid-time interval (ADR 0016), on the assertion a write creates. Optional; unix millis.
@@ -1710,17 +1796,9 @@ fn tool_list() -> Vec<Value> {
     });
     let derive_props = merge(&valued_vt, &basis);
     let read = ["subject", "predicate"];
-    let valued_req = ["subject", "predicate", "value", "authority", "source"];
-    let derive_req = [
-        "subject",
-        "predicate",
-        "value",
-        "authority",
-        "source",
-        "basis",
-        "basis_predicate",
-    ];
-    let write_req = ["subject", "predicate", "authority", "source"];
+    let valued_req = ["subject", "predicate", "value"];
+    let derive_req = ["subject", "predicate", "value", "basis", "basis_predicate"];
+    let write_req = ["subject", "predicate"];
     vec![
         tool(
             "list_facts",
@@ -2950,6 +3028,56 @@ mod tests {
         );
     }
 
+    #[cfg(all(unix, feature = "async-store"))]
+    #[test]
+    fn authenticated_connection_defaults_mcp_write_metadata_and_rejects_laundered_source() {
+        let (guard, path) = temp_log();
+        let identity = test_connection_identity(&guard);
+        let write = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "assert", "arguments": {
+                "subject": "repo:p", "predicate": "database", "value": "postgres"
+            }},
+        });
+        let accepted = raw_handle(&write, &path, &identity).expect("accepted response");
+        assert_eq!(
+            accepted["result"]["isError"],
+            Value::Bool(false),
+            "{accepted}"
+        );
+        let structured = &accepted["result"]["structuredContent"];
+        assert_eq!(structured["source"], "source:codex");
+        assert_eq!(structured["authority"], "high");
+        assert_eq!(
+            structured["accepted_events"][0]["source"], "source:codex",
+            "{structured}",
+        );
+
+        let laundered = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "assert", "arguments": {
+                "subject": "person:alice",
+                "predicate": "favorite_drink",
+                "value": "tea",
+                "source": "source:other"
+            }},
+        });
+        let rejected = raw_handle(&laundered, &path, &identity).expect("rejected response");
+        assert_eq!(
+            rejected["result"]["isError"],
+            Value::Bool(true),
+            "{rejected}"
+        );
+        assert_eq!(rejected["result"]["structuredContent"]["status"], "invalid");
+        assert!(
+            rejected["result"]["structuredContent"]["error_reason"]
+                .as_str()
+                .unwrap()
+                .contains("grant source"),
+            "{rejected}",
+        );
+    }
+
     #[test]
     fn a_subject_without_a_colon_is_invalid() {
         let (_guard, path) = temp_log();
@@ -3074,6 +3202,21 @@ mod tests {
             );
         }
         let assert_tool = tools.iter().find(|tool| tool["name"] == "assert").unwrap();
+        let assert_required = assert_tool["inputSchema"]["required"]
+            .as_array()
+            .expect("assert required");
+        assert_eq!(
+            assert_required,
+            json!(["subject", "predicate", "value"])
+                .as_array()
+                .expect("expected required array"),
+        );
+        for optional in ["authority", "source"] {
+            assert!(
+                !assert_required.contains(&json!(optional)),
+                "{optional} should be optional when signed identity can default it",
+            );
+        }
         assert_eq!(
             assert_tool["outputSchema"]["oneOf"][0]["properties"]["accepted_events"]["type"],
             "array"
@@ -3520,8 +3663,7 @@ mod tests {
             HandshakeState::Failed.write_identity(),
             WriteIdentity::Unauthenticated
         ));
-        let identity =
-            std::sync::Arc::new(crate::identity::IdentityContext::from_env().expect("from_env"));
+        let identity = std::sync::Arc::new(test_identity_context(&tempdir::Guard::new()));
         assert!(matches!(
             HandshakeState::Authenticated { identity }.write_identity(),
             WriteIdentity::Connection(_)
@@ -3581,5 +3723,31 @@ mod tests {
                 let _ = std::fs::remove_dir_all(&self.path);
             }
         }
+    }
+
+    #[cfg(all(unix, feature = "async-store"))]
+    fn test_connection_identity(dir: &tempdir::Guard) -> WriteIdentity {
+        WriteIdentity::Connection(std::sync::Arc::new(test_identity_context(dir)))
+    }
+
+    #[cfg(all(unix, feature = "async-store"))]
+    fn test_identity_context(dir: &tempdir::Guard) -> crate::identity::IdentityContext {
+        let bundle = format!("{}/identity", dir.path());
+        let issuer_key = format!("{}/issuer.key", dir.path());
+        let output = crate::identity::bootstrap_bundle(
+            &bundle,
+            "source:codex",
+            "owner",
+            Some(&issuer_key),
+            crate::CliAuthority::High,
+            "*",
+            None,
+        )
+        .expect("bootstrap signed identity");
+        crate::identity::IdentityContext::from_test_parts(
+            output.trust_file.to_string_lossy().into_owned(),
+            output.grant_file.to_string_lossy().into_owned(),
+            output.source_key_path.to_string_lossy().into_owned(),
+        )
     }
 }
