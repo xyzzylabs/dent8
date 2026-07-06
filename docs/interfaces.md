@@ -108,8 +108,10 @@ remains design-only today.
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.
 These hooks are not an alternate write path; they run `dent8 verify` and block direct edits
-to provider-native memory/rules files that would bypass the fact-event firewall. The
-adapter design is tracked in
+to provider-native memory/rules files that would bypass the fact-event firewall.
+`dent8 native scan --agent <profile>` is the read-only audit counterpart: it inventories
+known native files/rules, hashes them, flags dent8 receipt markers, and reports guard posture.
+The adapter design is tracked in
 [`agent-adapters.md`](agent-adapters.md).
 
 ## MCP Resources

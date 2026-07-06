@@ -28,7 +28,11 @@ access to the event tables.
    `dent8 hook native-memory-guard` to run `dent8 verify` and block direct native
    memory/rules writes that would bypass dent8. Provider profiles live in
    [`examples/agent-hooks/`](../examples/agent-hooks/).
-3. **Signed source identity, default build.** Use `dent8 init --agent <profile>` or
+3. **Native scan, built.** `dent8 native scan --agent <profile>` inventories provider-native
+   memory/rules files, hashes them, reports dent8 receipt markers, and includes the selected
+   profile's guard posture. `doctor --agent` runs the same read-only scan. This is audit, not
+   import.
+4. **Signed source identity, default build.** Use `dent8 init --agent <profile>` or
    `dent8 init --identity --source <source>` to give each agent a distinct source key and
    issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Several agents can use the
    same globally installed `dent8` binary and the same backend store, but stdio MCP clients
@@ -38,12 +42,12 @@ access to the event tables.
    whose key it holds; use separate daemon instances for distinct local source identities.
    Future remote HTTP transport should authenticate the source per request without requiring
    the service to hold user source keys.
-4. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
+5. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
    `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
    authority candidate events. Imported facts need provenance and review.
-5. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
+6. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
    receipts. Exported files should carry dent8 fact ids and hash receipts in comments.
-6. **Reconcile, design-only.** Compare native files with dent8 projections and report stale,
+7. **Reconcile, design-only.** Compare native files with dent8 projections and report stale,
    superseded, unverified, or low-authority facts that are still visible to an agent.
 
 ## Provider stance

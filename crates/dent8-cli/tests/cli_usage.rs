@@ -137,6 +137,64 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
 }
 
 #[test]
+fn native_scan_reports_agent_memory_files_and_receipt_markers() {
+    let temp = TempDir::new();
+    fs::create_dir_all(temp.file(".cursor/rules")).expect("create cursor rules dir");
+    fs::write(
+        temp.file("AGENTS.md"),
+        "Stable facts live in dent8.\nreceipt: dent8://repo/app/deploy_target\n",
+    )
+    .expect("write AGENTS.md");
+    fs::write(
+        temp.file(".cursor/rules/project.mdc"),
+        "Remember: deploy target is staging.\n",
+    )
+    .expect("write cursor rule");
+    fs::write(
+        temp.file("notes.txt"),
+        "AGENTS.md is mentioned but not a native file\n",
+    )
+    .expect("write unrelated note");
+
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let scan = run_dent8(
+        &[
+            "--output", "json", "native", "scan", "--agent", "codex", "--dir", &dir,
+        ],
+        &[],
+    );
+    assert_success(&scan, "native scan --output json");
+    let scan = stdout_json(&scan);
+    assert_eq!(scan["status"], "ok");
+    assert_eq!(scan["tool"], "native scan");
+    assert_eq!(scan["agent"], "codex");
+    assert_eq!(scan["guard"]["status"], "missing");
+    assert_eq!(scan["summary"]["files"], 2);
+    assert_eq!(scan["summary"]["with_receipt_markers"], 1);
+    assert_eq!(scan["summary"]["without_receipt_markers"], 1);
+
+    let files = scan["files"].as_array().expect("files array");
+    let agents = files
+        .iter()
+        .find(|file| file["relative_path"] == "AGENTS.md")
+        .expect("AGENTS.md entry");
+    assert_eq!(agents["kind"], "agent_instructions");
+    assert_eq!(agents["has_receipt_marker"], true);
+    assert!(
+        agents["sha256"]
+            .as_str()
+            .is_some_and(|hash| hash.len() == 64)
+    );
+
+    let cursor = files
+        .iter()
+        .find(|file| file["relative_path"] == ".cursor/rules/project.mdc")
+        .expect("cursor rule entry");
+    assert_eq!(cursor["kind"], "cursor_rules");
+    assert_eq!(cursor["has_receipt_marker"], false);
+}
+
+#[test]
 fn read_audit_commands_emit_machine_readable_json() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

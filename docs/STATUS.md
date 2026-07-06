@@ -69,7 +69,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   a best-effort **bypass guard** posture for known hook-capable profiles: OK when an installed
   native-memory hook config references `dent8 hook native-memory-guard` with
   `DENT8_HOOK_ENFORCE=1`, WARN when the hook is missing/advisory, and WARN/unknown for
-  profiles whose hook schema is host-specific. With
+  profiles whose hook schema is host-specific. It also runs the same read-only native scan as
+  `dent8 native scan --agent <profile>` and reports how many native memory/rules files exist
+  and how many contain dent8 receipt markers. With
   `--write-check`, it runs an explicit acceptance probe through the installed MCP server
   against the configured store: a high-authority internal diagnostic fact
   (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a low-authority supersession to
@@ -268,6 +270,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   when `DENT8_HOOK_ENFORCE=1` blocks a direct native-memory write that would bypass the
   fact-event firewall. It is a bypass guard around provider files, not an alternate dent8
   store.
+- **`dent8 native scan --agent <profile> [--dir .dent8] [--root PATH]`** — a read-only audit of
+  provider-native memory/rules files. It scans known native surfaces (`AGENTS.md`, `CLAUDE.md`,
+  `CLAUDE.local.md`, `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`,
+  `.windsurf/rules`, `.windsurfrules`), reports size, mtime, SHA-256, and whether a file
+  contains dent8 receipt markers (`dent8://`, `fact_id` + `event_hash`, etc.), and includes
+  the selected agent's native-memory guard posture. This is audit only: it does not import
+  native text as facts and does not write provider-native files. Supports `--output json`.
 - **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
   firewall). A source→authority *ceiling* registry: every write checks the requested/defaulted

@@ -147,6 +147,8 @@ library-only vs. design-only. In brief, runnable today:
   MCP server (`dent8 mcp serve`) — all in the stock binary.
 - Machine-readable `--output json` across the read/write/audit surface, shell completions, and
   Parquet **export** for offline DuckDB analysis (`--features export`).
+- Read-only native memory/rules audit with `dent8 native scan --agent <profile>`; import,
+  export, and reconcile remain future work.
 
 Run `dent8 --help` for the full command surface. The stock binary needs no services; opt-in
 builds add a Postgres backend (`--features postgres`) and Parquet export (`--features export`).

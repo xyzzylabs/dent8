@@ -34,6 +34,7 @@ mod mcp;
 #[cfg(all(unix, feature = "async-store"))]
 mod mcp_client;
 mod mcp_config;
+mod native;
 mod ops;
 mod setup;
 mod status;
@@ -140,6 +141,9 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Identity(args)) => run_identity(&args.command, cli.output),
         Some(CliCommand::Hook(args)) => match args.command {
             HookCommand::NativeMemoryGuard => hook::cmd_hook_native_memory_guard(),
+        },
+        Some(CliCommand::Native(args)) => match args.command {
+            NativeCommand::Scan(args) => native::cmd_native_scan(&args, cli.output),
         },
         Some(CliCommand::Mcp(args)) => match args.command {
             McpCommand::Serve(args) => mcp::serve_command(args.daemon, args.socket.as_deref()),
@@ -264,6 +268,8 @@ enum CliCommand {
     Identity(IdentityArgs),
     /// Provider hook helpers.
     Hook(HookArgs),
+    /// Audit agent-native memory/rules files.
+    Native(NativeArgs),
     /// Emit/verify Ed25519 signed tree heads.
     Witness(WitnessArgs),
     /// Print schemas.
@@ -310,6 +316,7 @@ impl CliCommand {
             Self::Authority(_) => "authority",
             Self::Identity(_) => "identity",
             Self::Hook(_) => "hook",
+            Self::Native(_) => "native",
             Self::Witness(_) => "witness",
             Self::Schema(_) => "schema",
             Self::Mcp(_) => "mcp",
@@ -928,6 +935,31 @@ struct HookArgs {
 enum HookCommand {
     /// Verify on session boundaries and guard native memory/rules writes.
     NativeMemoryGuard,
+}
+
+#[derive(Args, Debug)]
+struct NativeArgs {
+    #[command(subcommand)]
+    command: NativeCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum NativeCommand {
+    /// Read-only audit of provider-native memory/rules files.
+    Scan(NativeScanArgs),
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct NativeScanArgs {
+    /// Agent profile whose native memory/rules posture should be audited.
+    #[arg(long, value_enum)]
+    agent: InitAgent,
+    /// Directory for dent8's local project config. Used to infer the project root.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Project root to scan. Defaults to the parent of --dir when --dir is .dent8, else cwd.
+    #[arg(long, value_name = "ROOT")]
+    root: Option<String>,
 }
 
 #[derive(Args, Debug)]

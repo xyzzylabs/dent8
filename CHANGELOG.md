@@ -16,6 +16,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   grant-log heads with `--grants` when signed identity is in use.
 - Added a local daemon example README and clarified that daemon writes are authenticated by
   `dent8/hello`/`dent8/prove` while each daemon process remains single-source.
+- Added `dent8 native scan --agent <profile>` as a read-only audit of provider-native
+  memory/rules files, with size/hash/mtime, receipt-marker detection, and guard posture.
 
 ## [0.3.0] - 2026-07-06
 

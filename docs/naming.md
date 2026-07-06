@@ -36,6 +36,7 @@ Command groups:
 - `dent8 explain <subject> <predicate>`
 - `dent8 conflicts`
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`
+- `dent8 native scan --agent <profile>`
 - `dent8 mcp serve`
 
 Subjects use `<kind>:<key>` (`person:alice`, `repo:dent8`) so the fact reads left-to-right:

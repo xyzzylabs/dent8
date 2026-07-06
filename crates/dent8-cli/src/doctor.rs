@@ -259,6 +259,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
         }
     };
     doctor_agent_bypass_guard(&mut output, agent, &dir);
+    doctor_agent_native_scan(&mut output, agent, &dir);
 
     let expected_command = expected_doctor_mcp_command(args, &dir);
     match validate_installed_agent_config(&bundle_env, &installed, expected_command.as_deref()) {
@@ -361,6 +362,54 @@ pub(crate) fn doctor_agent_bypass_guard(
         ),
         BypassGuardStatus::Unvalidated(reason) => {
             doctor_line(output, "WARN", &format!("bypass guard: {reason}"));
+        }
+    }
+}
+
+pub(crate) fn doctor_agent_native_scan(
+    output: &mut String,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) {
+    let root = match crate::native::native_scan_root_for_dir(dir) {
+        Ok(root) => root,
+        Err(error) => {
+            doctor_line(
+                output,
+                "WARN",
+                &format!("native memory scan: could not resolve project root: {error}"),
+            );
+            return;
+        }
+    };
+    match crate::native::scan_agent_native_memory(agent, dir, &root) {
+        Ok(scan) if scan.files.is_empty() => {
+            doctor_line(
+                output,
+                "OK",
+                "native memory scan: no native memory/rules files found",
+            );
+        }
+        Ok(scan) => {
+            let receipt_count = scan
+                .files
+                .iter()
+                .filter(|file| file.has_receipt_marker)
+                .count();
+            let message = format!(
+                "native memory scan: {} file(s) found ({} with dent8 receipt markers); {}",
+                scan.files.len(),
+                receipt_count,
+                scan.guard.message,
+            );
+            if scan.guard.protected {
+                doctor_line(output, "OK", &message);
+            } else {
+                doctor_line(output, "WARN", &message);
+            }
+        }
+        Err(error) => {
+            doctor_line(output, "WARN", &format!("native memory scan: {error}"));
         }
     }
 }

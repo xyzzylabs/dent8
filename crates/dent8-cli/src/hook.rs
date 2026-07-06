@@ -4,7 +4,7 @@
 //! design — the MCP/CLI write path is the integrity boundary; this is the seatbelt (see
 //! `examples/agent-hooks/`).
 
-use crate::{env_flag, log_path, verify_log};
+use crate::{env_flag, log_path, native::native_memory_paths_in_payload, verify_log};
 
 /// Built-in helper for provider hook systems. It intentionally does not write native memory
 /// files; it only runs `verify` or blocks writes that would bypass the fact-event firewall.
@@ -37,7 +37,7 @@ pub(crate) fn cmd_hook_native_memory_guard() -> i32 {
         };
     };
 
-    let touched = native_memory_paths(&payload);
+    let touched = native_memory_paths_in_payload(&payload);
     if mode == "post-write-audit" {
         if touched.is_empty() {
             return 0;
@@ -124,172 +124,4 @@ fn hook_verify(reason: &str) -> i32 {
             1
         }
     }
-}
-
-fn native_memory_paths(payload: &serde_json::Value) -> Vec<String> {
-    let mut paths = std::collections::BTreeSet::new();
-    for candidate in hook_candidate_strings(payload) {
-        let normalized = candidate.replace('\\', "/");
-        if is_native_memory_path(&normalized) {
-            paths.insert(normalized);
-            continue;
-        }
-        // The candidate may be a shell command or an `apply_patch` body that *writes* a native
-        // memory file with the path embedded (not as the whole string) — e.g. `echo x >> AGENTS.md`
-        // or an `*** Update File: AGENTS.md` header. Pull out the write targets and check those.
-        for target in embedded_write_targets(&normalized) {
-            if is_native_memory_path(&target) {
-                paths.insert(target);
-            }
-        }
-    }
-    paths.into_iter().collect()
-}
-
-/// Best-effort extraction of the file paths a shell command or `apply_patch` body **writes**:
-/// `apply_patch` `*** Update/Add/Delete File:` / `*** Move to:` headers, and `>` / `>>` / `tee`
-/// redirect targets. Deliberately conservative — it flags *write* targets, not mere mentions (so
-/// `cat AGENTS.md` is not flagged), and does not model every shell write mechanism (`sed -i`,
-/// `cp`, `mv`, an interpreter writing a file): the MCP/CLI firewall, not this hook, is the
-/// integrity boundary. See `examples/agent-hooks/README.md`.
-fn embedded_write_targets(text: &str) -> Vec<String> {
-    let mut targets = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        for prefix in [
-            "*** Update File: ",
-            "*** Add File: ",
-            "*** Delete File: ",
-            "*** Move to: ",
-        ] {
-            if let Some(rest) = line.strip_prefix(prefix) {
-                targets.push(unquote(rest.trim()));
-            }
-        }
-    }
-    let tokens: Vec<&str> = text.split_whitespace().collect();
-    for (idx, token) in tokens.iter().enumerate() {
-        if *token == ">" || *token == ">>" {
-            // Spaced redirection: the next token is the destination file.
-            if let Some(next) = tokens.get(idx + 1) {
-                targets.push(unquote(next));
-            }
-        } else if let Some(rest) = token.strip_prefix(">>").or_else(|| token.strip_prefix('>')) {
-            // Attached redirection: `>file` / `>>file`.
-            if !rest.is_empty() {
-                targets.push(unquote(rest));
-            }
-        } else if *token == "tee" {
-            // `tee [-a] FILE`: the first non-flag argument is a write target.
-            if let Some(arg) = tokens[idx + 1..].iter().find(|arg| !arg.starts_with('-')) {
-                targets.push(unquote(arg));
-            }
-        }
-    }
-    targets
-}
-
-/// Strip surrounding shell quotes and normalize backslashes for path matching.
-fn unquote(token: &str) -> String {
-    token.trim_matches(['"', '\'']).replace('\\', "/")
-}
-
-fn hook_candidate_strings(value: &serde_json::Value) -> Vec<&str> {
-    fn walk<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
-        const PATH_KEYS: &[&str] = &[
-            "absolute_path",
-            "file",
-            "filePath",
-            "file_path",
-            "new_path",
-            "old_path",
-            "path",
-            "relative_path",
-            "target_file",
-        ];
-        match value {
-            serde_json::Value::Object(map) => {
-                for (key, child) in map {
-                    if PATH_KEYS.contains(&key.as_str())
-                        && let Some(path) = child.as_str()
-                    {
-                        out.push(path);
-                    }
-                    walk(child, out);
-                }
-            }
-            serde_json::Value::Array(items) => {
-                for child in items {
-                    walk(child, out);
-                }
-            }
-            serde_json::Value::String(text) if hook_string_looks_like_path(text) => {
-                out.push(text);
-            }
-            _ => {}
-        }
-    }
-
-    let mut out = Vec::new();
-    walk(value, &mut out);
-    out
-}
-
-fn hook_string_looks_like_path(value: &str) -> bool {
-    [
-        "/",
-        "\\",
-        "AGENTS.md",
-        "CLAUDE.md",
-        "CLAUDE.local.md",
-        "GEMINI.md",
-        "MEMORY.md",
-        ".cursor/rules",
-        ".devin/rules",
-        ".windsurf/rules",
-        ".windsurfrules",
-    ]
-    .iter()
-    .any(|marker| value.contains(marker))
-}
-
-fn is_native_memory_path(path: &str) -> bool {
-    let path = path.trim_start_matches("./");
-    let ends_with_named_file = [
-        "AGENTS.md",
-        "CLAUDE.md",
-        "CLAUDE.local.md",
-        "GEMINI.md",
-        "MEMORY.md",
-    ]
-    .iter()
-    .any(|name| {
-        path == *name
-            || path
-                .strip_suffix(name)
-                .is_some_and(|prefix| prefix.ends_with('/'))
-    });
-    if ends_with_named_file {
-        return true;
-    }
-
-    if path == ".windsurfrules" || path.ends_with("/.windsurfrules") {
-        return true;
-    }
-
-    let in_cursor_rules = path.starts_with(".cursor/rules/") || path.contains("/.cursor/rules/");
-    let has_rule_ext = std::path::Path::new(path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("mdc"));
-    if in_cursor_rules && has_rule_ext {
-        return true;
-    }
-
-    let in_devin_rules = path.starts_with(".devin/rules/") || path.contains("/.devin/rules/");
-    let in_windsurf_rules =
-        path.starts_with(".windsurf/rules/") || path.contains("/.windsurf/rules/");
-    let has_md_ext = std::path::Path::new(path)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-    (in_devin_rules || in_windsurf_rules) && has_md_ext
 }
