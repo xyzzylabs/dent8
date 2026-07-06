@@ -25,6 +25,7 @@ use dent8_store::{
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
+mod daemon;
 mod doctor;
 mod hook;
 mod identity;
@@ -104,6 +105,10 @@ fn run_cli(cli: Cli) -> i32 {
             AgentCommand::Add(args) => setup::cmd_agent_add(&args, cli.output),
         },
         Some(CliCommand::Doctor(args)) => doctor::cmd_doctor(&args, cli.output),
+        Some(CliCommand::Daemon(args)) => match args.command {
+            DaemonCommand::Status(args) => daemon::cmd_daemon_status(&args, cli.output),
+            DaemonCommand::Serve(args) => daemon::cmd_daemon_serve(&args),
+        },
         Some(CliCommand::Completions(args)) => cmd_completions(args.shell, cli.output),
         Some(CliCommand::Export(args)) => {
             #[cfg(feature = "export")]
@@ -259,6 +264,8 @@ enum CliCommand {
     Agent(AgentArgs),
     /// Diagnose the current dent8 setup.
     Doctor(DoctorArgs),
+    /// Inspect or run the local Unix-socket daemon.
+    Daemon(DaemonArgs),
     /// Generate shell completion scripts.
     #[command(visible_aliases = ["completion", "autocomplete"])]
     Completions(CompletionsArgs),
@@ -282,13 +289,16 @@ enum CliCommand {
 
 impl CliCommand {
     /// Whether this command emits a `--output json` result. Everything does, except commands
-    /// that have no single JSON result to emit: `mcp serve` and `mcp proxy` stream JSON-RPC
-    /// frames, and `hook` is a git-hook stdin/stdout filter. A deny-list, not an allow-list, so a
-    /// newly added command is machine-readable by default.
+    /// that have no single JSON result to emit: `mcp serve`, `mcp proxy`, and `daemon serve`
+    /// stream JSON-RPC frames, and `hook` is a git-hook stdin/stdout filter. A deny-list, not an
+    /// allow-list, so a newly added command is machine-readable by default.
     fn supports_json_output(&self) -> bool {
         !matches!(
             self,
             Self::Hook(_)
+                | Self::Daemon(DaemonArgs {
+                    command: DaemonCommand::Serve(_),
+                })
                 | Self::Mcp(McpArgs {
                     command: McpCommand::Serve(_) | McpCommand::Proxy(_),
                 })
@@ -313,6 +323,7 @@ impl CliCommand {
             Self::Init(_) => "init",
             Self::Agent(_) => "agent",
             Self::Doctor(_) => "doctor",
+            Self::Daemon(_) => "daemon",
             Self::Completions(_) => "completions",
             Self::Export(_) => "export",
             Self::Authority(_) => "authority",
@@ -747,6 +758,34 @@ struct DoctorArgs {
     /// Repair stale generated identity/MCP agent setup before checking it.
     #[arg(long, requires = "agent")]
     repair: bool,
+}
+
+#[derive(Args, Debug)]
+struct DaemonArgs {
+    #[command(subcommand)]
+    command: DaemonCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum DaemonCommand {
+    /// Check whether the local daemon socket is reachable and whether this shell can authenticate.
+    Status(DaemonStatusArgs),
+    /// Run the local Unix-socket daemon in the foreground.
+    Serve(DaemonServeArgs),
+}
+
+#[derive(Args, Debug)]
+struct DaemonStatusArgs {
+    /// Socket path to check. Defaults to `DENT8_DAEMON_SOCKET`, then the per-user daemon path.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct DaemonServeArgs {
+    /// Socket path to bind. Defaults to the per-user daemon path.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<String>,
 }
 
 #[derive(Args, Debug)]

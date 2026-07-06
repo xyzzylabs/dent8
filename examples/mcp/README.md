@@ -68,7 +68,7 @@ Cascade, and Hecate, point those subprocesses at the same backend and authority/
 registries, while keeping distinct per-agent `DENT8_GRANT` and `DENT8_IDENTITY_KEY` values.
 For production multi-agent concurrency, prefer Postgres over the file dev store.
 
-The local daemon (`dent8 mcp serve --daemon`) is available when many local processes should
+The local daemon (`dent8 daemon serve`) is available when many local processes should
 share one transport and one source identity. It authenticates each connection with a signed
 session challenge before writes, then attests accepted events daemon-side. It is still
 single-source in v0, so distinct per-agent provenance should use separate stdio subprocesses

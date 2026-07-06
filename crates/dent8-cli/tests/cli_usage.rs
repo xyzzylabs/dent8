@@ -853,6 +853,11 @@ fn json_output_fails_closed_for_unsupported_commands() {
     assert!(stdout(&output).is_empty());
     assert!(stderr(&output).contains("has no `--output json` result"));
 
+    let daemon_serve = run_dent8(&["--output", "json", "daemon", "serve"], &envs);
+    assert_eq!(daemon_serve.status.code(), Some(2));
+    assert!(stdout(&daemon_serve).is_empty());
+    assert!(stderr(&daemon_serve).contains("has no `--output json` result"));
+
     // `witness serve` DOES stream NDJSON now; even its setup failure (no signing key here)
     // is a machine-readable line on stderr, not prose.
     {
@@ -3202,7 +3207,7 @@ fn doctor_agent_reports_unreachable_daemon_proxy_config() {
         stdout.contains("agent mcp config: up to date")
             && stdout.contains("mcp smoke: daemon proxy: cannot reach the dent8 daemon at")
             && stdout.contains(&socket)
-            && stdout.contains("dent8 mcp serve --daemon --socket")
+            && stdout.contains("dent8 daemon serve --socket")
             && stdout.contains("mcp write-check: skipped because MCP smoke failed"),
         "{stdout}"
     );
@@ -3293,6 +3298,116 @@ fn doctor_agent_smokes_reachable_daemon_proxy_config() {
         )) && stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"),
         "{stdout}"
     );
+}
+
+#[test]
+#[cfg(unix)]
+fn daemon_status_reports_unreachable_socket() {
+    let temp = TempDir::new();
+    let socket = temp
+        .file("missing-daemon.sock")
+        .to_string_lossy()
+        .into_owned();
+
+    let status = run_dent8(&["daemon", "status", "--socket", &socket], &[]);
+    assert_eq!(status.status.code(), Some(1));
+    let stdout = stdout(&status);
+    assert!(
+        stdout.contains("dent8 daemon status")
+            && stdout.contains("FAIL  daemon: cannot reach the dent8 daemon at")
+            && stdout.contains(&socket)
+            && stdout.contains("dent8 daemon serve --socket"),
+        "{stdout}"
+    );
+
+    let status_json = run_dent8(
+        &["--output", "json", "daemon", "status", "--socket", &socket],
+        &[],
+    );
+    assert_eq!(status_json.status.code(), Some(1));
+    let status_json = stdout_json(&status_json);
+    assert_eq!(status_json["status"], "failed");
+    assert_eq!(status_json["tool"], "daemon status");
+    assert_eq!(status_json["socket"], socket);
+    assert_eq!(status_json["reachable"], false);
+    assert!(
+        status_json["start_command"]
+            .as_str()
+            .is_some_and(|command| command.contains("dent8 daemon serve --socket")),
+        "{status_json}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn daemon_status_reports_reachable_runtime_and_auth() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--store",
+                "sqlite",
+                "--source",
+                "source:owner",
+                "--identity",
+            ],
+            &[("DENT8_ISSUER_KEY", &issuer_key)],
+        ),
+        "init daemon bundle",
+    );
+
+    let mut env = read_test_env_file(&temp.file(".dent8/env"));
+    env.extend(read_test_env_file(&temp.file(".dent8/identity-owner.env")));
+    let socket = temp.file("dent8.sock");
+    let socket_arg = socket.to_string_lossy().into_owned();
+    let mut daemon = spawn_daemon(&socket_arg, &env);
+    wait_for_socket(&socket, &mut daemon);
+
+    let read_only = run_dent8(&["daemon", "status", "--socket", &socket_arg], &[]);
+    assert_success(&read_only, "daemon status read-only");
+    let read_only_stdout = stdout(&read_only);
+    assert!(
+        read_only_stdout.contains("OK  daemon: reachable")
+            && read_only_stdout
+                .contains("SKIP  auth: DENT8_GRANT and DENT8_IDENTITY_KEY are not set"),
+        "{read_only_stdout}"
+    );
+
+    let via_env = run_dent8(
+        &["daemon", "status"],
+        &[("DENT8_DAEMON_SOCKET", &socket_arg)],
+    );
+    assert_success(&via_env, "daemon status via DENT8_DAEMON_SOCKET");
+    assert!(
+        stdout(&via_env).contains(&socket_arg),
+        "{}",
+        stdout(&via_env)
+    );
+
+    let env_refs = env_refs(&env);
+    let status = run_dent8(
+        &[
+            "--output",
+            "json",
+            "daemon",
+            "status",
+            "--socket",
+            &socket_arg,
+        ],
+        &env_refs,
+    );
+    assert_success(&status, "daemon status --output json");
+    let status = stdout_json(&status);
+    assert_eq!(status["status"], "ok");
+    assert_eq!(status["reachable"], true);
+    assert_eq!(status["runtime_status"]["store"]["backend"], "sqlite");
+    assert_eq!(status["auth"]["status"], "ok");
+    assert_eq!(status["auth"]["source"], "source:owner");
 }
 
 #[test]
@@ -7497,6 +7612,7 @@ fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_DAEMON_SOCKET")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
         .env_remove("DENT8_WITNESS_LOG");
@@ -7583,7 +7699,7 @@ fn run_dent8_mcp_proxy(socket: &str, input: &str, envs: &[(String, String)]) -> 
 fn spawn_daemon(socket: &str, envs: &[(String, String)]) -> ChildGuard {
     let mut command = Command::new(dent8_bin());
     command
-        .args(["mcp", "serve", "--daemon", "--socket", socket])
+        .args(["daemon", "serve", "--socket", socket])
         .env_remove("DENT8_STORE_URL")
         .env_remove("DENT8_LOG")
         .env_remove("DENT8_AUTHORITY")
@@ -7642,6 +7758,13 @@ fn read_test_env_file(path: &Path) -> Vec<(String, String)> {
                 .unwrap_or_else(|| panic!("{} is not KEY=VALUE: {line}", path.display()));
             Some((key.trim().to_string(), shell_unquote_for_test(value.trim())))
         })
+        .collect()
+}
+
+#[cfg(unix)]
+fn env_refs(envs: &[(String, String)]) -> Vec<(&str, &str)> {
+    envs.iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect()
 }
 

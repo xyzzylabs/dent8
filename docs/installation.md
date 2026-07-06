@@ -110,7 +110,7 @@ set -a
 . .dent8/env
 . .dent8/identity-codex.env
 set +a
-dent8 mcp serve --daemon
+dent8 daemon serve
 ```
 
 In another shell:
@@ -121,7 +121,7 @@ set -a
 . .dent8/identity-codex.env
 set +a
 export DENT8_DAEMON_SOCKET="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/dent8/dent8.sock"
-dent8 doctor --source source:codex
+dent8 daemon status
 dent8 assert person:alice favorite_drink tea
 ```
 
@@ -144,7 +144,7 @@ dent8 mcp install --agent codex --daemon-socket /path/to/dent8.sock
 current `DENT8_GRANT` / `DENT8_IDENTITY_KEY`, and forwards frames over the daemon socket.
 After installing a proxy config, `dent8 doctor --agent <profile> --write-check` probes that
 daemon socket with the generated agent identity and prints the exact
-`dent8 mcp serve --daemon --socket ...` command to run if the daemon is not reachable.
+`dent8 daemon serve --socket ...` command to run if the daemon is not reachable.
 
 Authenticated daemon connections can write through the same firewall and receive
 offline-verifiable write attestations. The daemon is still per-user and single-source in v0:

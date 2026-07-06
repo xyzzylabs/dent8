@@ -13,10 +13,10 @@ From a clone, point the demo at the workspace binary:
 DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh
 ```
 
-The script bootstraps a temporary signed identity bundle, starts `dent8 mcp serve --daemon`
-on a private Unix socket, routes separate CLI write invocations through
-`DENT8_DAEMON_SOCKET`, rejects a low-authority override, and verifies that daemon-written
-events still carry offline-verifiable Ed25519 attestations.
+The script bootstraps a temporary signed identity bundle, starts `dent8 daemon serve`
+on a private Unix socket, checks it with `dent8 daemon status`, routes separate CLI write
+invocations through `DENT8_DAEMON_SOCKET`, rejects a low-authority override, and verifies that
+daemon-written events still carry offline-verifiable Ed25519 attestations.
 
 The v0 daemon is per-user and single-source. Each client connection must complete
 `dent8/hello` + `dent8/prove` and prove the same source key the daemon process holds. That is

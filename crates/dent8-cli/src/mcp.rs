@@ -33,7 +33,7 @@ use crate::{
 };
 
 /// The latest MCP protocol revision this server prefers.
-const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+pub(crate) const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
 /// Older revisions this adapter still speaks without changing its response shape.
 const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, "2025-06-18"];
 

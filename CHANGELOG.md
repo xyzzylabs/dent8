@@ -18,6 +18,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   target daemon socket with the config's own signed identity env, reports an explicit daemon
   start hint when the socket is unreachable, and skips the MCP write-check when smoke already
   failed.
+- Added `dent8 daemon status [--socket PATH]` and `dent8 daemon serve [--socket PATH]` as the
+  human-facing local daemon surface. `daemon status` probes the socket with read-only
+  `runtime_status`, then verifies write authentication when `DENT8_GRANT` and
+  `DENT8_IDENTITY_KEY` are set.
 
 ## [0.3.1] - 2026-07-06
 

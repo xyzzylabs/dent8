@@ -38,6 +38,8 @@ Command groups:
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`
 - `dent8 native scan --agent <profile>`
 - `dent8 native reconcile --agent <profile>`
+- `dent8 daemon status`
+- `dent8 daemon serve`
 - `dent8 mcp serve`
 - `dent8 mcp proxy`
 

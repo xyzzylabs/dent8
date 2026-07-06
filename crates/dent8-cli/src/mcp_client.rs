@@ -42,6 +42,63 @@ pub(crate) fn daemon_health(socket_path: &str) -> Result<String, String> {
     Ok(Session::connect(socket_path)?.source)
 }
 
+/// Read-only daemon status over the unauthenticated MCP surface. This lets `dent8 daemon
+/// status` distinguish "the socket is up and serving reads" from "this caller can write after
+/// proving identity" without requiring identity env just to inspect the daemon.
+pub(crate) fn daemon_runtime_status(socket_path: &str) -> Result<Value, String> {
+    let stream = UnixStream::connect(socket_path)
+        .map_err(|error| format!("cannot reach the dent8 daemon at {socket_path}: {error}"))?;
+    let mut writer = stream
+        .try_clone()
+        .map_err(|error| format!("dent8 daemon socket: {error}"))?;
+    let mut reader = BufReader::new(stream);
+
+    let initialize = request(
+        1,
+        "initialize",
+        json!({
+            "protocolVersion": crate::mcp::LATEST_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "dent8 daemon status", "version": env!("CARGO_PKG_VERSION") },
+        }),
+    );
+    let reply = round_trip(&mut writer, &mut reader, &initialize)?;
+    if reply["result"]["serverInfo"]["name"] != "dent8" {
+        return Err(format!(
+            "daemon initialize did not return dent8 serverInfo: {reply}"
+        ));
+    }
+    let initialized = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized",
+    });
+    let mut initialized_line = serde_json::to_string(&initialized)
+        .map_err(|error| format!("encode initialized notification: {error}"))?;
+    initialized_line.push('\n');
+    write_raw_line(&mut writer, &initialized_line)?;
+
+    let call = request(
+        2,
+        "tools/call",
+        json!({ "name": "runtime_status", "arguments": {} }),
+    );
+    let reply = round_trip(&mut writer, &mut reader, &call)?;
+    let result = reply
+        .get("result")
+        .ok_or_else(|| format!("runtime_status missing result: {reply}"))?;
+    if result
+        .get("isError")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+    {
+        return Err(format!("runtime_status returned an error: {result}"));
+    }
+    result
+        .get("structuredContent")
+        .cloned()
+        .ok_or_else(|| format!("runtime_status missing structuredContent: {result}"))
+}
+
 /// Same as [`daemon_health`], but authenticates with a generated MCP config's env instead of
 /// the current process env. `dent8 doctor --agent` uses this to preflight installed
 /// `dent8 mcp proxy` configs exactly as the agent will run them.

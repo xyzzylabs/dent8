@@ -39,7 +39,7 @@ set -a
 set +a
 
 echo "# 2. Start a per-user daemon on a Unix socket (0600), serving that belief base"
-$DENT8 mcp serve --daemon --socket "$SOCK" >"$WORK/daemon.log" 2>&1 &
+$DENT8 daemon serve --socket "$SOCK" >"$WORK/daemon.log" 2>&1 &
 DPID=$!
 for _ in $(seq 1 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 [ -S "$SOCK" ] || { echo "daemon did not start:"; cat "$WORK/daemon.log"; exit 1; }
@@ -48,8 +48,8 @@ for _ in $(seq 1 50); do [ -S "$SOCK" ] && break; sleep 0.1; done
 export DENT8_DAEMON_SOCKET="$SOCK"
 
 echo
-echo "# 3. doctor confirms the daemon is reachable and this caller authenticates"
-$DENT8 doctor --source source:owner | grep "daemon:"
+echo "# 3. daemon status confirms reachability and this caller authenticates"
+$DENT8 daemon status
 
 echo
 echo "# 4. Process A routes a write through the daemon"

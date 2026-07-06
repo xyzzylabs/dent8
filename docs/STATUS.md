@@ -70,7 +70,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   different store backend/path or source identity than the installed agent bundle declares.
   If the installed config uses `dent8 mcp proxy`, doctor first probes the target daemon socket
   with the config's own `DENT8_GRANT` / `DENT8_IDENTITY_KEY`, reports the authenticated source
-  on success, and reports a concrete `dent8 mcp serve --daemon --socket ...` hint when the
+  on success, and reports a concrete `dent8 daemon serve --socket ...` hint when the
   daemon is unreachable. With `--write-check`, a failed MCP smoke skips the write probe because
   the same server would be reused.
   With `--all-agents`, it checks every known profile that has both a source-bound identity env
@@ -156,7 +156,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - The write commands above support `--output json` for agent wrappers/scripts. Every dent8
   command emits its `--output json` result — success **and** error — to **stdout** as one object,
   so a machine consumer reads a single stream and branches on the object's `status` (the nonzero
-  exit code still signals failure); `mcp serve`, `mcp proxy`, and `hook` have no JSON result.
+  exit code still signals failure); `mcp serve`, `mcp proxy`, `daemon serve`, and `hook` have
+  no JSON result.
   Each payload carries a `schema_version`. The `status` string matches the MCP tool's for the same operation:
   an admitted write is `accepted` (`contradict` is `contested`), a firewall refusal is `rejected`,
   malformed input is `invalid`; on the read side `verify` is `ok`/`integrity_issues` and
@@ -264,6 +265,16 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   CLI's own writes through such a daemon (the CLI does the handshake with its
   `DENT8_GRANT`/`DENT8_IDENTITY_KEY`); reads stay local and the output is identical to a local
   write — so the CLI and several agents can dogfood one shared belief base on a box.
+- **`dent8 daemon status [--socket <path>]`** — a human-facing local daemon health check.
+  It resolves the socket from `--socket`, then `DENT8_DAEMON_SOCKET`, then the default per-user
+  daemon path. It first performs an unauthenticated read-only `runtime_status` probe so a user
+  can see whether the daemon is reachable and which store it serves. If `DENT8_GRANT` and
+  `DENT8_IDENTITY_KEY` are set, it also completes the session-challenge handshake and reports
+  the authenticated source; if only one is set, it fails because writes would not authenticate.
+  Supports `--output json`.
+- **`dent8 daemon serve [--socket <path>]`** — foreground alias for
+  `dent8 mcp serve --daemon [--socket <path>]`, intended for humans and service managers.
+  It has no single JSON result.
 - **`dent8 mcp proxy [--socket <path>]`** — a stdio MCP bridge to a running local daemon. It
   completes the same `dent8/hello` / `dent8/prove` session-challenge handshake using the
   caller's `DENT8_GRANT` and `DENT8_IDENTITY_KEY`, then forwards newline-delimited JSON-RPC

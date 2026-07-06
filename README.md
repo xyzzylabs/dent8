@@ -125,14 +125,14 @@ set -a
 . .dent8/env
 . .dent8/identity-codex.env
 set +a
-dent8 mcp serve --daemon                 # default per-user Unix socket
+dent8 daemon serve                       # foreground; default per-user Unix socket
 ```
 
 In another shell with the same env loaded:
 
 ```sh
 export DENT8_DAEMON_SOCKET="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/dent8/dent8.sock"
-dent8 doctor --source source:codex       # check the daemon is reachable and you authenticate
+dent8 daemon status                      # check reachability and write authentication
 dent8 assert repo:app deploy_target production
 ```
 

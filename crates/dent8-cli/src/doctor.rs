@@ -623,7 +623,7 @@ pub(crate) fn doctor_agent_mcp_proxy_preflight(
 #[cfg(all(unix, feature = "async-store"))]
 fn daemon_start_command(socket: &std::path::Path) -> String {
     format!(
-        "dent8 mcp serve --daemon --socket {}",
+        "dent8 daemon serve --socket {}",
         shell_quote(&socket.to_string_lossy())
     )
 }
