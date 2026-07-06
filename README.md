@@ -65,12 +65,12 @@ firewall path run through the real CLI:
 
 ## How it works
 
-The primitive is a **fact event**, not a generic memory item. Every write is arbitrated at
-one unbypassable boundary (`EventStore::append`) before it is persisted:
+The primitive is a **fact event**, not a generic memory item. Every write that enters dent8 is
+arbitrated at the append boundary (`EventStore::append`) before it is persisted:
 
 - **Authority-weighted arbitration** — a write cannot override a fact of higher authority, and
-  dent8 checks the *actual* authority behind a revision, not just what the event facts (so
-  laundering a weak fact through a high-authority-looking event is caught).
+  dent8 checks the *actual* authority behind a revision, not just the authority claimed by the
+  event, so laundering a weak fact through a high-authority-looking event is caught.
 - **Paraconsistent contradiction** — disagreement is *kept* as a contested pair rather than
   silently resolved; but contradicting a `canonical` fact is a hard alarm, not a soft contest.
 - **Earned entrenchment** — a fact backed by more independent sources, or one that has
@@ -114,13 +114,14 @@ dent8 doctor                             # check the daemon is reachable and you
 dent8 assert repo:app deploy_target production
 ```
 
-Every connection proves its identity with a signed session challenge, and the daemon arbitrates
-and **attests each write as that source** — so a daemon-written fact re-verifies offline exactly
-like a local one, and many processes build one firewalled belief base over one transport. Reads
-stay local. Run the whole path with
+Every connection proves the daemon-configured source identity with a signed session challenge,
+and the daemon arbitrates and **attests each write as that source** — so a daemon-written fact
+re-verifies offline exactly like a local one, and many processes build one firewalled belief base
+over one transport. Reads stay local. Run the whole path with
 **`DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh`** (see
 [examples/daemon/](examples/daemon/)). Today the daemon is single-source (it attests with its own
-key), so this shares *one* identity across processes; distinct per-agent identities over one
+key), so this shares *one* identity across processes; separate agent identities should use
+separate MCP subprocesses against the same backend, and distinct per-agent identities over one
 daemon are future work.
 
 ## Status

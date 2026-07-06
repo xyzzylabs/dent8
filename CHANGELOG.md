@@ -117,6 +117,13 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `UnearnedSupersession::WeakerCorroboration` → `WeakerEntrenchment` (a non-serialized API
   type).
 
+### Documentation
+- **Clarified bypass resistance.** The README, threat model, and agent-adapter guide now
+  distinguish dent8's enforced write boundary from system-level sandboxing: dent8 prevents
+  silent corruption on CLI/MCP/daemon/`EventStore::append` paths, while same-user direct writes
+  to provider-native memory or raw storage require hook guards, least-privilege store access,
+  verification, and witness publication.
+
 ### Changed
 - **`identity` and `witness` are no longer Cargo features — they are always compiled.** Signed
   source identity is core to the threat model and `witness` reuses the same Ed25519 crypto, so

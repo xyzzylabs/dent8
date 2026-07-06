@@ -6,6 +6,20 @@ provider-specific memory provider. The invariant is simple:
 > Native memory/rules files are projection and integration surfaces. The source of truth is
 > still the dent8 fact-event log.
 
+## Bypass boundary
+
+dent8 prevents silent corruption on write paths it controls: CLI, MCP, daemon, and store
+adapters that call `EventStore::append`. It does not sandbox a same-user agent. If an agent can
+write provider-native memory/rules files directly, mutate the dev file log, or use raw database
+write credentials, it can bypass dent8's policy layer.
+
+For local dogfood this is acceptable only with guardrails: install the native-memory hook guard
+for every agent profile that supports hooks, keep provider-native memory files as generated or
+reviewed surfaces rather than truth, run `dent8 doctor --agent <profile> --write-check`, and use
+`dent8 verify` plus witness heads to detect raw-store tampering. For shared or production use,
+make a dent8 daemon/service the only writer and give agents no raw `INSERT`/`UPDATE`/`DELETE`
+access to the event tables.
+
 ## Adapter layers
 
 1. **MCP write path, built.** Agents call `dent8 mcp serve` and write candidate facts through
