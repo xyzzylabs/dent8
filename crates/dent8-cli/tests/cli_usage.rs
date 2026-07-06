@@ -423,6 +423,7 @@ fn write_commands_emit_machine_readable_json() {
     );
     assert_success(&asserted, "assert --output json");
     let asserted = stdout_json(&asserted);
+    assert_eq!(asserted["schema_version"], 1);
     assert_eq!(asserted["status"], "ok");
     assert_eq!(asserted["tool"], "assert");
     assert_eq!(asserted["accepted"], true);
@@ -456,6 +457,7 @@ fn write_commands_emit_machine_readable_json() {
             stderr(&rejected)
         )
     });
+    assert_eq!(rejected["schema_version"], 1);
     assert_eq!(rejected["status"], "rejected");
     assert_eq!(rejected["tool"], "supersede");
     assert_eq!(rejected["accepted"], false);

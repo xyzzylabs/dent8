@@ -24,6 +24,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   additive-only again.
 
 ### Added
+- **`schema_version` on every machine payload.** Each `--output json` object and every MCP
+  `structuredContent` now carries a top-level `schema_version` (currently `1`) from one shared
+  constant, so a consumer can branch when the (still pre-1.0) output shape changes. The MCP tools'
+  advertised `outputSchema` requires it on both result arms.
 - **Local Unix-socket MCP daemon with per-connection identity**
   ([ADR 0018](docs/decisions/0018-local-daemon-and-per-connection-identity.md)): `dent8 mcp
   serve --daemon [--socket <path>]` serves the same JSON-RPC belief surface over a per-user

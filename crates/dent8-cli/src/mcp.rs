@@ -1835,11 +1835,37 @@ fn with_tool_error_schema(tool: &str, success: Value) -> Value {
         "$schema".to_string(),
         json!("https://json-schema.org/draft/2020-12/schema"),
     );
+    // Every emitted `structuredContent` is stamped with `schema_version` by
+    // `crate::stamp_schema_version`; advertise it (required, fixed value) on both result arms so
+    // the payload still conforms to the tool's `additionalProperties: false` output schema.
     schema.insert(
         "oneOf".to_string(),
-        Value::Array(vec![success, tool_error_output_schema(tool)]),
+        Value::Array(vec![
+            with_schema_version_prop(success),
+            with_schema_version_prop(tool_error_output_schema(tool)),
+        ]),
     );
     Value::Object(schema)
+}
+
+/// Add the `schema_version` marker to a top-level result object schema — both its `properties`
+/// (as a fixed `const`) and its `required` list — mirroring the runtime stamp applied by
+/// [`crate::stamp_schema_version`]. Nested object schemas (e.g. `subject`) are left untouched,
+/// since the stamp only lands on the top-level object.
+fn with_schema_version_prop(schema: Value) -> Value {
+    let Value::Object(mut object) = schema else {
+        return schema;
+    };
+    if let Some(Value::Object(properties)) = object.get_mut("properties") {
+        properties.insert(
+            "schema_version".to_string(),
+            json!({ "const": crate::SCHEMA_VERSION }),
+        );
+    }
+    if let Some(Value::Array(required)) = object.get_mut("required") {
+        required.push(json!("schema_version"));
+    }
+    Value::Object(object)
 }
 
 fn list_facts_output_schema() -> Value {
@@ -2188,7 +2214,10 @@ fn merge(a: &Value, b: &Value) -> Value {
 }
 
 fn tool_content(text: &str, is_error: bool, structured: &Value) -> Value {
-    let structured_text = serde_json::to_string(structured).unwrap_or_else(|_| "{}".to_string());
+    // Stamp `schema_version` so MCP `structuredContent` carries the same shape marker as the
+    // CLI's `--output json` (one shared constant across both machine surfaces).
+    let structured = crate::stamp_schema_version(structured);
+    let structured_text = serde_json::to_string(&structured).unwrap_or_else(|_| "{}".to_string());
     json!({
         "content": [
             { "type": "text", "text": text },
@@ -3160,6 +3189,28 @@ mod tests {
         let mirrored: Value =
             serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
         assert_eq!(mirrored, result["structuredContent"]);
+    }
+
+    #[test]
+    fn every_structured_result_carries_the_schema_version() {
+        let (_guard, path) = temp_log();
+        // A success and a rejection both carry the shared `schema_version` marker, matching the
+        // CLI's `--output json`; the mirrored text arm agrees.
+        let accepted = call_tool_result(&path, "assert", database("postgres", "high"));
+        assert_eq!(
+            accepted["structuredContent"]["schema_version"],
+            json!(crate::SCHEMA_VERSION)
+        );
+        let mirrored: Value =
+            serde_json::from_str(accepted["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(mirrored["schema_version"], json!(crate::SCHEMA_VERSION));
+
+        let rejected = call_tool_result(&path, "assert", database("mysql", "low"));
+        assert_eq!(rejected["structuredContent"]["status"], "rejected");
+        assert_eq!(
+            rejected["structuredContent"]["schema_version"],
+            json!(crate::SCHEMA_VERSION)
+        );
     }
 
     #[test]

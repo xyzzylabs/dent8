@@ -3080,6 +3080,24 @@ fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
     })
 }
 
+/// The version of dent8's JSON output shape, stamped on every `--output json` object and every
+/// MCP `structuredContent`, so a consumer can branch when the (pre-1.0, still-evolving) shape
+/// changes. One shared constant across both surfaces.
+pub(crate) const SCHEMA_VERSION: u32 = 1;
+
+/// Stamp `schema_version` onto a top-level JSON object; a non-object value passes through
+/// unchanged. Applied at the CLI JSON choke points so every `--output json` payload carries it.
+pub(crate) fn stamp_schema_version(value: &serde_json::Value) -> serde_json::Value {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "schema_version".to_string(),
+            serde_json::json!(SCHEMA_VERSION),
+        );
+    }
+    value
+}
+
 fn print_json_stdout(value: &serde_json::Value) -> i32 {
     print_json_stdout_with_code(value, 0)
 }
@@ -3087,7 +3105,8 @@ fn print_json_stdout(value: &serde_json::Value) -> i32 {
 fn print_json_stdout_with_code(value: &serde_json::Value, code: i32) -> i32 {
     println!(
         "{}",
-        serde_json::to_string_pretty(value).expect("CLI JSON output should serialize")
+        serde_json::to_string_pretty(&stamp_schema_version(value))
+            .expect("CLI JSON output should serialize")
     );
     code
 }
@@ -3095,7 +3114,8 @@ fn print_json_stdout_with_code(value: &serde_json::Value, code: i32) -> i32 {
 fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
     eprintln!(
         "{}",
-        serde_json::to_string_pretty(value).expect("CLI JSON error output should serialize")
+        serde_json::to_string_pretty(&stamp_schema_version(value))
+            .expect("CLI JSON error output should serialize")
     );
     code
 }
