@@ -57,7 +57,7 @@ command.
 ## Packaging
 
 All workspace crates that depend on another dent8 crate must specify both `path` and a
-`version` matching the current workspace version (currently `0.3.0`) so crates.io packaging
+`version` matching the current workspace version (currently `0.3.1`) so crates.io packaging
 can replace local paths with published versions.
 
 Fast manifest/package check:

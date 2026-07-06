@@ -17,14 +17,14 @@ path = "src/main.rs"
 
 [dependencies]
 # `signed-anchor` is always on: the witness transparency log is a stock command, not opt-in.
-dent8-core = { path = "../dent8-core", version = "0.3.0", features = ["signed-anchor"] }
-dent8-store = { path = "../dent8-store", version = "0.3.0" }
-dent8-store-postgres = { path = "../dent8-store-postgres", version = "0.3.0" }
+dent8-core = { path = "../dent8-core", version = "0.3.1", features = ["signed-anchor"] }
+dent8-store = { path = "../dent8-store", version = "0.3.1" }
+dent8-store-postgres = { path = "../dent8-store-postgres", version = "0.3.1" }
 # Default local backend: embedded SQLite (sqlx + bundled libsqlite3), selected by a sqlite:// URL.
-dent8-store-sqlite = { path = "../dent8-store-sqlite", version = "0.3.0", optional = true }
+dent8-store-sqlite = { path = "../dent8-store-sqlite", version = "0.3.1", optional = true }
 # Pure logic over core/store (no extra heavy deps) — powers the self-demonstrating
 # `dent8 eval` benchmark.
-dent8-evals = { path = "../dent8-evals", version = "0.3.0" }
+dent8-evals = { path = "../dent8-evals", version = "0.3.1" }
 clap = { version = "4.5", features = ["derive"] }
 clap_complete = "4.5"
 serde = { version = "1", features = ["derive"] }
@@ -43,7 +43,7 @@ getrandom = { version = "0.2" }
 hex = { version = "0.4" }
 # Opt-in: the `dent8 export` analytical lane (Parquet for DuckDB). Off by default so the stock
 # binary stays free of the arrow/parquet columnar stack.
-dent8-export = { path = "../dent8-export", version = "0.3.0", optional = true }
+dent8-export = { path = "../dent8-export", version = "0.3.1", optional = true }
 
 [features]
 default = ["sqlite"]

@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-06
+
 ### Added
 - Added `dent8 doctor --all-agents`, which checks every installed known agent profile in a
   `.dent8` bundle, skips profiles without a source-bound install, aggregates failures, and emits
