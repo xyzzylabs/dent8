@@ -118,7 +118,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   fact(s) to the terminal `Expired` lifecycle. This is an explicit policy close, not TTL
   staleness, and is **authority-gated** like retraction ([ADR 0011](decisions/0011-authority-gated-expiration.md)):
   a lower-authority source cannot expire a higher-authority incumbent.
-- **`dent8 derive <subject> <predicate> <value> --from <source-subject> <source-predicate>
+- **`dent8 derive <subject> <predicate> <value> --basis <basis-subject> <basis-predicate>
   --authority <level> --source <source> [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts
   a fact **derived from** another (named by subject, resolved to
   its believed fact id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source

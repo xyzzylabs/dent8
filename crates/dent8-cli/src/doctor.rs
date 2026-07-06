@@ -1126,8 +1126,7 @@ pub(crate) fn mcp_value_fact_args(
 
 pub(crate) fn mcp_read_fact_args(subject_key: &str) -> serde_json::Value {
     serde_json::json!({
-        "subject_kind": "diagnostic",
-        "subject_key": subject_key,
+        "subject": format!("diagnostic:{subject_key}"),
         "predicate": "dent8.write_check",
     })
 }

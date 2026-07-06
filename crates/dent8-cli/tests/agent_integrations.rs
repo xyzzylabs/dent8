@@ -230,8 +230,7 @@ fn mcp_authority_scenario_requests() -> String {
         json!({
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "assert", "arguments": {
-                "subject_kind": "repo",
-                "subject_key": "myproj",
+                "subject": "repo:myproj",
                 "predicate": "database",
                 "value": "postgres",
                 "authority": "high",
@@ -241,8 +240,7 @@ fn mcp_authority_scenario_requests() -> String {
         json!({
             "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": { "name": "supersede", "arguments": {
-                "subject_kind": "repo",
-                "subject_key": "myproj",
+                "subject": "repo:myproj",
                 "predicate": "database",
                 "value": "mysql",
                 "authority": "high",

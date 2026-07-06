@@ -940,8 +940,11 @@ fn dispatch_tool(
     path: &str,
     identity: &WriteIdentity,
 ) -> Result<ToolOutput, ToolError> {
-    let kind = || arg(arguments, "subject_kind");
-    let key = || arg(arguments, "subject_key");
+    // One `subject` argument (`"kind:key"`, e.g. `person:alice`) mirrors the CLI grammar; the
+    // `kind`/`key` closures split it so the per-tool destructuring below is unchanged.
+    let subject = || arg_subject(arguments, "subject");
+    let kind = || subject().map(|(kind, _)| kind);
+    let key = || subject().map(|(_, key)| key);
     let predicate = || arg(arguments, "predicate");
     match name {
         "list_facts" => list_facts(path, arguments),
@@ -1113,11 +1116,10 @@ fn dispatch_tool(
                 arg_authority(arguments)?,
                 arg(arguments, "source")?,
             );
-            let (from_kind, from_key, from_predicate) = (
-                arg(arguments, "from_kind")?,
-                arg(arguments, "from_key")?,
-                arg(arguments, "from_predicate")?,
-            );
+            // The basis fact this derivative depends on: one `basis` subject (`"kind:key"`) plus
+            // its predicate — mirrors the CLI's `--basis <subject> <predicate>`.
+            let (from_kind, from_key) = arg_subject(arguments, "basis")?;
+            let from_predicate = arg(arguments, "basis_predicate")?;
             let validity = arg_validity(arguments)?;
             let mut output = run_write_tool(
                 "derive",
@@ -1469,12 +1471,11 @@ fn error_structured(tool: &str, arguments: &Value, error: &ToolError) -> Value {
         "error_reason": error.message(),
     });
     if let Some(object) = structured.as_object_mut() {
-        if let Some(subject_kind) = argument_string(arguments, "subject_kind") {
-            let subject_key = argument_string(arguments, "subject_key").unwrap_or_default();
-            object.insert(
-                "subject".to_string(),
-                json!({ "kind": subject_kind, "key": subject_key }),
-            );
+        if let Some(subject) = argument_string(arguments, "subject") {
+            // Echo the attempted subject back as `{kind, key}` (matching the success shape), even
+            // if it is malformed — split on the first `:`, treating a colon-less value as all-kind.
+            let (kind, key) = subject.split_once(':').unwrap_or((subject.as_str(), ""));
+            object.insert("subject".to_string(), json!({ "kind": kind, "key": key }));
         }
         if let Some(predicate) = argument_string(arguments, "predicate") {
             object.insert("predicate".to_string(), json!(predicate));
@@ -1596,6 +1597,24 @@ fn arg(arguments: &Value, name: &str) -> Result<String, ToolError> {
         .ok_or_else(|| ToolError::Invalid(format!("missing required string argument: {name}")))
 }
 
+/// Parse a `"kind:key"` subject argument into its kind and key, mirroring the CLI's
+/// `person:alice` grammar exactly (split on the first `:`, then validate via [`Subject::new`]).
+/// `name` is the argument name, so a `derive` basis and the primary subject give distinct errors.
+fn arg_subject(arguments: &Value, name: &str) -> Result<(String, String), ToolError> {
+    let raw = arg(arguments, name)?;
+    let Some((kind, key)) = raw.split_once(':') else {
+        return Err(ToolError::Invalid(format!(
+            "invalid {name} '{raw}' (expected <kind>:<key>, e.g. person:alice)"
+        )));
+    };
+    dent8_core::Subject::new(kind, key).map_err(|error| {
+        ToolError::Invalid(format!(
+            "invalid {name} '{raw}' (expected <kind>:<key>): {error}"
+        ))
+    })?;
+    Ok((kind.to_string(), key.to_string()))
+}
+
 fn optional_bool(arguments: &Value, name: &str) -> Result<bool, ToolError> {
     match arguments.get(name) {
         Some(Value::Bool(value)) => Ok(*value),
@@ -1666,8 +1685,7 @@ fn tool_list() -> Vec<Value> {
         },
     });
     let subject = json!({
-        "subject_kind": { "type": "string", "description": "subject kind, e.g. repo" },
-        "subject_key": { "type": "string", "description": "subject key, e.g. myproj" },
+        "subject": { "type": "string", "description": "subject as <kind>:<key>, e.g. repo:myproj" },
         "predicate": { "type": "string", "description": "fact name, e.g. database" },
     });
     let write = json!({
@@ -1692,39 +1710,23 @@ fn tool_list() -> Vec<Value> {
     let valued_vt = merge(&valued, &validity);
     let read_props = merge(&subject, &clock);
     let write_only = merge(&subject, &write);
-    let from = json!({
-        "from_kind": { "type": "string", "description": "source fact's subject kind" },
-        "from_key": { "type": "string", "description": "source fact's subject key" },
-        "from_predicate": { "type": "string", "description": "source fact's predicate" },
+    let basis = json!({
+        "basis": { "type": "string", "description": "basis fact's subject as <kind>:<key>, e.g. repo:myproj" },
+        "basis_predicate": { "type": "string", "description": "basis fact's predicate" },
     });
-    let derive_props = merge(&valued_vt, &from);
-    let read = ["subject_kind", "subject_key", "predicate"];
-    let valued_req = [
-        "subject_kind",
-        "subject_key",
-        "predicate",
-        "value",
-        "authority",
-        "source",
-    ];
+    let derive_props = merge(&valued_vt, &basis);
+    let read = ["subject", "predicate"];
+    let valued_req = ["subject", "predicate", "value", "authority", "source"];
     let derive_req = [
-        "subject_kind",
-        "subject_key",
+        "subject",
         "predicate",
         "value",
         "authority",
         "source",
-        "from_kind",
-        "from_key",
-        "from_predicate",
+        "basis",
+        "basis_predicate",
     ];
-    let write_req = [
-        "subject_kind",
-        "subject_key",
-        "predicate",
-        "authority",
-        "source",
-    ];
+    let write_req = ["subject", "predicate", "authority", "source"];
     vec![
         tool(
             "list_facts",
@@ -2440,7 +2442,7 @@ mod tests {
         let (_guard, path) = temp_log();
         // A subject key with a '/' and a predicate with a space must survive list -> read.
         let args = json!({
-            "subject_kind": "repo", "subject_key": "a/b", "predicate": "db x",
+            "subject": "repo:a/b", "predicate": "db x",
             "value": "postgres", "authority": "high", "source": "owner",
         });
         let (err, _) = call_tool(&path, "assert", args);
@@ -2518,12 +2520,12 @@ mod tests {
         call_tool(
             &path,
             "assert",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "value": "postgres", "authority": "high", "source": "u" }),
+            json!({ "subject": "repo:p", "predicate": "db", "value": "postgres", "authority": "high", "source": "u" }),
         );
         call_tool(
             &path,
             "assert",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "window", "value": "open", "authority": "high", "source": "u", "valid_from": 1000, "valid_to": 2000 }),
+            json!({ "subject": "repo:p", "predicate": "window", "value": "open", "authority": "high", "source": "u", "valid_from": 1000, "valid_to": 2000 }),
         );
 
         // list_facts carries a per-stream freshness field (also validated against the schema).
@@ -2567,7 +2569,7 @@ mod tests {
             &path,
             "assert",
             json!({
-                "subject_kind": "repo", "subject_key": "p", "predicate": "db",
+                "subject": "repo:p", "predicate": "db",
                 "value": "postgres", "authority": "high", "source": "user:o",
                 "valid_from": 1000, "valid_to": 2000,
             }),
@@ -2578,13 +2580,13 @@ mod tests {
         let (_, inside) = call_tool_text(
             &path,
             "explain",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "valid_at": 1500 }),
+            json!({ "subject": "repo:p", "predicate": "db", "valid_at": 1500 }),
         );
         assert!(!inside.contains("stale"), "{inside}");
         let (_, after) = call_tool_text(
             &path,
             "explain",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "valid_at": 2000 }),
+            json!({ "subject": "repo:p", "predicate": "db", "valid_at": 2000 }),
         );
         assert!(after.contains("stale"), "{after}");
 
@@ -2592,7 +2594,7 @@ mod tests {
         let bad = call_tool_result(
             &path,
             "explain",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "db", "valid_at": "soon" }),
+            json!({ "subject": "repo:p", "predicate": "db", "valid_at": "soon" }),
         );
         assert_eq!(bad["isError"], true);
     }
@@ -2865,15 +2867,14 @@ mod tests {
 
     fn database(value: &str, authority: &str) -> Value {
         json!({
-            "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+            "subject": "repo:p", "predicate": "database",
             "value": value, "authority": authority, "source": "src",
         })
     }
 
     fn diagnostic(value: &str, authority: &str) -> Value {
         json!({
-            "subject_kind": "diagnostic",
-            "subject_key": "doctor",
+            "subject": "diagnostic:doctor",
             "predicate": "dent8.write_check",
             "value": value,
             "authority": authority,
@@ -2883,8 +2884,7 @@ mod tests {
 
     fn hidden_doctor_probe(value: &str, authority: &str) -> Value {
         json!({
-            "subject_kind": "person",
-            "subject_key": "alice-doctor-hidden",
+            "subject": "person:alice-doctor-hidden",
             "predicate": "favorite_drink",
             "value": value,
             "authority": authority,
@@ -2910,7 +2910,7 @@ mod tests {
         let (err, text) = call_tool(
             &path,
             "retract",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+            json!({ "subject": "repo:p", "predicate": "database",
                     "authority": "low", "source": "src" }),
         );
         assert!(err, "low-authority retract must be refused: {text}");
@@ -2921,7 +2921,7 @@ mod tests {
         let (err, text) = call_tool(
             &path,
             "expire",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+            json!({ "subject": "repo:p", "predicate": "database",
                     "authority": "low", "source": "src" }),
         );
         assert!(err, "low-authority expire must be refused: {text}");
@@ -2940,7 +2940,7 @@ mod tests {
             &path,
             "assert",
             json!({
-                "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+                "subject": "repo:p", "predicate": "database",
                 "value": "postgres", "authority": "high",
             }),
         );
@@ -2953,6 +2953,29 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("source")
+        );
+    }
+
+    #[test]
+    fn a_subject_without_a_colon_is_invalid() {
+        let (_guard, path) = temp_log();
+        let result = call_tool_result(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo", "predicate": "database",
+                "value": "postgres", "authority": "high", "source": "owner",
+            }),
+        );
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["status"], "invalid");
+        assert!(
+            result["structuredContent"]["error_reason"]
+                .as_str()
+                .unwrap()
+                .contains("<kind>:<key>"),
+            "{}",
+            result["structuredContent"]["error_reason"]
         );
     }
 
@@ -2997,7 +3020,7 @@ mod tests {
         let note = json!({
             "jsonrpc": "2.0", "method": "tools/call",
             "params": { "name": "assert", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
                 "value": "postgres", "authority": "high", "source": "source:owner",
             }},
         });
@@ -3083,8 +3106,7 @@ mod tests {
         let (_guard, path) = temp_log();
         assert_tool_output_matches_schema(&path, "assert", database("postgres", "high"));
         let read_args = json!({
-            "subject_kind": "repo",
-            "subject_key": "p",
+            "subject": "repo:p",
             "predicate": "database",
         });
         assert_tool_output_matches_schema(&path, "explain", read_args.clone());
@@ -3097,8 +3119,7 @@ mod tests {
             &path,
             "reinforce",
             json!({
-                "subject_kind": "repo",
-                "subject_key": "p",
+                "subject": "repo:p",
                 "predicate": "database",
                 "authority": "high",
                 "source": "src",
@@ -3111,8 +3132,7 @@ mod tests {
             &path,
             "retract",
             json!({
-                "subject_kind": "repo",
-                "subject_key": "p",
+                "subject": "repo:p",
                 "predicate": "database",
                 "authority": "high",
                 "source": "src",
@@ -3125,8 +3145,7 @@ mod tests {
             &path,
             "expire",
             json!({
-                "subject_kind": "repo",
-                "subject_key": "p",
+                "subject": "repo:p",
                 "predicate": "database",
                 "authority": "high",
                 "source": "src",
@@ -3139,23 +3158,19 @@ mod tests {
             &path,
             "derive",
             json!({
-                "subject_kind": "service",
-                "subject_key": "api",
+                "subject": "service:api",
                 "predicate": "datastore",
                 "value": "postgres",
                 "authority": "high",
                 "source": "src",
-                "from_kind": "repo",
-                "from_key": "p",
-                "from_predicate": "database",
+                "basis": "repo:p", "basis_predicate": "database",
             }),
         );
         assert_tool_output_matches_schema(
             &path,
             "retract",
             json!({
-                "subject_kind": "repo",
-                "subject_key": "p",
+                "subject": "repo:p",
                 "predicate": "database",
                 "authority": "high",
                 "source": "src",
@@ -3173,8 +3188,7 @@ mod tests {
             &path,
             "assert",
             json!({
-                "subject_kind": "repo",
-                "subject_key": "p",
+                "subject": "repo:p",
                 "predicate": "database",
                 "value": "postgres",
                 "authority": "high",
@@ -3246,16 +3260,16 @@ mod tests {
             &path,
             "derive",
             json!({
-                "subject_kind": "service", "subject_key": "api", "predicate": "datastore",
+                "subject": "service:api", "predicate": "datastore",
                 "value": "pg", "authority": "high", "source": "src",
-                "from_kind": "repo", "from_key": "p", "from_predicate": "database",
+                "basis": "repo:p", "basis_predicate": "database",
             }),
         );
         assert!(!err, "derive should be admitted: {text}");
         let (err, text) = call_tool(
             &path,
             "retract",
-            json!({ "subject_kind": "repo", "subject_key": "p", "predicate": "database",
+            json!({ "subject": "repo:p", "predicate": "database",
                     "authority": "high", "source": "src" }),
         );
         assert!(!err, "retract should be admitted: {text}");
@@ -3294,7 +3308,7 @@ mod tests {
         };
         let subject = |extra: Value| {
             let mut base = json!({
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
             });
             for (k, v) in extra.as_object().unwrap() {
                 base[k] = v.clone();
@@ -3338,7 +3352,7 @@ mod tests {
         let assert = json!({
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "assert", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
                 "value": "postgres", "authority": "high", "source": "source:owner",
             }},
         });
@@ -3350,7 +3364,7 @@ mod tests {
         let explain = json!({
             "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": { "name": "explain", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
             }},
         });
         let response = handle(&explain, &path).expect("response");
@@ -3367,7 +3381,7 @@ mod tests {
         let assert = json!({
             "jsonrpc": "2.0", "id": 5, "method": "tools/call",
             "params": { "name": "assert", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
                 "value": "mysql", "authority": "low", "source": "source:web",
             }},
         });
@@ -3400,7 +3414,7 @@ mod tests {
         let seed = json!({
             "jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": { "name": "assert", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
                 "value": "postgres", "authority": "high", "source": "source:owner",
             }},
         });
@@ -3422,7 +3436,7 @@ mod tests {
         let write = json!({
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "supersede", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
                 "value": "mysql", "authority": "high", "source": "source:owner",
             }},
         });
@@ -3441,7 +3455,7 @@ mod tests {
         let explain = json!({
             "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": { "name": "explain", "arguments": {
-                "subject_kind": "repo", "subject_key": "myproj", "predicate": "database",
+                "subject": "repo:myproj", "predicate": "database",
             }},
         });
         let text = handle(&explain, &path).expect("explain")["result"]["content"][0]["text"]

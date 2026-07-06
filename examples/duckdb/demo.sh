@@ -23,7 +23,7 @@ echo "# 1. Build a belief history (asserts, a derivation, a retraction of the so
 $DENT8 assert person:alice favorite_drink tea --authority high --source user:alice
 $DENT8 assert person:alice city paris --authority medium --source user:alice
 # A fact derived FROM another fact — records a claim->claim dependency edge (ADR 0010).
-$DENT8 derive person:alice shopping_item tea --from person:alice favorite_drink --authority medium --source assistant
+$DENT8 derive person:alice shopping_item tea --basis person:alice favorite_drink --authority medium --source assistant
 # Retract the source fact: its derivative is now poisoned (verify/export surface the taint).
 $DENT8 retract person:alice favorite_drink --authority high --source user:alice
 

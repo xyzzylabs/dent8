@@ -366,9 +366,9 @@ struct DeriveWriteArgs {
     predicate: String,
     /// Text value to assert.
     value: String,
-    /// Source fact to derive from: <source-subject> <source-predicate>.
-    #[arg(long, required = true, num_args = 2, value_names = ["SOURCE_SUBJECT", "SOURCE_PREDICATE"])]
-    from: Vec<String>,
+    /// Basis fact this derivative depends on: <basis-subject> <basis-predicate>.
+    #[arg(long, required = true, num_args = 2, value_names = ["BASIS_SUBJECT", "BASIS_PREDICATE"])]
+    basis: Vec<String>,
     /// Authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,

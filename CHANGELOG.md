@@ -29,6 +29,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `contested` for a disputed fact. The `accepted` boolean on write output is unchanged. A
   consumer that keyed on the CLI's old `status: "ok"` for a successful write must read `accepted`
   / `contested` (or the `accepted` boolean) instead.
+- **MCP tools take one `subject` string, and `derive` takes `basis`.** The MCP write/read tools
+  now take a single `subject` argument as `"kind:key"` (e.g. `repo:myproj`) instead of separate
+  `subject_kind` + `subject_key`, mirroring the CLI's `person:alice` grammar exactly. `derive`'s
+  source fact is now `basis` (`"kind:key"`) + `basis_predicate` instead of
+  `from_kind`/`from_key`/`from_predicate`, and the **CLI `derive --from` flag is renamed
+  `--basis`**. Tool result shapes are unchanged (`subject` stays a `{kind, key}` object on output).
+  An MCP client or script must send `subject`/`basis` string arguments; a CLI `derive` invocation
+  must use `--basis`.
 - **`--output json` errors now print to stdout, not stderr.** Every command's `--output json`
   result — success and error alike — goes to **stdout** as one object (the nonzero exit code still
   signals failure), so a machine consumer reads a single stream instead of merging stdout and

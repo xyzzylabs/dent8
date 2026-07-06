@@ -15,7 +15,7 @@ Initial command groups:
 - `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
 - `dent8 expire <subject> <predicate> --authority <level> --source <source>`
 - `dent8 retract <subject> <predicate> --authority <level> --source <source>`
-- `dent8 derive <subject> <predicate> <value> --from <subject> <predicate> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
 - `dent8 replay <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 explain <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 conflicts`

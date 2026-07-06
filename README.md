@@ -53,7 +53,7 @@ dent8 supersede repo:myproj deploy_target staging --authority low --source web:s
 dent8 explain repo:myproj deploy_target
 
 # Derive a fact from it, then retract the source — the derivative is flagged tainted.
-dent8 derive service:api target production --from repo:myproj deploy_target --authority high --source user:alice
+dent8 derive service:api target production --basis repo:myproj deploy_target --authority high --source user:alice
 dent8 retract repo:myproj deploy_target --authority high --source user:alice
 dent8 verify
 ```

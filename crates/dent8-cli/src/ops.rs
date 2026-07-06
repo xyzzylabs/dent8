@@ -562,7 +562,7 @@ pub(crate) fn op_derive(
 }
 
 pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
-    let from_subject = match CliSubject::from_str(&args.from[0]) {
+    let from_subject = match CliSubject::from_str(&args.basis[0]) {
         Ok(subject) => subject,
         Err(message) => {
             return present_write(
@@ -572,7 +572,7 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
             );
         }
     };
-    let from_predicate = match parse_predicate(&args.from[1]) {
+    let from_predicate = match parse_predicate(&args.basis[1]) {
         Ok(predicate) => predicate,
         Err(message) => {
             return present_write(
@@ -597,15 +597,16 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
         }),
     };
     let mut arguments = serde_json::Map::new();
-    arguments.insert("subject_kind".into(), args.subject.kind.clone().into());
-    arguments.insert("subject_key".into(), args.subject.key.clone().into());
+    arguments.insert("subject".into(), subject_arg(&args.subject).into());
     arguments.insert("predicate".into(), args.predicate.clone().into());
     arguments.insert("value".into(), args.value.clone().into());
     arguments.insert("authority".into(), args.authority.level().name().into());
     arguments.insert("source".into(), args.source.clone().into());
-    arguments.insert("from_kind".into(), from_subject.kind.clone().into());
-    arguments.insert("from_key".into(), from_subject.key.clone().into());
-    arguments.insert("from_predicate".into(), from_predicate.clone().into());
+    arguments.insert(
+        "basis".into(),
+        format!("{}:{}", from_subject.kind, from_subject.key).into(),
+    );
+    arguments.insert("basis_predicate".into(), from_predicate.clone().into());
     insert_validity(&mut arguments, args.valid_from, args.valid_to);
     run_write(
         "derive",
@@ -855,12 +856,16 @@ fn run_write(
     present_write(with_write_retry(local), output, view)
 }
 
+/// Format a subject as the `"kind:key"` string the MCP tools accept (mirrors the CLI grammar).
+fn subject_arg(subject: &CliSubject) -> String {
+    format!("{}:{}", subject.kind, subject.key)
+}
+
 /// The MCP tool arguments for a value write (`assert` / `supersede` / `contradict`): the same
 /// fields the tool schema declares, so the daemon parses them exactly like a stdio client.
 fn value_write_arguments(args: &ValueWriteArgs) -> serde_json::Value {
     let mut object = serde_json::Map::new();
-    object.insert("subject_kind".into(), args.subject.kind.clone().into());
-    object.insert("subject_key".into(), args.subject.key.clone().into());
+    object.insert("subject".into(), subject_arg(&args.subject).into());
     object.insert("predicate".into(), args.predicate.clone().into());
     object.insert("value".into(), args.value.clone().into());
     object.insert("authority".into(), args.authority.level().name().into());
@@ -873,8 +878,7 @@ fn value_write_arguments(args: &ValueWriteArgs) -> serde_json::Value {
 /// validity window.
 fn fact_write_arguments(args: &FactWriteArgs) -> serde_json::Value {
     serde_json::json!({
-        "subject_kind": args.subject.kind,
-        "subject_key": args.subject.key,
+        "subject": subject_arg(&args.subject),
         "predicate": args.predicate,
         "authority": args.authority.level().name(),
         "source": args.source,

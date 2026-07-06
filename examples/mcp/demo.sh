@@ -17,8 +17,8 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
   '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
   '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_facts","arguments":{}}}' \
-  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"assert","arguments":{"subject_kind":"repo","subject_key":"myproj","predicate":"database","value":"postgres","authority":"high","source":"owner"}}}' \
-  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"supersede","arguments":{"subject_kind":"repo","subject_key":"myproj","predicate":"database","value":"mysql","authority":"low","source":"web-scrape"}}}' \
-  '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explain","arguments":{"subject_kind":"repo","subject_key":"myproj","predicate":"database"}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"assert","arguments":{"subject":"repo:myproj","predicate":"database","value":"postgres","authority":"high","source":"owner"}}}' \
+  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"supersede","arguments":{"subject":"repo:myproj","predicate":"database","value":"mysql","authority":"low","source":"web-scrape"}}}' \
+  '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"explain","arguments":{"subject":"repo:myproj","predicate":"database"}}}' \
   '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"verify","arguments":{}}}' \
   | $DENT8 mcp serve
