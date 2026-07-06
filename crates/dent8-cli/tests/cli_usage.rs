@@ -689,7 +689,6 @@ fn json_output_fails_closed_for_unsupported_commands() {
 
     // `witness serve` DOES stream NDJSON now; even its setup failure (no signing key here)
     // is a machine-readable line on stderr, not prose.
-    #[cfg(feature = "witness")]
     {
         let witness_serve = run_dent8(&["--output", "json", "witness", "serve"], &envs);
         assert_eq!(witness_serve.status.code(), Some(1));
@@ -1636,30 +1635,6 @@ fn init_witness_adds_verification_config_without_signing_key() {
     );
 }
 
-#[cfg(not(feature = "witness"))]
-#[test]
-fn doctor_without_witness_feature_fails_closed_when_signed_heads_exist() {
-    let temp = TempDir::new();
-    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let witness_log = temp.file("witness.jsonl").to_string_lossy().into_owned();
-    fs::write(&witness_log, "{}\n").expect("witness log");
-
-    let doctor = run_dent8(
-        &["doctor"],
-        &[
-            ("DENT8_LOG", log.as_str()),
-            ("DENT8_WITNESS_LOG", witness_log.as_str()),
-        ],
-    );
-    assert_eq!(doctor.status.code(), Some(1));
-    assert!(
-        stdout(&doctor).contains("signed heads are configured"),
-        "{}",
-        stdout(&doctor)
-    );
-}
-
-#[cfg(feature = "witness")]
 fn assert_alice_fact(log: &str, predicate: &str, value: &str, context: &str) {
     assert_success(
         &run_dent8(
@@ -1679,7 +1654,6 @@ fn assert_alice_fact(log: &str, predicate: &str, value: &str, context: &str) {
     );
 }
 
-#[cfg(feature = "witness")]
 #[test]
 fn witness_publish_is_idempotent_and_rejects_local_witness_rollback() {
     let temp = TempDir::new();
@@ -1775,7 +1749,6 @@ fn witness_publish_is_idempotent_and_rejects_local_witness_rollback() {
     );
 }
 
-#[cfg(feature = "witness")]
 #[test]
 fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewound() {
     let temp = TempDir::new();
@@ -1878,7 +1851,6 @@ fn witness_verify_published_detects_rollback_even_if_local_witness_log_is_rewoun
     );
 }
 
-#[cfg(feature = "witness")]
 #[test]
 fn witness_doctor_checks_writer_signer_separation() {
     let temp = TempDir::new();
@@ -1935,7 +1907,6 @@ fn witness_doctor_checks_writer_signer_separation() {
     );
 }
 
-#[cfg(feature = "witness")]
 #[test]
 fn witness_commands_emit_machine_readable_json() {
     let fixture = WitnessJsonFixture::new();
@@ -1946,7 +1917,6 @@ fn witness_commands_emit_machine_readable_json() {
     assert_witness_doctor_and_trailing_json(&fixture);
 }
 
-#[cfg(feature = "witness")]
 struct WitnessJsonFixture {
     _temp: TempDir,
     log: String,
@@ -1956,7 +1926,6 @@ struct WitnessJsonFixture {
     published: String,
 }
 
-#[cfg(feature = "witness")]
 impl WitnessJsonFixture {
     fn new() -> Self {
         let temp = TempDir::new();
@@ -1995,7 +1964,6 @@ impl WitnessJsonFixture {
     }
 }
 
-#[cfg(feature = "witness")]
 fn assert_witness_keygen_json(fixture: &WitnessJsonFixture) {
     let keygen = run_dent8(
         &["--output", "json", "witness", "keygen"],
@@ -2011,7 +1979,6 @@ fn assert_witness_keygen_json(fixture: &WitnessJsonFixture) {
     assert_eq!(keygen["writer_must_not_inherit_key"], true);
 }
 
-#[cfg(feature = "witness")]
 #[test]
 fn witness_accepts_the_output_flag_after_the_subcommand() {
     // Real subcommands (not a trailing catch-all) mean the global `--output` works *after* the
@@ -2029,7 +1996,6 @@ fn witness_accepts_the_output_flag_after_the_subcommand() {
     assert_eq!(keygen["tool"], "witness keygen");
 }
 
-#[cfg(feature = "witness")]
 fn assert_witness_sign_head_and_verify_json(fixture: &WitnessJsonFixture) {
     let sign_env = fixture.sign_env();
     let verify_env = fixture.verify_env();
@@ -2065,7 +2031,6 @@ fn assert_witness_sign_head_and_verify_json(fixture: &WitnessJsonFixture) {
     assert_eq!(verify["current_event_count"], 1);
 }
 
-#[cfg(feature = "witness")]
 fn assert_witness_publish_json(fixture: &WitnessJsonFixture) {
     let verify_env = fixture.verify_env();
     let publish = run_dent8(
@@ -2106,7 +2071,6 @@ fn assert_witness_publish_json(fixture: &WitnessJsonFixture) {
     assert_eq!(published_verify["coverage"], "complete");
 }
 
-#[cfg(feature = "witness")]
 fn assert_witness_doctor_and_trailing_json(fixture: &WitnessJsonFixture) {
     let verify_env = fixture.verify_env();
     let writer_doctor = run_dent8(
@@ -2154,7 +2118,7 @@ fn assert_witness_doctor_and_trailing_json(fixture: &WitnessJsonFixture) {
     assert_eq!(trailing["unwitnessed_events"], 1);
 }
 
-#[cfg(all(feature = "witness", unix))]
+#[cfg(unix)]
 #[test]
 fn witness_operator_split_demo_runs_against_test_binary() {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/witness/demo.sh");
@@ -2187,7 +2151,6 @@ fn witness_operator_split_demo_runs_against_test_binary() {
     );
 }
 
-#[cfg(feature = "witness")]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear scenario: sign -> grow -> tamper -> verify/doctor
 fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
@@ -2357,7 +2320,6 @@ fn init_rejects_agent_source_override() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_identity_bootstraps_a_usable_secure_local_setup() {
     let temp = TempDir::new();
@@ -2437,7 +2399,6 @@ fn init_identity_bootstraps_a_usable_secure_local_setup() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_agent_profile_selects_source_and_implies_identity() {
     let temp = TempDir::new();
@@ -2477,7 +2438,6 @@ fn init_agent_profile_selects_source_and_implies_identity() {
     assert!(temp.file(".dent8/identities/source_codex.key").exists());
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_emits_machine_readable_json() {
     let temp = TempDir::new();
@@ -2558,7 +2518,6 @@ fn init_emits_machine_readable_json() {
     assert!(temp.file(".dent8/witness.jsonl").exists());
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_json_reports_mcp_check_state() {
     let temp = TempDir::new();
@@ -2633,7 +2592,6 @@ fn init_rejects_mcp_command_without_install_mcp() {
     assert!(stderr(&output).contains("--install-mcp"));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
     let temp = TempDir::new();
@@ -2682,7 +2640,6 @@ fn init_agent_codex_installs_mcp_config_and_prints_resulting_file() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_requires_per_source_identity_env() {
     let temp = TempDir::new();
@@ -2724,7 +2681,6 @@ fn mcp_install_requires_per_source_identity_env() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_local_bin_writes_wrapper_and_config() {
     let temp = TempDir::new();
@@ -2835,7 +2791,6 @@ fn mcp_install_local_bin_writes_wrapper_and_config() {
     assert_eq!(checked_json["config"]["written"], false);
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_local_bin_requires_prebuilt_target_before_writing() {
     let temp = TempDir::new();
@@ -2882,7 +2837,6 @@ fn mcp_install_local_bin_requires_prebuilt_target_before_writing() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_accepts_local_bin_install() {
     let temp = TempDir::new();
@@ -2924,7 +2878,6 @@ fn doctor_agent_accepts_local_bin_install() {
     assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_reports_stale_local_bin_repair_command() {
     let temp = TempDir::new();
@@ -2975,7 +2928,6 @@ fn doctor_agent_reports_stale_local_bin_repair_command() {
     assert!(!stdout.contains("<profile>"), "{stdout}");
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     let temp = TempDir::new();
@@ -3022,7 +2974,6 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn identity_repair_env_recovers_stale_agent_bundle_active_grants() {
     let temp = TempDir::new();
@@ -3106,7 +3057,6 @@ fn identity_repair_env_recovers_stale_agent_bundle_active_grants() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_reports_stale_mcp_config_repair_command() {
     let temp = TempDir::new();
@@ -3156,7 +3106,6 @@ fn doctor_agent_reports_stale_mcp_config_repair_command() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_repair_refreshes_stale_env_and_mcp_config() {
     let temp = TempDir::new();
@@ -3229,7 +3178,6 @@ fn doctor_agent_repair_refreshes_stale_env_and_mcp_config() {
     assert!(repaired_config.contains("DENT8_ACTIVE_GRANTS = "));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn identity_repair_env_refuses_to_replace_a_different_active_grant() {
     let temp = TempDir::new();
@@ -3277,7 +3225,6 @@ fn identity_repair_env_refuses_to_replace_a_different_active_grant() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
     for (agent, source, config_path) in [
@@ -3334,7 +3281,6 @@ fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
     }
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_rejects_second_agent_on_another_agents_file_log() {
     let temp = TempDir::new();
@@ -3383,7 +3329,6 @@ fn mcp_install_rejects_second_agent_on_another_agents_file_log() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn agent_add_rejects_file_store_bundle() {
     let temp = TempDir::new();
@@ -3431,7 +3376,6 @@ fn agent_add_rejects_file_store_bundle() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn agent_add_error_emits_machine_readable_json() {
     let temp = TempDir::new();
@@ -3492,7 +3436,7 @@ fn agent_add_error_emits_machine_readable_json() {
     );
 }
 
-#[cfg(all(feature = "identity", feature = "sqlite"))]
+#[cfg(feature = "sqlite")]
 #[test]
 fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
     let temp = TempDir::new();
@@ -3580,7 +3524,7 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
     }
 }
 
-#[cfg(all(feature = "identity", feature = "sqlite"))]
+#[cfg(feature = "sqlite")]
 #[test]
 fn agent_add_emits_machine_readable_json() {
     let temp = TempDir::new();
@@ -3652,7 +3596,7 @@ fn agent_add_emits_machine_readable_json() {
     );
 }
 
-#[cfg(all(feature = "identity", feature = "sqlite"))]
+#[cfg(feature = "sqlite")]
 #[test]
 fn agent_add_preserves_existing_authority_ceiling_when_reused() {
     let temp = TempDir::new();
@@ -3741,7 +3685,6 @@ fn agent_add_preserves_existing_authority_ceiling_when_reused() {
     );
 }
 
-#[cfg(feature = "identity")]
 fn add_claude_code_identity(temp: &TempDir, dir: &str, issuer_key: &str) {
     let authority = temp
         .file(".dent8/authority.json")
@@ -3810,7 +3753,6 @@ fn add_claude_code_identity(temp: &TempDir, dir: &str, issuer_key: &str) {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_mcp_write_check_works_for_hecate_task_config() {
     let temp = TempDir::new();
@@ -3882,7 +3824,6 @@ fn doctor_agent_mcp_write_check_works_for_hecate_task_config() {
     assert!(stdout.contains(&format!("cwd={}", temp.path.display())));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn doctor_agent_smokes_the_configured_mcp_command() {
     let temp = TempDir::new();
@@ -3916,7 +3857,7 @@ fn doctor_agent_smokes_the_configured_mcp_command() {
     assert!(stdout.contains(&missing_command));
 }
 
-#[cfg(all(feature = "identity", unix))]
+#[cfg(unix)]
 #[test]
 fn doctor_agent_smokes_installed_cwd_and_custom_env() {
     use std::os::unix::fs::PermissionsExt;
@@ -3979,7 +3920,7 @@ fn doctor_agent_smokes_installed_cwd_and_custom_env() {
     assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
 }
 
-#[cfg(all(feature = "identity", unix))]
+#[cfg(unix)]
 #[test]
 fn doctor_agent_mcp_smoke_times_out_hanging_command() {
     let temp = TempDir::new();
@@ -4022,7 +3963,6 @@ fn doctor_agent_mcp_smoke_times_out_hanging_command() {
     assert!(stdout.contains("mcp smoke: `/bin/sh -c exec sleep 60` timed out after 150ms"));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_patches_json_config_and_preserves_other_servers() {
     let temp = TempDir::new();
@@ -4108,7 +4048,6 @@ fn mcp_install_patches_json_config_and_preserves_other_servers() {
     assert_eq!(first, second, "mcp install should be idempotent");
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_dry_run_and_check_do_not_write() {
     let temp = TempDir::new();
@@ -4182,7 +4121,6 @@ fn mcp_install_dry_run_and_check_do_not_write() {
     assert!(stdout(&up_to_date_check).contains("MCP config up to date:"));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_json_reports_dry_run_and_check_state() {
     let temp = TempDir::new();
@@ -4262,7 +4200,6 @@ fn mcp_install_json_reports_dry_run_and_check_state() {
     assert_mcp_install_up_to_date_json(&up_to_date_json);
 }
 
-#[cfg(feature = "identity")]
 fn assert_mcp_install_dry_run_json(output: &Value, config_path: &Path) {
     assert_eq!(output["status"], "ok");
     assert_eq!(output["tool"], "mcp install");
@@ -4289,7 +4226,6 @@ fn assert_mcp_install_dry_run_json(output: &Value, config_path: &Path) {
     );
 }
 
-#[cfg(feature = "identity")]
 fn assert_mcp_install_needs_update_json(output: &Value) {
     assert_eq!(output["status"], "needs_update");
     assert_eq!(output["mode"], "check");
@@ -4299,7 +4235,6 @@ fn assert_mcp_install_needs_update_json(output: &Value) {
     assert_eq!(output["config"]["written"], false);
 }
 
-#[cfg(feature = "identity")]
 fn assert_mcp_install_up_to_date_json(output: &Value) {
     assert_eq!(output["status"], "ok");
     assert_eq!(output["config"]["action"], "unchanged");
@@ -4307,7 +4242,6 @@ fn assert_mcp_install_up_to_date_json(output: &Value) {
     assert_eq!(output["config"]["written"], false);
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_requires_explicit_config_for_custom_dent8_dir_name() {
     let temp = TempDir::new();
@@ -4348,7 +4282,6 @@ fn mcp_install_requires_explicit_config_for_custom_dent8_dir_name() {
     assert!(config_path.exists());
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_install_mcp_reports_partial_success_when_config_patch_fails() {
     let temp = TempDir::new();
@@ -4390,7 +4323,6 @@ fn init_install_mcp_reports_partial_success_when_config_patch_fails() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn mcp_install_hecate_requires_explicit_config_path() {
     let temp = TempDir::new();
@@ -4417,7 +4349,6 @@ fn mcp_install_hecate_requires_explicit_config_path() {
     assert!(stderr(&installed).contains("needs --config"));
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_agent_profiles_match_documented_source_and_slug_paths() {
     let profiles = [
@@ -4510,7 +4441,6 @@ fn init_agent_profiles_match_documented_source_and_slug_paths() {
     }
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn init_identity_preflights_existing_identity_before_writing_authority() {
     let temp = TempDir::new();
@@ -4549,40 +4479,6 @@ fn init_identity_preflights_existing_identity_before_writing_authority() {
     );
 }
 
-#[cfg(not(feature = "identity"))]
-#[test]
-fn init_identity_explains_feature_gate_without_identity_build() {
-    let temp = TempDir::new();
-    let dir = temp.file(".dent8").to_string_lossy().into_owned();
-    let init = run_dent8(&["init", "--dir", &dir, "--identity"], &[]);
-    assert_eq!(init.status.code(), Some(1));
-    assert!(stderr(&init).contains("--features identity"));
-    assert!(
-        !temp.file(".dent8").exists(),
-        "feature-gated identity init should fail before creating config state"
-    );
-}
-
-#[cfg(not(feature = "identity"))]
-#[test]
-fn identity_command_explains_feature_gate_without_identity_build() {
-    let output = run_dent8(&["identity", "trust-list"], &[]);
-    assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("--features identity"));
-}
-
-#[cfg(not(feature = "identity"))]
-#[test]
-fn doctor_fails_when_identity_is_configured_without_identity_build() {
-    let temp = TempDir::new();
-    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let trust = temp.file("trust.json").to_string_lossy().into_owned();
-    let output = run_dent8(&["doctor"], &[("DENT8_LOG", &log), ("DENT8_TRUST", &trust)]);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(stdout(&output).contains("without `--features identity`"));
-}
-
-#[cfg(feature = "identity")]
 #[test]
 fn identity_bootstrap_rejects_project_local_issuer_key() {
     let temp = TempDir::new();
@@ -4613,7 +4509,6 @@ fn identity_bootstrap_rejects_project_local_issuer_key() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
     let temp = TempDir::new();
@@ -4713,7 +4608,6 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn identity_lifecycle_commands_emit_machine_readable_json() {
@@ -4824,7 +4718,6 @@ fn identity_lifecycle_commands_emit_machine_readable_json() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn identity_artifact_commands_emit_machine_readable_json() {
@@ -4958,7 +4851,6 @@ fn identity_artifact_commands_emit_machine_readable_json() {
     assert_eq!(verified["max_authority"], "high");
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn identity_env_filename_sanitizes_source_suffix() {
     let temp = TempDir::new();
@@ -4990,7 +4882,6 @@ fn identity_env_filename_sanitizes_source_suffix() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 fn identity_status_reports_bundle_and_expiry() {
     let temp = TempDir::new();
@@ -5099,7 +4990,6 @@ fn identity_status_reports_bundle_and_expiry() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
@@ -5266,7 +5156,6 @@ fn identity_rotate_source_rekeys_active_paths_and_rejects_old_key() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn identity_rotate_source_can_replace_an_expired_grant() {
@@ -5417,7 +5306,6 @@ fn identity_rotate_source_can_replace_an_expired_grant() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::similar_names)]
 fn identity_bootstrap_can_share_one_explicit_issuer_across_projects() {
@@ -5513,7 +5401,6 @@ fn identity_bootstrap_can_share_one_explicit_issuer_across_projects() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::similar_names, clippy::too_many_lines)]
 fn identity_bootstrap_project_specific_issuer_keys_isolate_trust_roots() {
@@ -5630,7 +5517,6 @@ fn identity_bootstrap_project_specific_issuer_keys_isolate_trust_roots() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)]
 fn signed_identity_grant_is_required_and_bound_to_the_write() {
@@ -5837,7 +5723,6 @@ fn signed_identity_grant_is_required_and_bound_to_the_write() {
     assert!(stderr(&out_of_scope).contains("does not cover write subject"));
 }
 
-#[cfg(all(feature = "identity", feature = "witness"))]
 #[test]
 fn witness_covers_the_grant_log_and_detects_truncated_revocations() {
     let temp = TempDir::new();
@@ -5945,7 +5830,6 @@ fn witness_covers_the_grant_log_and_detects_truncated_revocations() {
     );
 }
 
-#[cfg(all(feature = "identity", feature = "witness"))]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear lifecycle: publish -> revoke -> scrub -> catch
 fn witness_publishes_grant_log_heads_and_detects_scrubbed_history() {
@@ -6158,7 +6042,6 @@ fn witness_publishes_grant_log_heads_and_detects_scrubbed_history() {
     );
 }
 
-#[cfg(all(feature = "identity", feature = "witness"))]
 #[test]
 fn witness_serve_covers_the_grant_log_and_signs_only_on_change() {
     let temp = TempDir::new();
@@ -6251,7 +6134,6 @@ fn witness_serve_covers_the_grant_log_and_signs_only_on_change() {
     );
 }
 
-#[cfg(all(feature = "identity", feature = "witness"))]
 #[test]
 fn witness_serve_streams_ndjson() {
     let temp = TempDir::new();
@@ -6322,7 +6204,6 @@ fn witness_serve_streams_ndjson() {
     assert_eq!(last["signed_heads"], 1);
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear lifecycle: issue -> rotate -> revoke -> backfill
 fn grant_history_decides_entitlement_across_rotation_and_revocation() {
@@ -6469,7 +6350,6 @@ fn grant_history_decides_entitlement_across_rotation_and_revocation() {
     );
 }
 
-#[cfg(feature = "identity")]
 #[test]
 #[allow(clippy::too_many_lines)] // one linear scenario: bootstrap -> attest -> verify -> tamper
 fn writes_carry_attestations_that_verify_and_detect_tamper() {
@@ -6619,7 +6499,6 @@ fn writes_carry_attestations_that_verify_and_detect_tamper() {
 /// Security artifacts (grants, trust/active-grant/authority registries, witness heads) are
 /// deserialized strictly: an unknown field is unsigned noise at best and tampering at worst,
 /// so it must fail loudly ("corrupt …") instead of being silently ignored.
-#[cfg(all(feature = "identity", feature = "witness"))]
 #[test]
 fn security_artifacts_reject_unknown_fields() {
     let temp = TempDir::new();
@@ -6709,7 +6588,6 @@ fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(None, args, envs)
 }
 
-#[cfg(feature = "identity")]
 fn run_dent8_in(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(Some(cwd), args, envs)
 }
@@ -6768,7 +6646,6 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
-#[cfg(feature = "witness")]
 fn line_count(path: &str) -> usize {
     fs::read_to_string(path)
         .expect("read file")
@@ -6777,7 +6654,6 @@ fn line_count(path: &str) -> usize {
         .count()
 }
 
-#[cfg(feature = "identity")]
 fn assert_installed_agent_doctor_ok(output: &Output, agent: &str, source: &str, mcp_command: &str) {
     assert_success(output, &format!("doctor --agent {agent} --write-check"));
     let stdout = stdout(output);
@@ -6806,12 +6682,10 @@ fn assert_installed_agent_doctor_ok(output: &Output, agent: &str, source: &str, 
     );
 }
 
-#[cfg(feature = "identity")]
 fn read_file(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
-#[cfg(feature = "identity")]
 fn find_backup(dir: &Path, prefix: &str) -> PathBuf {
     fs::read_dir(dir)
         .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
@@ -6825,7 +6699,6 @@ fn find_backup(dir: &Path, prefix: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("missing backup with prefix {prefix} in {}", dir.display()))
 }
 
-#[cfg(feature = "identity")]
 fn assert_no_backup(dir: &Path, prefix: &str) {
     let found = fs::read_dir(dir)
         .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
@@ -6844,7 +6717,6 @@ fn assert_no_backup(dir: &Path, prefix: &str) {
     );
 }
 
-#[cfg(feature = "identity")]
 fn make_owner_only(path: &Path) {
     #[cfg(unix)]
     {
@@ -6858,7 +6730,6 @@ fn make_owner_only(path: &Path) {
     }
 }
 
-#[cfg(feature = "identity")]
 fn seed_local_mcp_target(dir: &str) {
     let target = Path::new(dir).join("target-sqlite/debug/dent8");
     fs::create_dir_all(target.parent().expect("local target parent"))
@@ -6868,7 +6739,6 @@ fn seed_local_mcp_target(dir: &str) {
     make_executable(&target);
 }
 
-#[cfg(feature = "identity")]
 fn make_executable(path: &Path) {
     #[cfg(unix)]
     {
@@ -6882,7 +6752,7 @@ fn make_executable(path: &Path) {
     }
 }
 
-#[cfg(all(feature = "identity", unix))]
+#[cfg(unix)]
 fn toml_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }

@@ -303,8 +303,7 @@ pub(crate) fn entitlement_at(
 /// follow-up): a signed head commits to `(record_count, hash_of_last_line)`, and a verifier
 /// re-checks each witnessed count against the hash at that prefix. `Ok(None)` = no grant log
 /// configured/present. The records themselves are chain-validated on load. Only the witness
-/// lane consumes this, so it is gated on that feature to stay dead-code-free in stock builds.
-#[cfg(feature = "witness")]
+/// lane consumes this.
 pub(crate) fn grant_log_line_hashes() -> Result<Option<(PathBuf, Vec<String>)>, String> {
     let Some(path) = grant_log_path_for_verify() else {
         return Ok(None);

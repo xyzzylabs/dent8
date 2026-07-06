@@ -16,7 +16,8 @@ name = "dent8"
 path = "src/main.rs"
 
 [dependencies]
-dent8-core = { path = "../dent8-core", version = "0.2.0" }
+# `signed-anchor` is always on: the witness transparency log is a stock command, not opt-in.
+dent8-core = { path = "../dent8-core", version = "0.2.0", features = ["signed-anchor"] }
 dent8-store = { path = "../dent8-store", version = "0.2.0" }
 dent8-store-postgres = { path = "../dent8-store-postgres", version = "0.2.0" }
 # Default local backend: embedded SQLite (sqlx + bundled libsqlite3), selected by a sqlite:// URL.
@@ -33,26 +34,28 @@ toml_edit = "0.22"
 # This lets the CLI/MCP run against a backend selected by DENT8_STORE_URL. `net`/`io-util`
 # also back the local `dent8 mcp serve --daemon` Unix-socket transport (ADR 0018).
 tokio = { version = "1", features = ["rt", "net", "time", "io-util"], optional = true }
-# Default: Ed25519 source identity is part of the stock CLI because the secure onboarding
-# path should not require a custom build. The witness command remains opt-in below.
-ed25519-dalek = { version = "2", optional = true }
-sha2 = { version = "0.10", optional = true }
-getrandom = { version = "0.2", optional = true }
-hex = { version = "0.4", optional = true }
+# Always compiled: Ed25519 source identity and the witness transparency log are stock parts of
+# the CLI — the secure onboarding and integrity story should not require a custom build. These
+# add ~0.7 MiB to the binary (identity ~0.4, witness ~0.3) and are shared between the two.
+ed25519-dalek = { version = "2" }
+sha2 = { version = "0.10" }
+getrandom = { version = "0.2" }
+hex = { version = "0.4" }
 # Opt-in: the `dent8 export` analytical lane (Parquet for DuckDB). Off by default so the stock
 # binary stays free of the arrow/parquet columnar stack.
 dent8-export = { path = "../dent8-export", version = "0.2.0", optional = true }
 
 [features]
-default = ["identity", "sqlite"]
+default = ["sqlite"]
 # Umbrella enabled by every async backend: it brings in the `AsyncEventStore` trait + the
 # tokio bridge, so the generic `connect_backend`/`backend_*` facade compiles. A backend
 # feature (e.g. `postgres`) turns it on; selection is by URL scheme at runtime.
 async-store = ["dent8-store/async-store", "dep:tokio"]
 postgres = ["dent8-store-postgres/adapter", "async-store"]
 sqlite = ["dep:dent8-store-sqlite", "async-store"]
-identity = ["dep:ed25519-dalek", "dep:getrandom", "dep:hex", "dep:sha2"]
-witness = ["dent8-core/signed-anchor", "dep:ed25519-dalek", "dep:getrandom", "dep:hex"]
+# `identity` and `witness` used to be features; they are now always compiled (~0.7 MiB total,
+# 90+ cfg sites removed). Ed25519 source identity is core to the threat model, and `witness`
+# reuses the same crypto. Backends (postgres/export) stay opt-in — they carry real weight.
 export = ["dep:dent8-export"]
 
 [lints]

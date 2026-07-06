@@ -140,13 +140,13 @@ library-only vs. design-only. In brief, runnable today:
 - Three backends behind one contract: a local **file** dev log (default), embedded **SQLite**,
   and a DB-verified transactional **Postgres** adapter (`--features postgres`) — selected by
   `DENT8_STORE_URL`.
-- **Signed identity** with grant history + revocation, the **witness** (`--features witness`),
-  and an MCP server (`dent8 mcp serve`).
+- **Signed identity** with grant history + revocation, the **witness** transparency log, and an
+  MCP server (`dent8 mcp serve`) — all in the stock binary.
 - Machine-readable `--output json` across the read/write/audit surface, shell completions, and
   Parquet **export** for offline DuckDB analysis (`--features export`).
 
 Run `dent8 --help` for the full command surface. The stock binary needs no services; opt-in
-builds add Postgres (`--features postgres`) and the witness (`--features witness`).
+builds add a Postgres backend (`--features postgres`) and Parquet export (`--features export`).
 
 *(Origin: the* dentate gyrus*, the hippocampal structure associated with pattern separation —
 keeping similar memories distinct.)*

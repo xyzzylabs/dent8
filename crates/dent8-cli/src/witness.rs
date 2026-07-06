@@ -1642,13 +1642,12 @@ fn write_secret(path: &str, contents: &str) -> Result<(), String> {
 // fresh revocation) undetectably from the file alone — the same residual the event log has.
 // Same remedy: the witness signs `(record_count, head)` over the grant log into its own
 // appended sequence, and `witness verify` re-checks every signed head against the current
-// grant log's prefix. Requires both the witness key (this module) and the identity feature
-// (the grant log lives there); builds without `identity` skip the lane.
+// grant log's prefix. Uses both the witness key (this module) and the signed-identity grant log.
 
 /// One signed grant-log head: `(record_count, hash of the last record line)` under the
-/// witness key. Strict deserialization — a security artifact. The head *machinery* is
-/// feature-independent (publishing and re-checking an external sequence needs no identity
-/// bundle); only reading the local grant log itself requires the `identity` feature.
+/// witness key. Strict deserialization — a security artifact. Publishing and re-checking an
+/// external sequence needs only the witness key; only reading the local grant log itself needs
+/// the signed-identity bundle.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GrantLogHead {
@@ -1701,22 +1700,11 @@ fn load_grant_log_heads(
 }
 
 /// The line hashes of the *current* grant log — the ground truth every signed grant-log head
-/// is re-checked against. Explicit-lane callers (`--grants`) go through this: a build without
-/// the identity feature cannot see grant logs, and an explicit request must fail closed
-/// rather than silently verify nothing.
-#[cfg(feature = "identity")]
+/// is re-checked against. Explicit-lane callers (`--grants`) go through this.
 fn current_grant_log_hashes() -> Result<Vec<String>, String> {
     Ok(crate::identity::grant_log_line_hashes()?
         .map(|(_, hashes)| hashes)
         .unwrap_or_default())
-}
-
-#[cfg(not(feature = "identity"))]
-fn current_grant_log_hashes() -> Result<Vec<String>, String> {
-    Err(
-        "the grant-log lane needs the identity feature — this build was compiled without it"
-            .to_string(),
-    )
 }
 
 fn grant_log_head_message(record_count: u64, head: Option<&str>) -> Result<Vec<u8>, String> {
@@ -1750,7 +1738,6 @@ impl GrantLaneSigned {
 
 /// Sign the current grant-log head, if a grant log is discoverable. Returns `None` when
 /// there is no grant log (not an error — witness-only setups are legitimate).
-#[cfg(feature = "identity")]
 fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<GrantLaneSigned>, String> {
     use ed25519_dalek::Signer as _;
     let Some((grant_log, hashes)) = crate::identity::grant_log_line_hashes()? else {
@@ -1781,19 +1768,10 @@ fn sign_grant_log_head(signing: &SigningKey) -> Result<Option<GrantLaneSigned>, 
     }))
 }
 
-// The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
-// errors are real.
-#[cfg(not(feature = "identity"))]
-#[allow(clippy::unnecessary_wraps)]
-fn sign_grant_log_head(_signing: &SigningKey) -> Result<Option<GrantLaneSigned>, String> {
-    Ok(None)
-}
-
 /// `serve`'s growth-triggered wrapper for the grant-log lane: sign a new head only when the
 /// grant log's `(record_count, last-line hash)` differs from the last state this process
 /// signed (or was seeded with). A count that goes *down* still gets signed — the regressed
 /// head in the lane's own sequence is exactly the ROLLBACK evidence `verify` renders.
-#[cfg(feature = "identity")]
 fn sign_grant_log_head_if_changed(
     signing: &SigningKey,
     last: &mut Option<(u64, Option<String>)>,
@@ -1808,17 +1786,6 @@ fn sign_grant_log_head_if_changed(
     let lane = sign_grant_log_head(signing)?;
     *last = Some(state);
     Ok(lane)
-}
-
-// The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
-// errors are real.
-#[cfg(not(feature = "identity"))]
-#[allow(clippy::unnecessary_wraps)]
-fn sign_grant_log_head_if_changed(
-    _signing: &SigningKey,
-    _last: &mut Option<(u64, Option<String>)>,
-) -> Result<Option<GrantLaneSigned>, String> {
-    Ok(None)
 }
 
 /// Verify a sequence of signed grant-log heads against the current grant log's line hashes:
@@ -1897,7 +1864,6 @@ fn verify_grant_heads(
 /// witness public key, non-decreasing counts, and each witnessed prefix hash still matching.
 /// Returns `Ok(None)` when the lane is unused, `Ok(Some(count))` with the number of verified
 /// heads, or the same fault taxonomy as the event lane.
-#[cfg(feature = "identity")]
 fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
     let path = grants_witness_log_path();
     let heads = load_grant_log_heads(&path, "grants-witness log", true)
@@ -1907,14 +1873,6 @@ fn verify_grant_log_heads(verifying: &VerifyingKey) -> Result<Option<usize>, Wit
     }
     let current = current_grant_log_hashes().map_err(WitnessFault::CannotVerify)?;
     verify_grant_heads(&heads, &current, verifying).map(Some)
-}
-
-// The wrap is load-bearing: the signature must match the cfg(identity) twin above, whose
-// faults are real.
-#[cfg(not(feature = "identity"))]
-#[allow(clippy::unnecessary_wraps)]
-fn verify_grant_log_heads(_verifying: &VerifyingKey) -> Result<Option<usize>, WitnessFault> {
-    Ok(None)
 }
 
 struct GrantsPublishOutcome {

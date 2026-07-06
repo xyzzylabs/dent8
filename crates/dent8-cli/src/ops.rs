@@ -810,7 +810,7 @@ pub(crate) fn op_error_exit_code(error: &OpError) -> i32 {
 
 /// The daemon socket writes route through when `DENT8_DAEMON_SOCKET` names one (ADR 0018 PR 5),
 /// so several agents can share one belief base over one transport.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 fn daemon_socket() -> Option<String> {
     std::env::var("DENT8_DAEMON_SOCKET")
         .ok()
@@ -832,7 +832,7 @@ fn run_write(
     // Route only when a signed identity is configured: the handshake needs the caller's grant +
     // key, and dev mode (no identity) writes locally-unattested — routing an unconfigured caller
     // would diverge (a hard error) from the local exit-0 accept it expects.
-    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    #[cfg(all(unix, feature = "async-store"))]
     if let Some(socket) = daemon_socket()
         && crate::identity::IdentityContext::from_env().is_ok_and(|ctx| ctx.configured())
     {
@@ -842,16 +842,7 @@ fn run_write(
         };
         return present_write(outcome, output, view);
     }
-    // A storage-backend build without `identity` cannot handshake, so routing is compiled out —
-    // warn rather than silently ignoring an explicitly-set socket.
-    #[cfg(all(unix, feature = "async-store", not(feature = "identity")))]
-    if std::env::var("DENT8_DAEMON_SOCKET").is_ok_and(|value| !value.trim().is_empty()) {
-        eprintln!(
-            "warning: DENT8_DAEMON_SOCKET is set but this build lacks the `identity` feature; \
-             writing to the local store instead of routing to the daemon"
-        );
-    }
-    #[cfg(not(all(unix, feature = "async-store", feature = "identity")))]
+    #[cfg(not(all(unix, feature = "async-store")))]
     let _ = (tool, arguments);
     present_write(with_write_retry(local), output, view)
 }

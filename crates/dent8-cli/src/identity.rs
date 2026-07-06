@@ -56,7 +56,6 @@ struct ActiveSourceGrant {
 }
 
 mod records;
-#[cfg(feature = "witness")]
 pub(crate) use records::grant_log_line_hashes;
 pub(crate) use records::{Entitlement, entitlement_at, load_grant_history_for_verify};
 use records::{GrantAction, append_grant_records, grant_log_path_in, has_issued_record};

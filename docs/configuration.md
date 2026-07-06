@@ -39,7 +39,7 @@ dent8 doctor --agent codex --write-check
 | `DENT8_TRUST` | signed identity | `./dent8-trust.json` | Path to trusted issuer public keys. If this file exists, signed source identity is active for every write. |
 | `DENT8_ACTIVE_GRANTS` | signed identity | sibling `active-grants.json` next to `DENT8_TRUST`, when present | Path to the active source-grant registry. Bootstrap writes `.dent8/active-grants.json`; writes presenting an older grant for the same source are rejected once this registry exists. |
 | `DENT8_GRANT_LOG` | signed identity + `verify` | sibling `grant-log.jsonl` next to `DENT8_TRUST`, when present | Append-only, issuer-signed grant **history** (ADR 0014). Lifecycle commands append `issued`/`revoked` records; `verify` uses it to decide each attested event's *entitlement at write time*. `dent8 identity revoke` ends trust without a replacement; `dent8 identity backfill-grant-log` seeds records for pre-history grants. |
-| `DENT8_REQUIRE_IDENTITY` | every write | *(unset / false)* | Fail-closed identity guard. When true, a missing trust registry, grant, or source key rejects writes. In a `--no-default-features` build, setting this or configuring identity produces a build-hint error. |
+| `DENT8_REQUIRE_IDENTITY` | every write | *(unset / false)* | Fail-closed identity guard. When true, a missing trust registry, grant, or source key rejects writes. |
 | `DENT8_RECORD_CHALLENGES` | rejected writes | *(unset = on)* | Survived-challenge recording (ADR 0015). When the firewall rejects a challenge on strength, the incumbent's stream records a `fact.challenge_rejected` event with the challenger's provenance and effective authority. Set `0`/`false` to opt out; a malformed value keeps recording. |
 | `DENT8_ENTRENCHMENT_GATE` | `supersede` | *(unset / off)* | Opt-in earned-supersession gate: an equal-authority replacement may not displace an incumbent with strictly stronger authority-weighted **earned entrenchment** — corroboration plus survived challenges (ADR 0015 + [ADR 0017](decisions/0017-survived-challenges-in-arbitration.md)). A malformed value fails toward enforcement. |
 | `DENT8_GRANT` | every write | *(unset)* | Signed source grant JSON binding the configured source id to a source public key and maximum authority. |
@@ -47,10 +47,10 @@ dent8 doctor --agent codex --write-check
 | `DENT8_DAEMON_SOCKET` | CLI writes (Unix, a storage-backend build) | *(unset → write locally)* | When set, CLI **writes** (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`) route through a running local daemon ([`dent8 mcp serve --daemon`](decisions/0018-local-daemon-and-per-connection-identity.md)) at this socket path instead of writing the local store: the CLI completes the session-challenge handshake with `DENT8_GRANT`/`DENT8_IDENTITY_KEY` and the daemon attests the write. Reads stay local. Output is identical to a local write. |
 | `DENT8_ISSUER_KEY` | `dent8 init --identity` / `dent8 identity bootstrap` | `$XDG_CONFIG_HOME/dent8/issuer.key` or `$HOME/.config/dent8/issuer.key` | Optional operator issuer signing-key path for bootstrap. This key should stay outside the project/agent workspace. |
 | `DENT8_MCP_SMOKE_TIMEOUT_MS` | `dent8 doctor --agent` | `10000` | Maximum time to wait for the installed MCP server smoke check before killing it and reporting a timeout. |
-| `DENT8_WITNESS_KEY` | `dent8 witness` (`--features witness`) | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
+| `DENT8_WITNESS_KEY` | `dent8 witness` | `./dent8-witness.key` | Path to the Ed25519 **signing** key (hex, `0600`). `<path>.pub` holds the public key. |
 | `DENT8_WITNESS_PUBKEY` | `dent8 witness verify` | `<DENT8_WITNESS_KEY>.pub` | Override the public key used for verification (e.g. when verifying a published head without the signing key). |
 | `DENT8_WITNESS_LOG` | `dent8 witness sign` / `verify` / `serve` | `./dent8-witness.jsonl` | Path to the appended log of signed tree heads. |
-| `DENT8_WITNESS_GRANTS_LOG` | `dent8 witness` (`--features witness` + identity) | `./dent8-witness-grants.jsonl` | Appended log of witness-signed **grant-log** heads (ADR 0014 follow-up): `sign`/`serve` cover the grant log when one is discoverable, and `witness verify` detects grant-history truncation (a hidden revocation) as ROLLBACK. |
+| `DENT8_WITNESS_GRANTS_LOG` | `dent8 witness` (grant-log lane) | `./dent8-witness-grants.jsonl` | Appended log of witness-signed **grant-log** heads (ADR 0014 follow-up): `sign`/`serve` cover the grant log when one is discoverable, and `witness verify` detects grant-history truncation (a hidden revocation) as ROLLBACK. |
 | `DATABASE_URL` | the adapter's integration tests only | *(unset → tests skip)* | A throwaway `postgres://…` for `cargo test -p dent8-store-postgres --features adapter`. **Not** read by the CLI/MCP — that is `DENT8_STORE_URL`. |
 
 The optional hook helper `dent8 hook native-memory-guard` has its own variables:
@@ -71,13 +71,12 @@ URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhos
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
 ```sh
-cargo build -p dent8                                    # stock: file store + SQLite + signed identity
-cargo build -p dent8 --no-default-features              # minimal: file store only
+cargo build -p dent8                                    # stock: file store + SQLite + signed identity + witness
+cargo build -p dent8 --no-default-features              # minimal: file store only (no async backend)
 cargo build -p dent8 --features postgres                # + Postgres backend
 cargo build -p dent8 --features sqlite                  # explicit SQLite (already default)
-cargo build -p dent8 --features witness                 # + witness
 cargo build -p dent8 --features export                  # + Parquet export for DuckDB
-cargo build -p dent8 --features postgres,sqlite,identity,witness,export # all
+cargo build -p dent8 --features postgres,sqlite,export  # all backends + export
 ```
 
 Postgres, export, and witness stay off by default so the stock binary stays free of the

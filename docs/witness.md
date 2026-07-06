@@ -4,7 +4,7 @@ The witness is dent8's external tamper-evidence layer. The event log already has
 chain, but a writer that can rewrite the log could also recompute that chain. A witness
 periodically signs the current chain head so a later rewrite or rollback can be detected.
 
-The mechanism is built as `dent8 witness` behind `--features witness`. The operated product
+The mechanism is the stock `dent8 witness` command. The operated product
 shape is: keep the signing key off the writer, append signed tree heads to a witness log, and
 publish the latest head somewhere the writer cannot silently roll back. That shape is
 **packaged** in [`examples/witness-operated/`](../examples/witness-operated/) — a Docker
@@ -19,7 +19,7 @@ Use this when you want to exercise the flow on one machine. It proves the toolin
 not the strongest security posture because the writer and witness key are colocated.
 
 ```sh
-cargo build -p dent8 --features witness
+cargo build -p dent8
 
 dent8 init --witness
 set -a
@@ -52,7 +52,7 @@ Use this shape when the event writer and witness are different processes or host
 For a runnable local version of this split, use the checked example:
 
 ```sh
-DENT8="cargo run -q -p dent8 --features witness --" ./examples/witness/demo.sh
+DENT8="cargo run -q -p dent8 --" ./examples/witness/demo.sh
 ```
 
 It creates separate writer, signer, and monitor environments in a temporary directory,

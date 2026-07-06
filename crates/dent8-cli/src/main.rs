@@ -27,18 +27,16 @@ use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
 mod doctor;
 mod hook;
-#[cfg(feature = "identity")]
 mod identity;
 mod mcp;
 /// The daemon write client (ADR 0018 PR 5): a synchronous Unix socket that proves identity via
 /// the session challenge, so it needs `identity` signing and a Unix target.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 mod mcp_client;
 mod mcp_config;
 mod ops;
 mod setup;
 mod status;
-#[cfg(feature = "witness")]
 mod witness;
 
 use status::Status;
@@ -1224,41 +1222,6 @@ fn parse_source(raw: &str) -> Result<String, String> {
 }
 
 fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
-    #[cfg(not(feature = "identity"))]
-    {
-        let _ = command;
-        match output {
-            CliOutput::Text => {
-                eprintln!("`dent8 identity` requires a build with `--features identity`");
-                2
-            }
-            CliOutput::Json => {
-                let tool = match command {
-                    IdentityCommand::Bootstrap(_) => "identity bootstrap",
-                    IdentityCommand::Status(_) => "identity status",
-                    IdentityCommand::RepairEnv(_) => "identity repair-env",
-                    IdentityCommand::RotateSource(_) => "identity rotate-source",
-                    IdentityCommand::IssuerKeygen(_) => "identity issuer-keygen",
-                    IdentityCommand::AgentKeygen(_) => "identity agent-keygen",
-                    IdentityCommand::TrustAdd(_) => "identity trust-add",
-                    IdentityCommand::TrustList => "identity trust-list",
-                    IdentityCommand::GrantIssue(_) => "identity grant-issue",
-                    IdentityCommand::GrantVerify(_) => "identity grant-verify",
-                    IdentityCommand::Revoke(_) => "identity revoke",
-                    IdentityCommand::BackfillGrantLog(_) => "identity backfill-grant-log",
-                };
-                print_json_stdout_with_code(
-                    &serde_json::json!({
-                        "status": "failed",
-                        "tool": tool,
-                        "message": "`dent8 identity` requires a build with `--features identity`",
-                    }),
-                    2,
-                )
-            }
-        }
-    }
-    #[cfg(feature = "identity")]
     match command {
         IdentityCommand::Bootstrap(args) => identity::bootstrap(
             &args.dir,
@@ -1316,28 +1279,8 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
     }
 }
 
-/// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
-/// exists only to explain how to enable it.
-#[cfg_attr(not(feature = "witness"), expect(unused_variables))]
+/// Dispatch `dent8 witness <sub>` (the transparency-log surface, ADR 0011/0014).
 fn run_witness(command: &WitnessCommand, output: CliOutput) -> i32 {
-    #[cfg(not(feature = "witness"))]
-    return match output {
-        CliOutput::Text => {
-            eprintln!("`dent8 witness` requires a build with `--features witness`");
-            2
-        }
-        CliOutput::Json => print_json_stdout_with_code(
-            &serde_json::json!({
-                "status": Status::Failed.as_str(),
-                "tool": "witness",
-                "required_feature": "witness",
-                "message": "`dent8 witness` requires a build with `--features witness`",
-            }),
-            2,
-        ),
-    };
-
-    #[cfg(feature = "witness")]
     match command {
         WitnessCommand::Keygen => witness::keygen(output),
         WitnessCommand::Sign => witness::sign(output),
@@ -1613,7 +1556,6 @@ fn authority_registry_path() -> String {
 /// *content* is no longer carried here — the persisted per-event attestation (ADR 0013) signs
 /// the whole event at the append boundary, which covers strictly more than any summary could.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(not(feature = "identity"), allow(dead_code))]
 struct WriteAuth<'a> {
     subject_kind: &'a str,
     subject_key: &'a str,
@@ -1636,7 +1578,6 @@ impl<'a> WriteAuth<'a> {
         }
     }
 
-    #[cfg(feature = "identity")]
     fn subject(&self) -> String {
         format!("{}:{}", self.subject_kind, self.subject_key)
     }
@@ -1742,7 +1683,7 @@ pub(crate) enum WriteIdentity {
     /// proved possession of at `dent8/hello` + `dent8/prove`. Its writes are authorized and
     /// Ed25519-attested as that source — the same-user key the daemon holds — never borrowing an
     /// ambient env identity. Constructed only by the Unix-socket daemon handshake.
-    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    #[cfg(all(unix, feature = "async-store"))]
     Connection(std::sync::Arc<identity::IdentityContext>),
 }
 
@@ -1761,7 +1702,6 @@ fn enforce_write_authority(
 const UNAUTHENTICATED_WRITE_ERROR: &str =
     "write reached the identity seam without a proven connection identity";
 
-#[cfg(feature = "identity")]
 fn enforce_source_identity(auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Result<(), String> {
     match identity {
         WriteIdentity::Env => {
@@ -1772,28 +1712,6 @@ fn enforce_source_identity(auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Re
         WriteIdentity::Connection(ctx) => identity::enforce_write(ctx, auth, now_millis()),
         WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
     }
-}
-
-#[cfg(not(feature = "identity"))]
-fn enforce_source_identity(_auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Result<(), String> {
-    if matches!(identity, WriteIdentity::Unauthenticated) {
-        return Err(UNAUTHENTICATED_WRITE_ERROR.to_string());
-    }
-    let required = env_flag("DENT8_REQUIRE_IDENTITY")?;
-    let trust_path =
-        std::env::var("DENT8_TRUST").unwrap_or_else(|_| "dent8-trust.json".to_string());
-    let configured = required
-        || std::env::var_os("DENT8_GRANT").is_some()
-        || std::env::var_os("DENT8_IDENTITY_KEY").is_some()
-        || std::path::Path::new(&trust_path).exists();
-    if configured {
-        return Err(
-            "signed source identity is configured, but this binary was built without \
-             `--features identity`"
-                .to_string(),
-        );
-    }
-    Ok(())
 }
 
 /// The pure decision: reject `requested` above the source's ceiling. `None` registry is
@@ -2166,7 +2084,6 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
 /// render its own `TAMPER`/`ROLLBACK` verdict even on a log the integrity gate would reject,
 /// rather than be preempted by that gate's error. A genuinely unparseable line is still a hard
 /// error (nothing to witness).
-#[cfg(feature = "witness")]
 fn load_raw_events(path: &str) -> Result<Vec<FactEvent>, String> {
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
@@ -2200,7 +2117,7 @@ fn load_raw_events(path: &str) -> Result<Vec<FactEvent>, String> {
 
 /// Raw ordered backend log for the witness: connect + self-migrate + scan, with **no**
 /// integrity gate (see [`load_raw_events`]). Backend-agnostic via [`connect_backend`].
-#[cfg(all(feature = "witness", feature = "async-store"))]
+#[cfg(feature = "async-store")]
 fn backend_scan_raw(url: &str) -> Result<Vec<FactEvent>, String> {
     use dent8_store::EventFilter;
     store_runtime()?.block_on(async {
@@ -2221,8 +2138,6 @@ fn backend_scan_raw(url: &str) -> Result<Vec<FactEvent>, String> {
 struct AttestationSummary {
     /// Events carrying an attestation.
     attested: usize,
-    /// Whether this build can actually verify them (`identity` feature).
-    verifiable: bool,
     /// Whether a grant log was present, enabling entitlement verdicts (ADR 0014).
     history: bool,
     /// Attested events whose (source, key) had an active covering grant at write time.
@@ -2235,17 +2150,10 @@ struct AttestationSummary {
 
 impl AttestationSummary {
     /// The clause appended to a verify OK line: silent when nothing is attested, counts when
-    /// attestations verify (with entitlement counts when a grant log is present), and an
-    /// honest "present but unverifiable" note on a `--no-default-features` build.
+    /// attestations verify (with entitlement counts when a grant log is present).
     fn ok_clause(&self) -> String {
         if self.attested == 0 {
             String::new()
-        } else if !self.verifiable {
-            format!(
-                ", {} write attestation(s) present but NOT verifiable in this build (rebuild \
-                 with the identity feature)",
-                self.attested
-            )
         } else if self.history {
             format!(
                 ", {} write attestation(s) verify ({} entitled at write time, {} unknown — no \
@@ -2261,11 +2169,9 @@ impl AttestationSummary {
 /// Re-verify every persisted write attestation (signature over the event content), and —
 /// when a grant log is present (ADR 0014) — resolve each attested event's **entitlement at
 /// write time** against the issuer-signed grant history.
-#[cfg(feature = "identity")]
 fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
     let mut summary = AttestationSummary {
         attested: 0,
-        verifiable: true,
         history: false,
         entitled: 0,
         unknown_entitlement: 0,
@@ -2320,21 +2226,6 @@ fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
 
 /// Without the `identity` feature there is no Ed25519 verifier — count the attestations and
 /// let the caller report them as present-but-unverified rather than silently reporting "OK".
-#[cfg(not(feature = "identity"))]
-fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
-    AttestationSummary {
-        attested: events
-            .iter()
-            .filter(|event| event.provenance.attestation.is_some())
-            .count(),
-        verifiable: false,
-        history: false,
-        entitled: 0,
-        unknown_entitlement: 0,
-        issues: Vec::new(),
-    }
-}
-
 /// Unearned-supersession **advisories** (ADR 0007/0015/0017), grouped from a flat event set
 /// by fact stream. Unlike lineage breaks, retraction taint, or a broken attestation, these
 /// are **not** integrity failures — the base firewall admitted the supersession (the
@@ -2913,7 +2804,6 @@ fn append_events(
 
 /// Sign per-event write attestations when signed identity is configured (ADR 0013); a no-op
 /// in unconfigured dev mode.
-#[cfg(feature = "identity")]
 fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(), String> {
     match identity {
         WriteIdentity::Env => {
@@ -2930,14 +2820,6 @@ fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(
 /// failed closed if identity is *configured* in this build (or the write is from an
 /// unauthenticated daemon connection), so reaching here means dev mode — events are simply
 /// written unattested.
-#[cfg(not(feature = "identity"))]
-fn attest_events(_events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(), String> {
-    if matches!(identity, WriteIdentity::Unauthenticated) {
-        return Err(UNAUTHENTICATED_WRITE_ERROR.to_string());
-    }
-    Ok(())
-}
-
 /// The async-backend URL from `DENT8_STORE_URL` (dispatched by scheme). `None` selects the
 /// file dev store. Always available (just env reads), so the file-only build can still detect
 /// "a store URL is set but no backend is compiled in."

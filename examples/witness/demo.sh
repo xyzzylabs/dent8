@@ -4,11 +4,11 @@
 # - signer env has the event log, witness log, and private signing key;
 # - monitor env verifies externally published heads using only the event log and public key.
 #
-# Requires a dent8 binary built with the witness feature. From a clone:
-#   DENT8="cargo run -q -p dent8 --features witness --" ./examples/witness/demo.sh
+# Uses the stock dent8 binary (the witness is a stock command). From a clone:
+#   DENT8="cargo run -q -p dent8 --" ./examples/witness/demo.sh
 set -euo pipefail
 
-# Split intentionally so callers can pass `DENT8="cargo run -q -p dent8 --features witness --"`.
+# Split intentionally so callers can pass `DENT8="cargo run -q -p dent8 --"`.
 read -r -a DENT8_CMD <<<"${DENT8:-dent8}"
 DENT8_ENV=(
   env

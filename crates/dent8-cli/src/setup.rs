@@ -12,7 +12,6 @@ use crate::{
     absolute_path, load_authority_registry_at, mcp_config, path_string,
     print_json_stdout_with_code, save_authority_registry_at, shell_quote, write_atomic,
 };
-#[cfg(feature = "identity")]
 use crate::{CliAuthority, SourceRegistry, identity};
 
 pub(crate) fn cmd_init(args: &InitArgs, output: CliOutput) -> i32 {
@@ -69,20 +68,6 @@ pub(crate) fn cmd_mcp_install(args: &McpInstallArgs, output: CliOutput) -> i32 {
 }
 
 pub(crate) fn cmd_agent_add(args: &AgentAddArgs, output: CliOutput) -> i32 {
-    #[cfg(not(feature = "identity"))]
-    {
-        let message = "`dent8 agent add` requires signed source identity; default builds include \
-                       it, or rebuild this binary with `--features identity`";
-        match output {
-            CliOutput::Text => {
-                eprintln!("{message}");
-                1
-            }
-            CliOutput::Json => print_json_stdout_with_code(&agent_add_error_json(args, message), 1),
-        }
-    }
-
-    #[cfg(feature = "identity")]
     match agent_add_inner(args) {
         Ok(outcome) => match output {
             CliOutput::Text => {
@@ -103,7 +88,6 @@ pub(crate) fn cmd_agent_add(args: &AgentAddArgs, output: CliOutput) -> i32 {
     }
 }
 
-#[cfg(feature = "identity")]
 pub(crate) struct AgentAddBundle {
     dir: std::path::PathBuf,
     store_url: String,
@@ -111,7 +95,6 @@ pub(crate) struct AgentAddBundle {
     registry: SourceRegistry,
 }
 
-#[cfg(feature = "identity")]
 pub(crate) struct AgentAddOutcome {
     agent: InitAgent,
     dir: std::path::PathBuf,
@@ -122,7 +105,6 @@ pub(crate) struct AgentAddOutcome {
     mcp_install: McpInstallAttempt,
 }
 
-#[cfg(feature = "identity")]
 impl AgentAddOutcome {
     fn message(&self) -> String {
         let mut message = agent_add_base_message(
@@ -150,7 +132,6 @@ impl AgentAddOutcome {
     }
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn agent_add_inner(args: &AgentAddArgs) -> Result<AgentAddOutcome, String> {
     validate_agent_add_args(args)?;
     let mut bundle = load_agent_add_bundle(args)?;
@@ -212,7 +193,6 @@ pub(crate) fn agent_add_inner(args: &AgentAddArgs) -> Result<AgentAddOutcome, St
     })
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn validate_agent_add_args(args: &AgentAddArgs) -> Result<(), String> {
     if args
         .mcp_command
@@ -231,7 +211,6 @@ pub(crate) fn validate_agent_add_args(args: &AgentAddArgs) -> Result<(), String>
     Ok(())
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn load_agent_add_bundle(args: &AgentAddArgs) -> Result<AgentAddBundle, String> {
     let dir = absolute_path(&std::path::PathBuf::from(&args.dir))?;
     let env_path = dir.join("env");
@@ -254,7 +233,6 @@ pub(crate) fn load_agent_add_bundle(args: &AgentAddArgs) -> Result<AgentAddBundl
     })
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn shared_store_url_from_bundle_env(
     env: &std::collections::BTreeMap<String, String>,
     env_path: &std::path::Path,
@@ -278,7 +256,6 @@ pub(crate) fn shared_store_url_from_bundle_env(
     }
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn agent_add_base_message(
     agent: InitAgent,
     dir: &std::path::Path,
@@ -304,7 +281,6 @@ pub(crate) fn agent_add_base_message(
     )
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn agent_add_json(args: &AgentAddArgs, outcome: &AgentAddOutcome) -> serde_json::Value {
     serde_json::json!({
         "status": agent_add_status(outcome),
@@ -354,7 +330,6 @@ pub(crate) fn agent_add_json(args: &AgentAddArgs, outcome: &AgentAddOutcome) -> 
     })
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn agent_add_status(outcome: &AgentAddOutcome) -> &'static str {
     if outcome.mcp_install.result.is_ok() {
         "ok"
@@ -373,7 +348,6 @@ pub(crate) fn agent_add_error_json(args: &AgentAddArgs, message: &str) -> serde_
     })
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn bundle_env_required<'a>(
     env: &'a std::collections::BTreeMap<String, String>,
     key: &str,
@@ -384,7 +358,6 @@ pub(crate) fn bundle_env_required<'a>(
         .ok_or_else(|| format!("generated dent8 env is missing {key}"))
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn bundle_env_path_value(raw: &str, bundle_dir: &std::path::Path) -> std::path::PathBuf {
     let path = std::path::PathBuf::from(raw);
     if path.is_absolute() {
@@ -457,14 +430,6 @@ pub(crate) fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
     let dir = absolute_path(&dir)?;
     let source = init_source(args);
     let bootstrap_identity = args.identity || args.agent.is_some();
-    #[cfg(not(feature = "identity"))]
-    if bootstrap_identity {
-        return Err(
-            "`dent8 init --identity` requires signed source identity; default builds include it, \
-             or rebuild this binary with `--features identity`"
-                .to_string(),
-        );
-    }
     let authority_path = dir.join("authority.json");
     let env_path = dir.join("env");
     if env_path.exists() && !args.force {
@@ -1133,14 +1098,12 @@ pub(crate) fn mcp_install_mode(dry_run: bool, check: bool) -> mcp_config::Instal
     }
 }
 
-#[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
 pub(crate) fn preflight_identity(
     args: &InitArgs,
     dir: &std::path::Path,
     source: &str,
     enabled: bool,
 ) -> Result<(), String> {
-    #[cfg(feature = "identity")]
     {
         if enabled {
             identity::preflight_bootstrap_bundle(
@@ -1151,11 +1114,6 @@ pub(crate) fn preflight_identity(
                 &args.identity_scope,
             )?;
         }
-        Ok(())
-    }
-    #[cfg(not(feature = "identity"))]
-    {
-        let _ = (args, dir, source, enabled);
         Ok(())
     }
 }
@@ -1176,14 +1134,12 @@ pub(crate) struct InitIdentityOutput {
     env_file: Option<std::path::PathBuf>,
 }
 
-#[cfg_attr(not(feature = "identity"), allow(clippy::unnecessary_wraps))]
 pub(crate) fn init_identity(
     args: &InitArgs,
     dir: &std::path::Path,
     source: &str,
     enabled: bool,
 ) -> Result<InitIdentityOutput, String> {
-    #[cfg(feature = "identity")]
     {
         if !enabled {
             return Ok(InitIdentityOutput {
@@ -1235,25 +1191,6 @@ pub(crate) fn init_identity(
             grant_file: Some(identity.grant_file),
             source_key_path: Some(identity.source_key_path),
             env_file: Some(identity.env_file),
-        })
-    }
-    #[cfg(not(feature = "identity"))]
-    {
-        let _ = (args, dir, source, enabled);
-        Ok(InitIdentityOutput {
-            enabled: false,
-            summary: String::new(),
-            env_load: String::new(),
-            source: None,
-            issuer: None,
-            max_authority: None,
-            scope: None,
-            issuer_key_path: None,
-            trust_file: None,
-            active_grants_file: None,
-            grant_file: None,
-            source_key_path: None,
-            env_file: None,
         })
     }
 }

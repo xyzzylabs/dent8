@@ -3,7 +3,7 @@
 #
 # By default this builds the stock `dent8` package and tests the installed-user shape in a
 # temporary project. Set DENT8_BIN=/path/to/dent8 to test an already installed/release binary.
-# Set DENT8_EXPECT_WITNESS=1 when that binary is expected to include `--features witness`.
+# The witness is a stock command, so its smoke always runs.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -105,34 +105,22 @@ echo "# CLI: assert, list, explain, verify over the generated bundle"
 "$BIN" explain person:alice favorite_drink
 "$BIN" verify
 
-echo "# witness: smoke if this binary was built with --features witness"
-if "$BIN" --output json witness head >"$OUT/witness-probe.json" 2>"$OUT/witness-probe.err"; then
-  WITNESS_KEY="$WORK/witness.key"
-  WITNESS_LOG="$PROJECT/.dent8/witness.jsonl"
-  PUBLISHED="$WORK/published-heads.jsonl"
-  DENT8_WITNESS_KEY="$WITNESS_KEY" "$BIN" witness keygen
-  DENT8_WITNESS_KEY="$WITNESS_KEY" \
-    DENT8_WITNESS_LOG="$WITNESS_LOG" \
-    "$BIN" witness sign
-  DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
-    DENT8_WITNESS_LOG="$WITNESS_LOG" \
-    "$BIN" --output json witness verify >"$OUT/witness-verify.json"
-  DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
-    DENT8_WITNESS_LOG="$WITNESS_LOG" \
-    "$BIN" --output json witness publish "$PUBLISHED" >"$OUT/witness-publish.json"
-  DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
-    "$BIN" --output json witness verify-published "$PUBLISHED" >"$OUT/witness-published.json"
-else
-  if grep -q -- "--features witness" "$OUT/witness-probe.err"; then
-    if [ "${DENT8_EXPECT_WITNESS:-0}" = "1" ]; then
-      echo "witness smoke failed: binary was expected to include --features witness" >&2
-      exit 1
-    fi
-    echo "witness smoke skipped: binary does not include --features witness"
-  else
-    echo "witness smoke failed during feature probe" >&2
-    exit 1
-  fi
-fi
+echo "# witness: smoke (the witness is a stock command)"
+"$BIN" --output json witness head >"$OUT/witness-probe.json"
+WITNESS_KEY="$WORK/witness.key"
+WITNESS_LOG="$PROJECT/.dent8/witness.jsonl"
+PUBLISHED="$WORK/published-heads.jsonl"
+DENT8_WITNESS_KEY="$WITNESS_KEY" "$BIN" witness keygen
+DENT8_WITNESS_KEY="$WITNESS_KEY" \
+  DENT8_WITNESS_LOG="$WITNESS_LOG" \
+  "$BIN" witness sign
+DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
+  DENT8_WITNESS_LOG="$WITNESS_LOG" \
+  "$BIN" --output json witness verify >"$OUT/witness-verify.json"
+DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
+  DENT8_WITNESS_LOG="$WITNESS_LOG" \
+  "$BIN" --output json witness publish "$PUBLISHED" >"$OUT/witness-publish.json"
+DENT8_WITNESS_PUBKEY="$WITNESS_KEY.pub" \
+  "$BIN" --output json witness verify-published "$PUBLISHED" >"$OUT/witness-published.json"
 
 echo "OK: dent8 release acceptance path passed"

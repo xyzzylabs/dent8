@@ -12,15 +12,11 @@ use std::{
 
 use dent8_core::AuthorityLevel;
 
-#[cfg(not(feature = "identity"))]
-use crate::env_flag;
-#[cfg(feature = "identity")]
 use crate::identity;
 use crate::setup::{
     LocalMcpBinary, install_mcp_config_prepared, is_executable_file, local_mcp_binary,
     local_mcp_build_command, local_mcp_missing_target_message, render_local_mcp_wrapper,
 };
-#[cfg(feature = "witness")]
 use crate::witness;
 use crate::{
     CliOutput, DEFAULT_MCP_SMOKE_TIMEOUT, DoctorArgs, InitAgent, absolute_path,
@@ -182,7 +178,7 @@ pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
 /// Probe the local daemon (ADR 0018) when `DENT8_DAEMON_SOCKET` is set: connect and complete the
 /// session-challenge handshake without writing, confirming the daemon is reachable and that this
 /// caller's identity authenticates. A no-op when the var is unset (writes go to the local store).
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 fn doctor_daemon(output: &mut String) -> bool {
     let socket = std::env::var("DENT8_DAEMON_SOCKET")
         .ok()
@@ -214,7 +210,7 @@ fn doctor_daemon(output: &mut String) -> bool {
 
 /// Builds without the daemon client (non-Unix, or no `async-store`/`identity`) cannot route to a
 /// daemon, so there is nothing to probe.
-#[cfg(not(all(unix, feature = "async-store", feature = "identity")))]
+#[cfg(not(all(unix, feature = "async-store")))]
 #[allow(clippy::ptr_arg)] // signature mirrors the daemon-capable variant
 fn doctor_daemon(_output: &mut String) -> bool {
     true
@@ -433,21 +429,11 @@ pub(crate) fn repair_agent_setup(
     true
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn repair_agent_identity_env(
     agent: InitAgent,
     dir: &std::path::Path,
 ) -> Result<String, String> {
     identity::repair_env_bundle(&dir.to_string_lossy(), agent.source())
-}
-
-#[cfg(not(feature = "identity"))]
-pub(crate) fn repair_agent_identity_env(
-    agent: InitAgent,
-    dir: &std::path::Path,
-) -> Result<String, String> {
-    let _ = (agent, dir);
-    Err("`dent8 doctor --agent --repair` requires a build with `--features identity`".to_string())
 }
 
 pub(crate) fn repair_agent_mcp_config(
@@ -1318,7 +1304,6 @@ pub(crate) fn doctor_authority(output: &mut String, source: &str) -> Result<(), 
     Ok(())
 }
 
-#[cfg(feature = "identity")]
 pub(crate) fn doctor_identity(output: &mut String, source: &str) -> bool {
     let mut ok = true;
     for line in identity::doctor_status(source, now_millis()) {
@@ -1330,38 +1315,6 @@ pub(crate) fn doctor_identity(output: &mut String, source: &str) -> bool {
     ok
 }
 
-#[cfg(not(feature = "identity"))]
-pub(crate) fn doctor_identity(output: &mut String, _source: &str) -> bool {
-    let required = match env_flag("DENT8_REQUIRE_IDENTITY") {
-        Ok(required) => required,
-        Err(error) => {
-            doctor_line(output, "FAIL", &format!("identity: {error}"));
-            return false;
-        }
-    };
-    let configured = required
-        || env_present("DENT8_TRUST")
-        || env_present("DENT8_GRANT")
-        || env_present("DENT8_IDENTITY_KEY")
-        || std::path::Path::new("dent8-trust.json").exists();
-    if configured {
-        doctor_line(
-            output,
-            "FAIL",
-            "identity: configured, but this binary was built without `--features identity`",
-        );
-        false
-    } else {
-        doctor_line(
-            output,
-            "WARN",
-            "identity: not configured (optional; build with `--features identity` to enable signed source identity)",
-        );
-        true
-    }
-}
-
-#[cfg(feature = "witness")]
 pub(crate) fn doctor_witness(output: &mut String) -> bool {
     let mut ok = true;
     for line in witness::doctor_status() {
@@ -1371,66 +1324,6 @@ pub(crate) fn doctor_witness(output: &mut String) -> bool {
         doctor_line(output, line.level, &line.message);
     }
     ok
-}
-
-#[cfg(not(feature = "witness"))]
-pub(crate) fn doctor_witness(output: &mut String) -> bool {
-    let configured = env_present("DENT8_WITNESS_LOG")
-        || env_present("DENT8_WITNESS_PUBKEY")
-        || env_present("DENT8_WITNESS_KEY")
-        || std::path::Path::new("dent8-witness.jsonl").exists();
-    if !configured {
-        doctor_line(
-            output,
-            "WARN",
-            "witness: not configured (optional; build with `--features witness` for signed tree heads)",
-        );
-        return true;
-    }
-
-    let log =
-        std::env::var("DENT8_WITNESS_LOG").unwrap_or_else(|_| "dent8-witness.jsonl".to_string());
-    match std::fs::read_to_string(&log) {
-        Ok(contents) if contents.lines().any(|line| !line.trim().is_empty()) => {
-            doctor_line(
-                output,
-                "FAIL",
-                "witness: signed heads are configured, but this binary was built without `--features witness`",
-            );
-            false
-        }
-        Ok(_) => {
-            doctor_line(
-                output,
-                "WARN",
-                "witness: configured but no signed heads verified by this non-witness build",
-            );
-            true
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            doctor_line(
-                output,
-                "WARN",
-                "witness: configured but no signed heads verified by this non-witness build",
-            );
-            true
-        }
-        Err(error) => {
-            doctor_line(
-                output,
-                "FAIL",
-                &format!(
-                    "witness: cannot read configured witness log {log}: {error}; rebuild with `--features witness` to verify signed heads"
-                ),
-            );
-            false
-        }
-    }
-}
-
-#[cfg(any(not(feature = "identity"), not(feature = "witness")))]
-pub(crate) fn env_present(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
 }
 
 pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {

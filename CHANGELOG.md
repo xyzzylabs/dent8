@@ -112,6 +112,16 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   type).
 
 ### Changed
+- **`identity` and `witness` are no longer Cargo features — they are always compiled.** Signed
+  source identity is core to the threat model and `witness` reuses the same Ed25519 crypto, so
+  gating them bought ~0 on a default build (identity was already in `default`) while costing 90+
+  `#[cfg(feature = …)]` sites and the fail-closed stub paths. Removing the features deletes all of
+  that, adds ~0.3 MiB to the stock binary (identity was already included; witness is the delta),
+  and makes the identity/witness tests run in the *default* `cargo test`. **Breaking for build
+  invocations:** `--features identity` / `--features witness` no longer exist (they error), and a
+  `--no-default-features` build now still includes identity + witness (it only drops the
+  SQLite/async backend down to the file store). Backends stay opt-in: `postgres` (+3.7 MiB) and
+  `export` (+5.3 MiB) carry real weight, so they remain features.
 - **`witness` is now real clap subcommands.** `dent8 witness <keygen|sign|verify|verify-published|
   head|publish|serve|doctor>` are parsed like every other command instead of a hand-rolled
   catch-all, so `witness` gets real `--help`, `--output json` works in any position (including

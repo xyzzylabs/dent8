@@ -53,11 +53,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND|--mcp-local-bin] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
-  witness verification status when configured, `verify`, and MCP availability. With
-  `--features witness`, configured witness status includes the witness log/public key paths,
-  signed-head count, latest witnessed event count, current event count, unwitnessed-tail
-  warnings, and `FAIL` on tamper/rollback/corrupt heads. A non-witness build warns when no
-  heads exist and fails if signed heads are configured but cannot be verified. With `--agent`,
+  witness verification status when configured, `verify`, and MCP availability. Configured
+  witness status includes the witness log/public key paths, signed-head count, latest witnessed
+  event count, current event count, unwitnessed-tail warnings, and `FAIL` on
+  tamper/rollback/corrupt heads. With `--agent`,
   it loads the generated `.dent8/env` plus the selected source's identity env
   (`.dent8/identity-<source>.env`) without requiring the shell to source it, parses the selected
   agent's installed MCP config, checks that it is up to date, then smokes the exact installed
@@ -316,15 +315,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   thereby detects content edits to attested events. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
   `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`; when
   `DENT8_ACTIVE_GRANTS` or the sibling active-grant registry exists, the presented grant must
-  also be the current grant for that source. Otherwise local dev mode stays permissive. A
-  `--no-default-features` binary fails closed with a build hint if identity is configured.
+  also be the current grant for that source. Otherwise local dev mode stays permissive.
   Limits: source keys are local files (`0600` required on Unix), so this distinguishes honestly
   configured agents on one machine but is not a
   sandbox against malware or another process running as the same OS user; direct DB/adapter
   writes still bypass the CLI/MCP boundary. See
   [ADR 0012](decisions/0012-signed-source-identity.md).
 - **`dent8 witness keygen | sign | verify | verify-published | head | publish | serve |
-  doctor`** — the **witness** (behind `--features witness`), built on the Ed25519 signed tree
+  doctor`** — the **witness** (a stock command), built on the Ed25519 signed tree
   head. `keygen` writes a keypair (private key `0600`, with the warning to keep it off the
   log-writer's machine); `sign` emits a signed tree head over the current log and appends it to
   a witness log (`DENT8_WITNESS_LOG`); `verify` re-checks every witnessed head against the

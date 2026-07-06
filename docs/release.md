@@ -15,7 +15,6 @@ Install commands:
 
 ```sh
 cargo install dent8
-cargo install dent8 --features witness
 cargo install dent8 --features postgres
 ```
 
@@ -41,18 +40,18 @@ Run the release acceptance path:
 scripts/release-acceptance.sh
 ```
 
-To include the witness smoke:
+To include the witness smoke (the witness is in the stock binary):
 
 ```sh
-cargo build -p dent8 --features witness
+cargo build -p dent8
 DENT8_BIN=target/debug/dent8 DENT8_EXPECT_WITNESS=1 scripts/release-acceptance.sh
 ```
 
 The script initializes a throwaway project with the Codex profile, signed identity, a stock
 SQLite backend, and an MCP config; then it runs `doctor --agent --write-check`,
-`assert`, `facts list`, `explain`, and `verify`. With `DENT8_EXPECT_WITNESS=1`, it also
-requires the witness feature and checks `keygen -> sign -> verify -> publish ->
-verify-published`.
+`assert`, `facts list`, `explain`, and `verify`. It also exercises the witness smoke
+(`keygen -> sign -> verify -> publish -> verify-published`), since the witness is a stock
+command.
 
 ## Packaging
 

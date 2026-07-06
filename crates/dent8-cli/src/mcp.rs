@@ -189,11 +189,9 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
     // connection authenticates *as this same-user source* (ADR 0018): the session challenge
     // proves the connecting party holds the key the daemon will attest its writes with. `None`
     // (or an unconfigured identity) leaves the connection read-only.
-    #[cfg(feature = "identity")]
     let daemon_identity = crate::identity::IdentityContext::from_env()
         .ok()
         .map(std::sync::Arc::new);
-    #[cfg(feature = "identity")]
     let mut session = HandshakeState::Fresh;
 
     let (read_half, mut write_half) = stream.into_split();
@@ -236,7 +234,6 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
 
         // The session-challenge handshake is handled inline (never dispatched to the store),
         // maintaining per-connection state so one connection can never present another's nonce.
-        #[cfg(feature = "identity")]
         if let Some(method) = request.get("method").and_then(Value::as_str)
             && matches!(method, "dent8/hello" | "dent8/prove")
         {
@@ -257,10 +254,7 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
         // A normal request runs under this connection's current write identity: `Connection`
         // once authenticated (writes allowed, attested as that source), else `Unauthenticated`
         // (reads only — the gate in `handle` refuses writes).
-        #[cfg(feature = "identity")]
         let write_identity = session.write_identity();
-        #[cfg(not(feature = "identity"))]
-        let write_identity = WriteIdentity::Unauthenticated;
 
         let store_path = store_path.clone();
         let response = match tokio::task::spawn_blocking(move || {
@@ -306,34 +300,34 @@ async fn write_line(
 
 /// A challenge is valid for 30 seconds — long enough for a client round-trip, short enough to
 /// bound the replay window (the nonce is also single-use and connection-scoped).
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_CHALLENGE_TTL_MS: i64 = 30_000;
 
 // Server-defined JSON-RPC error codes for the handshake, so a client can distinguish
 // "retry the handshake" from "your grant is dead."
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_ERR_UNCONFIGURED: i64 = -32010;
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_ERR_HELLO: i64 = -32011;
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_ERR_SEQUENCE: i64 = -32012;
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_ERR_EXPIRED: i64 = -32013;
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_ERR_BAD_SIGNATURE: i64 = -32014;
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_ERR_INTERNAL: i64 = -32015;
 
 /// The coarse client-facing reason for any hello-check failure, so the wire never reveals
 /// *which* of grant / active-grant / key mismatched. The specific reason is logged server-side.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 const SESSION_HELLO_REJECTED: &str =
     "hello rejected: not a valid, active grant for this daemon's source";
 
 /// Per-connection handshake state, owned by the one `serve_connection` task (so a nonce is never
 /// reachable from another connection). Every early return / failure lands in `Failed`, never a
 /// reusable `Challenged`.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 enum HandshakeState {
     /// No handshake attempted yet — reads allowed, writes refused.
     Fresh,
@@ -352,7 +346,7 @@ enum HandshakeState {
     Failed,
 }
 
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 impl HandshakeState {
     /// The write identity for a normal request in this state: a proven `Connection` once
     /// authenticated, else `Unauthenticated` (the gate refuses writes).
@@ -369,7 +363,7 @@ impl HandshakeState {
 /// Dispatch a `dent8/hello` or `dent8/prove` message, mutating the per-connection state. The
 /// cheap state transitions stay on the reactor thread (they hold `&mut session`); the blocking
 /// grant/signature verification is offloaded to the blocking pool by the handlers.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 async fn handle_handshake(
     session: &mut HandshakeState,
     method: &str,
@@ -389,7 +383,7 @@ async fn handle_handshake(
 /// `dent8/hello`: verify the presented grant against the daemon's own trust + key, then issue a
 /// fresh single-use nonce. A fresh hello always resets the connection to `Challenged`. The grant
 /// verification (file reads + Ed25519) runs on the blocking pool, off the reactor.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 async fn handle_hello(
     session: &mut HandshakeState,
     id: &Value,
@@ -465,7 +459,7 @@ async fn handle_hello(
 /// consumed here (it never returns to `Challenged`, pass or fail) so it is single-use. A prove
 /// in any *other* state is out of sequence and leaves that state unchanged — a stray or replayed
 /// prove never demotes an already-authenticated connection.
-#[cfg(all(unix, feature = "async-store", feature = "identity"))]
+#[cfg(all(unix, feature = "async-store"))]
 async fn handle_prove(
     session: &mut HandshakeState,
     id: &Value,
@@ -619,7 +613,7 @@ fn access_for(identity: &WriteIdentity) -> Access {
     match identity {
         WriteIdentity::Env => Access::Full,
         WriteIdentity::Unauthenticated => Access::ReadOnly,
-        #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+        #[cfg(all(unix, feature = "async-store"))]
         WriteIdentity::Connection(_) => Access::Full,
     }
 }
@@ -3514,7 +3508,7 @@ mod tests {
     /// `write_identity` grants `Connection` (writes allowed, attested as that source) only in
     /// the `Authenticated` state; every other state is `Unauthenticated` (read-only). This is
     /// the invariant the gate relies on.
-    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    #[cfg(all(unix, feature = "async-store"))]
     #[test]
     fn write_identity_is_connection_only_when_authenticated() {
         use super::HandshakeState;
@@ -3536,7 +3530,7 @@ mod tests {
 
     /// A `dent8/prove` with no prior `dent8/hello` is out of sequence, and it does not demote the
     /// connection: a `Fresh` (or `Authenticated`) state is preserved, not knocked to `Failed`.
-    #[cfg(all(unix, feature = "async-store", feature = "identity"))]
+    #[cfg(all(unix, feature = "async-store"))]
     #[test]
     fn prove_without_a_challenge_is_out_of_sequence_and_preserves_state() {
         let runtime = tokio::runtime::Builder::new_current_thread()

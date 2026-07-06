@@ -37,14 +37,8 @@ jobs:
       # The CLI's Postgres backend is feature-gated; compile-check + lint it too.
       - name: Clippy CLI Postgres feature
         run: cargo clippy -p dent8 --features postgres --all-targets -- -D warnings
-      # The CLI's witness commands (Ed25519 signed tree heads) are feature-gated; lint + test.
-      - name: Clippy CLI witness feature
-        run: cargo clippy -p dent8 --features witness --all-targets -- -D warnings
-      # Witness *without* identity: the grant-log lane's `#[cfg(not(feature = "identity"))]`
-      # no-op arms compile only here — neither the default-witness nor the plain
-      # no-default-features step reaches them.
-      - name: Clippy CLI witness feature (no default features)
-        run: cargo clippy -p dent8 --no-default-features --features witness --all-targets -- -D warnings
+      # Signed source identity and the witness commands are always compiled into the CLI now, so
+      # the default `cargo clippy --workspace` + `cargo test --workspace` cover them.
       # The asymmetric (signed) anchor is feature-gated; lint + test it too.
       - name: Clippy signed-anchor feature
         run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
@@ -57,31 +51,20 @@ jobs:
         run: cargo clippy -p dent8-store-sqlite --all-targets -- -D warnings
       - name: Clippy CLI SQLite feature
         run: cargo clippy -p dent8 --features sqlite --all-targets -- -D warnings
-      # The minimal build (`--no-default-features` drops signed identity): the docs advertise
-      # it, and the identity/witness *fail-closed* fallback arms (`#[cfg(not(feature = …))]`)
-      # compile ONLY in this combo — without this step they are never even built in CI.
+      # The minimal build (`--no-default-features` drops the SQLite/async backend down to the
+      # file-only dev store): the docs advertise it, so keep it compiling + linting.
       - name: Clippy CLI no default features
         run: cargo clippy -p dent8 --no-default-features --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
-      # Runs the `#[cfg(not(feature = …))]` fail-closed tests (e.g. identity configured but
-      # not compiled must reject writes), which no other job exercises.
+      # The minimal file-only build (no async backend); its store-selection paths run here.
       - name: Test CLI no default features
         run: cargo test -p dent8 --no-default-features
+      # The stock binary includes the witness, so this exercises the witness smoke too.
       - name: Release acceptance smoke
         run: scripts/release-acceptance.sh
-      - name: Release acceptance smoke with witness
-        run: |
-          cargo build -p dent8 --features witness
-          DENT8_BIN=target/debug/dent8 DENT8_EXPECT_WITNESS=1 scripts/release-acceptance.sh
       - name: Test signed-anchor feature
         run: cargo test -p dent8-core --features signed-anchor
-      - name: Test CLI witness feature
-        run: cargo test -p dent8 --features witness
-      # Witness log signing/verification must keep working when the grant-log lane is
-      # compiled out (the no-op fallback arms).
-      - name: Test CLI witness feature (no default features)
-        run: cargo test -p dent8 --no-default-features --features witness
       - name: Test export crate
         run: cargo test -p dent8-export
 

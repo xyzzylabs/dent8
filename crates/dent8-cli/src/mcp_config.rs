@@ -6,7 +6,6 @@ use toml_edit::{Array, DocumentMut, Item, Table, value};
 
 use crate::{InitAgent, write_atomic};
 
-#[cfg(feature = "identity")]
 use crate::identity;
 
 pub(crate) struct InstallOptions {
@@ -321,7 +320,6 @@ fn load_agent_identity_env(
     dir: &Path,
     agent: InitAgent,
 ) -> Result<BTreeMap<String, String>, String> {
-    #[cfg(feature = "identity")]
     {
         let per_source = identity::identity_env_path_for_source(dir, agent.source())?;
         read_env_file(&per_source).map_err(|error| {
@@ -333,11 +331,6 @@ fn load_agent_identity_env(
                 agent.source()
             )
         })
-    }
-    #[cfg(not(feature = "identity"))]
-    {
-        let _ = (dir, agent);
-        Err("`dent8 mcp install --agent` requires a build with `--features identity`".to_string())
     }
 }
 
