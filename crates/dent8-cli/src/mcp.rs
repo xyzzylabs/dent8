@@ -565,7 +565,7 @@ async fn handle_prove(
 /// directory). The `dent8` subdir is created `0700` regardless, so the socket is never
 /// world-reachable even under a shared `/tmp`.
 #[cfg(all(unix, feature = "async-store"))]
-fn daemon_socket_path(socket: Option<&str>) -> std::path::PathBuf {
+pub(crate) fn daemon_socket_path(socket: Option<&str>) -> std::path::PathBuf {
     if let Some(socket) = socket {
         return std::path::PathBuf::from(socket);
     }

@@ -3159,6 +3159,143 @@ fn mcp_install_json_reports_daemon_proxy_args() {
 }
 
 #[test]
+#[cfg(unix)]
+fn doctor_agent_reports_unreachable_daemon_proxy_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    let socket = temp
+        .file("missing-daemon.sock")
+        .to_string_lossy()
+        .into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+                "--mcp-daemon-socket",
+                &socket,
+            ],
+            &[],
+        ),
+        "init daemon proxy bundle",
+    );
+
+    let doctor = run_dent8(
+        &["doctor", "--agent", "codex", "--dir", &dir, "--write-check"],
+        &[],
+    );
+    assert_eq!(doctor.status.code(), Some(1));
+    let stdout = stdout(&doctor);
+    assert!(
+        stdout.contains("agent mcp config: up to date")
+            && stdout.contains("mcp smoke: daemon proxy: cannot reach the dent8 daemon at")
+            && stdout.contains(&socket)
+            && stdout.contains("dent8 mcp serve --daemon --socket")
+            && stdout.contains("mcp write-check: skipped because MCP smoke failed"),
+        "{stdout}"
+    );
+
+    let doctor_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "doctor",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--write-check",
+        ],
+        &[],
+    );
+    assert_eq!(doctor_json.status.code(), Some(1));
+    let doctor_json = stdout_json(&doctor_json);
+    assert_eq!(doctor_json["status"], "failed");
+    assert_eq!(doctor_json["mcp_runtime"]["status"], "failed");
+    assert!(
+        doctor_json["mcp_runtime"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("daemon proxy: cannot reach")),
+        "{doctor_json}"
+    );
+    assert!(
+        doctor_json["sections"]["skip"]
+            .as_array()
+            .expect("skip sections")
+            .iter()
+            .any(|check| check["message"].as_str().is_some_and(
+                |message| message == "mcp write-check: skipped because MCP smoke failed"
+            )),
+        "{doctor_json}"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn doctor_agent_smokes_reachable_daemon_proxy_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    let socket = temp.file("dent8.sock");
+    let socket_arg = socket.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+                "--mcp-use-daemon",
+            ],
+            &[],
+        ),
+        "init daemon proxy bundle",
+    );
+
+    let mut env = read_test_env_file(&temp.file(".dent8/env"));
+    env.extend(read_test_env_file(&temp.file(".dent8/identity-codex.env")));
+    let mut daemon = spawn_daemon(&socket_arg, &env);
+    wait_for_socket(&socket, &mut daemon);
+
+    let doctor = run_dent8(
+        &["doctor", "--agent", "codex", "--dir", &dir, "--write-check"],
+        &[("DENT8_DAEMON_SOCKET", &socket_arg)],
+    );
+    assert_success(
+        &doctor,
+        "doctor --agent codex --write-check through daemon proxy",
+    );
+    let stdout = stdout(&doctor);
+    assert!(
+        stdout.contains(&format!(
+            "daemon proxy: reachable at {socket_arg}, authenticated as source:codex"
+        )) && stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn doctor_agent_accepts_local_bin_install() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();

@@ -14,6 +14,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   / `--daemon-socket PATH`, plus `dent8 init --mcp-use-daemon` /
   `--mcp-daemon-socket PATH` and matching `dent8 agent add` flags. These write `dent8 mcp
   proxy` argv into the MCP config so stdio-only clients can use a running local daemon.
+- `dent8 doctor --agent` now recognizes installed `dent8 mcp proxy` configs, preflights the
+  target daemon socket with the config's own signed identity env, reports an explicit daemon
+  start hint when the socket is unreachable, and skips the MCP write-check when smoke already
+  failed.
 
 ## [0.3.1] - 2026-07-06
 

@@ -76,6 +76,9 @@ against the same backend, or separate daemon instances. Stdio-only clients can r
 daemon through `dent8 mcp proxy`, which authenticates once and then forwards MCP frames over
 the daemon socket. `dent8 mcp install --agent <profile> --use-daemon` writes that proxy
 command into known agent configs; `--daemon-socket PATH` pins a non-default daemon socket.
+`dent8 doctor --agent <profile> --write-check` recognizes those proxy configs, checks the
+daemon socket with the installed agent identity, and prints the matching daemon start command
+when the socket is not reachable.
 A remote HTTP/streamable transport is future work, not part of v0.
 
 Client-specific examples:

@@ -68,6 +68,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` + `runtime_status` and
   a bounded timeout. The runtime-status smoke fails if the live MCP server starts against a
   different store backend/path or source identity than the installed agent bundle declares.
+  If the installed config uses `dent8 mcp proxy`, doctor first probes the target daemon socket
+  with the config's own `DENT8_GRANT` / `DENT8_IDENTITY_KEY`, reports the authenticated source
+  on success, and reports a concrete `dent8 mcp serve --daemon --socket ...` hint when the
+  daemon is unreachable. With `--write-check`, a failed MCP smoke skips the write probe because
+  the same server would be reused.
   With `--all-agents`, it checks every known profile that has both a source-bound identity env
   and a default project-local MCP config, skips uninstalled profiles, and fails the aggregate
   command if any installed profile fails its normal `--agent` doctor. Hecate has no default

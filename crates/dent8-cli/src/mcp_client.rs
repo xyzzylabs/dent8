@@ -8,6 +8,7 @@
 //! plain blocking `std::os::unix::net` (no async runtime — the CLI is synchronous). All crypto
 //! stays in `identity`; this module only frames requests and maps the reply.
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
@@ -39,6 +40,18 @@ pub(crate) fn daemon_write(
 /// the handshake fails.
 pub(crate) fn daemon_health(socket_path: &str) -> Result<String, String> {
     Ok(Session::connect(socket_path)?.source)
+}
+
+/// Same as [`daemon_health`], but authenticates with a generated MCP config's env instead of
+/// the current process env. `dent8 doctor --agent` uses this to preflight installed
+/// `dent8 mcp proxy` configs exactly as the agent will run them.
+pub(crate) fn daemon_health_with_env(
+    socket_path: &str,
+    env: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let grant_path = env_map_path(env, "DENT8_GRANT")?;
+    let key_path = env_map_path(env, "DENT8_IDENTITY_KEY")?;
+    Ok(Session::connect_with_identity(socket_path, &grant_path, &key_path)?.source)
 }
 
 /// Bridge a stdio MCP client to an already-running local daemon. The proxy authenticates once
@@ -77,6 +90,16 @@ struct Session {
 
 impl Session {
     fn connect(socket_path: &str) -> Result<Self, String> {
+        let grant_path = env_path("DENT8_GRANT")?;
+        let key_path = env_path("DENT8_IDENTITY_KEY")?;
+        Self::connect_with_identity(socket_path, &grant_path, &key_path)
+    }
+
+    fn connect_with_identity(
+        socket_path: &str,
+        grant_path: &str,
+        key_path: &str,
+    ) -> Result<Self, String> {
         let stream = UnixStream::connect(socket_path)
             .map_err(|error| format!("cannot reach the dent8 daemon at {socket_path}: {error}"))?;
         let mut writer = stream
@@ -84,7 +107,7 @@ impl Session {
             .map_err(|error| format!("dent8 daemon socket: {error}"))?;
         let mut reader = BufReader::new(stream);
 
-        let grant = load_local_grant()?;
+        let grant = load_grant(grant_path)?;
         let source = grant_field(&grant, &["grant", "source"])?;
         let public_key = grant_field(&grant, &["grant", "public_key"])?;
         let grant_signature = grant_field(&grant, &["signature"])?;
@@ -103,13 +126,12 @@ impl Session {
             .ok_or_else(|| handshake_failure("dent8/hello", &reply))?;
 
         // 2. prove possession by signing the nonce with the source key.
-        let key_path = env_path("DENT8_IDENTITY_KEY")?;
         let signature = crate::identity::sign_session_challenge(
             nonce,
             &source,
             &public_key,
             &grant_signature,
-            &key_path,
+            key_path,
         )?;
         let prove = request(2, "dent8/prove", json!({ "signature": signature }));
         let reply = round_trip(&mut writer, &mut reader, &prove)?;
@@ -256,10 +278,8 @@ fn handshake_failure(step: &str, reply: &Value) -> String {
     format!("daemon {step} failed: {detail}")
 }
 
-/// The parsed grant JSON from the file `DENT8_GRANT` points at.
-fn load_local_grant() -> Result<Value, String> {
-    let path = env_path("DENT8_GRANT")?;
-    let text = std::fs::read_to_string(&path)
+fn load_grant(path: &str) -> Result<Value, String> {
+    let text = std::fs::read_to_string(path)
         .map_err(|error| format!("cannot read grant {path}: {error}"))?;
     serde_json::from_str(&text).map_err(|error| format!("invalid grant {path}: {error}"))
 }
@@ -280,6 +300,13 @@ fn grant_field(grant: &Value, path: &[&str]) -> Result<String, String> {
 fn env_path(name: &str) -> Result<String, String> {
     std::env::var(name)
         .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{name} must be set to route writes through the daemon"))
+}
+
+fn env_map_path(env: &BTreeMap<String, String>, name: &str) -> Result<String, String> {
+    env.get(name)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| format!("{name} must be set to route writes through the daemon"))

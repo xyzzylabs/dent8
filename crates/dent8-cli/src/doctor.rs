@@ -492,8 +492,14 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
     let (mcp_smoke_ok, mcp_runtime) = doctor_agent_mcp_smoke(&mut output, &installed, source);
     ok &= mcp_smoke_ok;
 
-    if args.write_check {
+    if args.write_check && mcp_smoke_ok {
         ok &= doctor_agent_mcp_write_check(&mut output, &installed, source);
+    } else if args.write_check {
+        doctor_line(
+            &mut output,
+            "SKIP",
+            "mcp write-check: skipped because MCP smoke failed",
+        );
     }
 
     DoctorReport::new(output, ok).with_mcp_runtime(mcp_runtime)
@@ -564,6 +570,62 @@ pub(crate) fn doctor_agent_mcp_write_check(
             false
         }
     }
+}
+
+#[cfg(all(unix, feature = "async-store"))]
+pub(crate) fn doctor_agent_mcp_proxy_preflight(
+    server: &mcp_config::InstalledServer,
+    expected_source: &str,
+) -> Result<Option<String>, String> {
+    let (uses_proxy, explicit_socket) = mcp_transport_from_args(&server.args);
+    if !uses_proxy {
+        return Ok(None);
+    }
+    let socket = explicit_socket
+        .or_else(|| installed_env_value(server, "DENT8_DAEMON_SOCKET"))
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("DENT8_DAEMON_SOCKET")
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| crate::mcp::daemon_socket_path(None));
+    let socket_text = socket.to_string_lossy().into_owned();
+    match crate::mcp_client::daemon_health_with_env(&socket_text, &server.env) {
+        Ok(source) if source == expected_source => Ok(Some(format!(
+            "daemon proxy: reachable at {socket_text}, authenticated as {source}"
+        ))),
+        Ok(source) => Err(format!(
+            "daemon proxy identity mismatch at {socket_text}: expected {expected_source}, authenticated as {source}"
+        )),
+        Err(error) => Err(format!(
+            "daemon proxy: {error}; start it with `{}` using the same .dent8/env and identity env, or reinstall with `dent8 mcp install --agent <profile> --daemon-socket PATH`",
+            daemon_start_command(&socket),
+        )),
+    }
+}
+
+#[cfg(not(all(unix, feature = "async-store")))]
+pub(crate) fn doctor_agent_mcp_proxy_preflight(
+    server: &mcp_config::InstalledServer,
+    _expected_source: &str,
+) -> Result<Option<String>, String> {
+    let (uses_proxy, _) = mcp_transport_from_args(&server.args);
+    if uses_proxy {
+        return Err(
+            "daemon proxy config needs a Unix build with a storage backend; reinstall without --use-daemon or run a daemon-capable dent8 binary"
+                .to_string(),
+        );
+    }
+    Ok(None)
+}
+
+#[cfg(all(unix, feature = "async-store"))]
+fn daemon_start_command(socket: &std::path::Path) -> String {
+    format!(
+        "dent8 mcp serve --daemon --socket {}",
+        shell_quote(&socket.to_string_lossy())
+    )
 }
 
 pub(crate) fn doctor_agent_bypass_guard(
@@ -1367,6 +1429,8 @@ pub(crate) fn mcp_smoke_with_server(
     server: &mcp_config::InstalledServer,
     expected_source: &str,
 ) -> Result<McpSmokeReport, McpSmokeError> {
+    let proxy_note = doctor_agent_mcp_proxy_preflight(server, expected_source)
+        .map_err(McpSmokeError::without_runtime)?;
     let responses = mcp_exchange_with_server(
         server,
         &[
@@ -1419,9 +1483,10 @@ pub(crate) fn mcp_smoke_with_server(
     let events = runtime_status["store"]["event_count"]
         .as_u64()
         .map_or_else(|| "unknown".to_string(), |count| count.to_string());
+    let proxy_suffix = proxy_note.map_or_else(String::new, |note| format!(", {note}"));
     Ok(McpSmokeReport {
         message: format!(
-            "mcp smoke: initialize + tools/list + runtime_status OK ({} tool(s), store={backend}, events={events})",
+            "mcp smoke: initialize + tools/list + runtime_status OK ({} tool(s), store={backend}, events={events}{proxy_suffix})",
             tools.len(),
         ),
         runtime_status: runtime_status.clone(),
