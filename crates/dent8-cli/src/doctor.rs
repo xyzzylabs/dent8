@@ -39,6 +39,41 @@ pub(crate) fn cmd_doctor(args: &DoctorArgs, output: CliOutput) -> i32 {
 pub(crate) struct DoctorReport {
     output: String,
     ok: bool,
+    mcp_runtime: Option<DoctorMcpRuntime>,
+    agents: Vec<DoctorAgentRun>,
+}
+
+pub(crate) struct DoctorMcpRuntime {
+    status: &'static str,
+    message: String,
+    runtime_status: Option<serde_json::Value>,
+}
+
+pub(crate) struct DoctorAgentRun {
+    agent: InitAgent,
+    status: &'static str,
+    report: DoctorReport,
+}
+
+impl DoctorReport {
+    fn new(output: String, ok: bool) -> Self {
+        Self {
+            output,
+            ok,
+            mcp_runtime: None,
+            agents: Vec::new(),
+        }
+    }
+
+    fn with_mcp_runtime(mut self, mcp_runtime: Option<DoctorMcpRuntime>) -> Self {
+        self.mcp_runtime = mcp_runtime;
+        self
+    }
+
+    fn with_agents(mut self, agents: Vec<DoctorAgentRun>) -> Self {
+        self.agents = agents;
+        self
+    }
 }
 
 pub(crate) fn doctor_report_json(report: &DoctorReport) -> serde_json::Value {
@@ -60,7 +95,7 @@ pub(crate) fn doctor_report_json(report: &DoctorReport) -> serde_json::Value {
             _ => {}
         }
     }
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "status": if report.ok { "ok" } else { "failed" },
         "tool": "doctor",
         "ok": report.ok,
@@ -77,6 +112,33 @@ pub(crate) fn doctor_report_json(report: &DoctorReport) -> serde_json::Value {
             "skip": skip,
         },
         "checks": checks.iter().map(doctor_check_json).collect::<Vec<_>>(),
+    });
+    if let Some(mcp_runtime) = &report.mcp_runtime {
+        payload["mcp_runtime"] = serde_json::json!({
+            "status": mcp_runtime.status,
+            "message": mcp_runtime.message,
+            "runtime_status": mcp_runtime.runtime_status,
+        });
+    }
+    if !report.agents.is_empty() {
+        payload["agents"] = serde_json::Value::Array(
+            report
+                .agents
+                .iter()
+                .map(doctor_agent_run_json)
+                .collect::<Vec<_>>(),
+        );
+    }
+    payload
+}
+
+pub(crate) fn doctor_agent_run_json(agent: &DoctorAgentRun) -> serde_json::Value {
+    serde_json::json!({
+        "agent": agent.agent.cli_name(),
+        "source": agent.agent.source(),
+        "status": agent.status,
+        "ok": agent.report.ok,
+        "report": doctor_report_json(&agent.report),
     })
 }
 
@@ -100,6 +162,9 @@ pub(crate) fn doctor_check_json(check: &DoctorCheck<'_>) -> serde_json::Value {
 }
 
 pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
+    if args.all_agents {
+        return doctor_all_agents_report(args);
+    }
     if let Some(agent) = args.agent {
         return doctor_agent_report(args, agent);
     }
@@ -172,7 +237,137 @@ pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
         );
     }
 
-    DoctorReport { output, ok }
+    DoctorReport::new(output, ok)
+}
+
+pub(crate) fn doctor_all_agents_report(args: &DoctorArgs) -> DoctorReport {
+    let mut output = String::from("dent8 doctor\n");
+    let dir = std::path::PathBuf::from(&args.dir);
+    let dir = match absolute_path(&dir) {
+        Ok(dir) => dir,
+        Err(error) => {
+            doctor_line(&mut output, "FAIL", &error);
+            return DoctorReport::new(output, false);
+        }
+    };
+    doctor_line(
+        &mut output,
+        "OK",
+        &format!("all-agents: dir: {}", dir.display()),
+    );
+
+    let mut agents = Vec::new();
+    let mut checked = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    let mut agent_output = String::new();
+    for &agent in InitAgent::all() {
+        let run = doctor_all_agent_run(args, agent, &dir);
+        match run.status {
+            "ok" => checked += 1,
+            "failed" => {
+                checked += 1;
+                failed += 1;
+            }
+            "skipped" => skipped += 1,
+            _ => {}
+        }
+        agent_output.push_str(agent.cli_name());
+        agent_output.push_str(":\n");
+        agent_output.push_str(doctor_report_body(&run.report));
+        agents.push(run);
+    }
+
+    let ok = failed == 0;
+    let level = if ok { "OK" } else { "FAIL" };
+    doctor_line(
+        &mut output,
+        level,
+        &format!("all-agents: {checked} checked, {skipped} skipped, {failed} failed"),
+    );
+    output.push_str(&agent_output);
+    DoctorReport::new(output, ok).with_agents(agents)
+}
+
+pub(crate) fn doctor_all_agent_run(
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> DoctorAgentRun {
+    if let Some(reason) = doctor_all_agent_skip_reason(agent, dir) {
+        let message = format!("{}: {reason}", agent.cli_name());
+        return DoctorAgentRun {
+            agent,
+            status: "skipped",
+            report: doctor_skip_report(&message),
+        };
+    }
+
+    let agent_args = DoctorArgs {
+        write_check: args.write_check,
+        source: None,
+        agent: Some(agent),
+        all_agents: false,
+        dir: dir.to_string_lossy().into_owned(),
+        mcp_config: None,
+        mcp_command: None,
+        mcp_local_bin: false,
+        repair: false,
+    };
+    let report = doctor_agent_report(&agent_args, agent);
+    let status = if report.ok { "ok" } else { "failed" };
+    DoctorAgentRun {
+        agent,
+        status,
+        report,
+    }
+}
+
+pub(crate) fn doctor_all_agent_skip_reason(
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> Option<String> {
+    let identity_env = match identity::identity_env_path_for_source(dir, agent.source()) {
+        Ok(path) => path,
+        Err(error) => return Some(format!("identity env path: {error}")),
+    };
+    if !identity_env.exists() {
+        return Some(format!(
+            "not installed (missing source identity env {})",
+            identity_env.display()
+        ));
+    }
+
+    let config_path = match mcp_config::default_project_config_path(agent, dir) {
+        Ok(Some(path)) => path,
+        Ok(None) => {
+            return Some(
+                "no default MCP config path; run `dent8 doctor --agent hecate --mcp-config PATH`"
+                    .to_string(),
+            );
+        }
+        Err(error) => return Some(error),
+    };
+    if !config_path.exists() {
+        return Some(format!(
+            "MCP config not installed at {}",
+            config_path.display()
+        ));
+    }
+    None
+}
+
+pub(crate) fn doctor_skip_report(message: &str) -> DoctorReport {
+    let mut output = String::from("dent8 doctor\n");
+    doctor_line(&mut output, "SKIP", message);
+    DoctorReport::new(output, true)
+}
+
+pub(crate) fn doctor_report_body(report: &DoctorReport) -> &str {
+    report
+        .output
+        .strip_prefix("dent8 doctor\n")
+        .unwrap_or(&report.output)
 }
 
 /// Probe the local daemon (ADR 0018) when `DENT8_DAEMON_SOCKET` is set: connect and complete the
@@ -224,7 +419,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
         Ok(dir) => dir,
         Err(error) => {
             doctor_line(&mut output, "FAIL", &error);
-            return DoctorReport { output, ok: false };
+            return DoctorReport::new(output, false);
         }
     };
     let source = agent.source();
@@ -239,7 +434,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
     );
 
     if args.repair && !repair_agent_setup(&mut output, args, agent, &dir) {
-        return DoctorReport { output, ok: false };
+        return DoctorReport::new(output, false);
     }
 
     let bundle_env =
@@ -247,7 +442,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
             Ok(env) => env,
             Err(error) => {
                 doctor_line(&mut output, "FAIL", &error);
-                return DoctorReport { output, ok: false };
+                return DoctorReport::new(output, false);
             }
         };
 
@@ -255,7 +450,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
         Ok(installed) => installed,
         Err(error) => {
             doctor_line(&mut output, "FAIL", &error);
-            return DoctorReport { output, ok: false };
+            return DoctorReport::new(output, false);
         }
     };
     doctor_agent_bypass_guard(&mut output, agent, &dir);
@@ -290,35 +485,83 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
         ok = false;
     }
 
-    match run_doctor_with_env(source, false, &installed.env, !args.write_check) {
-        Ok(child) => {
-            output.push_str(&child);
-        }
-        Err(error) => {
-            ok = false;
-            doctor_line(&mut output, "FAIL", &error);
-        }
-    }
+    ok &= doctor_agent_self_check(&mut output, &installed, source, !args.write_check);
 
-    match mcp_smoke_with_server(&installed, source) {
-        Ok(message) => doctor_line(&mut output, "OK", &message),
-        Err(error) => {
-            ok = false;
-            doctor_line(&mut output, "FAIL", &format!("mcp smoke: {error}"));
-        }
-    }
+    let (mcp_smoke_ok, mcp_runtime) = doctor_agent_mcp_smoke(&mut output, &installed, source);
+    ok &= mcp_smoke_ok;
 
     if args.write_check {
-        match mcp_write_check_with_server(&installed, source) {
-            Ok(message) => doctor_line(&mut output, "OK", &message),
-            Err(error) => {
-                ok = false;
-                doctor_line(&mut output, "FAIL", &format!("mcp write-check: {error}"));
-            }
-        }
+        ok &= doctor_agent_mcp_write_check(&mut output, &installed, source);
     }
 
-    DoctorReport { output, ok }
+    DoctorReport::new(output, ok).with_mcp_runtime(mcp_runtime)
+}
+
+pub(crate) fn doctor_agent_self_check(
+    output: &mut String,
+    installed: &mcp_config::InstalledServer,
+    source: &str,
+    include_write_check_skip: bool,
+) -> bool {
+    match run_doctor_with_env(source, false, &installed.env, include_write_check_skip) {
+        Ok(child) => {
+            output.push_str(&child);
+            true
+        }
+        Err(error) => {
+            doctor_line(output, "FAIL", &error);
+            false
+        }
+    }
+}
+
+pub(crate) fn doctor_agent_mcp_smoke(
+    output: &mut String,
+    installed: &mcp_config::InstalledServer,
+    source: &str,
+) -> (bool, Option<DoctorMcpRuntime>) {
+    match mcp_smoke_with_server(installed, source) {
+        Ok(smoke) => {
+            doctor_line(output, "OK", &smoke.message);
+            (
+                true,
+                Some(DoctorMcpRuntime {
+                    status: "ok",
+                    message: smoke.message,
+                    runtime_status: Some(smoke.runtime_status),
+                }),
+            )
+        }
+        Err(error) => {
+            let message = format!("mcp smoke: {}", error.message);
+            doctor_line(output, "FAIL", &message);
+            (
+                false,
+                Some(DoctorMcpRuntime {
+                    status: "failed",
+                    message,
+                    runtime_status: error.runtime_status,
+                }),
+            )
+        }
+    }
+}
+
+pub(crate) fn doctor_agent_mcp_write_check(
+    output: &mut String,
+    installed: &mcp_config::InstalledServer,
+    source: &str,
+) -> bool {
+    match mcp_write_check_with_server(installed, source) {
+        Ok(message) => {
+            doctor_line(output, "OK", &message);
+            true
+        }
+        Err(error) => {
+            doctor_line(output, "FAIL", &format!("mcp write-check: {error}"));
+            false
+        }
+    }
 }
 
 pub(crate) fn doctor_agent_bypass_guard(
@@ -1087,10 +1330,20 @@ pub(crate) fn run_doctor_with_env(
     Ok(forwarded)
 }
 
+pub(crate) struct McpSmokeReport {
+    message: String,
+    runtime_status: serde_json::Value,
+}
+
+pub(crate) struct McpSmokeError {
+    message: String,
+    runtime_status: Option<serde_json::Value>,
+}
+
 pub(crate) fn mcp_smoke_with_server(
     server: &mcp_config::InstalledServer,
     expected_source: &str,
-) -> Result<String, String> {
+) -> Result<McpSmokeReport, McpSmokeError> {
     let responses = mcp_exchange_with_server(
         server,
         &[
@@ -1104,38 +1357,65 @@ pub(crate) fn mcp_smoke_with_server(
             mcp_tool_call(3, "runtime_status", &serde_json::json!({})),
         ],
         "mcp smoke",
-    )?;
+    )
+    .map_err(McpSmokeError::without_runtime)?;
     if responses.len() != 3 {
-        return Err(format!(
+        return Err(McpSmokeError::without_runtime(format!(
             "expected 3 JSON-RPC responses, got {}",
             responses.len()
-        ));
+        )));
     }
     if responses[0]["result"]["serverInfo"]["name"] != "dent8" {
-        return Err("initialize did not return dent8 serverInfo".to_string());
+        return Err(McpSmokeError::without_runtime(
+            "initialize did not return dent8 serverInfo".to_string(),
+        ));
     }
-    let tools = responses[1]["result"]["tools"]
-        .as_array()
-        .ok_or_else(|| "tools/list did not return a tools array".to_string())?;
+    let tools = responses[1]["result"]["tools"].as_array().ok_or_else(|| {
+        McpSmokeError::without_runtime("tools/list did not return a tools array".to_string())
+    })?;
     for expected in ["runtime_status", "assert", "explain", "verify"] {
         if !tools
             .iter()
             .any(|tool| tool["name"].as_str() == Some(expected))
         {
-            return Err(format!("tools/list is missing {expected}"));
+            return Err(McpSmokeError::without_runtime(format!(
+                "tools/list is missing {expected}"
+            )));
         }
     }
-    let runtime_status = mcp_runtime_status_result(&responses[2], server, expected_source)?;
+    let runtime_status = mcp_runtime_status_result(&responses[2], server, expected_source)
+        .map_err(|error| {
+            McpSmokeError::new(
+                error,
+                mcp_runtime_status_payload(&responses[2]).ok().cloned(),
+            )
+        })?;
     let backend = runtime_status["store"]["backend"]
         .as_str()
         .unwrap_or("unknown");
     let events = runtime_status["store"]["event_count"]
         .as_u64()
         .map_or_else(|| "unknown".to_string(), |count| count.to_string());
-    Ok(format!(
-        "mcp smoke: initialize + tools/list + runtime_status OK ({} tool(s), store={backend}, events={events})",
-        tools.len(),
-    ))
+    Ok(McpSmokeReport {
+        message: format!(
+            "mcp smoke: initialize + tools/list + runtime_status OK ({} tool(s), store={backend}, events={events})",
+            tools.len(),
+        ),
+        runtime_status: runtime_status.clone(),
+    })
+}
+
+impl McpSmokeError {
+    fn new(message: String, runtime_status: Option<serde_json::Value>) -> Self {
+        Self {
+            message,
+            runtime_status,
+        }
+    }
+
+    fn without_runtime(message: String) -> Self {
+        Self::new(message, None)
+    }
 }
 
 pub(crate) fn mcp_runtime_status_result<'a>(
@@ -1143,6 +1423,20 @@ pub(crate) fn mcp_runtime_status_result<'a>(
     server: &mcp_config::InstalledServer,
     expected_source: &str,
 ) -> Result<&'a serde_json::Value, String> {
+    let structured = mcp_runtime_status_payload(response)?;
+    if structured["status"] != "ok" {
+        return Err(format!(
+            "runtime_status reported degraded runtime: {structured}"
+        ));
+    }
+    validate_mcp_runtime_store(server, structured)?;
+    validate_mcp_runtime_identity(structured, expected_source)?;
+    Ok(structured)
+}
+
+pub(crate) fn mcp_runtime_status_payload(
+    response: &serde_json::Value,
+) -> Result<&serde_json::Value, String> {
     let result = mcp_tool_result(response, "runtime_status")?;
     if result["isError"].as_bool() != Some(false) {
         return Err(format!("runtime_status returned a tool error: {result}"));
@@ -1155,13 +1449,6 @@ pub(crate) fn mcp_runtime_status_result<'a>(
             "runtime_status returned wrong tool payload: {structured}"
         ));
     }
-    if structured["status"] != "ok" {
-        return Err(format!(
-            "runtime_status reported degraded runtime: {structured}"
-        ));
-    }
-    validate_mcp_runtime_store(server, structured)?;
-    validate_mcp_runtime_identity(structured, expected_source)?;
     Ok(structured)
 }
 

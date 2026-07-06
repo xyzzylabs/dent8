@@ -50,7 +50,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   trusted issuers, pass `--issuer`; Hecate still needs `--mcp-config` because there is no
   stable project-local config path to infer. Supports `--output json` with structured identity,
   authority, store, MCP install, and follow-up doctor fields.
-- **`dent8 doctor [--agent <profile>] [--dir .dent8] [--mcp-config PATH]
+- **`dent8 doctor [--agent <profile>|--all-agents] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND|--mcp-local-bin] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
   witness verification status when configured, `verify`, and MCP availability. Configured
@@ -63,6 +63,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` + `runtime_status` and
   a bounded timeout. The runtime-status smoke fails if the live MCP server starts against a
   different store backend/path or source identity than the installed agent bundle declares.
+  With `--all-agents`, it checks every known profile that has both a source-bound identity env
+  and a default project-local MCP config, skips uninstalled profiles, and fails the aggregate
+  command if any installed profile fails its normal `--agent` doctor. Hecate has no default
+  project-local config path, so use `--agent hecate --mcp-config PATH` for Hecate task configs.
   If `--mcp-command` is omitted,
   the expected command is read from the installed config; pass it only to assert a specific
   expected command. By default it is read-only; with `--repair`, it first repairs the
@@ -80,7 +84,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   a tampered value from the same configured source is rejected, `explain` still returns `ok`,
   and `verify` passes. Diagnostic streams are hidden from normal MCP fact/resource browsing by
   default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
-  than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections.
+  than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections,
+  and `doctor --agent --output json` also includes a structured `mcp_runtime` object with the
+  MCP smoke result plus the live `runtime_status` payload when the server answers.
+  `doctor --all-agents --output json` includes an `agents[]` array with each profile's
+  `ok` / `failed` / `skipped` status and nested report.
 - **`dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>]
   [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and

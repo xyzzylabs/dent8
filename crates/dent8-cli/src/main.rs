@@ -592,6 +592,20 @@ enum InitAgent {
 }
 
 impl InitAgent {
+    const ALL: [Self; 7] = [
+        Self::Codex,
+        Self::ClaudeCode,
+        Self::Cursor,
+        Self::GrokBuild,
+        Self::Gemini,
+        Self::Cascade,
+        Self::Hecate,
+    ];
+
+    fn all() -> &'static [Self] {
+        &Self::ALL
+    }
+
     fn cli_name(self) -> &'static str {
         match self {
             Self::Codex => "codex",
@@ -672,6 +686,7 @@ impl InitStore {
 }
 
 #[derive(Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct DoctorArgs {
     /// Also run an explicit assert -> rejected supersede -> explain -> verify write check.
     #[arg(long)]
@@ -682,7 +697,20 @@ struct DoctorArgs {
     /// Agent profile to diagnose from its generated .dent8 bundle and MCP config.
     #[arg(long, value_enum, conflicts_with = "source")]
     agent: Option<InitAgent>,
-    /// Directory for dent8's local project config when --agent is set.
+    /// Diagnose every installed known agent profile from its generated .dent8 bundle.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "source",
+            "agent",
+            "mcp_config",
+            "mcp_command",
+            "mcp_local_bin",
+            "repair"
+        ]
+    )]
+    all_agents: bool,
+    /// Directory for dent8's local project config when --agent or --all-agents is set.
     #[arg(long, default_value = ".dent8", value_name = "DIR")]
     dir: String,
     /// MCP config file to check when --agent is set.

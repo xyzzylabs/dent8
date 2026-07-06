@@ -388,6 +388,20 @@ fn target_config_path(
     })
 }
 
+pub(crate) fn default_project_config_path(
+    agent: InitAgent,
+    dent8_dir: &Path,
+) -> Result<Option<PathBuf>, String> {
+    let dent8_dir = absolute_path(dent8_dir)?;
+    let root = project_root_for(&dent8_dir).ok_or_else(|| {
+        format!(
+            "cannot infer an MCP config path from --dir {}; use a .dent8 directory",
+            dent8_dir.display()
+        )
+    })?;
+    Ok(default_config_path(agent, &root))
+}
+
 fn project_root_for(dent8_dir: &Path) -> Option<PathBuf> {
     if dent8_dir.file_name().is_some_and(|name| name == ".dent8")
         && let Some(parent) = dent8_dir.parent()

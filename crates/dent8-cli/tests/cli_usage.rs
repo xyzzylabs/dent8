@@ -3152,6 +3152,29 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
         !stdout.contains("  OK  write-check: accepted trusted diagnostic:doctor-"),
         "{stdout}"
     );
+
+    let doctor_json = run_dent8(
+        &[
+            "doctor", "--agent", "codex", "--dir", &dir, "--output", "json",
+        ],
+        &[],
+    );
+    assert_success(&doctor_json, "doctor --agent codex --output json");
+    let doctor_json = stdout_json(&doctor_json);
+    assert_eq!(doctor_json["status"], "ok");
+    assert_eq!(doctor_json["mcp_runtime"]["status"], "ok");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["runtime_status"]["tool"],
+        "runtime_status"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["runtime_status"]["store"]["backend"],
+        "file"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["runtime_status"]["identity"]["source"],
+        "source:codex"
+    );
 }
 
 #[test]
@@ -3774,6 +3797,50 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
             "doctor should validate installed MCP env for {agent}; stdout:\n{doctor_stdout}"
         );
     }
+
+    let all = run_dent8(
+        &[
+            "doctor",
+            "--all-agents",
+            "--dir",
+            &dir,
+            "--write-check",
+            "--output",
+            "json",
+        ],
+        &[],
+    );
+    assert_success(&all, "doctor --all-agents --output json");
+    assert_shared_sqlite_all_agents_json(&stdout_json(&all));
+}
+
+fn assert_shared_sqlite_all_agents_json(all: &Value) {
+    assert_eq!(all["status"], "ok");
+    let agents = all["agents"].as_array().expect("agents");
+    assert_eq!(agents.len(), 7);
+    for (agent, source) in [
+        ("codex", "source:codex"),
+        ("claude-code", "source:claude-code"),
+    ] {
+        let run = agents
+            .iter()
+            .find(|run| run["agent"] == agent)
+            .unwrap_or_else(|| panic!("missing {agent} in {all}"));
+        assert_eq!(run["status"], "ok", "{run}");
+        assert_eq!(
+            run["report"]["mcp_runtime"]["runtime_status"]["store"]["backend"],
+            "sqlite"
+        );
+        assert_eq!(
+            run["report"]["mcp_runtime"]["runtime_status"]["identity"]["source"],
+            source
+        );
+    }
+    let skipped = agents
+        .iter()
+        .filter(|run| run["status"] == "skipped")
+        .count();
+    assert_eq!(skipped, 5, "{all}");
 }
 
 #[cfg(feature = "sqlite")]
@@ -4229,6 +4296,48 @@ fn doctor_agent_mcp_smoke_rejects_wrong_runtime_store() {
     assert!(
         stdout.contains(&wrong_log.to_string_lossy().to_string()),
         "{stdout}"
+    );
+
+    let doctor_json = run_dent8(
+        &[
+            "doctor", "--agent", "codex", "--dir", &dir, "--output", "json",
+        ],
+        &[],
+    );
+    assert_eq!(doctor_json.status.code(), Some(1));
+    let doctor_json = stdout_json(&doctor_json);
+    assert_eq!(doctor_json["status"], "failed");
+    assert_eq!(doctor_json["mcp_runtime"]["status"], "failed");
+    assert!(
+        doctor_json["mcp_runtime"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("runtime_status file log mismatch")),
+        "{doctor_json}"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["runtime_status"]["store"]["file_log_path"],
+        wrong_log.to_string_lossy().as_ref()
+    );
+
+    let all_json = run_dent8(
+        &["doctor", "--all-agents", "--dir", &dir, "--output", "json"],
+        &[],
+    );
+    assert_eq!(all_json.status.code(), Some(1));
+    let all_json = stdout_json(&all_json);
+    assert_eq!(all_json["status"], "failed");
+    let codex = all_json["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .find(|run| run["agent"] == "codex")
+        .unwrap_or_else(|| panic!("missing codex in {all_json}"));
+    assert_eq!(codex["status"], "failed", "{codex}");
+    assert!(
+        codex["report"]["mcp_runtime"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("runtime_status file log mismatch")),
+        "{codex}"
     );
 }
 

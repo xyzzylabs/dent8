@@ -10,6 +10,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- Added `dent8 doctor --all-agents`, which checks every installed known agent profile in a
+  `.dent8` bundle, skips profiles without a source-bound install, aggregates failures, and emits
+  per-agent reports under `agents[]` in `--output json`.
+- `dent8 doctor --agent --output json` now includes a structured `mcp_runtime` object with
+  the MCP smoke status, human message, and the live `runtime_status` payload when the server
+  answered, so agents and CI can detect stale store/source wiring without parsing prose.
 - `dent8 doctor --agent` now calls the MCP `runtime_status` tool during its smoke check and
   fails when the installed server starts against a different store or source than the agent
   bundle declares.

@@ -96,6 +96,7 @@ dent8 speaks MCP, so agents read and write memory *through the firewall*:
 ```sh
 dent8 init --agent codex --install-mcp     # signed identity + MCP config for Codex
 dent8 doctor --agent codex --write-check   # smoke the installed server + prove the firewall path
+dent8 doctor --all-agents --write-check    # check every installed agent profile in this bundle
 ```
 
 Shortcuts exist for `codex`, `claude-code`, `cursor`, `gemini`, `grok-build`, `cascade`, and
