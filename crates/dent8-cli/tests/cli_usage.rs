@@ -204,6 +204,14 @@ fn read_audit_commands_emit_machine_readable_json() {
     assert_eq!(verify["ok"], true);
     assert_eq!(verify["findings"].as_array().expect("findings").len(), 0);
 
+    // With one undisputed fact, `conflicts` is empty and reports `ok` — the other branch of the
+    // status fix (a non-empty result reports `contested`).
+    let conflicts = run_dent8(&["--output", "json", "conflicts"], &envs);
+    assert_success(&conflicts, "conflicts --output json");
+    let conflicts = stdout_json(&conflicts);
+    assert_eq!(conflicts["status"], "ok");
+    assert_eq!(conflicts["count"], 0);
+
     let doctor = run_dent8(&["--output", "json", "doctor"], &envs);
     assert_success(&doctor, "doctor --output json");
     let doctor = stdout_json(&doctor);
@@ -331,7 +339,8 @@ fn replay_and_conflicts_emit_machine_readable_json() {
     let conflicts = run_dent8(&["--output", "json", "conflicts"], &envs);
     assert_success(&conflicts, "conflicts --output json");
     let conflicts = stdout_json(&conflicts);
-    assert_eq!(conflicts["status"], "ok");
+    // A live dispute reports `contested`, not `ok` — the count and the status must agree.
+    assert_eq!(conflicts["status"], "contested");
     assert_eq!(conflicts["tool"], "conflicts");
     assert_eq!(conflicts["count"], 1);
     assert_eq!(conflicts["conflicts"][0]["subject"]["key"], "alice");

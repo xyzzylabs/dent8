@@ -25,7 +25,8 @@ use crate::ops::{
     op_explain_receipt, op_reinforce, op_replay, op_retract, op_supersede, with_write_retry,
 };
 use crate::{
-    WriteIdentity, display_value, load_store, log_path, parse_authority, short, verify_log,
+    WriteIdentity, display_value, load_store, log_path, parse_authority, short, status::Status,
+    verify_log,
 };
 
 /// The latest MCP protocol revision this server prefers.
@@ -957,7 +958,7 @@ fn dispatch_tool(
             Ok(ToolOutput::new(
                 report,
                 json!({
-                    "status": if verified { "ok" } else { "integrity_issues" },
+                    "status": if verified { Status::Ok.as_str() } else { Status::IntegrityIssues.as_str() },
                     "tool": "verify",
                     "integrity_verified": verified,
                 }),
@@ -968,7 +969,7 @@ fn dispatch_tool(
             Ok(ToolOutput::new(
                 text.clone(),
                 json!({
-                    "status": if text.starts_with("no contested") { "ok" } else { "contested" },
+                    "status": if text.starts_with("no contested") { Status::Ok.as_str() } else { Status::Contested.as_str() },
                     "tool": "conflicts",
                     "message": text,
                 }),
@@ -986,7 +987,7 @@ fn dispatch_tool(
             let validity = arg_validity(arguments)?;
             run_write_tool(
                 "assert",
-                "accepted",
+                Status::Accepted,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1016,7 +1017,7 @@ fn dispatch_tool(
             let validity = arg_validity(arguments)?;
             run_write_tool(
                 "supersede",
-                "accepted",
+                Status::Accepted,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1044,7 +1045,7 @@ fn dispatch_tool(
             );
             run_write_tool(
                 "retract",
-                "accepted",
+                Status::Accepted,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1067,7 +1068,7 @@ fn dispatch_tool(
             );
             run_write_tool(
                 "reinforce",
-                "accepted",
+                Status::Accepted,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1090,7 +1091,7 @@ fn dispatch_tool(
             );
             run_write_tool(
                 "expire",
-                "accepted",
+                Status::Accepted,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1120,7 +1121,7 @@ fn dispatch_tool(
             let validity = arg_validity(arguments)?;
             let mut output = run_write_tool(
                 "derive",
-                "accepted",
+                Status::Accepted,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1170,7 +1171,7 @@ fn dispatch_tool(
             let validity = arg_validity(arguments)?;
             run_write_tool(
                 "contradict",
-                "contested",
+                Status::Contested,
                 path,
                 WriteContext {
                     subject_kind: &kind,
@@ -1206,7 +1207,7 @@ fn dispatch_tool(
             let structured = match op_explain_receipt(path, &kind, &key, &predicate, clock) {
                 Ok(receipt) => explain_structured("replay", &receipt),
                 Err(_) => json!({
-                    "status": "ok",
+                    "status": Status::Ok.as_str(),
                     "tool": "replay",
                     "subject": { "kind": kind, "key": key },
                     "predicate": predicate,
@@ -1239,7 +1240,7 @@ fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
         return Ok(ToolOutput::new(
             format!("no dent8 facts recorded yet{hidden_note}"),
             json!({
-                "status": "ok",
+                "status": Status::Ok.as_str(),
                 "tool": "list_facts",
                 "count": 0,
                 "facts": [],
@@ -1273,7 +1274,7 @@ fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
     Ok(ToolOutput::new(
         format!("{count} dent8 fact stream(s):\n{}", lines.join("\n")),
         json!({
-            "status": "ok",
+            "status": Status::Ok.as_str(),
             "tool": "list_facts",
             "count": count,
             "facts": facts,
@@ -1295,14 +1296,14 @@ struct WriteContext<'a> {
 
 fn write_output(
     tool: &str,
-    status: &str,
+    status: Status,
     path: &str,
     context: WriteContext<'_>,
     text: String,
     accepted_events: &[AcceptedEvent],
 ) -> ToolOutput {
     let mut structured = json!({
-        "status": status,
+        "status": status.as_str(),
         "tool": tool,
         "subject": { "kind": context.subject_kind, "key": context.subject_key },
         "predicate": context.predicate,
@@ -1347,7 +1348,7 @@ fn write_output(
 
 fn run_write_tool(
     tool: &str,
-    status: &str,
+    status: Status,
     path: &str,
     context: WriteContext<'_>,
     mut op: impl FnMut() -> Result<String, OpError>,
@@ -1505,9 +1506,9 @@ fn argument_string(arguments: &Value, name: &str) -> Option<String> {
 
 fn receipt_status(receipt: &IntegrityReceipt) -> &'static str {
     if receipt.lifecycle == FactLifecycle::Contested {
-        "contested"
+        Status::Contested.as_str()
     } else {
-        "ok"
+        Status::Ok.as_str()
     }
 }
 

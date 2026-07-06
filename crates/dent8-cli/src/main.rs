@@ -37,8 +37,11 @@ mod mcp_client;
 mod mcp_config;
 mod ops;
 mod setup;
+mod status;
 #[cfg(feature = "witness")]
 mod witness;
+
+use status::Status;
 
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
 const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
@@ -1572,7 +1575,7 @@ fn receipt_json(tool: &str, receipt: &IntegrityReceipt) -> serde_json::Value {
     let object = value
         .as_object_mut()
         .expect("receipt fields should serialize as an object");
-    object.insert("status".to_string(), serde_json::json!("ok"));
+    object.insert("status".to_string(), serde_json::json!(Status::Ok.as_str()));
     object.insert("tool".to_string(), serde_json::json!(tool));
     value
 }
@@ -2599,7 +2602,7 @@ fn verify_json(ok: bool, report: &str) -> serde_json::Value {
         .map(str::to_string)
         .collect::<Vec<_>>();
     serde_json::json!({
-        "status": if ok { "ok" } else { "failed" },
+        "status": if ok { Status::Ok.as_str() } else { Status::Failed.as_str() },
         "tool": "verify",
         "ok": ok,
         "summary": first_line(report),

@@ -88,6 +88,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `UnearnedSupersession::WeakerCorroboration` → `WeakerEntrenchment` (a non-serialized API
   type).
 
+### Fixed
+- **`conflicts --output json` reported `status: "ok"` while listing live disputes.** A non-empty
+  result now reports `status: "contested"` (an empty one still reports `ok`), so a machine
+  consumer's `status` check and the `count`/`conflicts` array agree. The MCP `conflicts` tool was
+  already correct; this aligns the CLI with it. The CLI and MCP belief surfaces now draw every
+  `status` string from one shared `Status` enum, so the two cannot drift on the spelling a
+  consumer branches on.
+
 ## [0.2.0] - 2026-07-03
 
 ### Added

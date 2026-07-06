@@ -24,7 +24,7 @@ use crate::{
     ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events, attest_events,
     display_value, enforce_write_authority, fact_value_json, format_receipt, load_store, log_path,
     next_seq, now_millis, paint_status, parse_predicate, print_json_stderr, print_json_stdout,
-    read_annotation, receipt_fields_json, receipt_json, short,
+    read_annotation, receipt_fields_json, receipt_json, short, status::Status,
 };
 
 /// Build a validated `FactEvent` from CLI strings, returning a friendly error rather than
@@ -655,11 +655,11 @@ pub(crate) fn present(outcome: Result<String, OpError>) -> i32 {
 pub(crate) fn op_error_json(error: &OpError) -> serde_json::Value {
     match error {
         OpError::Invalid(message) => serde_json::json!({
-            "status": "invalid",
+            "status": Status::Invalid.as_str(),
             "message": message,
         }),
         OpError::Rejected(message) | OpError::Conflict(message) => serde_json::json!({
-            "status": "rejected",
+            "status": Status::Rejected.as_str(),
             "message": message,
         }),
     }
@@ -749,7 +749,7 @@ pub(crate) fn derived_from_write_json(value: Option<&DerivedFromJson<'_>>) -> se
 
 pub(crate) fn write_success_json(view: &WriteJsonView<'_>, message: &str) -> serde_json::Value {
     serde_json::json!({
-        "status": "ok",
+        "status": Status::Ok.as_str(),
         "tool": view.tool,
         "accepted": true,
         "subject": {
@@ -1769,7 +1769,7 @@ pub(crate) fn fact_event_json(event: &FactEvent) -> serde_json::Value {
 
 pub(crate) fn replay_json(outcome: &ReplayOutcome) -> serde_json::Value {
     serde_json::json!({
-        "status": "ok",
+        "status": Status::Ok.as_str(),
         "tool": "replay",
         "subject": {
             "kind": outcome.subject_kind.as_str(),
@@ -2106,7 +2106,7 @@ pub(crate) fn facts_list_json(outcome: &FactsListOutcome) -> serde_json::Value {
         })
         .collect::<Vec<_>>();
     serde_json::json!({
-        "status": "ok",
+        "status": Status::Ok.as_str(),
         "tool": "facts list",
         "count": facts.len(),
         "facts": facts,
@@ -2226,8 +2226,15 @@ pub(crate) fn op_conflicts(path: &str) -> Result<String, OpError> {
 }
 
 pub(crate) fn conflicts_json(conflicts: &[ConflictFact]) -> serde_json::Value {
+    // A non-empty result IS the contested signal — reporting `ok` here (the old bug) told a
+    // consumer "all clear" while handing it a list of live disputes.
+    let status = if conflicts.is_empty() {
+        Status::Ok
+    } else {
+        Status::Contested
+    };
     serde_json::json!({
-        "status": "ok",
+        "status": status.as_str(),
         "tool": "conflicts",
         "count": conflicts.len(),
         "conflicts": conflicts
