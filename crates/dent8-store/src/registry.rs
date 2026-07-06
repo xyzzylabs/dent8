@@ -25,10 +25,10 @@
 use std::collections::BTreeMap;
 
 use dent8_core::{
-    AuthorityLevel, EntityRef, FactEvent, FactEventKind, Predicate, TimestampMillis, Ttl,
+    AuthorityLevel, FactEvent, FactEventKind, Predicate, Subject, TimestampMillis, Ttl,
 };
 
-use crate::{EventFilter, EventStore, StoreError, replay_entity};
+use crate::{EventFilter, EventStore, StoreError, replay_subject};
 
 /// How often a fact is expected to change — advisory metadata that motivates the
 /// default TTL.
@@ -110,17 +110,13 @@ impl PredicateRegistry {
 
     /// The policy for a fact's `(subject.kind, predicate)`, if registered.
     #[must_use]
-    pub fn policy_for(
-        &self,
-        subject: &EntityRef,
-        predicate: &Predicate,
-    ) -> Option<&PredicatePolicy> {
+    pub fn policy_for(&self, subject: &Subject, predicate: &Predicate) -> Option<&PredicatePolicy> {
         self.policies
             .get(&(subject.kind().to_string(), predicate.as_str().to_string()))
     }
 }
 
-fn display_key(subject: &EntityRef, predicate: &Predicate) -> String {
+fn display_key(subject: &Subject, predicate: &Predicate) -> String {
     format!("{}.{}", subject.kind(), predicate.as_str())
 }
 
@@ -175,8 +171,8 @@ where
             predicate: Some(candidate.predicate.clone()),
             ..EventFilter::default()
         };
-        let entity = replay_entity(&store.scan_events(&filter)?).map_err(StoreError::Replay)?;
-        let conflict = entity
+        let subject = replay_subject(&store.scan_events(&filter)?).map_err(StoreError::Replay)?;
+        let conflict = subject
             .believed()
             .filter(|state| !state.is_expired_at(now))
             .any(|state| state.fact_id != candidate.fact_id);
@@ -195,9 +191,9 @@ mod tests {
     use super::{PredicateRegistry, Volatility, apply_policy_defaults, enforce_policy};
     use crate::{EventStore, InMemoryEventStore, StoreError};
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-        EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue,
-        Predicate, Provenance, SourceId, TimestampMillis, TransitionError, Ttl,
+        ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
+        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate,
+        Provenance, SourceId, Subject, TimestampMillis, TransitionError, Ttl,
     };
 
     const NOW: TimestampMillis = TimestampMillis::from_unix_millis(100);
@@ -217,7 +213,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
-            subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
+            subject: Subject::new(subject_kind, subject_key).expect("subject"),
             predicate: Predicate::new(predicate).expect("predicate"),
             value,
             confidence: Confidence::from_millis(900).expect("confidence"),
@@ -532,7 +528,7 @@ mod tests {
             ("branch", "status"),
             ("user", "preference"),
         ] {
-            let subject = EntityRef::new(kind, "x").unwrap();
+            let subject = Subject::new(kind, "x").unwrap();
             let pred = Predicate::new(predicate).unwrap();
             assert!(
                 registry.policy_for(&subject, &pred).is_some(),

@@ -3,7 +3,7 @@
 //!
 //! `proptest_fold.rs` and `proptest_invariants.rs` already exercise the fold on valid,
 //! coherent streams, and `proptest_robustness.rs` (core) proves the scalar pipeline is
-//! panic-free. This pins the remaining surface: `replay_entity` folding a *structurally*
+//! panic-free. This pins the remaining surface: `replay_subject` folding a *structurally*
 //! hostile stream — supersession/contradiction edges that point at the fact itself, form a
 //! cycle, or dangle (the successor never exists), plus extreme timestamps driving the
 //! freshness/TTL math, and a large evidence vector. The firewall must return a clean
@@ -15,9 +15,9 @@ use dent8_core::{
     FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance, SourceId,
     SupersessionReason, TimestampMillis, Ttl,
 };
-use dent8_store::replay_entity;
+use dent8_store::replay_subject;
 
-/// Build an event on the shared `repo:proj database` entity, with a chosen kind, timestamp,
+/// Build an event on the shared `repo:proj database` subject, with a chosen kind, timestamp,
 /// TTL, and evidence count — all via the real constructors, so only the *structure* is hostile.
 fn event(
     event_id: &str,
@@ -31,7 +31,7 @@ fn event(
         event_id: FactEventId::new(event_id).unwrap(),
         fact_id: FactId::new(fact_id).unwrap(),
         kind,
-        subject: dent8_core::EntityRef::new("repo", "proj").unwrap(),
+        subject: dent8_core::Subject::new("repo", "proj").unwrap(),
         predicate: Predicate::new("database").unwrap(),
         value: Some(FactValue::Text("postgres".to_string())),
         confidence: Confidence::from_millis(900).unwrap(),
@@ -72,12 +72,12 @@ fn superseded_by(by: &str) -> FactEventKind {
     }
 }
 
-/// `replay_entity` (fold + `lineage_issues` + projection) must absorb every hostile shape
+/// `replay_subject` (fold + `lineage_issues` + projection) must absorb every hostile shape
 /// without panicking — both the whole stream and every prefix of it.
 fn assert_replay_never_panics(events: &[FactEvent]) {
     for end in 0..=events.len() {
         // The result may be Ok (possibly with lineage issues) or Err — never a panic.
-        if let Ok(projection) = replay_entity(&events[..end]) {
+        if let Ok(projection) = replay_subject(&events[..end]) {
             let _ = projection.lineage_issues();
         }
     }
@@ -206,7 +206,7 @@ fn extreme_timestamps_and_ttls_do_not_panic_the_freshness_math() {
 
 #[test]
 fn a_large_evidence_and_event_stream_does_not_panic() {
-    // Many events on one entity, each carrying a sizeable evidence vector — exercises the
+    // Many events on one subject, each carrying a sizeable evidence vector — exercises the
     // count/aggregation paths without overflow.
     let mut events = vec![event(
         "event:0",
@@ -229,7 +229,7 @@ fn a_large_evidence_and_event_stream_does_not_panic() {
         ));
     }
     // Only the full stream (the per-prefix loop would be O(n^2) for n=500).
-    if let Ok(projection) = replay_entity(&events) {
+    if let Ok(projection) = replay_subject(&events) {
         let _ = projection.lineage_issues();
     }
 }

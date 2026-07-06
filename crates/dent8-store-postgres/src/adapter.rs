@@ -145,8 +145,8 @@ impl PostgresEventStore {
     /// Ordered events matching a filter (by fact / subject+predicate / sequence).
     pub async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
         let fact_id = filter.fact_id.as_ref().map(FactId::as_str);
-        let subject_type = filter.subject.as_ref().map(dent8_core::EntityRef::kind);
-        let subject_key = filter.subject.as_ref().map(dent8_core::EntityRef::key);
+        let subject_type = filter.subject.as_ref().map(dent8_core::Subject::kind);
+        let subject_key = filter.subject.as_ref().map(dent8_core::Subject::key);
         let predicate = filter.predicate.as_ref().map(dent8_core::Predicate::as_str);
         let after = filter
             .after_sequence
@@ -509,9 +509,9 @@ fn unavailable(error: sqlx::Error) -> StoreError {
 mod tests {
     use super::PostgresEventStore;
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
-        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue,
-        Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis, Ttl,
+        ActorId, Authority, AuthorityLevel, Confidence, Evidence, EvidenceId, EvidenceKind,
+        FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue, Predicate,
+        Provenance, SourceId, Subject, SupersessionReason, TimestampMillis, Ttl,
     };
     use dent8_store::StoreError;
 
@@ -630,7 +630,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
-            subject: EntityRef::new("repo", "myproj").expect("entity"),
+            subject: Subject::new("repo", "myproj").expect("subject"),
             predicate: Predicate::new("database").expect("predicate"),
             value,
             confidence: Confidence::from_millis(900).expect("confidence"),
@@ -741,7 +741,7 @@ mod tests {
         authority: AuthorityLevel,
     ) -> FactEvent {
         let mut event = assert_event(event_id, fact_id, "v", source, authority);
-        event.subject = EntityRef::new("repo", subject_key).expect("subject");
+        event.subject = Subject::new("repo", subject_key).expect("subject");
         event
     }
 

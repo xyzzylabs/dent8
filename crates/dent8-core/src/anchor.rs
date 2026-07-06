@@ -239,8 +239,8 @@ mod tests {
     use super::{ChainAnchor, anchor_head, hmac_sha256, verify_anchor};
     use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceKind, FactEvent,
-        FactEventKind, FactValue, Predicate, Provenance, Ttl,
+        Authority, AuthorityLevel, Confidence, Evidence, EvidenceKind, FactEvent, FactEventKind,
+        FactValue, Predicate, Provenance, Subject, Ttl,
     };
 
     const KEY: &[u8] = b"witness-secret-held-off-the-writer";
@@ -250,7 +250,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new("fact:1").expect("fact id"),
             kind: FactEventKind::Asserted,
-            subject: EntityRef::new("repo", "dent8").expect("entity"),
+            subject: Subject::new("repo", "dent8").expect("subject"),
             predicate: Predicate::new("database").expect("predicate"),
             value: Some(FactValue::Text(value.to_string())),
             confidence: Confidence::from_millis(900).expect("confidence"),

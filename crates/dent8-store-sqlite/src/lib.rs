@@ -148,8 +148,8 @@ impl SqliteEventStore {
     /// Events matching a filter, in global order.
     pub async fn scan_events(&self, filter: &EventFilter) -> Result<Vec<FactEvent>, StoreError> {
         let fact_id = filter.fact_id.as_ref().map(FactId::as_str);
-        let subject_type = filter.subject.as_ref().map(dent8_core::EntityRef::kind);
-        let subject_key = filter.subject.as_ref().map(dent8_core::EntityRef::key);
+        let subject_type = filter.subject.as_ref().map(dent8_core::Subject::kind);
+        let subject_key = filter.subject.as_ref().map(dent8_core::Subject::key);
         let predicate = filter.predicate.as_ref().map(dent8_core::Predicate::as_str);
         let after = filter
             .after_sequence
@@ -341,8 +341,8 @@ impl AsyncEventStore for SqliteEventStore {
 mod tests {
     use super::*;
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
-        EvidenceKind, FactEventId, FactValue, Predicate, Provenance, SourceId, SupersessionReason,
+        ActorId, Authority, AuthorityLevel, Confidence, Evidence, EvidenceId, EvidenceKind,
+        FactEventId, FactValue, Predicate, Provenance, SourceId, Subject, SupersessionReason,
         TimestampMillis, Ttl,
     };
 
@@ -351,7 +351,7 @@ mod tests {
             event_id: FactEventId::new(event_id).unwrap(),
             fact_id: FactId::new(fact).unwrap(),
             kind: FactEventKind::Asserted,
-            subject: EntityRef::new("repo", "dent8").unwrap(),
+            subject: Subject::new("repo", "dent8").unwrap(),
             predicate: Predicate::new("database").unwrap(),
             value: Some(FactValue::Text(value.to_string())),
             confidence: Confidence::from_millis(900).unwrap(),

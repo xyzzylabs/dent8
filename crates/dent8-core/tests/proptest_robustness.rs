@@ -16,9 +16,9 @@
 //! can all enter through a crafted log line. The pipeline must absorb them without crashing.
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, CanonicalJson, Confidence, EntityRef, Evidence, EvidenceId,
+    ActorId, Authority, AuthorityLevel, CanonicalJson, Confidence, Evidence, EvidenceId,
     EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, Predicate, Provenance, SourceId,
-    TimestampMillis, Ttl, apply_event, canonical_bytes, event_hash, hash_chain,
+    Subject, TimestampMillis, Ttl, apply_event, canonical_bytes, event_hash, hash_chain,
 };
 use proptest::prelude::*;
 
@@ -30,7 +30,7 @@ fn skeleton_event() -> FactEvent {
         event_id: FactEventId::new("event:1").unwrap(),
         fact_id: FactId::new("fact:1").unwrap(),
         kind: FactEventKind::Asserted,
-        subject: EntityRef::new("repo", "dent8").unwrap(),
+        subject: Subject::new("repo", "dent8").unwrap(),
         predicate: Predicate::new("database").unwrap(),
         value: Some(dent8_core::FactValue::Text("postgres".to_string())),
         confidence: Confidence::from_millis(900).unwrap(),

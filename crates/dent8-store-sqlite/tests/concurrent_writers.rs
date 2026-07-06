@@ -15,8 +15,8 @@
 use std::sync::{Arc, Barrier};
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId, EvidenceKind,
-    FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance, SourceId,
+    ActorId, Authority, AuthorityLevel, Confidence, Evidence, EvidenceId, EvidenceKind, FactEvent,
+    FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance, SourceId, Subject,
     TimestampMillis, Ttl,
 };
 use dent8_store::EventFilter;
@@ -32,7 +32,7 @@ fn asserted(writer: usize, sequence: usize) -> FactEvent {
         kind: FactEventKind::Asserted,
         // Distinct subjects per event: the race under test is the *global chain head*, not
         // firewall arbitration between competing facts.
-        subject: EntityRef::new("repo", format!("proj-w{writer}-{sequence}")).unwrap(),
+        subject: Subject::new("repo", format!("proj-w{writer}-{sequence}")).unwrap(),
         predicate: Predicate::new("database").unwrap(),
         value: Some(FactValue::Text("postgres".to_string())),
         confidence: Confidence::from_millis(900).unwrap(),

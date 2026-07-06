@@ -16,9 +16,9 @@
 //! authority-lattice tests in `dent8-core`.
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle,
-    FactState, FactValue, Predicate, Provenance, RetractionReason, SourceId, SupersessionReason,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
+    EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactState,
+    FactValue, Predicate, Provenance, RetractionReason, SourceId, Subject, SupersessionReason,
     TimestampMillis, Ttl,
 };
 use dent8_store::{EventFilter, EventStore, InMemoryEventStore, replay_fact, tainted_facts};
@@ -533,7 +533,7 @@ fn event(
         event_id: FactEventId::new(event_id).expect("event id"),
         fact_id: FactId::new(fact_id).expect("fact id"),
         kind,
-        subject: EntityRef::new("repo", "proj").expect("entity"),
+        subject: Subject::new("repo", "proj").expect("subject"),
         predicate: Predicate::new("database").expect("predicate"),
         value: value.map(|v| FactValue::Text(v.to_string())),
         confidence: Confidence::from_millis(900).expect("confidence"),

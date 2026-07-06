@@ -24,9 +24,9 @@
 use std::collections::BTreeMap;
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId,
-    FactLifecycle, FactState, FactValue, Predicate, Provenance, RetractionReason, SourceId,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
+    EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle,
+    FactState, FactValue, Predicate, Provenance, RetractionReason, SourceId, Subject,
     SupersessionReason, TimestampMillis, TransitionError, Ttl, apply_event,
 };
 use proptest::prelude::*;
@@ -225,14 +225,14 @@ fn model_apply(state: Option<&Model>, op: &Op, at: TimestampMillis) -> Result<Mo
 
 struct Base {
     fact: FactId,
-    subject: EntityRef,
+    subject: Subject,
     predicate: Predicate,
 }
 
 fn base() -> Base {
     Base {
         fact: FactId::new("fact:subject").expect("fact id"),
-        subject: EntityRef::new("repo", "dent8").expect("entity"),
+        subject: Subject::new("repo", "dent8").expect("subject"),
         predicate: Predicate::new("database").expect("predicate"),
     }
 }
@@ -513,7 +513,7 @@ proptest! {
         );
         match which {
             0 => foreign.fact_id = FactId::new("fact:foreign").expect("fact id"),
-            1 => foreign.subject = EntityRef::new("repo", "other").expect("entity"),
+            1 => foreign.subject = Subject::new("repo", "other").expect("subject"),
             _ => foreign.predicate = Predicate::new("other_predicate").expect("predicate"),
         }
         let result = apply_event(Some(state), &foreign);

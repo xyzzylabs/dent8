@@ -1665,8 +1665,8 @@ fn tool_list() -> Vec<Value> {
         },
     });
     let subject = json!({
-        "subject_kind": { "type": "string", "description": "entity kind, e.g. repo" },
-        "subject_key": { "type": "string", "description": "entity key, e.g. myproj" },
+        "subject_kind": { "type": "string", "description": "subject kind, e.g. repo" },
+        "subject_key": { "type": "string", "description": "subject key, e.g. myproj" },
         "predicate": { "type": "string", "description": "fact name, e.g. database" },
     });
     let write = json!({
@@ -1692,8 +1692,8 @@ fn tool_list() -> Vec<Value> {
     let read_props = merge(&subject, &clock);
     let write_only = merge(&subject, &write);
     let from = json!({
-        "from_kind": { "type": "string", "description": "source fact's entity kind" },
-        "from_key": { "type": "string", "description": "source fact's entity key" },
+        "from_kind": { "type": "string", "description": "source fact's subject kind" },
+        "from_key": { "type": "string", "description": "source fact's subject key" },
         "from_predicate": { "type": "string", "description": "source fact's predicate" },
     });
     let derive_props = merge(&valued_vt, &from);

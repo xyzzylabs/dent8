@@ -6,7 +6,7 @@
 //!
 //! 1. **Per-fact** ([`apply_event`]): schema validation, the *stated* authority gate,
 //!    the canonical-contradiction hard-alarm, terminal immutability, duplicate detection.
-//! 2. **Entity-aware** (anti-laundering): a `Superseded` event names a *replacing fact*;
+//! 2. **Subject-aware** (anti-laundering): a `Superseded` event names a *replacing fact*;
 //!    the firewall resolves that fact's **actual** authority and rejects the write if it
 //!    is below the incumbent's. This closes the over-stated-authority hole that the
 //!    per-fact gate alone cannot see, because a supersession event can assert any
@@ -40,7 +40,7 @@ where
 /// (ignored for other kinds; `None` is treated as an absent fact).
 ///
 /// Enforces both firewall layers: the per-fact stated-authority gate, terminal/shape
-/// invariants and the canonical hard-alarm (via [`apply_event`]); and the entity-aware
+/// invariants and the canonical hard-alarm (via [`apply_event`]); and the subject-aware
 /// anti-laundering check (a supersession must be backed by a *real* fact that out-ranks
 /// the incumbent).
 pub fn arbitrate_events(
@@ -54,7 +54,7 @@ pub fn arbitrate_events(
     // Per-fact arbitration (gates on the event's own stated authority).
     apply_event(current, candidate).map_err(StoreError::Rejected)?;
 
-    // Entity-aware anti-laundering: a supersession must be backed by a *real* fact that
+    // Subject-aware anti-laundering: a supersession must be backed by a *real* fact that
     // out-ranks the incumbent, not merely by an event that asserts high authority.
     if let FactEventKind::Superseded { by, .. } = &candidate.kind {
         let incumbent = incumbent_authority.expect("a supersession has an incumbent");
@@ -81,9 +81,9 @@ pub fn arbitrate_events(
 mod tests {
     use crate::{EventStore, InMemoryEventStore, StoreError};
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
-        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue,
-        Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis, TransitionError, Ttl,
+        ActorId, Authority, AuthorityLevel, Confidence, Evidence, EvidenceId, EvidenceKind,
+        FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue, Predicate,
+        Provenance, SourceId, Subject, SupersessionReason, TimestampMillis, TransitionError, Ttl,
     };
 
     fn assert_event(
@@ -135,7 +135,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
-            subject: EntityRef::new("repo", "myproj").expect("entity"),
+            subject: Subject::new("repo", "myproj").expect("subject"),
             predicate: Predicate::new("database").expect("predicate"),
             value,
             confidence: Confidence::from_millis(900).expect("confidence"),
@@ -247,7 +247,7 @@ mod tests {
             .expect("low fact may exist");
 
         // ...but the supersession EVENT facts High authority. The per-fact gate would
-        // pass; the entity-aware firewall must reject it.
+        // pass; the subject-aware firewall must reject it.
         let rejected = store.append(supersede_event(
             "e3",
             "fact:A",

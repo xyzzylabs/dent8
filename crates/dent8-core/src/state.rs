@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{FactEventId, FactId, SourceId, TimestampMillis};
 use crate::model::{
-    Authority, AuthorityLevel, EntityRef, FactEvent, FactEventKind, FactValue, Predicate, Ttl,
+    Authority, AuthorityLevel, FactEvent, FactEventKind, FactValue, Predicate, Subject, Ttl,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ impl FactLifecycle {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FactState {
     pub fact_id: FactId,
-    pub subject: EntityRef,
+    pub subject: Subject,
     pub predicate: Predicate,
     pub value: FactValue,
     /// Entrenchment of the incumbent fact, captured at assertion. Drives
@@ -119,7 +119,7 @@ impl FactState {
     /// independent backing ([`Self::corroboration_at_or_above`]) plus
     /// having-been-attacked-and-held ([`Self::survived_challenges_at_or_above`]), each counted
     /// only at authority ≥ `min`. This is the measure the opt-in supersession gate and the
-    /// entity-level unearned-supersession audit compare, so a fact that survived challenges
+    /// subject-level unearned-supersession audit compare, so a fact that survived challenges
     /// resists an equal-authority replacement as much as one with extra backing does.
     #[must_use]
     pub fn earned_entrenchment_at_or_above(&self, min: AuthorityLevel) -> usize {
@@ -391,9 +391,9 @@ impl std::error::Error for TransitionError {}
 mod tests {
     use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-        EvidenceKind, ExpirationReason, FactEvent, FactEventKind, FactValue, Predicate, Provenance,
-        RetractionReason, SupersessionReason, Ttl,
+        Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceKind,
+        ExpirationReason, FactEvent, FactEventKind, FactValue, Predicate, Provenance,
+        RetractionReason, Subject, SupersessionReason, Ttl,
     };
 
     use super::{FactLifecycle, TransitionError, apply_event};
@@ -475,7 +475,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("valid event id"),
             fact_id: fact_id("fact:1"),
             kind,
-            subject: EntityRef::new("repo", "dent8").expect("valid entity"),
+            subject: Subject::new("repo", "dent8").expect("valid subject"),
             predicate: Predicate::new("uses_database").expect("valid predicate"),
             value,
             confidence: Confidence::from_millis(900).expect("valid confidence"),
@@ -999,8 +999,8 @@ mod tests {
 mod proofs {
     use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceKind, ExpirationReason,
-        FactEvent, FactEventKind, FactValue, Predicate, Provenance, SupersessionReason, Ttl,
+        Authority, AuthorityLevel, Confidence, Evidence, EvidenceKind, ExpirationReason, FactEvent,
+        FactEventKind, FactValue, Predicate, Provenance, Subject, SupersessionReason, Ttl,
     };
 
     use super::apply_event;
@@ -1025,7 +1025,7 @@ mod proofs {
             event_id: FactEventId::new(event_id).unwrap(),
             fact_id: FactId::new("fact:1").unwrap(),
             kind,
-            subject: EntityRef::new("repo", "dent8").unwrap(),
+            subject: Subject::new("repo", "dent8").unwrap(),
             predicate: Predicate::new("uses_database").unwrap(),
             value,
             confidence: Confidence::from_millis(900).unwrap(),

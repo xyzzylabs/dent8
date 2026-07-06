@@ -13,9 +13,9 @@
 //! - **The external anchor accepts its own log and rejects any change.**
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, CanonicalJson, Confidence, ContradictionBasis, EntityRef,
-    Evidence, EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind,
-    FactId, FactValue, Predicate, Provenance, RetractionReason, SourceId, SupersessionReason,
+    ActorId, Authority, AuthorityLevel, CanonicalJson, Confidence, ContradictionBasis, Evidence,
+    EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId,
+    FactValue, Predicate, Provenance, RetractionReason, SourceId, Subject, SupersessionReason,
     TimestampMillis, Ttl, anchor_head, canonical_bytes, event_hash, hash_chain, verify_anchor,
 };
 use proptest::prelude::*;
@@ -60,7 +60,7 @@ fn object_text<'a>(pairs: impl Iterator<Item = &'a (String, JsonValue)>) -> Stri
     format!("{{{}}}", body.join(","))
 }
 
-/// A non-empty identifier string (the only constraint the ID newtypes and `EntityRef`/
+/// A non-empty identifier string (the only constraint the ID newtypes and `Subject`/
 /// `Predicate` impose). Mixes a tidy id-shaped form with arbitrary non-blank strings so
 /// escape-sensitive bytes (quotes, backslashes, control chars, non-ASCII) also reach the
 /// identity fields the hash chain commits to — not just the `Json`/`Text`/`Option` leaves.
@@ -237,7 +237,7 @@ fn arb_event() -> impl Strategy<Value = FactEvent> {
                 event_id: FactEventId::new(event_id).expect("event id"),
                 fact_id: FactId::new(fact_id).expect("fact id"),
                 kind,
-                subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
+                subject: Subject::new(subject_kind, subject_key).expect("subject"),
                 predicate: Predicate::new(predicate).expect("predicate"),
                 value,
                 confidence: Confidence::from_millis(confidence).expect("confidence"),

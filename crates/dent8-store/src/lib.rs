@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use dent8_core::{
-    AuthorityLevel, EntityRef, EpistemicPolicy, FactEvent, FactEventId, FactEventKind, FactId,
-    FactLifecycle, FactState, FactValue, Predicate, TransitionError, apply_event,
+    AuthorityLevel, EpistemicPolicy, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle,
+    FactState, FactValue, Predicate, Subject, TransitionError, apply_event,
 };
 
 pub mod firewall;
@@ -26,7 +26,7 @@ pub struct AppendReceipt {
 #[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct EventFilter {
     pub fact_id: Option<FactId>,
-    pub subject: Option<EntityRef>,
+    pub subject: Option<Subject>,
     pub predicate: Option<Predicate>,
     pub after_sequence: Option<u64>,
     pub limit: Option<u32>,
@@ -133,16 +133,16 @@ fn fold_fact(
     Ok(state)
 }
 
-/// A projection of every fact stream for one entity, folded independently and keyed
-/// by `fact_id`. Built by [`replay_entity`] (or [`replay_entity_with_policy`]) from
-/// the entity's events in global order. Unlike per-fact replay, this view enables
-/// cross-stream checks such as [`EntityProjection::lineage_issues`].
+/// A projection of every fact stream for one subject, folded independently and keyed
+/// by `fact_id`. Built by [`replay_subject`] (or [`replay_subject_with_policy`]) from
+/// the subject's events in global order. Unlike per-fact replay, this view enables
+/// cross-stream checks such as [`SubjectProjection::lineage_issues`].
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct EntityProjection {
+pub struct SubjectProjection {
     pub facts: BTreeMap<FactId, FactState>,
 }
 
-impl EntityProjection {
+impl SubjectProjection {
     #[must_use]
     pub fn get(&self, fact_id: &FactId) -> Option<&FactState> {
         self.facts.get(fact_id)
@@ -167,7 +167,7 @@ impl EntityProjection {
     /// Cross-stream supersession-lineage problems:
     ///
     /// - [`LineageIssue::DanglingSupersession`] — superseded by a fact absent from
-    ///   the entity;
+    ///   the subject;
     /// - [`LineageIssue::SupersededByInvalidated`] — superseded by a fact that has
     ///   itself been retracted or closed by a `fact.expired` event (an intact
     ///   `A -> B -> C` chain where `B` is merely `Superseded` is *not* an issue);
@@ -177,7 +177,7 @@ impl EntityProjection {
     /// Out of scope here: read-time TTL staleness of a successor is *not* flagged
     /// (freshness is a separate axis — combine with [`FactState::is_expired_at`]), and
     /// contradiction edges are not checked, because a contradictor may legitimately
-    /// live in another entity.
+    /// live in another subject.
     #[must_use]
     pub fn lineage_issues(&self) -> Vec<LineageIssue> {
         let on_cycle = self.supersession_cycle_members();
@@ -217,7 +217,7 @@ impl EntityProjection {
 
     /// Supersessions that did not *earn* their replacement, judged against the
     /// replacing fact's actual state (not just the supersession event's stated
-    /// authority). This is the entity-level entrenchment audit — defense-in-depth over
+    /// authority). This is the subject-level entrenchment audit — defense-in-depth over
     /// the per-stream authority gate in `apply_event`, which can only trust the
     /// supersession event's facted authority. Two cases:
     ///
@@ -237,9 +237,9 @@ impl EntityProjection {
     /// `WeakerEntrenchment` flag clears if the replacement later earns enough standing.
     /// Read it as "the replacement *still* has weaker entrenchment than what it displaced."
     ///
-    /// Scope: only supersessions whose target is present *in this entity* are judged (a
-    /// dangling target is a [`LineageIssue`]; a target in another entity is not seen).
-    /// Cyclic supersessions are skipped (handled by [`EntityProjection::lineage_issues`]).
+    /// Scope: only supersessions whose target is present *in this subject* are judged (a
+    /// dangling target is a [`LineageIssue`]; a target in another subject is not seen).
+    /// Cyclic supersessions are skipped (handled by [`SubjectProjection::lineage_issues`]).
     #[must_use]
     pub fn unearned_supersessions(&self) -> Vec<UnearnedSupersession> {
         let on_cycle = self.supersession_cycle_members();
@@ -279,7 +279,7 @@ impl EntityProjection {
     }
 
     /// The facts lying on a supersession cycle (including self-supersession), found by
-    /// following `superseded_by` edges within the entity. Single traversal per start
+    /// following `superseded_by` edges within the subject. Single traversal per start
     /// with a visited index, so cycles cannot loop.
     fn supersession_cycle_members(&self) -> BTreeSet<FactId> {
         let mut on_cycle = BTreeSet::new();
@@ -312,10 +312,10 @@ impl EntityProjection {
     }
 }
 
-/// A cross-stream supersession-lineage defect found by [`EntityProjection::lineage_issues`].
+/// A cross-stream supersession-lineage defect found by [`SubjectProjection::lineage_issues`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LineageIssue {
-    /// `fact` is superseded by `target`, but no such fact exists in the entity.
+    /// `fact` is superseded by `target`, but no such fact exists in the subject.
     DanglingSupersession { fact: FactId, target: FactId },
     /// `fact` is superseded by `target`, but `target` has itself been invalidated by a
     /// retraction or a `fact.expired` event, orphaning the lineage.
@@ -330,7 +330,7 @@ pub enum LineageIssue {
 }
 
 /// A supersession that did not earn its replacement, found by
-/// [`EntityProjection::unearned_supersessions`].
+/// [`SubjectProjection::unearned_supersessions`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UnearnedSupersession {
     /// `superseded` was replaced by `by`, but `by` is actually lower authority — the
@@ -352,10 +352,10 @@ pub enum UnearnedSupersession {
     },
 }
 
-/// Replay every fact stream for one entity (events in global order) into an
-/// [`EntityProjection`]. Strict, like [`replay_fact`].
-pub fn replay_entity(events: &[FactEvent]) -> Result<EntityProjection, ReplayError> {
-    replay_entity_with_policy(events, &EpistemicPolicy::identity())
+/// Replay every fact stream for one subject (events in global order) into an
+/// [`SubjectProjection`]. Strict, like [`replay_fact`].
+pub fn replay_subject(events: &[FactEvent]) -> Result<SubjectProjection, ReplayError> {
+    replay_subject_with_policy(events, &EpistemicPolicy::identity())
 }
 
 /// A still-believed fact that transitively derives (`EvidenceKind::DerivedFrom`, ADR 0010)
@@ -369,14 +369,14 @@ pub struct TaintedFact {
     pub root_lifecycle: FactLifecycle,
 }
 
-/// Cross-entity retraction-taint analysis over the **whole** log: fold every fact stream to
+/// Cross-subject retraction-taint analysis over the **whole** log: fold every fact stream to
 /// its lifecycle and collect its `DerivedFrom` dependency edges, then report each
 /// *still-believed* fact that transitively depends on an invalidated (`Retracted`/`Expired`)
 /// source. This is the read-side "poison does not survive in derivatives" check (ADR 0010) —
-/// computed on replay, never written, and cross-entity (a dependency may live in another
+/// computed on replay, never written, and cross-subject (a dependency may live in another
 /// subject's stream).
 pub fn tainted_facts(events: &[FactEvent]) -> Result<Vec<TaintedFact>, ReplayError> {
-    // Group by fact id — independent of entity, since a dependency edge may cross entities.
+    // Group by fact id — independent of subject, since a dependency edge may cross subjects.
     let mut streams: BTreeMap<FactId, Vec<&FactEvent>> = BTreeMap::new();
     for event in events {
         streams
@@ -445,13 +445,13 @@ fn an_invalidated_root(
     None
 }
 
-/// Entity-level [`replay_entity`] under an [`EpistemicPolicy`]: each stream is folded
+/// Subject-level [`replay_subject`] under an [`EpistemicPolicy`]: each stream is folded
 /// under the policy, so a distrusted source can make whole facts absent from the
-/// entity view — the multi-fact counterfactual surface.
-pub fn replay_entity_with_policy(
+/// subject view — the multi-fact counterfactual surface.
+pub fn replay_subject_with_policy(
     events: &[FactEvent],
     policy: &EpistemicPolicy,
-) -> Result<EntityProjection, ReplayError> {
+) -> Result<SubjectProjection, ReplayError> {
     let mut streams: BTreeMap<FactId, Vec<&FactEvent>> = BTreeMap::new();
     for event in events {
         streams
@@ -467,7 +467,7 @@ pub fn replay_entity_with_policy(
         }
     }
 
-    Ok(EntityProjection { facts })
+    Ok(SubjectProjection { facts })
 }
 
 /// The structural difference between a baseline projection and a counterfactual one,
@@ -630,14 +630,14 @@ impl std::error::Error for ReplayError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        LineageIssue, StateDiff, UnearnedSupersession, diff_states, replay_entity,
-        replay_entity_with_policy, replay_fact, replay_fact_with_policy, tainted_facts,
+        LineageIssue, StateDiff, UnearnedSupersession, diff_states, replay_fact,
+        replay_fact_with_policy, replay_subject, replay_subject_with_policy, tainted_facts,
     };
     use dent8_core::{
         ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, Confidence,
-        EntityRef, EpistemicPolicy, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId,
-        FactEventKind, FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason,
-        SourceId, SupersessionReason, TimestampMillis, Ttl,
+        EpistemicPolicy, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind,
+        FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason, SourceId,
+        Subject, SupersessionReason, TimestampMillis, Ttl,
     };
 
     #[allow(clippy::too_many_arguments)]
@@ -655,7 +655,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new("fact:1").expect("fact id"),
             kind,
-            subject: EntityRef::new("repo", "dent8").expect("entity"),
+            subject: Subject::new("repo", "dent8").expect("subject"),
             predicate: Predicate::new("uses_database").expect("predicate"),
             value,
             confidence: Confidence::from_millis(confidence_millis).expect("confidence"),
@@ -728,7 +728,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new(fact_id).expect("fact id"),
             kind,
-            subject: EntityRef::new("repo", fact_id).expect("entity"),
+            subject: Subject::new("repo", fact_id).expect("subject"),
             predicate: Predicate::new("fact").expect("predicate"),
             value: Some(FactValue::Text("v".to_string())),
             confidence: Confidence::from_millis(900).expect("confidence"),
@@ -1023,7 +1023,7 @@ mod tests {
         assert_eq!(diff_states(a.as_ref(), b.as_ref()), StateDiff::Unchanged);
     }
 
-    // ---- entity-level replay & cross-stream lineage ----
+    // ---- subject-level replay & cross-stream lineage ----
 
     fn with_fact(mut event: FactEvent, fact_id: &str) -> FactEvent {
         event.fact_id = FactId::new(fact_id).expect("fact id");
@@ -1137,21 +1137,21 @@ mod tests {
     }
 
     #[test]
-    fn replay_entity_folds_each_stream_independently() {
+    fn replay_subject_folds_each_stream_independently() {
         let events = [
             assert_in("event:1", "fact:A", "source:owner"),
             assert_in("event:2", "fact:B", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
-        assert_eq!(entity.facts.len(), 2);
+        assert_eq!(subject.facts.len(), 2);
         assert_eq!(
-            entity.get(&fact("fact:A")).unwrap().lifecycle,
+            subject.get(&fact("fact:A")).unwrap().lifecycle,
             FactLifecycle::Active
         );
-        assert_eq!(entity.believed().count(), 2);
-        assert!(entity.lineage_issues().is_empty());
+        assert_eq!(subject.believed().count(), 2);
+        assert!(subject.lineage_issues().is_empty());
     }
 
     #[test]
@@ -1162,17 +1162,17 @@ mod tests {
             supersede_in("event:3", "fact:A", "fact:B", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         assert_eq!(
-            entity.get(&fact("fact:A")).unwrap().lifecycle,
+            subject.get(&fact("fact:A")).unwrap().lifecycle,
             FactLifecycle::Superseded
         );
         assert_eq!(
-            entity.get(&fact("fact:B")).unwrap().lifecycle,
+            subject.get(&fact("fact:B")).unwrap().lifecycle,
             FactLifecycle::Active
         );
-        assert!(entity.lineage_issues().is_empty());
+        assert!(subject.lineage_issues().is_empty());
     }
 
     #[test]
@@ -1182,10 +1182,10 @@ mod tests {
             supersede_in("event:2", "fact:A", "fact:ghost", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         assert_eq!(
-            entity.lineage_issues(),
+            subject.lineage_issues(),
             vec![LineageIssue::DanglingSupersession {
                 fact: fact("fact:A"),
                 target: fact("fact:ghost"),
@@ -1202,10 +1202,10 @@ mod tests {
             retract_in("event:4", "fact:B"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         assert_eq!(
-            entity.lineage_issues(),
+            subject.lineage_issues(),
             vec![LineageIssue::SupersededByInvalidated {
                 fact: fact("fact:A"),
                 target: fact("fact:B"),
@@ -1215,18 +1215,18 @@ mod tests {
     }
 
     #[test]
-    fn entity_level_distrust_drops_a_whole_stream() {
+    fn subject_level_distrust_drops_a_whole_stream() {
         let events = [
             assert_in("event:1", "fact:A", "source:owner"),
             assert_in("event:2", "fact:B", "source:web-scrape"),
         ];
 
-        let entity = replay_entity_with_policy(&events, &distrust("source:web-scrape"))
-            .expect("entity replay");
+        let subject = replay_subject_with_policy(&events, &distrust("source:web-scrape"))
+            .expect("subject replay");
 
-        assert_eq!(entity.facts.len(), 1);
-        assert!(entity.get(&fact("fact:A")).is_some());
-        assert!(entity.get(&fact("fact:B")).is_none());
+        assert_eq!(subject.facts.len(), 1);
+        assert!(subject.get(&fact("fact:A")).is_some());
+        assert!(subject.get(&fact("fact:B")).is_none());
     }
 
     #[test]
@@ -1236,10 +1236,10 @@ mod tests {
             supersede_in("event:2", "fact:A", "fact:A", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         assert_eq!(
-            entity.lineage_issues(),
+            subject.lineage_issues(),
             vec![LineageIssue::SupersessionCycle {
                 fact: fact("fact:A"),
             }]
@@ -1255,10 +1255,10 @@ mod tests {
             supersede_in("event:4", "fact:B", "fact:A", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         assert_eq!(
-            entity.lineage_issues(),
+            subject.lineage_issues(),
             vec![
                 LineageIssue::SupersessionCycle {
                     fact: fact("fact:A"),
@@ -1280,12 +1280,12 @@ mod tests {
             supersede_in("event:5", "fact:B", "fact:C", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
-        assert!(entity.lineage_issues().is_empty());
-        assert_eq!(entity.believed().count(), 1); // only C
+        assert!(subject.lineage_issues().is_empty());
+        assert_eq!(subject.believed().count(), 1); // only C
         assert_eq!(
-            entity.get(&fact("fact:C")).unwrap().lifecycle,
+            subject.get(&fact("fact:C")).unwrap().lifecycle,
             FactLifecycle::Active
         );
     }
@@ -1300,9 +1300,9 @@ mod tests {
             reinforce_in("event:3", "fact:A", "source:owner"), // same source: no new corroboration
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
-        assert_eq!(entity.get(&fact("fact:A")).unwrap().corroboration(), 2);
+        assert_eq!(subject.get(&fact("fact:A")).unwrap().corroboration(), 2);
     }
 
     #[test]
@@ -1314,13 +1314,13 @@ mod tests {
             supersede_in("event:4", "fact:A", "fact:B", "source:rumor"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         // Lineage is intact (B exists, active); the weakness is only visible to the
         // entrenchment audit.
-        assert!(entity.lineage_issues().is_empty());
+        assert!(subject.lineage_issues().is_empty());
         assert_eq!(
-            entity.unearned_supersessions(),
+            subject.unearned_supersessions(),
             vec![UnearnedSupersession::WeakerEntrenchment {
                 superseded: fact("fact:A"),
                 by: fact("fact:B"),
@@ -1340,10 +1340,10 @@ mod tests {
             supersede_in("event:3", "fact:A", "fact:B", "source:rumor"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
         assert_eq!(
-            entity.unearned_supersessions(),
+            subject.unearned_supersessions(),
             vec![UnearnedSupersession::AuthorityDowngrade {
                 superseded: fact("fact:A"),
                 by: fact("fact:B"),
@@ -1369,11 +1369,11 @@ mod tests {
             supersede_in("event:7", "fact:A", "fact:B", "source:attacker"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
-        assert_eq!(entity.get(&fact("fact:B")).unwrap().corroboration(), 4); // raw, inflated
+        assert_eq!(subject.get(&fact("fact:B")).unwrap().corroboration(), 4); // raw, inflated
         assert_eq!(
-            entity.unearned_supersessions(),
+            subject.unearned_supersessions(),
             vec![UnearnedSupersession::WeakerEntrenchment {
                 superseded: fact("fact:A"),
                 by: fact("fact:B"),
@@ -1396,18 +1396,18 @@ mod tests {
             supersede_in("event:4", "fact:A", "fact:B", "source:rumor"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
-        assert_eq!(entity.get(&fact("fact:A")).unwrap().corroboration(), 1);
+        assert_eq!(subject.get(&fact("fact:A")).unwrap().corroboration(), 1);
         assert_eq!(
-            entity
+            subject
                 .get(&fact("fact:A"))
                 .unwrap()
                 .survived_challenges_at_or_above(AuthorityLevel::High),
             1
         );
         assert_eq!(
-            entity.unearned_supersessions(),
+            subject.unearned_supersessions(),
             vec![UnearnedSupersession::WeakerEntrenchment {
                 superseded: fact("fact:A"),
                 by: fact("fact:B"),
@@ -1430,8 +1430,8 @@ mod tests {
             supersede_in("event:3", "fact:A", "fact:B", "source:owner"),
         ];
 
-        let entity = replay_entity(&events).expect("entity replay");
+        let subject = replay_subject(&events).expect("subject replay");
 
-        assert!(entity.unearned_supersessions().is_empty());
+        assert!(subject.unearned_supersessions().is_empty());
     }
 }

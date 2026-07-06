@@ -5,20 +5,20 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct EntityRef {
+pub struct Subject {
     kind: String,
     key: String,
 }
 
-impl EntityRef {
+impl Subject {
     pub fn new(kind: impl Into<String>, key: impl Into<String>) -> Result<Self, ValidationError> {
         let kind = kind.into();
         let key = key.into();
         if kind.trim().is_empty() {
-            return Err(ValidationError::EmptyField("entity.kind"));
+            return Err(ValidationError::EmptyField("subject.kind"));
         }
         if key.trim().is_empty() {
-            return Err(ValidationError::EmptyField("entity.key"));
+            return Err(ValidationError::EmptyField("subject.key"));
         }
         Ok(Self { kind, key })
     }
@@ -354,7 +354,7 @@ pub enum ChallengeRejection {
     /// The challenge's stated authority was below the incumbent's.
     InsufficientAuthority,
     /// The supersession stated enough authority, but its backing fact was actually
-    /// weaker (the entity-aware anti-laundering check).
+    /// weaker (the subject-aware anti-laundering check).
     LaunderedAuthority,
     /// A contradiction against a canonical incumbent (the LFI hard-alarm).
     CanonicalContradiction,
@@ -438,7 +438,7 @@ pub struct FactEvent {
     pub event_id: FactEventId,
     pub fact_id: FactId,
     pub kind: FactEventKind,
-    pub subject: EntityRef,
+    pub subject: Subject,
     pub predicate: Predicate,
     pub value: Option<FactValue>,
     pub confidence: Confidence,

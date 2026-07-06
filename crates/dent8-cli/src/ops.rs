@@ -7,14 +7,14 @@
 
 use dent8_core::{
     ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, Confidence,
-    ContradictionBasis, EntityRef, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId,
-    FactEventKind, FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason,
+    ContradictionBasis, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind,
+    FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason, Subject,
     SupersessionReason, TimestampMillis, Ttl,
 };
 use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt,
-    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_entity,
-    replay_fact,
+    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_fact,
+    replay_subject,
 };
 
 use std::str::FromStr;
@@ -48,7 +48,7 @@ pub(crate) fn build_event(
         event_id: FactEventId::new(event_id).map_err(|e| format!("event id: {e}"))?,
         fact_id: FactId::new(fact_id).map_err(|e| format!("fact id: {e}"))?,
         kind,
-        subject: EntityRef::new(subject_kind, subject_key).map_err(|e| format!("subject: {e}"))?,
+        subject: Subject::new(subject_kind, subject_key).map_err(|e| format!("subject: {e}"))?,
         predicate: Predicate::new(predicate).map_err(|e| format!("predicate: {e}"))?,
         value,
         confidence: Confidence::ASSERTED,
@@ -278,7 +278,7 @@ fn classify_challenge(
 fn persist_challenge_record(
     path: &str,
     incumbent: &FactId,
-    subject: &EntityRef,
+    subject: &Subject,
     predicate: &Predicate,
     challenge: ChallengeKind,
     by: Option<FactId>,
@@ -505,7 +505,7 @@ pub(crate) fn op_derive(
         identity,
     )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
-    let from_subject = EntityRef::new(from_kind, from_key)
+    let from_subject = Subject::new(from_kind, from_key)
         .map_err(|error| OpError::Invalid(format!("invalid source subject: {error}")))?;
     let from_predicate_parsed = Predicate::new(from_predicate)
         .map_err(|error| OpError::Invalid(format!("invalid source predicate: {error}")))?;
@@ -982,7 +982,7 @@ pub(crate) fn op_supersede(
         identity,
     )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
-    let subject = EntityRef::new(subject_kind, subject_key)
+    let subject = Subject::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
@@ -1187,7 +1187,7 @@ pub(crate) fn op_retract(
         identity,
     )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
-    let subject = EntityRef::new(subject_kind, subject_key)
+    let subject = Subject::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
@@ -1339,7 +1339,7 @@ pub(crate) fn build_per_incumbent(
         identity,
     )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
-    let subject = EntityRef::new(subject_kind, subject_key)
+    let subject = Subject::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
@@ -1481,7 +1481,7 @@ pub(crate) fn op_contradict(
         identity,
     )?;
     let mut store = load_store(path).map_err(OpError::Invalid)?;
-    let subject = EntityRef::new(subject_kind, subject_key)
+    let subject = Subject::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
@@ -1621,7 +1621,7 @@ pub(crate) fn replay_outcome(
     clock: ReadClock,
 ) -> Result<ReplayOutcome, OpError> {
     let store = clock.store(path).map_err(OpError::Invalid)?;
-    let subject = EntityRef::new(subject_kind, subject_key)
+    let subject = Subject::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
@@ -1846,7 +1846,7 @@ pub(crate) fn op_explain_receipt(
     clock: ReadClock,
 ) -> Result<IntegrityReceipt, OpError> {
     let store = clock.store(path).map_err(OpError::Invalid)?;
-    let subject = EntityRef::new(subject_kind, subject_key)
+    let subject = Subject::new(subject_kind, subject_key)
         .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
         .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
@@ -2143,7 +2143,7 @@ pub(crate) fn cmd_facts_list(args: &FactsListArgs, output: CliOutput) -> i32 {
 }
 
 /// List every contested fact (a fact in dispute — `Contested` lifecycle) across all
-/// entities. Read-only; backend-aware via `load_store`. Wires `EntityProjection::contested`
+/// subjects. Read-only; backend-aware via `load_store`. Wires `SubjectProjection::contested`
 /// to a runnable surface (gap-register #8).
 pub(crate) fn conflicts_outcome(path: &str) -> Result<Vec<ConflictFact>, OpError> {
     let store = load_store(path).map_err(OpError::Invalid)?;
@@ -2157,10 +2157,10 @@ pub(crate) fn conflicts_outcome(path: &str) -> Result<Vec<ConflictFact>, OpError
         let events = store
             .scan_events(&filter)
             .map_err(|error| OpError::Invalid(error.to_string()))?;
-        let Ok(projection) = replay_entity(&events) else {
+        let Ok(projection) = replay_subject(&events) else {
             continue;
         };
-        // An entity is in dispute when one of its believed facts is `Contested`. Show *all*
+        // An subject is in dispute when one of its believed facts is `Contested`. Show *all*
         // its believed facts so both sides of the dispute are visible, not just one.
         let believed: Vec<&dent8_core::FactState> = projection.believed().collect();
         if believed

@@ -8,12 +8,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use dent8_core::{
-    AuthorityLevel, ChainAnchor, EntityRef, FactEvent, FactId, FactLifecycle, FactValue, Predicate,
+    AuthorityLevel, ChainAnchor, FactEvent, FactId, FactLifecycle, FactValue, Predicate, Subject,
     TimestampMillis, anchor_head, hash_chain, verify_anchor,
 };
 
 use crate::{
-    AppendReceipt, EventFilter, EventStore, ReplayError, StoreError, replay_entity, replay_fact,
+    AppendReceipt, EventFilter, EventStore, ReplayError, StoreError, replay_fact, replay_subject,
 };
 
 #[derive(Clone, Debug)]
@@ -111,7 +111,7 @@ impl InMemoryEventStore {
     /// first-seen (append) order. Each names one fact stream that [`Self::explain_subject`]
     /// / [`Self::explain_latest`] can read — used to enumerate facts for browsing.
     #[must_use]
-    pub fn subjects(&self) -> Vec<(EntityRef, Predicate)> {
+    pub fn subjects(&self) -> Vec<(Subject, Predicate)> {
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for stored in &self.log {
@@ -226,7 +226,7 @@ impl InMemoryEventStore {
     /// Shared by `explain_latest` and `latest_freshness` so the two never disagree.
     fn latest_fact_id(
         &self,
-        subject: &EntityRef,
+        subject: &Subject,
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<FactId>, StoreError> {
@@ -235,16 +235,16 @@ impl InMemoryEventStore {
             predicate: Some(predicate.clone()),
             ..EventFilter::default()
         };
-        let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
-        if let Some(state) = entity
+        let subject = replay_subject(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
+        if let Some(state) = subject
             .believed()
             .find(|state| state.lifecycle == FactLifecycle::Contested && !state.is_expired_at(now))
-            .or_else(|| entity.believed().find(|state| !state.is_expired_at(now)))
-            .or_else(|| entity.believed().next())
+            .or_else(|| subject.believed().find(|state| !state.is_expired_at(now)))
+            .or_else(|| subject.believed().next())
         {
             return Ok(Some(state.fact_id.clone()));
         }
-        Ok(entity
+        Ok(subject
             .facts
             .values()
             .max_by_key(|state| state.updated_at)
@@ -257,7 +257,7 @@ impl InMemoryEventStore {
     /// same fact as [`Self::explain_latest`]; `chain_verified` is `false` (not asked).
     pub fn latest_freshness(
         &self,
-        subject: &EntityRef,
+        subject: &Subject,
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, StoreError> {
@@ -275,7 +275,7 @@ impl InMemoryEventStore {
     /// leave a stale + fresh pair both believed, and superseding only one would leak.
     pub fn believed_fact_ids(
         &self,
-        subject: &EntityRef,
+        subject: &Subject,
         predicate: &Predicate,
     ) -> Result<Vec<FactId>, StoreError> {
         let filter = EventFilter {
@@ -283,8 +283,8 @@ impl InMemoryEventStore {
             predicate: Some(predicate.clone()),
             ..EventFilter::default()
         };
-        let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
-        Ok(entity
+        let subject = replay_subject(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
+        Ok(subject
             .believed()
             .map(|state| state.fact_id.clone())
             .collect())
@@ -297,7 +297,7 @@ impl InMemoryEventStore {
     /// subject+predicate has no events at all.
     pub fn explain_latest(
         &self,
-        subject: &EntityRef,
+        subject: &Subject,
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, StoreError> {
@@ -314,7 +314,7 @@ impl InMemoryEventStore {
     /// used to resolve the *current* fact (e.g. by `supersede`/`contradict`).
     pub fn explain_subject(
         &self,
-        subject: &EntityRef,
+        subject: &Subject,
         predicate: &Predicate,
         now: TimestampMillis,
     ) -> Result<Option<IntegrityReceipt>, StoreError> {
@@ -323,12 +323,12 @@ impl InMemoryEventStore {
             predicate: Some(predicate.clone()),
             ..EventFilter::default()
         };
-        let entity = replay_entity(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
-        let fact_id = entity
+        let subject = replay_subject(&self.scan_events(&filter)?).map_err(StoreError::Replay)?;
+        let fact_id = subject
             .believed()
             .find(|state| state.lifecycle == FactLifecycle::Contested && !state.is_expired_at(now))
-            .or_else(|| entity.believed().find(|state| !state.is_expired_at(now)))
-            .or_else(|| entity.believed().next())
+            .or_else(|| subject.believed().find(|state| !state.is_expired_at(now)))
+            .or_else(|| subject.believed().next())
             .map(|state| state.fact_id.clone());
         match fact_id {
             Some(id) => self.explain(&id, now).map_err(StoreError::Replay),
@@ -387,7 +387,7 @@ impl EventStore for InMemoryEventStore {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IntegrityReceipt {
     pub fact_id: FactId,
-    pub subject: EntityRef,
+    pub subject: Subject,
     pub predicate: Predicate,
     pub value: FactValue,
     pub lifecycle: FactLifecycle,
@@ -427,9 +427,9 @@ mod tests {
     use super::InMemoryEventStore;
     use crate::EventStore;
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-        EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle,
-        FactValue, Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis, Ttl,
+        ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
+        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactValue,
+        Predicate, Provenance, SourceId, Subject, SupersessionReason, TimestampMillis, Ttl,
     };
 
     fn assertion(event_id: &str, fact_id: &str, value: &str) -> FactEvent {
@@ -437,7 +437,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new(fact_id).expect("fact id"),
             kind: FactEventKind::Asserted,
-            subject: EntityRef::new("repo", "myproj").expect("entity"),
+            subject: Subject::new("repo", "myproj").expect("subject"),
             predicate: Predicate::new("database").expect("predicate"),
             value: Some(FactValue::Text(value.to_string())),
             confidence: Confidence::from_millis(900).expect("confidence"),
@@ -475,7 +475,7 @@ mod tests {
         let mut event = assertion("event:1", "fact:A", "postgres");
         event.ttl = Ttl::DurationMillis(100); // anchored at recorded_at = 1 -> expires at 101
         store.append(event).expect("append");
-        let subject = EntityRef::new("repo", "myproj").unwrap();
+        let subject = Subject::new("repo", "myproj").unwrap();
         let predicate = Predicate::new("database").unwrap();
 
         // Before expiry: fresh, with the expiry instant surfaced.
@@ -616,7 +616,7 @@ mod tests {
             .append(contradiction("event:2", "fact:A", "fact:B"))
             .expect("contradiction admitted");
 
-        let subject = EntityRef::new("repo", "myproj").unwrap();
+        let subject = Subject::new("repo", "myproj").unwrap();
         let predicate = Predicate::new("database").unwrap();
         assert_eq!(
             store.believed_fact_ids(&subject, &predicate).unwrap().len(),
@@ -648,7 +648,7 @@ mod tests {
 
         let receipt = store
             .explain_subject(
-                &EntityRef::new("repo", "myproj").unwrap(),
+                &Subject::new("repo", "myproj").unwrap(),
                 &Predicate::new("database").unwrap(),
                 TimestampMillis::from_unix_millis(100),
             )
@@ -668,7 +668,7 @@ mod tests {
             assertion("event:1", "fact:B", "mysql"),
         ])
         .expect("load");
-        let subject = EntityRef::new("repo", "myproj").unwrap();
+        let subject = Subject::new("repo", "myproj").unwrap();
         let predicate = Predicate::new("database").unwrap();
         assert_eq!(
             store.believed_fact_ids(&subject, &predicate).unwrap().len(),

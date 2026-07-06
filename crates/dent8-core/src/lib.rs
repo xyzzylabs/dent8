@@ -17,8 +17,8 @@ pub use hash::{CanonError, attestation_message, canonical_bytes, event_hash, has
 pub use ids::{ActorId, EvidenceId, FactEventId, FactId, IdError, SourceId, TimestampMillis};
 pub use model::{
     AttestationAlgorithm, Authority, AuthorityLevel, CanonicalJson, ChallengeKind,
-    ChallengeRejection, Confidence, ContradictionBasis, EntityRef, Evidence, EvidenceKind,
-    ExpirationReason, FactEvent, FactEventKind, FactValue, Predicate, Provenance, RetractionReason,
+    ChallengeRejection, Confidence, ContradictionBasis, Evidence, EvidenceKind, ExpirationReason,
+    FactEvent, FactEventKind, FactValue, Predicate, Provenance, RetractionReason, Subject,
     SupersessionReason, Ttl, ValidationError, WriteAttestation,
 };
 pub use policy::EpistemicPolicy;

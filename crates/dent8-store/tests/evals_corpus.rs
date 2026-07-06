@@ -24,13 +24,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate,
-    Provenance, RetractionReason, SourceId, SupersessionReason, TimestampMillis, TransitionError,
-    Ttl, hash_chain,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
+    EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance,
+    RetractionReason, SourceId, Subject, SupersessionReason, TimestampMillis, TransitionError, Ttl,
+    hash_chain,
 };
 use dent8_store::{
-    EventFilter, EventStore, InMemoryEventStore, StoreError, replay_entity, tainted_facts,
+    EventFilter, EventStore, InMemoryEventStore, StoreError, replay_subject, tainted_facts,
 };
 use serde::{Deserialize, Serialize};
 
@@ -117,7 +117,7 @@ fn ev(
         event_id: FactEventId::new(format!("event:{seq}")).expect("event id"),
         fact_id: FactId::new(fact).expect("fact id"),
         kind,
-        subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
+        subject: Subject::new(subject_kind, subject_key).expect("subject"),
         predicate: Predicate::new(predicate).expect("predicate"),
         value: value.map(|v| FactValue::Text(v.to_string())),
         confidence: Confidence::from_millis(900).expect("confidence"),
@@ -489,8 +489,8 @@ fn replay(events: &[FactEvent], now: TimestampMillis) -> Expected {
             predicate: Some(predicate),
             ..EventFilter::default()
         };
-        let stream = store.scan_events(&filter).expect("scan entity");
-        let projection = replay_entity(&stream).expect("replay entity");
+        let stream = store.scan_events(&filter).expect("scan subject");
+        let projection = replay_subject(&stream).expect("replay subject");
         for (fact_id, state) in &projection.facts {
             facts.push(FactOutcome {
                 fact_id: fact_id.as_str().to_string(),

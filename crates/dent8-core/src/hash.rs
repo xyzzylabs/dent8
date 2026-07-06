@@ -182,8 +182,8 @@ mod tests {
     use super::{CanonError, canonical_bytes, event_hash, hash_chain};
     use crate::ids::{ActorId, EvidenceId, FactEventId, FactId, SourceId, TimestampMillis};
     use crate::model::{
-        Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceKind, FactEvent,
-        FactEventKind, FactValue, Predicate, Provenance, SupersessionReason, Ttl,
+        Authority, AuthorityLevel, Confidence, Evidence, EvidenceKind, FactEvent, FactEventKind,
+        FactValue, Predicate, Provenance, Subject, SupersessionReason, Ttl,
     };
 
     fn event(event_id: &str, kind: FactEventKind, value: Option<FactValue>) -> FactEvent {
@@ -191,7 +191,7 @@ mod tests {
             event_id: FactEventId::new(event_id).expect("event id"),
             fact_id: FactId::new("fact:1").expect("fact id"),
             kind,
-            subject: EntityRef::new("repo", "dent8").expect("entity"),
+            subject: Subject::new("repo", "dent8").expect("subject"),
             predicate: Predicate::new("uses_database").expect("predicate"),
             value,
             confidence: Confidence::from_millis(900).expect("confidence"),

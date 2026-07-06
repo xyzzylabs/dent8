@@ -18,10 +18,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dent8_core::{
-    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, EntityRef, Evidence,
-    EvidenceId, EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId,
-    FactState, FactValue, Predicate, Provenance, SourceId, SupersessionReason, TimestampMillis,
-    Ttl, apply_event, hash_chain,
+    ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
+    EvidenceKind, ExpirationReason, FactEvent, FactEventId, FactEventKind, FactId, FactState,
+    FactValue, Predicate, Provenance, SourceId, Subject, SupersessionReason, TimestampMillis, Ttl,
+    apply_event, hash_chain,
 };
 use serde::{Deserialize, Serialize};
 
@@ -52,7 +52,7 @@ struct Scenario {
 /// Compact builder for one event on a shared fact, stamped at `seq`.
 struct Stream {
     fact: FactId,
-    subject: EntityRef,
+    subject: Subject,
     predicate: Predicate,
 }
 
@@ -60,7 +60,7 @@ impl Stream {
     fn new() -> Self {
         Self {
             fact: FactId::new("fact:repo:dent8:database").expect("fact id"),
-            subject: EntityRef::new("repo", "dent8").expect("entity"),
+            subject: Subject::new("repo", "dent8").expect("subject"),
             predicate: Predicate::new("database").expect("predicate"),
         }
     }

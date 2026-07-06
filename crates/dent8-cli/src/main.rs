@@ -14,14 +14,14 @@ use dent8_core::{
     Provenance, Ttl,
 };
 use dent8_core::{
-    AuthorityLevel, EntityRef, FactEvent, FactId, FactLifecycle, FactValue, Predicate, SourceId,
+    AuthorityLevel, FactEvent, FactId, FactLifecycle, FactValue, Predicate, SourceId, Subject,
     TimestampMillis,
 };
 #[cfg(test)]
 use dent8_store::StoreError;
 use dent8_store::{
     EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt, LineageIssue, PredicateRegistry,
-    UnearnedSupersession, replay_entity, tainted_facts,
+    UnearnedSupersession, replay_subject, tainted_facts,
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
@@ -1165,7 +1165,7 @@ impl FromStr for CliSubject {
                 "invalid subject '{raw}' (expected <kind>:<key>, e.g. person:alice)"
             ));
         };
-        EntityRef::new(kind, key)
+        Subject::new(kind, key)
             .map_err(|error| format!("invalid subject '{raw}' (expected <kind>:<key>): {error}"))?;
         Ok(Self {
             kind: kind.to_string(),
@@ -2241,7 +2241,7 @@ fn backend_scan_raw(url: &str) -> Result<Vec<FactEvent>, String> {
     })
 }
 
-/// On-demand integrity check: re-verify the hash chain and the per-entity lineage.
+/// On-demand integrity check: re-verify the hash chain and the per-subject lineage.
 /// Backend-aware. For **Postgres** it re-verifies the *stored* global chain (real
 /// tamper-evidence — a mutated stored event is caught); for the **file dev store** it
 /// re-folds and checks structural integrity (tamper-*resistance* over the file log is the
@@ -2387,7 +2387,7 @@ fn unearned_supersession_advisories(events: &[FactEvent]) -> Vec<String> {
     }
     let mut out = Vec::new();
     for ((kind, key, predicate), stream) in streams {
-        let Ok(projection) = replay_entity(&stream) else {
+        let Ok(projection) = replay_subject(&stream) else {
             continue;
         };
         for unearned in projection.unearned_supersessions() {
@@ -2469,7 +2469,7 @@ fn verify_log(path: &str) -> Result<String, String> {
         let events = store
             .scan_events(&filter)
             .map_err(|error| error.to_string())?;
-        if let Ok(projection) = replay_entity(&events) {
+        if let Ok(projection) = replay_subject(&events) {
             for issue in projection.lineage_issues() {
                 issues.push(format!(
                     "{}:{} {} — {issue:?}",
@@ -2481,7 +2481,7 @@ fn verify_log(path: &str) -> Result<String, String> {
         }
     }
     // Retraction taint (ADR 0010): a still-believed fact deriving from a retracted/expired
-    // source is surviving poison — flag it across all entities.
+    // source is surviving poison — flag it across all subjects.
     let all_events = store
         .scan_events(&EventFilter::default())
         .map_err(|error| error.to_string())?;
@@ -2506,7 +2506,7 @@ fn verify_log(path: &str) -> Result<String, String> {
         ));
     }
     let report = format!(
-        "OK: {} event(s) across {} entit(ies) — STRUCTURAL integrity holds (uniqueness + \
+        "OK: {} event(s) across {} subject(s) — STRUCTURAL integrity holds (uniqueness + \
          lineage intact, no retraction taint, all events canonicalize){}. This does NOT \
          detect a content edit to *unattested* events: the file dev store keeps no stored \
          hash to compare against — use `dent8 witness verify` (or the Postgres backend) for \
@@ -2820,26 +2820,26 @@ fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Resu
             subject: Some(event.subject.clone()),
             ..EventFilter::default()
         };
-        let entity = replay_entity(&store.scan_events(&filter).map_err(|e| e.to_string())?)
+        let subject = replay_subject(&store.scan_events(&filter).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?;
         // A supersession whose replacement is *missing* (dangling) or *cyclic* silently
         // drops the fact — the symmetric corruption to a duplicated belief, which the
         // >1-fresh check below never catches (0 fresh). Flag only those. NOT
         // `SupersededByInvalidated`: a successor that was legitimately retracted or expired
         // (e.g. assert -> supersede -> retract) is a valid history, not corruption.
-        if let Some(issue) = entity.lineage_issues().into_iter().find(|issue| {
+        if let Some(issue) = subject.lineage_issues().into_iter().find(|issue| {
             matches!(
                 issue,
                 LineageIssue::DanglingSupersession { .. } | LineageIssue::SupersessionCycle { .. }
             )
         }) {
             return Err(format!(
-                "corrupt log: {} entity has a broken supersession lineage ({issue:?}) \
+                "corrupt log: {} subject has a broken supersession lineage ({issue:?}) \
                  (possible external edit)",
                 event.subject.kind()
             ));
         }
-        let fresh: Vec<_> = entity
+        let fresh: Vec<_> = subject
             .believed()
             .filter(|state| !state.is_expired_at(now))
             .collect();
@@ -3143,7 +3143,7 @@ fn base(
         event_id: FactEventId::new(event_id).expect("event id"),
         fact_id: FactId::new(fact_id).expect("fact id"),
         kind: FactEventKind::Asserted,
-        subject: EntityRef::new(subject_kind, subject_key).expect("entity"),
+        subject: Subject::new(subject_kind, subject_key).expect("subject"),
         predicate: Predicate::new(predicate).expect("predicate"),
         value: None,
         confidence: Confidence::from_millis(900).expect("confidence"),

@@ -173,9 +173,9 @@ mod tests {
     use super::export_events;
     use arrow::array::{Array, StringArray};
     use dent8_core::{
-        ActorId, Authority, AuthorityLevel, Confidence, EntityRef, Evidence, EvidenceId,
-        EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate,
-        Provenance, SourceId, TimestampMillis, Ttl,
+        ActorId, Authority, AuthorityLevel, Confidence, Evidence, EvidenceId, EvidenceKind,
+        FactEvent, FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance, SourceId,
+        Subject, TimestampMillis, Ttl,
     };
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -200,7 +200,7 @@ mod tests {
             event_id: FactEventId::new(event_id).unwrap(),
             fact_id: FactId::new(fact_id).unwrap(),
             kind: FactEventKind::Asserted,
-            subject: EntityRef::new("repo", "proj").unwrap(),
+            subject: Subject::new("repo", "proj").unwrap(),
             predicate: Predicate::new("database").unwrap(),
             value: Some(FactValue::Text("postgres".to_string())),
             confidence: Confidence::from_millis(900).unwrap(),
