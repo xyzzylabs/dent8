@@ -78,7 +78,8 @@ pub fn serve() -> i32 {
 
 /// Route `dent8 mcp serve`: the stdio loop by default, or a local per-user Unix-socket daemon
 /// with `--daemon` (ADR 0018) — the same JSON-RPC surface many agents can share over one
-/// transport. The daemon is read-only until per-connection identity lands.
+/// transport. Daemon reads are available immediately; writes require the per-connection
+/// session-challenge handshake first.
 pub fn serve_command(daemon: bool, socket: Option<&str>) -> i32 {
     if daemon {
         serve_daemon(socket)
@@ -89,11 +90,11 @@ pub fn serve_command(daemon: bool, socket: Option<&str>) -> i32 {
 
 /// Serve the belief surface over a local Unix-domain socket (ADR 0018): a per-user daemon that
 /// dispatches each newline-delimited JSON-RPC request through the exact same [`dispatch`] the
-/// stdio server uses, so the firewall decision is identical on both transports. Read-only
-/// ([`Access::ReadOnly`]) for now — a socket write would otherwise be attested with the
-/// daemon's *process* identity; per-connection identity is a later ADR 0018 step. Connections
-/// are refused unless the peer runs as the same OS user (defence in depth atop the `0700`
-/// runtime dir). Returns a process exit code.
+/// stdio server uses, so the firewall decision is identical on both transports. Connections
+/// are read-only until they prove the daemon's configured source identity with
+/// `dent8/hello` + `dent8/prove`; authenticated writes are then attested server-side as that
+/// source. Connections are refused unless the peer runs as the same OS user (defence in depth
+/// atop the `0700` runtime dir). Returns a process exit code.
 #[cfg(all(unix, feature = "async-store"))]
 pub fn serve_daemon(socket: Option<&str>) -> i32 {
     use std::os::unix::fs::MetadataExt;
@@ -140,10 +141,7 @@ pub fn serve_daemon(socket: Option<&str>) -> i32 {
             }
         };
         let store_path = log_path();
-        eprintln!(
-            "dent8 mcp daemon (read-only) listening on {}",
-            socket_path.display()
-        );
+        eprintln!("dent8 mcp daemon listening on {}", socket_path.display());
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
@@ -590,8 +588,9 @@ pub fn serve_daemon(_socket: Option<&str>) -> i32 {
 }
 
 /// Whether a dispatch may execute writes. The stdio server is [`Access::Full`]; the local
-/// daemon (ADR 0018) runs [`Access::ReadOnly`] until per-connection identity lands, so a socket
-/// connection can never persist an event attested with the daemon's *process* identity.
+/// daemon starts each connection as [`Access::ReadOnly`] and promotes only after the
+/// session-challenge handshake, so a socket connection can never persist an event attested
+/// with an unproven process identity.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Access {
     Full,

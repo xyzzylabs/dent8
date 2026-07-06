@@ -131,7 +131,9 @@ Possible resources:
 The HTTP API should come after the CLI and Postgres adapter have proven the core semantics.
 It is the natural home for a shared local daemon or remote dent8 service used by many agents;
 it must preserve the same firewall path, identity checks, and replay receipts as CLI/MCP,
-instead of becoming a generic memory provider.
+instead of becoming a generic memory provider. The local Unix-socket daemon already covers
+the single-user, single-source-key version of this with a session challenge; the HTTP API is
+the future remote/multi-tenant shape and cannot rely on service-held user source keys.
 
 Likely routes:
 

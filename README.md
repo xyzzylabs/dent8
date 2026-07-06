@@ -119,10 +119,10 @@ and the daemon arbitrates and **attests each write as that source** — so a dae
 re-verifies offline exactly like a local one, and many processes build one firewalled belief base
 over one transport. Reads stay local. Run the whole path with
 **`DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh`** (see
-[examples/daemon/](examples/daemon/)). Today the daemon is single-source (it attests with its own
-key), so this shares *one* identity across processes; separate agent identities should use
-separate MCP subprocesses against the same backend, and distinct per-agent identities over one
-daemon are future work.
+[examples/daemon/](examples/daemon/)). Today each daemon process is single-source: every
+client connection must prove the same source key the daemon holds, so this shares *one*
+identity across processes. Separate agent identities should use separate MCP subprocesses
+against the same backend, or separate daemon instances.
 
 ## Status
 

@@ -95,3 +95,17 @@ fn operated_witness_example_retains_grant_log_heads() {
     assert!(systemd_monitor.contains("--grants"));
     assert!(systemd_monitor.contains("PUBLISHED_GRANTS"));
 }
+
+#[test]
+fn daemon_example_documents_authenticated_single_source_writes() {
+    let readme = include_str!("../../../examples/daemon/README.md");
+    let demo = include_str!("../../../examples/daemon/demo.sh");
+
+    assert!(readme.contains("DENT8_DAEMON_SOCKET"));
+    assert!(readme.contains("dent8/hello"));
+    assert!(readme.contains("dent8/prove"));
+    assert!(readme.contains("single-source"));
+    assert!(readme.contains("offline-verifiable Ed25519 attestations"));
+    assert!(demo.contains("DENT8_DAEMON_SOCKET"));
+    assert!(demo.contains("many connections sharing one identity"));
+}

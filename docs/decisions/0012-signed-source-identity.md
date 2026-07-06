@@ -132,5 +132,8 @@ isolation later should use separate OS users, hardware-backed keys, macOS Keycha
 - The local source->authority registry remains useful as a simple authz layer and a dev-mode
   bootstrap path; signed identity is the production authn layer above it.
 - MCP deployments should run one dent8 stdio server process per agent identity if they need
-  per-agent source separation. A shared MCP process can only prove the identity whose key it
-  holds; a future HTTP/daemon transport needs per-request source authentication.
+  per-agent source separation. A shared stdio MCP process can only prove the identity whose
+  key it holds. The local Unix-socket daemon adds a per-connection challenge, but each daemon
+  process still proves the single source key it holds; run separate daemon instances for
+  distinct local identities. Future remote HTTP transport needs per-request source
+  authentication without service-held user source keys.

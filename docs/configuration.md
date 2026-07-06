@@ -162,9 +162,14 @@ dent8 identity bootstrap \
 Each agent should have a distinct source key and grant. Multiple agents can use the same
 globally installed `dent8` binary, and their stdio server subprocesses can share the same
 belief base by pointing at the same `DENT8_STORE_URL` and authority/trust registries. A shared
-MCP process can only prove the single identity whose private key it holds; a future HTTP or
-daemon transport needs per-request source authentication rather than one process-wide env. See
-[ADR 0012](decisions/0012-signed-source-identity.md) for the security model and limits.
+stdio MCP process can only prove the single identity whose private key it holds. The local
+Unix-socket daemon adds a per-connection session challenge, but still requires each connection
+to prove the same source key the daemon process holds; run separate daemon instances if you
+need distinct local source identities over sockets. Future remote HTTP transport needs
+per-request source authentication without service-held source keys. See
+[ADR 0012](decisions/0012-signed-source-identity.md) and
+[ADR 0018](decisions/0018-local-daemon-and-per-connection-identity.md) for the security model
+and limits.
 
 For that shared-backend setup, `dent8 agent add` is the normal follow-up to the first
 `init`. It refuses file-dev bundles, then adds/repairs the selected profile's authority

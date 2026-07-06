@@ -33,9 +33,11 @@ access to the event tables.
    issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Several agents can use the
    same globally installed `dent8` binary and the same backend store, but stdio MCP clients
    typically launch one subprocess per client/profile. Run one `dent8 mcp serve` process per
-   agent identity when per-agent provenance matters; a shared MCP process can only prove the
-   identity whose key it holds. A future HTTP/daemon transport should authenticate the source
-   per request instead of relying on one process-wide identity env.
+   agent identity when per-agent provenance matters. The local daemon supports
+   session-challenge writes, but each daemon process still proves the single source identity
+   whose key it holds; use separate daemon instances for distinct local source identities.
+   Future remote HTTP transport should authenticate the source per request without requiring
+   the service to hold user source keys.
 4. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
    `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
    authority candidate events. Imported facts need provenance and review.

@@ -9,9 +9,9 @@
 # https://github.com/xyzzylabs/dent8 dent8`) and run `./demo.sh`, or from a clone:
 #   DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh
 #
-# The daemon is a per-user, single-source service (it attests with its own key): "many processes"
-# here means many connections sharing one identity, not distinct per-agent identities — that
-# needs multi-source support, which is future work.
+# The daemon is a per-user, single-source service: each connection must prove the same source
+# key the daemon holds. "Many processes" here means many connections sharing one identity; use
+# separate stdio servers or separate daemon instances for distinct per-agent identities.
 set -euo pipefail
 
 DENT8="${DENT8:-dent8}"

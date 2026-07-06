@@ -14,6 +14,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   MCP/JSON automation changes.
 - Hardened the operated witness recipe so its packaged publisher/monitor retain and verify
   grant-log heads with `--grants` when signed identity is in use.
+- Added a local daemon example README and clarified that daemon writes are authenticated by
+  `dent8/hello`/`dent8/prove` while each daemon process remains single-source.
 
 ## [0.3.0] - 2026-07-06
 
