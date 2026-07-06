@@ -23,8 +23,9 @@ use crate::{
     CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs, ReadFactArgs,
     ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events, attest_events,
     display_value, enforce_write_authority, fact_value_json, format_receipt, load_store, log_path,
-    next_seq, now_millis, paint_status, parse_predicate, print_json_stderr, print_json_stdout,
-    read_annotation, receipt_fields_json, receipt_json, short, status::Status,
+    next_seq, now_millis, paint_status, parse_predicate, print_json_stdout,
+    print_json_stdout_with_code, read_annotation, receipt_fields_json, receipt_json, short,
+    status::Status,
 };
 
 /// Build a validated `FactEvent` from CLI strings, returning a friendly error rather than
@@ -902,9 +903,10 @@ pub(crate) fn present_write(
         CliOutput::Text => present(outcome),
         CliOutput::Json => match outcome {
             Ok(message) => print_json_stdout(&write_success_json(view, &message)),
-            Err(error) => {
-                print_json_stderr(&write_error_json(view, &error), op_error_exit_code(&error))
-            }
+            Err(error) => print_json_stdout_with_code(
+                &write_error_json(view, &error),
+                op_error_exit_code(&error),
+            ),
         },
     }
 }
@@ -1820,7 +1822,7 @@ pub(crate) fn cmd_replay(args: &ReadFactArgs, output: CliOutput) -> i32 {
                 OpError::Invalid(_) => 2,
                 OpError::Rejected(_) | OpError::Conflict(_) => 1,
             };
-            print_json_stderr(&op_error_json(&error), code)
+            print_json_stdout_with_code(&op_error_json(&error), code)
         }
     }
 }
@@ -1893,7 +1895,7 @@ pub(crate) fn cmd_explain(args: &ReadFactArgs, output: CliOutput) -> i32 {
                     OpError::Invalid(_) => 2,
                     OpError::Rejected(_) | OpError::Conflict(_) => 1,
                 };
-                print_json_stderr(&op_error_json(&error), code)
+                print_json_stdout_with_code(&op_error_json(&error), code)
             }
         },
     }
@@ -2142,7 +2144,7 @@ pub(crate) fn cmd_facts_list(args: &FactsListArgs, output: CliOutput) -> i32 {
                     OpError::Invalid(_) => 2,
                     OpError::Rejected(_) | OpError::Conflict(_) => 1,
                 };
-                print_json_stderr(&op_error_json(&error), code)
+                print_json_stdout_with_code(&op_error_json(&error), code)
             }
         },
     }
@@ -2286,7 +2288,7 @@ pub(crate) fn cmd_conflicts(output: CliOutput) -> i32 {
                 OpError::Invalid(_) => 2,
                 OpError::Rejected(_) | OpError::Conflict(_) => 1,
             };
-            print_json_stderr(&op_error_json(&error), code)
+            print_json_stdout_with_code(&op_error_json(&error), code)
         }
     }
 }

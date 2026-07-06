@@ -29,6 +29,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `contested` for a disputed fact. The `accepted` boolean on write output is unchanged. A
   consumer that keyed on the CLI's old `status: "ok"` for a successful write must read `accepted`
   / `contested` (or the `accepted` boolean) instead.
+- **`--output json` errors now print to stdout, not stderr.** Every command's `--output json`
+  result — success and error alike — goes to **stdout** as one object (the nonzero exit code still
+  signals failure), so a machine consumer reads a single stream instead of merging stdout and
+  stderr. Previously most commands wrote error JSON to stderr while `verify` alone used stdout. A
+  consumer that read error JSON from stderr must read stdout. The `--output json` allow-list is
+  also gone: every command is machine-readable except `mcp serve` (the JSON-RPC server itself) and
+  `hook` (a git-hook filter), which still exit 2 with a short note; a newly added command is
+  JSON-capable by default.
 
 ### Added
 - **`schema_version` on every machine payload.** Each `--output json` object and every MCP

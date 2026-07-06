@@ -9,7 +9,7 @@ use dent8_core::AuthorityLevel;
 
 use crate::{
     AgentAddArgs, CliOutput, InitAgent, InitArgs, InitStore, McpInstallArgs, SourceGrant,
-    absolute_path, load_authority_registry_at, mcp_config, path_string, print_json_stderr,
+    absolute_path, load_authority_registry_at, mcp_config, path_string,
     print_json_stdout_with_code, save_authority_registry_at, shell_quote, write_atomic,
 };
 #[cfg(feature = "identity")]
@@ -31,7 +31,7 @@ pub(crate) fn cmd_init(args: &InitArgs, output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(&init_error_json(args, &error), 1),
+            CliOutput::Json => print_json_stdout_with_code(&init_error_json(args, &error), 1),
         },
     }
 }
@@ -61,7 +61,9 @@ pub(crate) fn cmd_mcp_install(args: &McpInstallArgs, output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(&mcp_install_error_json(args, mode, &error), 1),
+            CliOutput::Json => {
+                print_json_stdout_with_code(&mcp_install_error_json(args, mode, &error), 1)
+            }
         },
     }
 }
@@ -76,7 +78,7 @@ pub(crate) fn cmd_agent_add(args: &AgentAddArgs, output: CliOutput) -> i32 {
                 eprintln!("{message}");
                 1
             }
-            CliOutput::Json => print_json_stderr(&agent_add_error_json(args, message), 1),
+            CliOutput::Json => print_json_stdout_with_code(&agent_add_error_json(args, message), 1),
         }
     }
 
@@ -96,7 +98,7 @@ pub(crate) fn cmd_agent_add(args: &AgentAddArgs, output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(&agent_add_error_json(args, &error), 1),
+            CliOutput::Json => print_json_stdout_with_code(&agent_add_error_json(args, &error), 1),
         },
     }
 }

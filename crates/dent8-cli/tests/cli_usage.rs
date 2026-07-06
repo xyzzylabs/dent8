@@ -458,10 +458,11 @@ fn write_commands_emit_machine_readable_json() {
         &envs,
     );
     assert_eq!(rejected.status.code(), Some(1));
-    assert!(stdout(&rejected).is_empty());
-    let rejected = serde_json::from_slice::<Value>(&rejected.stderr).unwrap_or_else(|error| {
+    // Error JSON goes to stdout (a nonzero exit signals failure); stderr stays clean.
+    assert!(stderr(&rejected).is_empty(), "{}", stderr(&rejected));
+    let rejected = serde_json::from_slice::<Value>(&rejected.stdout).unwrap_or_else(|error| {
         panic!(
-            "stderr is not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
+            "stdout is not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
             stdout(&rejected),
             stderr(&rejected)
         )
@@ -684,7 +685,7 @@ fn json_output_fails_closed_for_unsupported_commands() {
     let output = run_dent8(&["--output", "json", "hook", "native-memory-guard"], &envs);
     assert_eq!(output.status.code(), Some(2));
     assert!(stdout(&output).is_empty());
-    assert!(stderr(&output).contains("does not support `--output json` yet"));
+    assert!(stderr(&output).contains("has no `--output json` result"));
 
     // `witness serve` DOES stream NDJSON now; even its setup failure (no signing key here)
     // is a machine-readable line on stderr, not prose.
@@ -739,11 +740,11 @@ fn export_json_reports_missing_feature() {
     let exported = run_dent8(&["--output", "json", "export", &out], &[]);
     assert_eq!(exported.status.code(), Some(2));
     assert!(
-        stdout(&exported).is_empty(),
-        "export feature error should not write stdout:\n{}",
-        stdout(&exported)
+        stderr(&exported).is_empty(),
+        "export feature error JSON goes to stdout, not stderr:\n{}",
+        stderr(&exported)
     );
-    let exported = stderr_json(&exported);
+    let exported = stdout_json(&exported);
     assert_eq!(exported["status"], "failed");
     assert_eq!(exported["tool"], "export");
     assert_eq!(exported["out"], out);
@@ -1757,7 +1758,7 @@ fn witness_publish_is_idempotent_and_rejects_local_witness_rollback() {
     );
     assert_eq!(broken_local_json.status.code(), Some(1));
     assert_eq!(
-        stderr_json(&broken_local_json)["status"],
+        stdout_json(&broken_local_json)["status"],
         "rollback",
         "{}",
         stderr(&broken_local_json)
@@ -2269,7 +2270,7 @@ fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
     ] {
         let verify_json = run_dent8(args, &verify_env);
         assert_eq!(verify_json.status.code(), Some(1), "{args:?}");
-        let fault = stderr_json(&verify_json);
+        let fault = stdout_json(&verify_json);
         assert_eq!(fault["status"], "tamper", "{fault:#}");
         assert_eq!(fault["tool"], "witness verify");
     }
@@ -2286,7 +2287,7 @@ fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
         &verify_env,
     );
     assert_eq!(missing.status.code(), Some(1));
-    let fault = stderr_json(&missing);
+    let fault = stdout_json(&missing);
     assert_eq!(fault["status"], "failed", "{fault:#}");
 
     let doctor = run_dent8(&["doctor"], &verify_env);
@@ -2594,8 +2595,8 @@ fn init_json_reports_mcp_check_state() {
 fn init_json_reports_errors() {
     let init = run_dent8(&["--output", "json", "init", "--store", "postgres"], &[]);
     assert_eq!(init.status.code(), Some(1));
-    assert!(stdout(&init).is_empty(), "{}", stdout(&init));
-    let init = stderr_json(&init);
+    assert!(stderr(&init).is_empty(), "{}", stderr(&init));
+    let init = stdout_json(&init);
     assert_eq!(init["status"], "failed");
     assert_eq!(init["tool"], "init");
     assert_eq!(init["store"], "postgres");
@@ -3452,11 +3453,11 @@ fn agent_add_error_emits_machine_readable_json() {
     );
     assert_eq!(added.status.code(), Some(1));
     assert!(
-        stdout(&added).is_empty(),
-        "failed JSON command should not write stdout:\n{}",
-        stdout(&added)
+        stderr(&added).is_empty(),
+        "failed JSON command writes its error JSON to stdout, not stderr:\n{}",
+        stderr(&added)
     );
-    let error = stderr_json(&added);
+    let error = stdout_json(&added);
     assert_eq!(error["status"], "failed");
     assert_eq!(error["tool"], "agent add");
     assert_eq!(error["agent"], "claude-code");
@@ -5919,7 +5920,7 @@ fn witness_covers_the_grant_log_and_detects_truncated_revocations() {
     let truncated_json = run_dent8(&["--output", "json", "witness", "verify"], &envs);
     assert_eq!(truncated_json.status.code(), Some(1));
     assert_eq!(
-        stderr_json(&truncated_json)["status"],
+        stdout_json(&truncated_json)["status"],
         "rollback",
         "{}",
         stderr(&truncated_json)
@@ -6112,7 +6113,7 @@ fn witness_publishes_grant_log_heads_and_detects_scrubbed_history() {
     );
     assert_eq!(caught_json.status.code(), Some(1));
     assert_eq!(
-        stderr_json(&caught_json)["status"],
+        stdout_json(&caught_json)["status"],
         "rollback",
         "{}",
         stderr(&caught_json)
@@ -6747,16 +6748,6 @@ fn stdout_json(output: &Output) -> Value {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
-}
-
-fn stderr_json(output: &Output) -> Value {
-    serde_json::from_slice(&output.stderr).unwrap_or_else(|error| {
-        panic!(
-            "stderr is not JSON: {error}\nstdout:\n{}\nstderr:\n{}",
-            stdout(output),
-            stderr(output)
-        )
-    })
 }
 
 #[cfg(feature = "witness")]

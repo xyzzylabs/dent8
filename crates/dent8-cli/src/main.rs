@@ -44,11 +44,6 @@ mod witness;
 use status::Status;
 
 const DEFAULT_MCP_SMOKE_TIMEOUT: Duration = Duration::from_secs(10);
-const JSON_SUPPORTED_COMMANDS: &str = "assert, supersede, retract, contradict, derive, reinforce, \
-                                      expire, explain, replay, facts list, verify, conflicts, \
-                                      eval, init, agent add, authority, identity <subcommand>, \
-                                      doctor, completions, export, witness <subcommand>, schema \
-                                      postgres, mcp install";
 
 fn main() {
     let code = run(std::env::args().skip(1));
@@ -83,7 +78,8 @@ fn run_cli(cli: Cli) -> i32 {
         && !command.supports_json_output()
     {
         eprintln!(
-            "`dent8 {}` does not support `--output json` yet (supported: {JSON_SUPPORTED_COMMANDS})",
+            "`dent8 {}` has no `--output json` result — it is a streaming/hook command; \
+             every other command supports `--output json`.",
             command.cli_name()
         );
         return 2;
@@ -91,9 +87,7 @@ fn run_cli(cli: Cli) -> i32 {
     match cli.command {
         None => {
             if cli.output == CliOutput::Json {
-                eprintln!(
-                    "`dent8 --output json` requires a command (supported: {JSON_SUPPORTED_COMMANDS})"
-                );
+                eprintln!("`dent8 --output json` requires a command");
                 return 2;
             }
             let mut command = Cli::command()
@@ -279,39 +273,18 @@ enum CliCommand {
 }
 
 impl CliCommand {
+    /// Whether this command emits a `--output json` result. Everything does, except the two
+    /// commands that have no single JSON result to emit: `mcp serve` *is* the JSON-RPC server (it
+    /// streams protocol frames), and `hook` is a git-hook stdin/stdout filter. A deny-list, not an
+    /// allow-list, so a newly added command is machine-readable by default.
     fn supports_json_output(&self) -> bool {
-        match self {
-            Self::Witness(_) => true,
-            _ => matches!(
-                self,
-                Self::Assert(_)
-                    | Self::Supersede(_)
-                    | Self::Retract(_)
-                    | Self::Contradict(_)
-                    | Self::Derive(_)
-                    | Self::Reinforce(_)
-                    | Self::Expire(_)
-                    | Self::Explain(_)
-                    | Self::Replay(_)
-                    | Self::Facts(_)
-                    | Self::Verify
-                    | Self::Conflicts
-                    | Self::Eval
-                    | Self::Init(_)
-                    | Self::Agent(AgentArgs {
-                        command: AgentCommand::Add(_),
-                    })
-                    | Self::Authority(_)
-                    | Self::Identity(_)
-                    | Self::Doctor(_)
-                    | Self::Completions(_)
-                    | Self::Export(_)
-                    | Self::Schema(_)
-                    | Self::Mcp(McpArgs {
-                        command: McpCommand::Install(_),
-                    })
-            ),
-        }
+        !matches!(
+            self,
+            Self::Hook(_)
+                | Self::Mcp(McpArgs {
+                    command: McpCommand::Serve(_),
+                })
+        )
     }
 
     fn cli_name(&self) -> &'static str {
@@ -1219,7 +1192,7 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
                     IdentityCommand::Revoke(_) => "identity revoke",
                     IdentityCommand::BackfillGrantLog(_) => "identity backfill-grant-log",
                 };
-                print_json_stderr(
+                print_json_stdout_with_code(
                     &serde_json::json!({
                         "status": "failed",
                         "tool": tool,
@@ -1311,7 +1284,7 @@ fn run_witness(args: &[String], output: CliOutput) -> i32 {
                 eprintln!("`dent8 witness` requires a build with `--features witness`");
                 2
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &serde_json::json!({
                     "status": "failed",
                     "tool": "witness",
@@ -1386,7 +1359,7 @@ fn witness_usage_error(output: CliOutput) -> i32 {
             eprintln!("usage: {usage}");
             2
         }
-        CliOutput::Json => print_json_stderr(
+        CliOutput::Json => print_json_stdout_with_code(
             &serde_json::json!({
                 "status": "invalid",
                 "tool": "witness",
@@ -1986,7 +1959,7 @@ fn cmd_authority_list(output: CliOutput) -> i32 {
                 2
             }
             CliOutput::Json => {
-                print_json_stderr(&authority_error_json("authority list", &error), 2)
+                print_json_stdout_with_code(&authority_error_json("authority list", &error), 2)
             }
         },
     }
@@ -2008,7 +1981,7 @@ fn cmd_authority_add(
                     2
                 }
                 CliOutput::Json => {
-                    print_json_stderr(&authority_error_json("authority add", &error), 2)
+                    print_json_stdout_with_code(&authority_error_json("authority add", &error), 2)
                 }
             };
         }
@@ -2048,7 +2021,9 @@ fn cmd_authority_add(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(&authority_error_json("authority add", &error), 1),
+            CliOutput::Json => {
+                print_json_stdout_with_code(&authority_error_json("authority add", &error), 1)
+            }
         },
     }
 }
@@ -2063,9 +2038,10 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
                     eprintln!("{message}");
                     1
                 }
-                CliOutput::Json => {
-                    print_json_stderr(&authority_error_json("authority remove", message), 1)
-                }
+                CliOutput::Json => print_json_stdout_with_code(
+                    &authority_error_json("authority remove", message),
+                    1,
+                ),
             };
         }
         Err(error) => {
@@ -2074,9 +2050,10 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
                     eprintln!("{error}");
                     2
                 }
-                CliOutput::Json => {
-                    print_json_stderr(&authority_error_json("authority remove", &error), 2)
-                }
+                CliOutput::Json => print_json_stdout_with_code(
+                    &authority_error_json("authority remove", &error),
+                    2,
+                ),
             };
         }
     };
@@ -2088,7 +2065,7 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
                 1
             }
             CliOutput::Json => {
-                print_json_stderr(&authority_error_json("authority remove", &message), 1)
+                print_json_stdout_with_code(&authority_error_json("authority remove", &message), 1)
             }
         };
     }
@@ -2115,7 +2092,7 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
                 1
             }
             CliOutput::Json => {
-                print_json_stderr(&authority_error_json("authority remove", &error), 1)
+                print_json_stdout_with_code(&authority_error_json("authority remove", &error), 1)
             }
         },
     }
@@ -2698,7 +2675,7 @@ fn cmd_export(out: &str, output: CliOutput) -> i32 {
                     eprintln!("{error}");
                     2
                 }
-                CliOutput::Json => print_json_stderr(&export_error_json(out, &error), 2),
+                CliOutput::Json => print_json_stdout_with_code(&export_error_json(out, &error), 2),
             };
         }
     };
@@ -2711,7 +2688,9 @@ fn cmd_export(out: &str, output: CliOutput) -> i32 {
                     eprintln!("{message}");
                     1
                 }
-                CliOutput::Json => print_json_stderr(&export_error_json(out, &message), 1),
+                CliOutput::Json => {
+                    print_json_stdout_with_code(&export_error_json(out, &message), 1)
+                }
             };
         }
     };
@@ -2724,7 +2703,9 @@ fn cmd_export(out: &str, output: CliOutput) -> i32 {
                     eprintln!("{message}");
                     1
                 }
-                CliOutput::Json => print_json_stderr(&export_error_json(out, &message), 1),
+                CliOutput::Json => {
+                    print_json_stdout_with_code(&export_error_json(out, &message), 1)
+                }
             };
         }
     };
@@ -2754,7 +2735,9 @@ fn cmd_export(out: &str, output: CliOutput) -> i32 {
                     eprintln!("{message}");
                     1
                 }
-                CliOutput::Json => print_json_stderr(&export_error_json(out, &message), 1),
+                CliOutput::Json => {
+                    print_json_stdout_with_code(&export_error_json(out, &message), 1)
+                }
             }
         }
     }
@@ -2768,7 +2751,7 @@ fn cmd_export_unavailable(out: &str, output: CliOutput) -> i32 {
             eprintln!("{message}");
             2
         }
-        CliOutput::Json => print_json_stderr(&export_error_json(out, message), 2),
+        CliOutput::Json => print_json_stdout_with_code(&export_error_json(out, message), 2),
     }
 }
 
@@ -3111,20 +3094,15 @@ fn print_json_stdout(value: &serde_json::Value) -> i32 {
     print_json_stdout_with_code(value, 0)
 }
 
+/// Print a JSON payload to **stdout** with the given process exit code. Every `--output json`
+/// result — success *and* error — goes here, so a machine consumer reads one stream and branches
+/// on the payload's `status` (and the exit code), rather than having to merge stdout and stderr.
+/// Text-mode errors still go to stderr via `present`/`eprintln!`.
 fn print_json_stdout_with_code(value: &serde_json::Value, code: i32) -> i32 {
     println!(
         "{}",
         serde_json::to_string_pretty(&stamp_schema_version(value))
             .expect("CLI JSON output should serialize")
-    );
-    code
-}
-
-fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
-    eprintln!(
-        "{}",
-        serde_json::to_string_pretty(&stamp_schema_version(value))
-            .expect("CLI JSON error output should serialize")
     );
     code
 }

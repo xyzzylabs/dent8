@@ -644,7 +644,7 @@ pub(crate) fn bootstrap(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &identity_bootstrap_error_json(
                     dir,
                     source,
@@ -747,7 +747,7 @@ pub(crate) fn issuer_keygen(out: &str, output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &identity_keygen_error_json("identity issuer-keygen", None, out, &error),
                 1,
             ),
@@ -762,7 +762,7 @@ pub(crate) fn agent_keygen(source: &str, out: &str, output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 2
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &identity_keygen_error_json("identity agent-keygen", Some(source), out, &error),
                 2,
             ),
@@ -786,7 +786,7 @@ pub(crate) fn agent_keygen(source: &str, out: &str, output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &identity_keygen_error_json("identity agent-keygen", Some(source), out, &error),
                 1,
             ),
@@ -883,7 +883,7 @@ fn identity_trust_add_error(
             eprintln!("{message}");
             code
         }
-        CliOutput::Json => print_json_stderr(
+        CliOutput::Json => print_json_stdout_with_code(
             &identity_trust_add_error_json(issuer, public_key_path, message),
             code,
         ),
@@ -937,7 +937,9 @@ pub(crate) fn trust_list(output: CliOutput) -> i32 {
                 eprintln!("{error}");
                 2
             }
-            CliOutput::Json => print_json_stderr(&identity_trust_list_error_json(&path, &error), 2),
+            CliOutput::Json => {
+                print_json_stdout_with_code(&identity_trust_list_error_json(&path, &error), 2)
+            }
         },
     }
 }
@@ -1006,7 +1008,7 @@ pub(crate) fn status(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &serde_json::json!({
                     "status": "failed",
                     "tool": "identity status",
@@ -1037,7 +1039,7 @@ pub(crate) fn repair_env(dir: &str, source: &str, output: CliOutput) -> i32 {
                 1
             }
             CliOutput::Json => {
-                print_json_stderr(&identity_repair_env_error_json(dir, source, &error), 1)
+                print_json_stdout_with_code(&identity_repair_env_error_json(dir, source, &error), 1)
             }
         },
     }
@@ -1113,7 +1115,7 @@ pub(crate) fn rotate_source(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &identity_rotate_source_error_json(
                     dir,
                     source,
@@ -1465,7 +1467,7 @@ fn identity_grant_issue_error(
             eprintln!("{message}");
             code
         }
-        CliOutput::Json => print_json_stderr(
+        CliOutput::Json => print_json_stdout_with_code(
             &identity_grant_issue_error_json(
                 source,
                 public_key_path,
@@ -1535,7 +1537,7 @@ fn identity_grant_verify_error(path: &str, message: &str, code: i32, output: Cli
             code
         }
         CliOutput::Json => {
-            print_json_stderr(&identity_grant_verify_error_json(path, message), code)
+            print_json_stdout_with_code(&identity_grant_verify_error_json(path, message), code)
         }
     }
 }
@@ -1572,7 +1574,7 @@ fn print_json_stdout(value: &serde_json::Value) -> i32 {
     0
 }
 
-fn print_json_stderr(value: &serde_json::Value, code: i32) -> i32 {
+fn print_json_stdout_with_code(value: &serde_json::Value, code: i32) -> i32 {
     eprintln!(
         "{}",
         serde_json::to_string_pretty(value).expect("identity JSON error output should serialize")
@@ -1994,7 +1996,7 @@ pub(crate) fn revoke(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &serde_json::json!({
                     "status": "failed",
                     "tool": "identity revoke",
@@ -2092,7 +2094,7 @@ pub(crate) fn backfill_grant_log(
                 eprintln!("{error}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &serde_json::json!({
                     "status": "failed",
                     "tool": "identity backfill-grant-log",

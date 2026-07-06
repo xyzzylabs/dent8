@@ -125,9 +125,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
   "poison does not survive in derivatives" differentiator, demonstrated by the
   `poisoned_source_retraction` eval.
-- The write commands above support `--output json` for agent wrappers/scripts. Accepted writes
-  return structured command metadata plus the human message; rejected writes return structured
-  `invalid`/`rejected` errors on stderr with nonzero exit codes.
+- The write commands above support `--output json` for agent wrappers/scripts. Every dent8
+  command emits its `--output json` result — success **and** error — to **stdout** as one object,
+  so a machine consumer reads a single stream and branches on the object's `status` (the nonzero
+  exit code still signals failure); only `mcp serve` and `hook` have no JSON result. Each payload
+  carries a `schema_version`. The `status` string matches the MCP tool's for the same operation:
+  an admitted write is `accepted` (`contradict` is `contested`), a firewall refusal is `rejected`,
+  malformed input is `invalid`; on the read side `verify` is `ok`/`integrity_issues` and
+  `explain`/`conflicts` surface `contested`.
 - **`dent8 explain <subject> <predicate> [--as-of MILLIS] [--valid-at MILLIS]`** — replays
   the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**

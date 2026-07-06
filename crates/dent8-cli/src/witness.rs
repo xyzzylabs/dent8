@@ -30,7 +30,7 @@
 
 use std::io::Write;
 
-use crate::{CliOutput, print_json_stderr, print_json_stdout};
+use crate::{CliOutput, print_json_stdout, print_json_stdout_with_code};
 use dent8_core::{FactEvent, SignedTreeHead, sign_head, verify_signed_head};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
@@ -103,7 +103,7 @@ fn print_witness_fault(
             eprintln!("{message}");
             code
         }
-        CliOutput::Json => print_json_stderr(
+        CliOutput::Json => print_json_stdout_with_code(
             &serde_json::json!({
                 "status": status,
                 "tool": tool,
@@ -120,7 +120,7 @@ fn print_witness_usage(output: CliOutput, tool: &str, usage: &str) -> i32 {
             eprintln!("usage: {usage}");
             2
         }
-        CliOutput::Json => print_json_stderr(
+        CliOutput::Json => print_json_stdout_with_code(
             &serde_json::json!({
                 "status": "invalid",
                 "tool": tool,
@@ -176,7 +176,7 @@ pub fn keygen(output: CliOutput) -> i32 {
                 eprintln!("{message}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &witness_error_with_paths_json(
                     KEYGEN_TOOL,
                     &message,
@@ -210,7 +210,7 @@ pub fn keygen(output: CliOutput) -> i32 {
                 eprintln!("{message}");
                 1
             }
-            CliOutput::Json => print_json_stderr(
+            CliOutput::Json => print_json_stdout_with_code(
                 &witness_error_with_paths_json(
                     KEYGEN_TOOL,
                     &message,
