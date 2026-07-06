@@ -9,7 +9,7 @@ correct, installable memory-integrity tool, not to add new mechanisms during rel
 - Source path for the CLI package stays `crates/dent8-cli`.
 - Default features: signed source identity + embedded SQLite. The stock install is enough for
   local file-backed use and no-server multi-agent dogfooding via `sqlite://`.
-- Opt-in features: `postgres`, `witness`, `export`.
+- Opt-in features: `postgres`, `export`.
 
 Install commands:
 
@@ -56,7 +56,7 @@ command.
 ## Packaging
 
 All workspace crates that depend on another dent8 crate must specify both `path` and a
-`version` matching the current workspace version (currently `0.2.0`) so crates.io packaging
+`version` matching the current workspace version (currently `0.3.0`) so crates.io packaging
 can replace local paths with published versions.
 
 Fast manifest/package check:

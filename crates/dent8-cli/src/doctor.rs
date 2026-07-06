@@ -828,7 +828,7 @@ pub(crate) fn doctor_local_mcp_binary(
             doctor_line(
                 output,
                 "FAIL",
-                "local MCP binary: witness checks failed; rebuild with `--features sqlite,witness`",
+                "local MCP binary: witness checks failed; rebuild with `--features sqlite`",
             );
         }
     }

@@ -12,7 +12,7 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
 - Postgres (first) and embedded SQLite (second) are *adapters* of the storage boundary, not the architecture — keep durable storage design backend-agnostic against the `EventStore` / `AsyncEventStore` traits.
 - DuckDB and Parquet are an **export-only** analytical lane (built: `dent8 export` → Parquet, behind `--features export`), not runtime write stores.
 - dent8's formal identity is a **belief base** with paraconsistent contradiction tolerance and authority-as-entrenchment (`docs/belief-revision.md`). Do not fact AGM compliance; do not enforce global consistency; do not satisfy Recovery.
-- Be honest about the gap between *implemented in the library*, *runnable by a user*, and *production-ready*. Authority arbitration, freshness, and the hash chain are **enforced at the write boundary** (`EventStore::append` via `arbitrate` — there is no un-arbitrated write path); the CLI/MCP run that firewall end-to-end over a **file-backed dev store**; the **Postgres adapter is DB-verified** (transactional append + materialized projection/edges); and an **embedded SQLite adapter** is the default local async backend. The CLI/MCP run on the file dev store **or** any async backend selected by `DENT8_STORE_URL` (SQLite in stock builds; Postgres with `--features postgres`; each multi-event operation committed transactionally via the shared `AsyncEventStore`). The remaining gap is *productization*, not enforcement: **authz is built** (a source→authority *ceiling*, `dent8 authority`, that rejects an over-ceiling write at the write boundary), **authn is built as a feature-gated primitive** (`dent8 identity`, issuer-signed grants + per-write source-key possession checks at the CLI/MCP boundary), and the witness is a runnable *primitive* (`dent8 witness`), but key distribution/rotation, stronger secret storage, and an operated witness service are still product work. Check [docs/STATUS.md](docs/STATUS.md) (the single source of truth) before describing anything as "working" or "production," and keep it accurate when you move an item between tiers.
+- Be honest about the gap between *implemented in the library*, *runnable by a user*, and *production-ready*. Authority arbitration, freshness, and the hash chain are **enforced at the write boundary** (`EventStore::append` via `arbitrate` — there is no un-arbitrated write path); the CLI/MCP run that firewall end-to-end over a **file-backed dev store**; the **Postgres adapter is DB-verified** (transactional append + materialized projection/edges); and an **embedded SQLite adapter** is the default local async backend. The CLI/MCP run on the file dev store **or** any async backend selected by `DENT8_STORE_URL` (SQLite in stock builds; Postgres with `--features postgres`; each multi-event operation committed transactionally via the shared `AsyncEventStore`). The remaining gap is *productization*, not enforcement: **authz is built** (a source→authority *ceiling*, `dent8 authority`, that rejects an over-ceiling write at the write boundary), **authn is built into the stock CLI** (`dent8 identity`, issuer-signed grants + per-write source-key possession checks at the CLI/MCP boundary), and the witness is a runnable *primitive* (`dent8 witness`), but key distribution/rotation, stronger secret storage, and an operated witness service are still product work. Check [docs/STATUS.md](docs/STATUS.md) (the single source of truth) before describing anything as "working" or "production," and keep it accurate when you move an item between tiers.
 - Keep changes small, but preserve the shape needed for replay, audit, and debugger workflows.
 
 ## Key docs
@@ -32,16 +32,16 @@ dent8 is a memory integrity platform for agentic systems. Treat it as infrastruc
   available; otherwise use the local CLI after loading `.dent8/env` and the agent-specific
   identity env (for example `.dent8/identity-codex.env` or `.dent8/identity-cursor.env`).
 - The local Codex MCP config should point at `.dent8/bin/dent8`, an ignored wrapper that runs
-  a SQLite + witness-enabled build from `.dent8/target-sqlite`. Claude Code uses `.mcp.json`;
-  Cursor uses `.cursor/mcp.json`. This avoids normal `target/debug` rebuilds replacing the MCP
-  binary with one that lacks SQLite or witness support.
+  a SQLite-capable stock build from `.dent8/target-sqlite`. Claude Code uses `.mcp.json`;
+  Cursor uses `.cursor/mcp.json`. This avoids Cargo startup on every MCP launch and keeps the
+  dogfood binary isolated from normal `target/debug` rebuilds.
 - The local dogfood store may be witness-backed with `.dent8/witness.jsonl` and
   `.dent8/witness.key.pub`. The private `.dent8/witness.key` stays out of `.dent8/env` and
   should only be passed explicitly when signing a head.
-- To validate the local dogfood path, build the isolated SQLite+witness target and run:
+- To validate the local dogfood path, build the isolated SQLite-capable target and run:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite,witness
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check

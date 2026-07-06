@@ -47,7 +47,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        run: cargo build --release -p dent8 --target ${{ matrix.target }} --features postgres,sqlite,witness
+        run: cargo build --release -p dent8 --target ${{ matrix.target }} --features postgres,sqlite
       - name: Package
         shell: bash
         run: |

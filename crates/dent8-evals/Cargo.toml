@@ -15,8 +15,8 @@ name = "dent8_evals"
 path = "src/lib.rs"
 
 [dependencies]
-dent8-core = { path = "../dent8-core", version = "0.2.0" }
-dent8-store = { path = "../dent8-store", version = "0.2.0" }
+dent8-core = { path = "../dent8-core", version = "0.3.0" }
+dent8-store = { path = "../dent8-store", version = "0.3.0" }
 
 [lints]
 workspace = true

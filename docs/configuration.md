@@ -118,7 +118,7 @@ repo-local alternative is `--mcp-local-bin` on `init` / `agent add`, or `--local
 `mcp install`. Build the target first:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite,witness
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite
 dent8 mcp install --agent codex --local-bin
 dent8 doctor --agent codex --mcp-local-bin
 ```

@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-06
+
 ### Changed (breaking)
 - **`fact` vocabulary + event format v2.** The central concept is now **fact** everywhere — the
   library types (`ClaimEvent` → `FactEvent`, `ClaimState` → `FactState`, `ClaimValue` →
