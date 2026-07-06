@@ -5,6 +5,7 @@
 #     DENT8_STORE_URL=postgres://…
 #     DENT8_WITNESS_PUBKEY=/etc/dent8/witness.key.pub
 #     PUBLISHED_HEADS=/var/lib/dent8/published-heads.jsonl   (synced from the publication channel)
+#     PUBLISHED_GRANTS=/var/lib/dent8/published-grant-heads.jsonl   (optional, when signed identity is used)
 [Unit]
 Description=dent8 witness published-heads verification
 
@@ -12,7 +13,7 @@ Description=dent8 witness published-heads verification
 Type=oneshot
 User=dent8
 EnvironmentFile=/etc/dent8/monitor.env
-ExecStart=/bin/sh -c '/usr/local/bin/dent8 --output json witness verify-published "$PUBLISHED_HEADS"'
+ExecStart=/bin/sh -c 'if [ -n "${PUBLISHED_GRANTS:-}" ] && [ -f "$PUBLISHED_GRANTS" ]; then /usr/local/bin/dent8 --output json witness verify-published "$PUBLISHED_HEADS" --grants "$PUBLISHED_GRANTS"; else /usr/local/bin/dent8 --output json witness verify-published "$PUBLISHED_HEADS"; fi'
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

@@ -7,6 +7,8 @@
 set -eu
 
 pub="${DENT8_WITNESS_KEY:?}.pub"
+published_heads="${PUBLISHED_HEADS:-/published/heads.jsonl}"
+published_grants="${PUBLISHED_GRANTS:-/published/grant-heads.jsonl}"
 until [ -f "$pub" ]; do
   echo "publisher: waiting for the signer to generate ${pub}"
   sleep 2
@@ -15,7 +17,12 @@ cp -f "$pub" /published/witness.key.pub
 
 while true; do
   if [ -f "${DENT8_WITNESS_LOG:?}" ]; then
-    dent8 witness publish /published/heads.jsonl || echo "publisher: publish failed (will retry)"
+    if [ -n "${DENT8_WITNESS_GRANTS_LOG:-}" ] && [ -s "$DENT8_WITNESS_GRANTS_LOG" ]; then
+      dent8 witness publish "$published_heads" --grants "$published_grants" \
+        || echo "publisher: publish failed (will retry)"
+    else
+      dent8 witness publish "$published_heads" || echo "publisher: publish failed (will retry)"
+    fi
   fi
   sleep "${PUBLISH_INTERVAL_SECONDS:-15}"
 done

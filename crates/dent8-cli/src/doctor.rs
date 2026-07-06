@@ -979,12 +979,21 @@ pub(crate) fn collect_latest_rust_mtime(
     if !metadata.is_dir() {
         return;
     }
+    if is_non_runtime_rust_dir(path) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(path) else {
         return;
     };
     for entry in entries.filter_map(Result::ok) {
         collect_latest_rust_mtime(&entry.path(), latest);
     }
+}
+
+fn is_non_runtime_rust_dir(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "tests" | "benches" | "examples"))
 }
 
 pub(crate) fn run_doctor_with_env(
@@ -1560,5 +1569,57 @@ pub(crate) fn parent_dir(path: &str) -> Option<&std::path::Path> {
         None
     } else {
         Some(parent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::latest_workspace_rust_mtime;
+    use std::fs;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn latest_workspace_rust_mtime_ignores_integration_tests() {
+        let root = temp_repo_dir();
+        let src = root.join("crates/dent8-cli/src");
+        let tests = root.join("crates/dent8-cli/tests");
+        fs::create_dir_all(&src).expect("create src dir");
+        fs::create_dir_all(&tests).expect("create tests dir");
+        fs::write(root.join("Cargo.toml"), "[workspace]\n").expect("write workspace manifest");
+        fs::write(src.join("main.rs"), "fn main() {}\n").expect("write runtime source");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(tests.join("cli_usage.rs"), "#[test]\nfn cli() {}\n")
+            .expect("write integration test");
+
+        let runtime_mtime = fs::metadata(src.join("main.rs"))
+            .and_then(|meta| meta.modified())
+            .expect("runtime mtime");
+        let test_mtime = fs::metadata(tests.join("cli_usage.rs"))
+            .and_then(|meta| meta.modified())
+            .expect("test mtime");
+        assert!(
+            runtime_mtime < test_mtime,
+            "test fixture needs the integration test to be newer"
+        );
+        assert_eq!(
+            latest_workspace_rust_mtime(&root),
+            Some(runtime_mtime),
+            "integration tests should not make the MCP runtime binary look stale"
+        );
+
+        fs::remove_dir_all(root).expect("remove temp repo");
+    }
+
+    fn temp_repo_dir() -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("dent8-doctor-test-{}-{nonce}", std::process::id()));
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("clear stale temp repo");
+        }
+        path
     }
 }

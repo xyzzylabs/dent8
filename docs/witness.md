@@ -11,7 +11,8 @@ publish the latest head somewhere the writer cannot silently roll back. That sha
 Compose split (signer / publisher / monitor as separate services over a shared Postgres
 store, built from the repo [`Dockerfile`](../Dockerfile)) plus hardened systemd units for
 bare-metal signer/monitor hosts; the monitor alerts by exiting non-zero on a
-`tamper`/`rollback` verdict.
+`tamper`/`rollback` verdict. The packaged publisher/monitor cover grant-log heads too when
+signed identity is in use, retaining revocation evidence off-host with the event heads.
 
 ## Local Dev Setup
 

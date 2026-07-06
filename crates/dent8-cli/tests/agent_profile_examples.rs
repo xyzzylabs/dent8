@@ -74,3 +74,24 @@ fn vercel_ai_sdk_example_uses_dent8_mcp_and_source_id() {
     assert!(script.contains("DENT8_REQUIRE_IDENTITY"));
     assert!(script.contains("source_vercel-ai-sdk.grant.json"));
 }
+
+#[test]
+fn operated_witness_example_retains_grant_log_heads() {
+    let compose = include_str!("../../../examples/witness-operated/compose.yml");
+    let publisher = include_str!("../../../examples/witness-operated/publisher.sh");
+    let monitor = include_str!("../../../examples/witness-operated/monitor.sh");
+    let systemd_signer =
+        include_str!("../../../examples/witness-operated/systemd/dent8-witness-signer.service");
+    let systemd_monitor =
+        include_str!("../../../examples/witness-operated/systemd/dent8-witness-monitor.service");
+
+    assert!(compose.contains("DENT8_WITNESS_GRANTS_LOG"));
+    assert!(compose.contains("PUBLISHED_GRANTS"));
+    assert!(publisher.contains("--grants"));
+    assert!(publisher.contains("DENT8_WITNESS_GRANTS_LOG"));
+    assert!(monitor.contains("--grants"));
+    assert!(monitor.contains("PUBLISHED_GRANTS"));
+    assert!(systemd_signer.contains("DENT8_WITNESS_GRANTS_LOG"));
+    assert!(systemd_monitor.contains("--grants"));
+    assert!(systemd_monitor.contains("PUBLISHED_GRANTS"));
+}

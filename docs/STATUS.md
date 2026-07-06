@@ -363,8 +363,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `witness doctor --output json` groups checks into stable `ok` / `warn` / `fail` sections.
   The *operated* deployment is **packaged** in
   [`examples/witness-operated/`](../examples/witness-operated/) (Docker Compose
-  signer/publisher/monitor split + systemd units, with key-rotation and
-  publication-channel guidance); what remains is *hosting* it as a managed service. See
+  signer/publisher/monitor split + systemd units, event-head and grant-head publication,
+  with key-rotation and publication-channel guidance); what remains is *hosting* it as a
+  managed service. See
   [witness.md](witness.md).
 - **`dent8 completions <bash|elvish|fish|powershell|zsh>`** — prints shell completion
   scripts generated from the same `clap` command model as the parser. Visible aliases
@@ -577,8 +578,9 @@ subject+predicate.
   `--grants`, grant-log heads), and verification of externally saved
   heads. The operated deployment is **packaged**
   ([`examples/witness-operated/`](../examples/witness-operated/): compose + systemd, with
-  key-rotation and publication-channel guidance); what is still design-only is *hosting* it —
-  a managed signer/publication service instead of your own second host.
+  event-head and grant-head publication plus key-rotation and publication-channel guidance);
+  what is still design-only is *hosting* it — a managed signer/publication service instead
+  of your own second host.
 
 ## How to keep this honest
 

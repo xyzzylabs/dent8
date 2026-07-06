@@ -27,12 +27,16 @@ docker compose logs -f signer publisher monitor
 ```
 
 - `signer` generates the keypair on first run into the `witness-keys` volume — the only
-  place the private key exists — and runs `dent8 witness serve`.
+  place the private key exists — and runs `dent8 witness serve`. When signed identity is
+  configured, the same signer also writes grant-log heads to `DENT8_WITNESS_GRANTS_LOG`.
 - `publisher` idempotently appends the latest head plus the **public** key into the
-  `published` volume (the stand-in for object storage / a git repo / another host).
-- `monitor` loops `dent8 --output json witness verify-published`; on a `tamper` / `rollback`
-  verdict its container **exits non-zero and stays down** — the alert hook
-  (`docker compose ps` shows it; wire real alerting to container exit).
+  `published` volume (the stand-in for object storage / a git repo / another host). If a
+  grants-witness log exists, it publishes the grant-log head to `grant-heads.jsonl` in the
+  same external channel.
+- `monitor` loops `dent8 --output json witness verify-published`; once `grant-heads.jsonl`
+  exists, it adds `--grants` and verifies grant history too. On a `tamper` / `rollback`
+  verdict its container **exits non-zero and stays down** — the alert hook (`docker compose
+  ps` shows it; wire real alerting to container exit).
 - your **writer** points `DENT8_STORE_URL` at the exposed Postgres (port 5432) with no
   witness key in its env — prove the split with `dent8 witness doctor writer` (writer host)
   and `dent8 witness doctor signer` (signer container).
@@ -73,6 +77,6 @@ long-running service (`dent8-witness-signer.service`, key provisioned once with
   writes — that's the point: they verify its *history* against signatures the writer cannot
   forge. Give them read-only credentials.
 - **Grant history.** If the deployment also uses signed identity (ADR 0014), the signer
-  covers the grant log automatically; extend the publisher/monitor with
-  `--grants <published-grants.jsonl>` on `publish`/`verify-published` so revocation history
-  is retained off-host too (see docs/witness.md, "Grant-Log Coverage").
+  covers the grant log automatically. The packaged publisher/monitor now publish and verify
+  `grant-heads.jsonl` once `DENT8_WITNESS_GRANTS_LOG` exists, so revocation history is
+  retained off-host too (see docs/witness.md, "Grant-Log Coverage").

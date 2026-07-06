@@ -3,6 +3,7 @@
 #   DENT8_STORE_URL=postgres://…      (read access to the event store)
 #   DENT8_WITNESS_KEY=/var/lib/dent8/witness.key
 #   DENT8_WITNESS_LOG=/var/lib/dent8/witness.jsonl
+#   DENT8_WITNESS_GRANTS_LOG=/var/lib/dent8/witness-grants.jsonl   (when signed identity is used)
 # Generate the key once with `dent8 witness keygen` as the service user. The private key
 # must exist ONLY on this host — that separation is what upgrades tamper-evidence to
 # tamper-resistance (docs/witness.md).

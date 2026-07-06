@@ -12,6 +12,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ### Added
 - Added a v0.3 upgrade note covering the format-v2 break, re-ingestion path, and
   MCP/JSON automation changes.
+- Hardened the operated witness recipe so its packaged publisher/monitor retain and verify
+  grant-log heads with `--grants` when signed identity is in use.
 
 ## [0.3.0] - 2026-07-06
 
