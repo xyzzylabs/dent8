@@ -9,6 +9,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- Added a v0.3 upgrade note covering the format-v2 break, re-ingestion path, and
+  MCP/JSON automation changes.
+
 ## [0.3.0] - 2026-07-06
 
 ### Changed (breaking)

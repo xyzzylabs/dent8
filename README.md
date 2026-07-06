@@ -131,8 +131,9 @@ the Postgres storage schema may all still change between minor versions. The eve
 **versioned** by `CANON_VERSION`, mixed into every hash so encodings can never collide. v0.3
 introduces **format v2** (the `fact` vocabulary — `claim_id` → `fact_id`, lowercase `authority`);
 this is a deliberate one-time pre-1.0 break, so a v1 log does not carry forward and must be
-re-ingested from source. From v2 onward the intent is again additive-only (new fields stay
-optional and out of the hash), but that stability is not guaranteed until 1.0.
+re-ingested from source. See [the v0.3 upgrade note](docs/upgrading-to-v0.3.md). From v2 onward
+the intent is again additive-only (new fields stay optional and out of the hash), but that
+stability is not guaranteed until 1.0.
 [docs/STATUS.md](docs/STATUS.md) is the single source of truth for what is runnable vs.
 library-only vs. design-only. In brief, runnable today:
 
