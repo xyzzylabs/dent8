@@ -10,7 +10,7 @@ Accepted.
 
 ADR 0013 made every write carry a persisted attestation: proof that *this key signed this
 content*. Its documented non-goal is **entitlement at write time**: whether that key was
-granted the facted source/authority *when the event was written*. Today that cannot be
+granted the stated source/authority *when the event was written*. Today that cannot be
 answered retroactively:
 
 - `active-grants.json` holds only the **current** grant per source. Rotation overwrites the

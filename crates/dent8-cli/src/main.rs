@@ -326,7 +326,7 @@ struct ValueWriteArgs {
     predicate: String,
     /// Text value to assert.
     value: String,
-    /// Facted authority level.
+    /// Authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,
     /// Provenance source for this write.
@@ -349,7 +349,7 @@ struct FactWriteArgs {
     /// Predicate within the subject's fact stream.
     #[arg(value_parser = parse_predicate)]
     predicate: String,
-    /// Facted authority level.
+    /// Authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,
     /// Provenance source for this write.
@@ -369,7 +369,7 @@ struct DeriveWriteArgs {
     /// Source fact to derive from: <source-subject> <source-predicate>.
     #[arg(long, required = true, num_args = 2, value_names = ["SOURCE_SUBJECT", "SOURCE_PREDICATE"])]
     from: Vec<String>,
-    /// Facted authority level.
+    /// Authority level.
     #[arg(long, short = 'a', value_enum)]
     authority: CliAuthority,
     /// Provenance source for this write.
@@ -1621,7 +1621,7 @@ fn authority_registry_path() -> String {
 }
 
 /// What the write-boundary auth gate needs to know about a write: the subject (for grant
-/// scope checks), the facted authority (for ceiling checks), and the source. The full write
+/// scope checks), the stated authority (for ceiling checks), and the source. The full write
 /// *content* is no longer carried here — the persisted per-event attestation (ADR 0013) signs
 /// the whole event at the append boundary, which covers strictly more than any summary could.
 #[derive(Clone, Copy, Debug)]
@@ -2331,7 +2331,7 @@ fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
 }
 
 /// Without the `identity` feature there is no Ed25519 verifier — count the attestations and
-/// let the caller report them as present-but-unverified rather than silently facting "OK".
+/// let the caller report them as present-but-unverified rather than silently reporting "OK".
 #[cfg(not(feature = "identity"))]
 fn check_attestations(events: &[FactEvent]) -> AttestationSummary {
     AttestationSummary {

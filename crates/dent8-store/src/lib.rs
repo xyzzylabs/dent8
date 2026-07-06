@@ -219,7 +219,7 @@ impl SubjectProjection {
     /// replacing fact's actual state (not just the supersession event's stated
     /// authority). This is the subject-level entrenchment audit — defense-in-depth over
     /// the per-stream authority gate in `apply_event`, which can only trust the
-    /// supersession event's facted authority. Two cases:
+    /// supersession event's stated authority. Two cases:
     ///
     /// - [`UnearnedSupersession::AuthorityDowngrade`] — the replacing fact is actually
     ///   *lower* authority than the one it replaced (the event must have overstated its

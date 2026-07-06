@@ -101,7 +101,7 @@ DENT8_IDENTITY_KEY=.dent8/identities/source_codex.key
 
 This defends against:
 
-- an unregistered or low-trust agent facting to be a higher-authority source;
+- an unregistered or low-trust agent posing as a higher-authority source;
 - copying a signed grant without also holding the source private key;
 - raising the requested authority above the grant ceiling;
 - using a grant outside its optional subject scope or after expiration;

@@ -70,7 +70,7 @@ This adds, over ADR 0012:
 This does **not** provide:
 
 - **Grant-validity-at-write-time.** Verification checks the signature against the *embedded*
-  key. Whether that key was granted the facted source/authority **at the time of the write**
+  key. Whether that key was granted the stated source/authority **at the time of the write**
   requires grant history (grants can rotate/expire); today's check answers "is this the
   content that key signed", and the write-boundary gate (ADR 0012) answers entitlement at
   write time. A future grant-history log could close the gap retroactively.

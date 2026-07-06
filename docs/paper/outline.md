@@ -186,7 +186,7 @@ as "first to unify/transplant," never "first to invent"):
   making **authority-weighted supersession** the headline (Graphiti arbitrates
   contradictions by recency only — "consistently prioritizes new information" [7]).
 - **"Belief-revision semantics."** Weak if stated as AGM compliance. *Strengthen* by
-  facting the *operational spirit of belief-base revision* and disfacting closure +
+  claiming the *operational spirit of belief-base revision* and disclaiming closure +
   Recovery [1][2].
 - **"Formally verified."** Overfacts. *Strengthen* to "property-tested + bounded-
   model-checked, fold optionally deductively verified, concurrency model-checked" —

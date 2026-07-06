@@ -574,7 +574,7 @@ pub(crate) fn attest_events(
 /// `Ok(false)` = the event carries no attestation (a pre-attestation or dev-mode write).
 ///
 /// This proves the event content is exactly what the holder of `public_key` signed. Whether
-/// that key was *entitled* to the facted source/authority at write time is a trust question
+/// that key was *entitled* to the stated source/authority at write time is a trust question
 /// (grant history) deliberately out of scope here — see ADR 0013.
 pub(crate) fn verify_event_attestation(event: &FactEvent) -> Result<bool, String> {
     let Some(attestation) = event.provenance.attestation.as_ref() else {
@@ -1792,14 +1792,14 @@ pub(crate) fn session_nonce() -> Result<String, String> {
 pub(crate) fn verify_session_hello(
     ctx: &IdentityContext,
     grant_json: &serde_json::Value,
-    facted_source: &str,
+    stated_source: &str,
     now: TimestampMillis,
 ) -> Result<VerifiedHello, String> {
     let grant: SignedSourceGrant = serde_json::from_value(grant_json.clone())
         .map_err(|error| format!("invalid grant in hello: {error}"))?;
-    if grant.grant.source != facted_source {
+    if grant.grant.source != stated_source {
         return Err(format!(
-            "hello source {facted_source:?} does not match the presented grant's source {:?}",
+            "hello source {stated_source:?} does not match the presented grant's source {:?}",
             grant.grant.source
         ));
     }

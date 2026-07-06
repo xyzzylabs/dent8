@@ -94,7 +94,7 @@ pass are folded into the topical docs and noted below.
   matrix cell downgraded ✓→◐ (at the time: no `valid_to`, freshness-only; the freshness
   evaluator, and in v0.2.0 `valid_to` intervals plus `--as-of`/`--valid-at` time-travel reads
   per ADR 0016, have since shipped); TTL/authority
-  arbitration flagged as design-only everywhere they are facted; "AWS originated the
+  arbitration flagged as design-only everywhere they are stated; "AWS originated the
   P language" reworded (P: Microsoft/UC Berkeley); LOC corrected to ~470 non-test.
 
 ## Novelty risks (kept deliberately visible)
@@ -121,7 +121,7 @@ These are the reviewer objections the project must pre-empt, not hide:
    time-travel reads — so it is no longer *behind* Zep on the missing-`valid_to` axis. Frame
    the remaining difference precisely: dent8 treats `valid_to` as an asserted read-time
    freshness/validity bound, not a running lifecycle edge-invalidation — so state the exact
-   bitemporal gap rather than facting either a missing interval or full parity.
+   bitemporal gap rather than asserting either a missing interval or full parity.
 5. **Deterministic replay alone is not unique** — Zep/Graphiti reconstruct from
    episodes too. The precise differentiator is the *typed, hash-verified,
    single-source-of-truth* log.
