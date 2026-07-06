@@ -19,8 +19,8 @@
 //!   log; appends are serialized by a transaction-scoped advisory lock so the chain has one
 //!   consistent head with no per-fact race.
 //! - **Materialized projection + edges:** on every accepted append the folded `FactState`
-//!   is upserted into `dent8_fact_projection` and the fact->fact relationship into
-//!   `dent8_fact_edge`, inside the same transaction (migration 003). These are derived
+//!   is upserted into `dent8_claim_projection` and the fact->fact relationship into
+//!   `dent8_claim_edge`, inside the same transaction (migration 003). These are derived
 //!   caches — the log stays the source of truth, and `verify_projection` checks the
 //!   `projection == fold(log)` invariant. `load_fact_events`/`scan_events` still fold from
 //!   the log; `materialized_projection` reads the cache without re-folding.
@@ -208,7 +208,7 @@ impl PostgresEventStore {
         fact_id: &FactId,
     ) -> Result<Option<FactState>, StoreError> {
         let row: Option<serde_json::Value> =
-            sqlx::query_scalar("SELECT state_json FROM dent8_fact_projection WHERE fact_id = $1")
+            sqlx::query_scalar("SELECT state_json FROM dent8_claim_projection WHERE fact_id = $1")
                 .bind(fact_id.as_str())
                 .fetch_optional(&self.pool)
                 .await
@@ -224,8 +224,8 @@ impl PostgresEventStore {
     /// contradiction / reinforcement links), ordered by the originating event.
     pub async fn edges_from(&self, fact_id: &FactId) -> Result<Vec<FactEdge>, StoreError> {
         let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
-            "SELECT from_fact_id, to_fact_id, edge_type, event_id, recorded_at \
-             FROM dent8_fact_edge WHERE from_fact_id = $1 ORDER BY recorded_at, event_id",
+            "SELECT from_claim_id, to_claim_id, edge_type, event_id, recorded_at \
+             FROM dent8_claim_edge WHERE from_claim_id = $1 ORDER BY recorded_at, event_id",
         )
         .bind(fact_id.as_str())
         .fetch_all(&self.pool)
@@ -312,7 +312,7 @@ fn fold_state(events: &[FactEvent]) -> Result<Option<FactState>, StoreError> {
     Ok(state)
 }
 
-/// Lifecycle as the lowercase tag the `dent8_fact_projection.lifecycle` CHECK expects.
+/// Lifecycle as the lowercase tag the `dent8_claim_projection.lifecycle` CHECK expects.
 fn lifecycle_tag(lifecycle: FactLifecycle) -> &'static str {
     match lifecycle {
         FactLifecycle::Active => "active",
@@ -337,7 +337,7 @@ async fn upsert_projection(
         .map_err(|error| StoreError::Canonicalization(error.to_string()))?;
     let conn: &mut PgConnection = tx;
     sqlx::query(
-        "INSERT INTO dent8_fact_projection \
+        "INSERT INTO dent8_claim_projection \
          (fact_id, subject_type, subject_key, predicate, lifecycle, superseded_by, \
           contradicted_by, corroboration, created_at, updated_at, last_event_id, state_json) \
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
@@ -384,7 +384,7 @@ async fn insert_edge(
     };
     let conn: &mut PgConnection = tx;
     sqlx::query(
-        "INSERT INTO dent8_fact_edge (from_fact_id, to_fact_id, edge_type, event_id, recorded_at) \
+        "INSERT INTO dent8_claim_edge (from_claim_id, to_claim_id, edge_type, event_id, recorded_at) \
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
     )
     .bind(event.fact_id.as_str())
@@ -553,7 +553,7 @@ mod tests {
         store.migrate().await.expect("migrate");
         // Isolate each run (all three tables: log + the derived caches).
         sqlx::query(
-            "TRUNCATE dent8_event_log, dent8_fact_projection, dent8_fact_edge RESTART IDENTITY",
+            "TRUNCATE dent8_event_log, dent8_claim_projection, dent8_claim_edge RESTART IDENTITY",
         )
         .execute(store.pool())
         .await
@@ -1076,7 +1076,7 @@ mod tests {
             last_event_id,
         ): (String, Option<String>, Vec<String>, i64, i64, i64, String) = sqlx::query_as(
             "SELECT lifecycle, superseded_by, contradicted_by, corroboration, created_at, \
-             updated_at, last_event_id FROM dent8_fact_projection WHERE fact_id = $1",
+             updated_at, last_event_id FROM dent8_claim_projection WHERE fact_id = $1",
         )
         .bind(a.as_str())
         .fetch_one(store.pool())
