@@ -6,11 +6,11 @@
 # cannot touch (object store with retention, a git repo, another host).
 set -eu
 
-pub="${DENT8_WITNESS_KEY:?}.pub"
+pub="${DENT8_WITNESS_PUBKEY:?}"
 published_heads="${PUBLISHED_HEADS:-/published/heads.jsonl}"
 published_grants="${PUBLISHED_GRANTS:-/published/grant-heads.jsonl}"
 until [ -f "$pub" ]; do
-  echo "publisher: waiting for the signer to generate ${pub}"
+  echo "publisher: waiting for the signer to publish ${pub}"
   sleep 2
 done
 cp -f "$pub" /published/witness.key.pub

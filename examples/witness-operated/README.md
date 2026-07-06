@@ -26,13 +26,16 @@ docker compose --profile demo run --rm demo-writer   # one trusted write to witn
 docker compose logs -f signer publisher monitor
 ```
 
-- `signer` generates the keypair on first run into the `witness-keys` volume — the only
-  place the private key exists — and runs `dent8 witness serve`. When signed identity is
-  configured, the same signer also writes grant-log heads to `DENT8_WITNESS_GRANTS_LOG`.
+- `signer` generates the keypair on first run into the `witness-private` volume — the only
+  place the private key exists — writes signed heads into the separate `witness-log` volume,
+  copies only the public key into `witness-public`, and runs `dent8 witness serve`. When
+  signed identity is configured, the same signer also writes grant-log heads to
+  `DENT8_WITNESS_GRANTS_LOG`.
 - `publisher` idempotently appends the latest head plus the **public** key into the
-  `published` volume (the stand-in for object storage / a git repo / another host). If a
-  grants-witness log exists, it publishes the grant-log head to `grant-heads.jsonl` in the
-  same external channel.
+  `published` volume (the stand-in for object storage / a git repo / another host). It mounts
+  the witness log and public key read-only, and does **not** receive the private signing-key
+  volume. If a grants-witness log exists, it publishes the grant-log head to
+  `grant-heads.jsonl` in the same external channel.
 - `monitor` loops `dent8 --output json witness verify-published`; once `grant-heads.jsonl`
   exists, it adds `--grants` and verifies grant history too. On a `tamper` / `rollback`
   verdict its container **exits non-zero and stays down** — the alert hook (`docker compose

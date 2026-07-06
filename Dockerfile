@@ -22,9 +22,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --create-home --home-dir /home/dent8 dent8 \
     # Volume mount points for the operated-witness split, owned by the runtime user (a fresh
-    # named volume inherits the image's ownership for its mount path).
-    && mkdir -p /witness /published \
-    && chown dent8 /witness /published
+    # named volume inherits the image's ownership for its mount path). The private key, local
+    # witness logs, and copied public key live on separate volumes so publisher/monitor services
+    # do not need the signing-key volume.
+    && mkdir -p /witness/private /witness/log /witness/public /published \
+    && chown -R dent8 /witness /published
 COPY --from=build /src/target/release/dent8 /usr/local/bin/dent8
 USER dent8
 WORKDIR /home/dent8

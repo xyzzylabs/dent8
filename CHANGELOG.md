@@ -15,6 +15,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   binary so stale globally installed or repo-local MCP commands are visible without digging
   into JSON.
 
+### Security
+- Hardened the operated-witness compose recipe: the private witness signing key now lives on a
+  signer-only volume, while the publisher mounts only the witness logs and public key
+  read-only before writing to the external published-heads volume.
+
 ## [0.3.2] - 2026-07-06
 
 ### Added

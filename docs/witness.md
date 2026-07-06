@@ -12,7 +12,10 @@ Compose split (signer / publisher / monitor as separate services over a shared P
 store, built from the repo [`Dockerfile`](../Dockerfile)) plus hardened systemd units for
 bare-metal signer/monitor hosts; the monitor alerts by exiting non-zero on a
 `tamper`/`rollback` verdict. The packaged publisher/monitor cover grant-log heads too when
-signed identity is in use, retaining revocation evidence off-host with the event heads.
+signed identity is in use, retaining revocation evidence off-host with the event heads. In
+the compose split, the private signing-key volume is mounted only into the signer; the
+publisher receives the witness logs and public key read-only, then writes to the external
+publication volume.
 
 ## Local Dev Setup
 
@@ -240,6 +243,9 @@ The guarantee is only as strong as the witness deployment:
 - Published heads plus `verify-published`: make deletion or rollback of the witness log
   insufficient to erase retained evidence, assuming the published-heads file lives outside the
   writer's control.
+- Publisher without the private key: keeps the operational publication loop from becoming a
+  second signer; compromising it can withhold or attempt to roll back published heads, but it
+  cannot forge a new signed head.
 
 The packaged deployment (compose + systemd) lives in
 [`examples/witness-operated/`](../examples/witness-operated/), including key-rotation and

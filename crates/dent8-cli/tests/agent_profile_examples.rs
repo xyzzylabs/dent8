@@ -77,6 +77,7 @@ fn vercel_ai_sdk_example_uses_dent8_mcp_and_source_id() {
 
 #[test]
 fn operated_witness_example_retains_grant_log_heads() {
+    let dockerfile = include_str!("../../../Dockerfile");
     let compose = include_str!("../../../examples/witness-operated/compose.yml");
     let publisher = include_str!("../../../examples/witness-operated/publisher.sh");
     let monitor = include_str!("../../../examples/witness-operated/monitor.sh");
@@ -87,10 +88,19 @@ fn operated_witness_example_retains_grant_log_heads() {
 
     assert!(compose.contains("DENT8_WITNESS_GRANTS_LOG"));
     assert!(compose.contains("PUBLISHED_GRANTS"));
+    assert!(compose.contains("DENT8_WITNESS_KEY: /witness/private/witness.key"));
+    assert!(compose.contains("DENT8_WITNESS_PUBKEY: /witness/public/witness.key.pub"));
+    assert!(compose.contains("witness-private:/witness/private"));
+    assert!(compose.contains("witness-log:/witness/log:ro"));
+    assert!(compose.contains("witness-public:/witness/public:ro"));
+    assert!(dockerfile.contains("/witness/private /witness/log /witness/public"));
     assert!(publisher.contains("--grants"));
     assert!(publisher.contains("DENT8_WITNESS_GRANTS_LOG"));
+    assert!(publisher.contains("DENT8_WITNESS_PUBKEY"));
+    assert!(!publisher.contains("DENT8_WITNESS_KEY"));
     assert!(monitor.contains("--grants"));
     assert!(monitor.contains("PUBLISHED_GRANTS"));
+    assert!(!monitor.contains("DENT8_WITNESS_KEY"));
     assert!(systemd_signer.contains("DENT8_WITNESS_GRANTS_LOG"));
     assert!(systemd_monitor.contains("--grants"));
     assert!(systemd_monitor.contains("PUBLISHED_GRANTS"));

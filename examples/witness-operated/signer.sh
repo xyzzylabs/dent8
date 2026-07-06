@@ -9,4 +9,14 @@ if [ ! -f "${DENT8_WITNESS_KEY:?}" ]; then
   dent8 witness keygen
 fi
 
+pub="${DENT8_WITNESS_KEY}.pub"
+public="${DENT8_WITNESS_PUBKEY:-$pub}"
+if [ "$public" != "$pub" ]; then
+  mkdir -p "$(dirname "$public")"
+  if [ ! -f "$public" ] || ! cmp -s "$pub" "$public"; then
+    echo "signer: publishing witness public key to ${public}"
+    cp -f "$pub" "$public"
+  fi
+fi
+
 exec dent8 witness serve "${SIGN_INTERVAL_SECONDS:-15}"
