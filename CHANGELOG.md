@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-06
+
 ### Added
 - Added daemon-proxy install modes for known agent configs: `dent8 mcp install --use-daemon`
   / `--daemon-socket PATH`, plus `dent8 init --mcp-use-daemon` /
