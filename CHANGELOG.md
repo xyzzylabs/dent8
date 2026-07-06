@@ -18,6 +18,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   signer/publisher/monitor split, publishes a signed head for one Postgres-backed write, then
   deletes `dent8_event_log` and confirms the monitor exits on a rollback alarm.
 
+### Changed
+- Refreshed the README firewall GIF/tape: the walkthrough now starts with a clearer headline,
+  supports opt-in reader pauses via `DENT8_DEMO_PAUSE`, and keeps the final witness caveat on
+  its own readable line.
+
 ### Security
 - Hardened the operated-witness compose recipe: the private witness signing key now lives on a
   signer-only volume, while the publisher mounts only the witness logs and public key

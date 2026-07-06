@@ -1,6 +1,7 @@
 # dent8 demo tape — the README's one-screen story.
 #
 # Record with https://github.com/charmbracelet/vhs:
+#     cargo build -q -p dent8
 #     vhs demo.tape        # -> demo.gif
 #
 # Tweak Theme / FontSize / Sleep timings to taste.
@@ -14,21 +15,12 @@ Set Height 820
 Set Padding 20
 Set Theme "Dracula"
 # Type quickly — the story is the output, not the keystrokes.
-Set TypingSpeed 12ms
+Set TypingSpeed 16ms
 
-# --- Setup (off-camera): build the CLI and point the walkthrough at it. ---
-Hide
-Type "cargo build -q -p dent8; export DENT8=$PWD/target/debug/dent8; clear" Enter
-Show
-
-Type "# dent8: a memory firewall for coding agents — bad writes can't overwrite good memory"
+Type "DENT8_DEMO_PAUSE=0.8 DENT8=$PWD/target/debug/dent8 ./examples/firewall/demo.sh"
 Enter
-Sleep 1200ms
-
-Type "./examples/firewall/demo.sh"
-Enter
-# Let the six-step walkthrough run and leave time to read it.
-Sleep 11s
+# Let the six-step walkthrough run and leave time to read the receipt.
+Sleep 16s
 
 # Hold on the final screen — the retained fact's receipt and the verified hash chain —
 # so a viewer can actually read it before the GIF loops.
