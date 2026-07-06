@@ -6,10 +6,12 @@
 //! the same canonical [`event_hash`]/[`hash_chain`]. Where it differs from the Postgres adapter
 //! is only the **primitives**, exactly as a second backend should:
 //! - storage is **embedded** (a file or `:memory:`, no server, bundled libsqlite3);
+//! - event-id suffixes are reserved from a small allocator table, so concurrent CLI/MCP
+//!   writers sign final, unique `event:{n}` ids before they append;
 //! - writers **serialize via `BEGIN IMMEDIATE` + `busy_timeout`** (the write lock is taken up
 //!   front, before the chain-head read), with WAL for reader concurrency — so concurrent writers
 //!   *wait* rather than fail, and a residual busy past the timeout is surfaced as a retryable
-//!   `Conflict` (the analogue of Postgres' advisory lock + optimistic-id retry);
+//!   `Conflict` (the analogue of Postgres write contention);
 //! - the canonical event is stored as **TEXT** (`event_json`), since `SQLite` has no `JSONB`.
 //!
 //! v0 is lean: the event log only. The believed projection is folded from the log on read (the
@@ -18,10 +20,14 @@
 //! per-event append *algorithm* (arbitrate → dedup → chain → insert) is structurally the same
 //! as Postgres'; only the SQL dialect is `SQLite`-native (so Postgres assumptions cannot leak).
 
+use std::collections::BTreeSet;
 use std::str::FromStr;
 
 use dent8_core::{FactEvent, FactEventKind, FactId, event_hash, hash_chain};
-use dent8_store::{AppendReceipt, AsyncEventStore, EventFilter, StoreError, arbitrate_events};
+use dent8_store::{
+    AppendReceipt, AsyncEventStore, EventFilter, PredicateRegistry, StoreError, arbitrate_events,
+    validate_unique_projection,
+};
 use sqlx::SqliteConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
 
@@ -44,6 +50,23 @@ CREATE INDEX IF NOT EXISTS dent8_event_log_fact_seq_idx
     ON dent8_event_log (fact_id, global_sequence);
 CREATE INDEX IF NOT EXISTS dent8_event_log_subject_idx
     ON dent8_event_log (subject_type, subject_key, predicate, global_sequence);
+
+CREATE TABLE IF NOT EXISTS dent8_id_allocator (
+    name TEXT PRIMARY KEY,
+    next_value INTEGER NOT NULL CHECK (next_value >= 0)
+);
+INSERT OR IGNORE INTO dent8_id_allocator (name, next_value) VALUES ('event', 0);
+UPDATE dent8_id_allocator
+   SET next_value = MAX(
+       next_value,
+       COALESCE((
+           SELECT MAX(CAST(substr(event_id, 7) AS INTEGER)) + 1
+             FROM dent8_event_log
+            WHERE event_id GLOB 'event:[0-9]*'
+              AND substr(event_id, 7) NOT GLOB '*[^0-9]*'
+       ), 0)
+   )
+ WHERE name = 'event';
 ";
 
 /// A v0 `SQLite`-backed event store. The pool is capped at **one connection**: that serializes
@@ -93,6 +116,34 @@ impl SqliteEventStore {
         Ok(())
     }
 
+    /// Reserve unique numeric suffixes for CLI/MCP `event:{n}` ids. The reservation is atomic
+    /// under `BEGIN IMMEDIATE`; ids are unique but not gap-free if a later write is rejected.
+    pub async fn reserve_event_ids(&self, count: u32) -> Result<u64, StoreError> {
+        if count == 0 {
+            return Err(StoreError::Unavailable(
+                "cannot reserve zero event ids".to_string(),
+            ));
+        }
+
+        let mut conn = self.pool.acquire().await.map_err(map_busy)?;
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_busy)?;
+        let start = match reserve_event_ids_in_tx(&mut conn, count).await {
+            Ok(start) => start,
+            Err(error) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                return Err(error);
+            }
+        };
+        sqlx::query("COMMIT")
+            .execute(&mut *conn)
+            .await
+            .map_err(map_busy)?;
+        Ok(start)
+    }
+
     /// Append one candidate through the firewall (a one-event [`Self::append_many`]).
     pub async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
         let mut receipts = self.append_many(vec![event]).await?;
@@ -125,6 +176,10 @@ impl SqliteEventStore {
                     return Err(error);
                 }
             }
+        }
+        if let Err(error) = validate_touched_policies_in_tx(&mut conn, &events).await {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            return Err(error);
         }
         sqlx::query("COMMIT")
             .execute(&mut *conn)
@@ -268,6 +323,25 @@ async fn append_event_in_tx(
     })
 }
 
+async fn reserve_event_ids_in_tx(
+    conn: &mut SqliteConnection,
+    count: u32,
+) -> Result<u64, StoreError> {
+    let start: i64 =
+        sqlx::query_scalar("SELECT next_value FROM dent8_id_allocator WHERE name = 'event'")
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(map_busy)?;
+    let count = i64::from(count);
+    sqlx::query("UPDATE dent8_id_allocator SET next_value = next_value + ?1 WHERE name = 'event'")
+        .bind(count)
+        .execute(&mut *conn)
+        .await
+        .map_err(map_busy)?;
+    u64::try_from(start)
+        .map_err(|_| StoreError::CorruptEvent(format!("negative event-id allocator {start}")))
+}
+
 async fn load_fact_in_tx(
     conn: &mut SqliteConnection,
     fact_id: &str,
@@ -282,6 +356,60 @@ async fn load_fact_in_tx(
     rows.iter().map(|json| event_from_json(json)).collect()
 }
 
+async fn load_subject_predicate_in_tx(
+    conn: &mut SqliteConnection,
+    subject_type: &str,
+    subject_key: &str,
+    predicate: &str,
+) -> Result<Vec<FactEvent>, StoreError> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT event_json FROM dent8_event_log \
+         WHERE subject_type = ?1 AND subject_key = ?2 AND predicate = ?3 \
+         ORDER BY global_sequence",
+    )
+    .bind(subject_type)
+    .bind(subject_key)
+    .bind(predicate)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(map_busy)?;
+    rows.iter().map(|json| event_from_json(json)).collect()
+}
+
+async fn validate_touched_policies_in_tx(
+    conn: &mut SqliteConnection,
+    events: &[FactEvent],
+) -> Result<(), StoreError> {
+    let registry = PredicateRegistry::coding_agent();
+    let mut touched = BTreeSet::new();
+    for event in events {
+        touched.insert((
+            event.subject.kind().to_string(),
+            event.subject.key().to_string(),
+            event.predicate.as_str().to_string(),
+        ));
+    }
+
+    for (subject_type, subject_key, predicate) in touched {
+        let now = events
+            .iter()
+            .filter(|event| {
+                event.subject.kind() == subject_type
+                    && event.subject.key() == subject_key
+                    && event.predicate.as_str() == predicate
+            })
+            .map(|event| event.provenance.recorded_at)
+            .max()
+            .expect("touched group has at least one event");
+        let subject_events =
+            load_subject_predicate_in_tx(&mut *conn, &subject_type, &subject_key, &predicate)
+                .await?;
+        validate_unique_projection(&registry, &subject_events, now)?;
+    }
+
+    Ok(())
+}
+
 fn event_from_json(value: &str) -> Result<FactEvent, StoreError> {
     serde_json::from_str(value).map_err(|error| StoreError::CorruptEvent(error.to_string()))
 }
@@ -294,8 +422,8 @@ fn unavailable(error: sqlx::Error) -> StoreError {
 
 /// Like [`unavailable`], but classifies `SQLite`'s `SQLITE_BUSY` ("database is locked") as a
 /// **retryable** [`StoreError::Conflict`] — so the CLI's `with_write_retry` re-runs a write that
-/// lost the write lock past `busy_timeout` (the `SQLite` analogue of the Postgres optimistic-id
-/// race), instead of failing it as a terminal `Unavailable`. Used on the write path.
+/// lost the write lock past `busy_timeout`, instead of failing it as a terminal `Unavailable`.
+/// Used on the write path.
 #[allow(clippy::needless_pass_by_value)]
 fn map_busy(error: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(db) = &error {
@@ -314,6 +442,10 @@ fn map_busy(error: sqlx::Error) -> StoreError {
 impl AsyncEventStore for SqliteEventStore {
     async fn migrate(&self) -> Result<(), StoreError> {
         self.migrate().await
+    }
+
+    async fn reserve_event_ids(&self, count: u32) -> Result<u64, StoreError> {
+        self.reserve_event_ids(count).await
     }
 
     async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
@@ -407,6 +539,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn event_id_reservations_are_unique_ranges() {
+        let store = SqliteEventStore::connect("sqlite::memory:").await.unwrap();
+        store.migrate().await.unwrap();
+
+        assert_eq!(store.reserve_event_ids(2).await.unwrap(), 0);
+        assert_eq!(store.reserve_event_ids(1).await.unwrap(), 2);
+        assert_eq!(store.reserve_event_ids(3).await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn migrate_advances_allocator_past_existing_event_ids() {
+        let store = SqliteEventStore::connect("sqlite::memory:").await.unwrap();
+        store.migrate().await.unwrap();
+        store
+            .append(asserted(
+                "event:7",
+                "fact:a",
+                "postgres",
+                AuthorityLevel::High,
+            ))
+            .await
+            .unwrap();
+
+        store.migrate().await.unwrap();
+
+        assert_eq!(store.reserve_event_ids(1).await.unwrap(), 8);
+    }
+
+    #[tokio::test]
+    async fn final_unique_projection_rejects_silent_duplicate_assertion() {
+        let store = SqliteEventStore::connect("sqlite::memory:").await.unwrap();
+        store.migrate().await.unwrap();
+        store
+            .append(asserted(
+                "event:0",
+                "fact:a",
+                "postgres",
+                AuthorityLevel::High,
+            ))
+            .await
+            .unwrap();
+
+        let duplicate = store
+            .append(asserted("event:1", "fact:b", "mysql", AuthorityLevel::High))
+            .await;
+
+        assert!(matches!(
+            duplicate,
+            Err(StoreError::UniquenessViolation { .. })
+        ));
+        assert!(
+            store
+                .load_fact_events(&FactId::new("fact:b").unwrap())
+                .await
+                .unwrap()
+                .is_empty(),
+            "rejected duplicate assertion must roll back"
+        );
+    }
+
+    #[tokio::test]
     async fn the_firewall_rejects_a_low_authority_supersession() {
         let store = SqliteEventStore::connect("sqlite::memory:").await.unwrap();
         store.migrate().await.unwrap();
@@ -420,10 +613,9 @@ mod tests {
             .await
             .unwrap();
         // A low-authority replacement asserted, then a supersession of the High incumbent by it.
-        store
-            .append(asserted("event:1", "fact:b", "mysql", AuthorityLevel::Low))
-            .await
-            .unwrap();
+        let mut weak = asserted("event:1", "fact:b", "mysql", AuthorityLevel::Low);
+        weak.subject = Subject::new("repo", "other").unwrap();
+        store.append(weak).await.unwrap();
         let supersede = FactEvent {
             kind: FactEventKind::Superseded {
                 by: FactId::new("fact:b").unwrap(),

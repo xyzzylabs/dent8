@@ -49,9 +49,10 @@ What remains to make it a hardened multi-user product:
   plus hardened systemd units) with key-rotation and publication-channel guidance; what
   remains is *hosting* it — a managed signer/publication service instead of your own second
   host.
-- **Production ergonomics and heavy-concurrency polish.** The Postgres adapter serializes
-  appends and the CLI retries id collisions, but DB-assigned ids remain the end-state for
-  heavy write fan-out.
+- **Production ergonomics and heavy-concurrency polish.** The async adapters reserve
+  `event:{n}` id ranges from the database before signing (unique, not gap-free) and serialize
+  appends, with an in-transaction final projection check for touched unique predicates;
+  remaining work is operational load testing and tuning.
 - **Richer protocol/product surfaces.** The v0 MCP server is useful today; official `rmcp`,
   richer transports, `resources/subscribe`, prompts, HTTP, SDKs, and a TypeScript/Tauri
   desktop debugger/control plane are later ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
@@ -158,7 +159,7 @@ the file/in-memory path and feature-gated `AsyncEventStore` for async backends. 
 SQLite is implemented as the stock local async backend (`sqlite://`), proving Postgres is an
 adapter, not the architecture.
 
-**Remaining.** DB-assigned ids for heavy fan-out, richer per-column event tables /
+**Remaining.** Richer per-column event tables /
 `uses_as_evidence` edges, operational tuning, and identity operations (key distribution /
 external signers) are future product work. (Source-key rotation (`dent8 identity
 rotate-source`), revocation (`dent8 identity revoke`), and append-only grant-log history —

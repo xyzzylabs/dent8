@@ -14,6 +14,7 @@ pub use firewall::{arbitrate, arbitrate_events};
 pub use memory::{InMemoryEventStore, IntegrityReceipt};
 pub use registry::{
     PredicatePolicy, PredicateRegistry, Volatility, apply_policy_defaults, enforce_policy,
+    validate_unique_projection,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,6 +69,12 @@ pub trait EventStore {
 pub trait AsyncEventStore {
     /// Deploy the schema this backend needs (idempotent).
     async fn migrate(&self) -> Result<(), StoreError>;
+    /// Reserve `count` numeric suffixes for CLI/MCP event ids (`event:{n}`), returning the
+    /// first suffix in the reserved range. Async backends own this allocation so concurrent
+    /// writers do not mint the same identifier from the same read snapshot. Reservations are
+    /// unique but not gap-free: if a later firewall/auth/signing step rejects the write, the
+    /// skipped suffix stays skipped. Durable append order is still [`AppendReceipt::global_sequence`].
+    async fn reserve_event_ids(&self, count: u32) -> Result<u64, StoreError>;
     /// Append one candidate through the firewall (a one-element [`append_many`](Self::append_many)).
     async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError>;
     /// Append a whole operation **atomically**: every event arbitrates and commits, or none do.

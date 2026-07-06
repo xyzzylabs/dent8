@@ -65,7 +65,7 @@ the data model in [`crates/dent8-core/src/model.rs`](../crates/dent8-core/src/mo
 | `contested` on `fact.contradicted` | **Paraconsistent toleration** of inconsistency | Rigorous (architectural) |
 | `Authority` vs `Confidence` | **Entrenchment** vs probability/evidential strength | Rigorous (architectural) |
 | `fact.expired` / TTL | **Defeasible/temporal defeat** | Inspirational — TTL read surface built; explicit expiration authority-gated |
-| `dent8_fact_edges` | **TMS justifications** | Rigorous (data-structure level) |
+| `dent8_claim_edge` | **TMS justifications** | Rigorous (data-structure level) |
 | `replay_fact` fold → projection | TMS **labelling pass** / non-monotonic consequence | Rigorous as motivation |
 
 **Why the operator mappings are "inspirational," not rigorous.** AGM and even
@@ -141,7 +141,7 @@ formally separate from evidential strength [1].
    `contradicting_a_non_canonical_fact_still_contests`). *Still future:* extending the
    hard-alarm to predicates flagged *uniqueness-constrained* (no such flag exists in
    the model yet).
-4. **Treat `dent8_fact_edges` as TMS justifications; decide JTMS vs ATMS.** dent8
+4. **Treat `dent8_claim_edge` as TMS justifications; decide JTMS vs ATMS.** dent8
    today is JTMS-like (one projection, one labelling). The "memory debugger"
    differentiator is the ATMS capability — replay facts under an assumption
    *environment* ("trust only `High`+ authority sources") to answer "what does

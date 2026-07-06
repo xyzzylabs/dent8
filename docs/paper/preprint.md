@@ -321,9 +321,9 @@ concurrency.
   product work.
 - **Operational persistence exists, but production operations are not done.** The file
   backend is single-writer and non-transactional; SQLite is an embedded backend; Postgres
-  is DB-verified with transactional append and projection materialization. Remaining
-  persistence work is operational tuning, DB-assigned ids for heavy fan-out, and richer
-  deployment packaging.
+  is DB-verified with transactional append, projection materialization, and DB-reserved
+  event-id ranges for concurrent CLI/MCP writers. Remaining persistence work is operational
+  tuning and richer deployment packaging.
 - **Overlap with prior art.** Bitemporality, contradiction-driven invalidation, and
   provenance individually overlap with Zep [7]; the contribution is the combination (§11).
 

@@ -18,6 +18,9 @@ in [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md).
 - `append(event) -> AppendReceipt` — validate the transition against current state,
   then atomically persist the immutable event, update its projection, and write
   graph edges. Returns the assigned `global_sequence` and the computed `event_hash`.
+- async backends additionally expose `reserve_event_ids(count)` — reserve the numeric
+  suffixes for CLI/MCP `event:{n}` ids before signing. These ids are unique but not
+  gap-free; `global_sequence` remains the append order.
 - `load_fact_events(fact_id)` — ordered events for one fact stream.
 - `scan_events(filter)` — ordered events by fact / subject+predicate / sequence.
 
@@ -54,6 +57,10 @@ These are backend-independent invariants (mechanized per
   on replay.
 - **Uniqueness** — `event_id` and `event_hash` are unique; a duplicate is the
   natural idempotency/tamper signal (`StoreError::Conflict`).
+- **Unique-predicate projection safety** — async transactional backends re-check the
+  final projection for each touched unique predicate before commit, so two stale
+  concurrent writers cannot silently leave two fresh believed facts unless the conflict
+  is explicitly contested.
 
 ## Tables / record shape
 
@@ -65,6 +72,8 @@ below is one realization):
   log).
 - **`fact_edges`** — the contradiction / supersession / reinforcement / evidence
   graph (`reinforces` · `contradicts` · `supersedes` · `uses_as_evidence`).
+- **`id_allocators`** — backend-owned counters for pre-signing event-id reservation
+  (`event:{n}`), intentionally distinct from append order.
 - **`replay_runs`** — replay and invariant-check reports (record a signed tree head
   — root/last hash + event count — so two runs are externally comparable).
 
@@ -134,9 +143,10 @@ operation — and Postgres transactions bundle append + projection + edges into 
 atomic, durable, isolation-respecting unit ([PostgreSQL transactions](https://www.postgresql.org/docs/current/tutorial-transactions.html)).
 The live schema is
 [002_event_log.sql](../crates/dent8-store-postgres/migrations/postgres/002_event_log.sql) +
-[003_materialization.sql](../crates/dent8-store-postgres/migrations/postgres/003_materialization.sql),
-exposed in-crate as `EVENT_LOG_SCHEMA_SQL` / `MATERIALIZATION_SCHEMA_SQL` (and printed by
-`dent8 schema postgres`).
+[003_materialization.sql](../crates/dent8-store-postgres/migrations/postgres/003_materialization.sql) +
+[004_id_allocator.sql](../crates/dent8-store-postgres/migrations/postgres/004_id_allocator.sql),
+exposed in-crate as `EVENT_LOG_SCHEMA_SQL` / `MATERIALIZATION_SCHEMA_SQL` /
+`ID_ALLOCATOR_SCHEMA_SQL` (and printed by `dent8 schema postgres`).
 
 **Chain semantics (the `EventStore` contract).** The hash chain is **global**: each
 `event_hash` links to the previous event across the *whole* log (by `global_sequence`),
@@ -158,10 +168,12 @@ separate Merkle layer over fact heads.)*
 2. take the global append lock and read the previous `event_hash`
    (`MAX(global_sequence)`);
 3. compute the `event_hash` (`dent8_core::event_hash`, chained to that previous);
-4. insert into `dent8_fact_events`;
-5. upsert `dent8_fact_projections`;
-6. insert `dent8_fact_edges`;
-7. commit. If any step fails, nothing is visible. The firewall (step 1) must run *inside*
+4. insert into `dent8_event_log`;
+5. upsert `dent8_claim_projection`;
+6. insert `dent8_claim_edge`;
+7. validate the final projection for every touched unique predicate (silent duplicate
+   beliefs reject; explicit contestation and atomic supersession batches pass);
+8. commit. If any step fails, nothing is visible. The firewall (step 1) must run *inside*
    the same serialized transaction so the arbitrated state cannot change before the append.
 
 **JSONB usage.** `jsonb` is used for fields whose internal schema evolves quickly
@@ -181,12 +193,15 @@ settle.
 `dent8_event_log` table (migration 002) that stores the **canonical event as JSONB** plus
 the scalar columns needed to index and arbitrate. It implements the append-transaction
 shape above — advisory-lock-serialized, firewall-in-transaction via the *shared*
-`arbitrate_events`, global-chain hash — and now also **materializes the derived caches in
+`arbitrate_events`, final unique-projection validation, global-chain hash — and now also
+**materializes the derived caches in
 the same transaction** (migration 003): it folds the post-append `FactState` via the shared
-`apply_event` and upserts it into `dent8_fact_projection` (so `materialized_projection`
+`apply_event` and upserts it into `dent8_claim_projection` (so `materialized_projection`
 reads the believed state without re-folding), and records the fact→fact relationship into
-`dent8_fact_edge` (supersedes / contradicts / reinforces). These are derived caches, not a
-second source of truth: `verify_projection` re-folds the log and asserts `projection ==
+`dent8_claim_edge` (supersedes / contradicts / reinforces). Migration 004 adds
+`dent8_id_allocator`, used to reserve CLI/MCP `event:{n}` suffixes before signing; gaps are
+allowed, because append order is still `global_sequence` + the hash chain. These are derived
+caches and operational counters, not a second source of truth: `verify_projection` re-folds the log and asserts `projection ==
 fold(log)`. (Timestamps in migration 003 are `BIGINT` Unix milliseconds matching
 `TimestampMillis`, and the exact folded state is kept as `state_json` for lossless reads;
 a per-column event table and `uses_as_evidence` edges remain a possible later design.) The `DATABASE_URL`-gated integration tests **pass against a live `postgres:16`**
@@ -210,7 +225,7 @@ not hand-maintained here.
 
 dent8 needs a *stock* Postgres — **no extensions** (no pgvector, no graph engine); the
 adapter's `migrate()` creates its tables itself (the event log + the projection/edge caches,
-migrations 002–003). Anything ≥ Postgres 10 works (the floor for `GENERATED ALWAYS AS
+migrations 002–004). Anything ≥ Postgres 10 works (the floor for `GENERATED ALWAYS AS
 IDENTITY`); `postgres:16` is the pinned default. The integration tests are **gated on
 `DATABASE_URL`** — they skip when it is unset and `TRUNCATE` disposable tables when it is set
 — so the same `cargo test` is a no-op locally and a real run wherever a database is provided.

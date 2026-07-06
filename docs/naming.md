@@ -71,9 +71,10 @@ Use past-tense event names because events are immutable facts. Commands can be i
 
 Postgres tables use the `dent8_` prefix:
 
-- `dent8_fact_events`
-- `dent8_fact_projections`
-- `dent8_fact_edges`
+- `dent8_event_log`
+- `dent8_claim_projection`
+- `dent8_claim_edge`
+- `dent8_id_allocator`
 - `dent8_replay_runs`
 
 ## IDs

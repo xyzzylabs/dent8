@@ -562,11 +562,14 @@ subject+predicate.
   (migration 002). Transactional append serialized by an advisory lock for the global
   chain; the firewall reuses `arbitrate_events`; the canonical event is stored as JSONB.
 - **Materialized projection + edge graph** (migration 003): each accepted append also folds
-  the post-append `FactState` (via the shared `apply_event`) into `dent8_fact_projection`
-  and records the fact→fact relationship into `dent8_fact_edge`, in the same transaction.
+  the post-append `FactState` (via the shared `apply_event`) into `dent8_claim_projection`
+  and records the fact→fact relationship into `dent8_claim_edge`, in the same transaction.
   `materialized_projection` reads the believed state without re-folding; `edges_from` reads
   the supersession/contradiction/reinforcement graph; `verify_projection` re-folds and
   asserts `projection == fold(log)`. Derived caches, not a second source of truth.
+- **Event-id allocator** (migration 004): `dent8_id_allocator` reserves CLI/MCP
+  `event:{n}` suffixes before signing. IDs are unique but not gap-free; append order is
+  `global_sequence`.
 - **Status: verified against a live Postgres (`postgres:16`).** The `DATABASE_URL`-gated
   integration tests pass — the firewall over Postgres (incl. laundered-supersession
   rejection) **and** the projection/edge materialization + `projection == fold(log)` + the
@@ -620,15 +623,15 @@ subject+predicate.
   is **tested** multi-writer-safe — a DB-gated test fires 12 genuinely concurrent appends and
   asserts they serialize (via a transaction-scoped advisory lock) into one gap-free,
   duplicate-free global chain that verifies, with every projection still `== fold(log)`. The
-  CLI mints `event:{n}` ids from a snapshot count, so two CLI *processes* racing one DB can pick
-  the same id — caught as a duplicate-id conflict and **auto-retried with exponential backoff +
-  per-process jitter** (`with_write_retry`, decorrelated so the herd does not phase-lock),
-  which re-snapshots and re-mints a non-colliding id. **Integrity is unconditional** — every
-  committed log is a contiguous, corruption-free chain, and a writer that exhausts the retry
-  budget gets a clean rejection, never a partial or corrupt write. **Convergence is
-  best-effort**: the retry lets ordinary concurrent writers through, but under heavy write
-  fan-out a writer can still be cleanly rejected (retry the command), and **DB-assigned ids
-  remain the end-state** that removes the contention entirely. Authz (source→authority ceilings)
+  CLI/MCP reserve `event:{n}` id ranges from async backends before signing, so concurrent
+  processes do not mint the same id from the same snapshot. Reserved ids are unique, not
+  gap-free: a later rejected write can leave an unused suffix, while append order remains
+  `global_sequence` plus the hash chain. Async adapters also recheck the final projection for
+  touched unique predicates inside the append transaction, so two stale concurrent writers
+  cannot silently land duplicate fresh beliefs. **Integrity is unconditional** — every committed
+  log is a contiguous, corruption-free chain, and a writer that hits residual backend
+  contention gets a clean retry/rejection, never a partial or corrupt write. Authz
+  (source→authority ceilings)
   is built (`dent8 authority`, above), authn is a runnable feature-gated boundary layer
   (`dent8 identity`, above), and the witness *primitive* is runnable (`dent8 witness`, above).
   The remaining product gap is operating those controls: source-key provisioning/rotation,

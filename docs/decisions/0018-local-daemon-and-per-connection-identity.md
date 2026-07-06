@@ -146,7 +146,8 @@ arbitration.
 - **Deferred: ADR 0019 — networked MCP-over-HTTP.** Genuinely harder: remote multi-tenancy
   forbids daemon-held keys, so it needs either a **prepare/commit round-trip** (freeze
   `seq`/`recorded_at`, sign, then append) or an **ADR 0013 amendment** to attest over
-  client-determinable content only — which connects to the deferred DB-assigned-ids work. 0018
-  must not imply 0019 is a small step.
+  client-determinable content only. Local async backends can reserve DB-owned `event:{n}`
+  ranges before signing, but that does not solve remote key custody. 0018 must not imply
+  0019 is a small step.
 - **Refactor blast radius (PR 1).** `enforce_write`/`attest_events`/`enforce_write_authority`
   feed CLI, doctor, and status; pin the behavior with the existing golden fixtures.

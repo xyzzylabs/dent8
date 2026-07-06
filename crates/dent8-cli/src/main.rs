@@ -2830,6 +2830,30 @@ fn next_seq(store: &InMemoryEventStore) -> usize {
     )
 }
 
+/// Reserve the first numeric suffix for `count` new `event:{n}` ids. File-backed dev logs derive
+/// it from the trusted snapshot; async backends reserve it from the database so concurrent
+/// writers do not sign the same event id. Reserved async ids are unique, not gap-free.
+pub(crate) fn reserve_event_seq(store: &InMemoryEventStore, count: usize) -> Result<usize, String> {
+    if count == 0 {
+        return Err("cannot reserve zero event ids".to_string());
+    }
+    #[cfg(feature = "async-store")]
+    if let Some(url) = store_url() {
+        return backend_reserve_event_ids(&url, count).and_then(|seq| {
+            usize::try_from(seq).map_err(|_| format!("reserved event id {seq} exceeds usize"))
+        });
+    }
+    #[cfg(not(feature = "async-store"))]
+    if store_url().is_some() {
+        return Err(
+            "DENT8_STORE_URL is set but this build has no async backend — \
+             rebuild with `--features postgres` (or another backend)"
+                .to_string(),
+        );
+    }
+    Ok(next_seq(store))
+}
+
 /// Reject a log that already violates per-predicate uniqueness (more than one *fresh*
 /// believed fact for a `unique` predicate). A legitimate stale + fresh pair is allowed
 /// (only one is fresh); two fresh believed facts signal corruption (a torn write or an
@@ -2913,12 +2937,12 @@ fn validate_unique_log(store: &InMemoryEventStore, now: TimestampMillis) -> Resu
     Ok(())
 }
 
-/// The outcome of a durable append. `Conflict` is the **retryable** Postgres optimistic-id
-/// race — a concurrent writer committed our snapshot-derived `event:{n}` id first — which a
-/// fresh-snapshot retry resolves; every other failure is terminal. The file dev store is
-/// single-writer and never conflicts (so the variant is unused without the `postgres` feature).
+/// The outcome of a durable append. `Conflict` is **retryable** write contention (a duplicate
+/// event id from a direct/legacy writer, or a backend lock held past timeout) that a
+/// fresh-snapshot retry may resolve; every other failure is terminal. The file dev store is
+/// single-writer and never conflicts.
 enum WriteError {
-    #[cfg_attr(not(feature = "postgres"), allow(dead_code))]
+    #[cfg_attr(not(feature = "async-store"), allow(dead_code))]
     Conflict(String),
     Other(String),
 }
@@ -3079,10 +3103,9 @@ fn backend_load(url: &str) -> Result<InMemoryEventStore, String> {
 /// firewall. Backend-agnostic.
 ///
 /// v0 concurrency: commits are serialized by the backend (Postgres' advisory lock; `SQLite`'s
-/// `BEGIN IMMEDIATE` + `busy_timeout`), so concurrent writers wait rather than corrupt — but
-/// event/fact ids are minted optimistically from a snapshot, so two writers racing the same
-/// backend can collide. The loser gets a **retryable** conflict (a duplicate id, or — on
-/// `SQLite` — a lock still held past the timeout), which [`with_write_retry`] re-runs.
+/// `BEGIN IMMEDIATE` + `busy_timeout`), so concurrent writers wait rather than corrupt. CLI/MCP
+/// event ids are reserved from the backend before signing, so duplicate-id conflicts should only
+/// come from direct/legacy writers; lock contention can still be retryable.
 #[cfg(feature = "async-store")]
 fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
     use dent8_store::StoreError;
@@ -3093,12 +3116,25 @@ fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
             .append_many(owned)
             .await
             .map_err(|error| match error {
-                // A duplicate id under the optimistic scheme is a race, not corruption: signal it
-                // as retryable so the caller re-snapshots and re-mints a non-colliding id.
+                // A duplicate id or long-held write lock can be retried by re-running the op
+                // against a fresh snapshot and reserving a fresh id range.
                 StoreError::Conflict(message) => WriteError::Conflict(message),
                 other => WriteError::Other(other.to_string()),
             })?;
         Ok(())
+    })
+}
+
+#[cfg(feature = "async-store")]
+fn backend_reserve_event_ids(url: &str, count: usize) -> Result<u64, String> {
+    let count = u32::try_from(count)
+        .map_err(|_| format!("cannot reserve {count} event ids in one operation"))?;
+    store_runtime()?.block_on(async {
+        let store = connect_backend(url).await?;
+        store
+            .reserve_event_ids(count)
+            .await
+            .map_err(|error| error.to_string())
     })
 }
 

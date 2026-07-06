@@ -23,9 +23,9 @@ use crate::{
     CliAuthority, CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs,
     ReadFactArgs, ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events,
     attest_events, display_value, enforce_write_authority, fact_value_json, format_receipt,
-    load_store, log_path, next_seq, now_millis, paint_status, parse_predicate, print_json_stdout,
-    print_json_stdout_with_code, read_annotation, receipt_fields_json, receipt_json, short,
-    status::Status,
+    load_store, log_path, now_millis, paint_status, parse_predicate, print_json_stdout,
+    print_json_stdout_with_code, read_annotation, receipt_fields_json, receipt_json,
+    reserve_event_seq, short, status::Status,
 };
 
 /// Build a validated `FactEvent` from CLI strings, returning a friendly error rather than
@@ -88,9 +88,10 @@ pub(crate) fn build_event(
 pub(crate) enum OpError {
     Invalid(String),
     Rejected(String),
-    /// A retryable concurrent-writer conflict (Postgres optimistic-id race). Surfaced so
-    /// [`with_write_retry`] can re-run the operation against a fresh snapshot; it never reaches
-    /// the user unless retries are exhausted (then it is downgraded to `Rejected`).
+    /// A retryable concurrent-writer conflict (duplicate id from a direct/legacy writer or a
+    /// backend lock held past timeout). Surfaced so [`with_write_retry`] can re-run the operation
+    /// against a fresh snapshot; it never reaches the user unless retries are exhausted (then it
+    /// is downgraded to `Rejected`).
     Conflict(String),
 }
 
@@ -335,8 +336,11 @@ fn persist_challenge_record(
     let Ok(mut store) = load_store(path) else {
         return false;
     };
+    let Ok(seq) = reserve_event_seq(&store, 1) else {
+        return false;
+    };
     let Ok(record) = build_event(
-        &format!("event:{}", next_seq(&store)),
+        &format!("event:{seq}"),
         incumbent.as_str(),
         subject.kind(),
         subject.key(),
@@ -400,12 +404,10 @@ fn record_survived_challenge(
 }
 
 /// Run a write operation, retrying on a concurrent-writer conflict. Each attempt re-runs the
-/// whole `op_*` (fresh snapshot → fresh `event:{n}` id → re-arbitrate → append), so a retry
-/// mints a non-colliding id and commits. Between attempts it backs off with per-process jitter
-/// to **de-synchronize a thundering herd** — immediate retries would re-collide on the same
-/// next id, so the spread is what lets many concurrent writers converge. A success or any
-/// non-conflict failure returns immediately. Without the `postgres` feature no conflict is ever
-/// produced, so this runs `op` exactly once.
+/// whole `op_*` (fresh snapshot → fresh/reserved `event:{n}` id range → re-arbitrate → append).
+/// Between attempts it backs off with per-process jitter to **de-synchronize a thundering herd**.
+/// A success or any non-conflict failure returns immediately. Without an async backend, no
+/// durable write conflict is produced, so this runs `op` exactly once.
 pub(crate) fn with_write_retry(
     mut op: impl FnMut() -> Result<String, OpError>,
 ) -> Result<String, OpError> {
@@ -422,7 +424,7 @@ pub(crate) fn with_write_retry(
     }
     Err(OpError::Rejected(format!(
         "write conflict persisted after {MAX_ATTEMPTS} attempts (last: {last}); a concurrent \
-         writer kept racing — try again, or move to DB-assigned ids for heavy write contention"
+         writer or backend lock kept racing — try again"
     )))
 }
 
@@ -465,7 +467,8 @@ pub(crate) fn op_assert(
     let now = now_millis();
     // A fresh fact per assertion (keyed by sequence); the registry's uniqueness governs
     // whether a second *fresh* fact for the same subject+predicate is admissible.
-    let seq = next_seq(&store);
+    let seq = reserve_event_seq(&store, 1)
+        .map_err(|error| OpError::Rejected(format!("could not reserve event id: {error}")))?;
     let mut event = build_event(
         &format!("event:{seq}"),
         &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
@@ -570,7 +573,8 @@ pub(crate) fn op_derive(
         )));
     }
     let now = now_millis();
-    let seq = next_seq(&store);
+    let seq = reserve_event_seq(&store, 1)
+        .map_err(|error| OpError::Rejected(format!("could not reserve event id: {error}")))?;
     let mut event = build_event(
         &format!("event:{seq}"),
         &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
@@ -1093,8 +1097,10 @@ pub(crate) fn op_supersede(
         )));
     }
 
+    let seq = reserve_event_seq(&store, 1 + incumbents.len())
+        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
     let (mut events, replacement_fact_id) = build_revision(
-        next_seq(&store),
+        seq,
         &incumbents,
         subject_kind,
         subject_key,
@@ -1283,8 +1289,10 @@ pub(crate) fn op_retract(
             )));
         }
     };
+    let seq = reserve_event_seq(&store, incumbents.len())
+        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
     let mut events = build_retractions(
-        next_seq(&store),
+        seq,
         &incumbents,
         subject_kind,
         subject_key,
@@ -1440,7 +1448,8 @@ pub(crate) fn build_per_incumbent(
         )));
     }
     let now = now_millis();
-    let seq = next_seq(&store);
+    let seq = reserve_event_seq(&store, incumbents.len())
+        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
     let mut events = Vec::with_capacity(incumbents.len());
     for (index, incumbent) in incumbents.iter().enumerate() {
         let event = build_event(
@@ -1607,8 +1616,10 @@ pub(crate) fn op_contradict(
             "nothing to contradict: no believed {subject_kind}:{subject_key} {predicate}"
         )));
     };
+    let seq = reserve_event_seq(&store, 2)
+        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
     let (mut events, opposing_fact_id) = build_contradiction(
-        next_seq(&store),
+        seq,
         incumbent.fact_id.as_str(),
         subject_kind,
         subject_key,

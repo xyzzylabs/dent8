@@ -15,6 +15,9 @@
 //!   *synchronous* `EventStore` trait) and also implements the shared
 //!   [`dent8_store::AsyncEventStore`] trait, so the CLI can hold it as a
 //!   `Box<dyn AsyncEventStore>` alongside other async backends.
+//! - **Event-id allocation:** CLI/MCP event ids are reserved from Postgres before signing, so
+//!   concurrent writers do not mint the same `event:{n}` from the same snapshot. `global_sequence`
+//!   remains the append order; reserved ids are unique but may have gaps.
 //! - **Global hash chain:** each `event_hash` links to the previous event across the whole
 //!   log; appends are serialized by a transaction-scoped advisory lock so the chain has one
 //!   consistent head with no per-fact race.
@@ -25,10 +28,15 @@
 //!   `projection == fold(log)` invariant. `load_fact_events`/`scan_events` still fold from
 //!   the log; `materialized_projection` reads the cache without re-folding.
 
+use std::collections::BTreeSet;
+
 use dent8_core::{
     FactEvent, FactEventKind, FactId, FactLifecycle, FactState, apply_event, event_hash, hash_chain,
 };
-use dent8_store::{AppendReceipt, AsyncEventStore, EventFilter, StoreError, arbitrate_events};
+use dent8_store::{
+    AppendReceipt, AsyncEventStore, EventFilter, PredicateRegistry, StoreError, arbitrate_events,
+    validate_unique_projection,
+};
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 /// Transaction-scoped advisory-lock key that serializes appends (so the global chain head
@@ -79,12 +87,39 @@ impl PostgresEventStore {
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
+        sqlx::raw_sql(crate::ID_ALLOCATOR_SCHEMA_SQL)
+            .execute(&mut *tx)
+            .await
+            .map_err(unavailable)?;
         sqlx::raw_sql(crate::MATERIALIZATION_SCHEMA_SQL)
             .execute(&mut *tx)
             .await
             .map_err(unavailable)?;
         tx.commit().await.map_err(unavailable)?;
         Ok(())
+    }
+
+    /// Reserve unique numeric suffixes for CLI/MCP `event:{n}` ids. The row update is atomic;
+    /// ids are unique but not gap-free if a later write is rejected before append.
+    pub async fn reserve_event_ids(&self, count: u32) -> Result<u64, StoreError> {
+        if count == 0 {
+            return Err(StoreError::Unavailable(
+                "cannot reserve zero event ids".to_string(),
+            ));
+        }
+        let count = i64::from(count);
+        let start: i64 = sqlx::query_scalar(
+            "UPDATE dent8_id_allocator \
+                SET next_value = next_value + $1 \
+              WHERE name = 'event' \
+          RETURNING next_value - $1",
+        )
+        .bind(count)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(unavailable)?;
+        u64::try_from(start)
+            .map_err(|_| StoreError::CorruptEvent(format!("negative event-id allocator {start}")))
     }
 
     /// Append a candidate event **through the firewall**, transactionally (a one-event
@@ -105,11 +140,12 @@ impl PostgresEventStore {
     /// supersession resolves the replacement fact asserted just before it).
     ///
     /// Trust boundary: the base fact-stream firewall (authority arbitration,
-    /// anti-laundering, canonical hard alarms, terminal-state rules) runs here. The
-    /// source→authority *ceiling* (`dent8 authority`) and predicate registry policy
-    /// (authority floors, default TTLs, uniqueness) are enforced one layer up, at the CLI/MCP
-    /// `op_*` write path — a process calling this adapter directly is responsible for those
-    /// product-policy checks itself.
+    /// anti-laundering, canonical hard alarms, terminal-state rules) runs here, and the final
+    /// projection for each touched unique predicate is rechecked before commit so stale
+    /// concurrent writers cannot silently create duplicate beliefs. The source→authority
+    /// *ceiling* (`dent8 authority`), authority floors, and default TTL stamping are enforced
+    /// one layer up, at the CLI/MCP `op_*` write path — a process calling this adapter directly
+    /// is responsible for those product-policy checks itself.
     pub async fn append_many(
         &self,
         events: Vec<FactEvent>,
@@ -126,6 +162,7 @@ impl PostgresEventStore {
         for event in &events {
             receipts.push(append_event_in_tx(&mut tx, event).await?);
         }
+        validate_touched_policies_in_tx(&mut tx, &events).await?;
         tx.commit().await.map_err(unavailable)?;
         Ok(receipts)
     }
@@ -265,6 +302,10 @@ impl PostgresEventStore {
 impl AsyncEventStore for PostgresEventStore {
     async fn migrate(&self) -> Result<(), StoreError> {
         self.migrate().await
+    }
+
+    async fn reserve_event_ids(&self, count: u32) -> Result<u64, StoreError> {
+        self.reserve_event_ids(count).await
     }
 
     async fn append(&self, event: FactEvent) -> Result<AppendReceipt, StoreError> {
@@ -494,6 +535,60 @@ async fn load_fact_in_tx(
     rows.into_iter().map(event_from_json).collect()
 }
 
+async fn load_subject_predicate_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    subject_type: &str,
+    subject_key: &str,
+    predicate: &str,
+) -> Result<Vec<FactEvent>, StoreError> {
+    let conn: &mut PgConnection = tx;
+    let rows: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT event_json FROM dent8_event_log \
+         WHERE subject_type = $1 AND subject_key = $2 AND predicate = $3 \
+         ORDER BY global_sequence",
+    )
+    .bind(subject_type)
+    .bind(subject_key)
+    .bind(predicate)
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(unavailable)?;
+    rows.into_iter().map(event_from_json).collect()
+}
+
+async fn validate_touched_policies_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    events: &[FactEvent],
+) -> Result<(), StoreError> {
+    let registry = PredicateRegistry::coding_agent();
+    let mut touched = BTreeSet::new();
+    for event in events {
+        touched.insert((
+            event.subject.kind().to_string(),
+            event.subject.key().to_string(),
+            event.predicate.as_str().to_string(),
+        ));
+    }
+
+    for (subject_type, subject_key, predicate) in touched {
+        let now = events
+            .iter()
+            .filter(|event| {
+                event.subject.kind() == subject_type
+                    && event.subject.key() == subject_key
+                    && event.predicate.as_str() == predicate
+            })
+            .map(|event| event.provenance.recorded_at)
+            .max()
+            .expect("touched group has at least one event");
+        let subject_events =
+            load_subject_predicate_in_tx(&mut *tx, &subject_type, &subject_key, &predicate).await?;
+        validate_unique_projection(&registry, &subject_events, now)?;
+    }
+
+    Ok(())
+}
+
 fn event_from_json(value: serde_json::Value) -> Result<FactEvent, StoreError> {
     serde_json::from_value(value).map_err(|error| StoreError::CorruptEvent(error.to_string()))
 }
@@ -551,13 +646,17 @@ mod tests {
         let guard = SERIAL.lock().await;
         let store = connect_with_retry(&database_url().unwrap()).await;
         store.migrate().await.expect("migrate");
-        // Isolate each run (all three tables: log + the derived caches).
+        // Isolate each run (log + derived caches + id allocator).
         sqlx::query(
             "TRUNCATE dent8_event_log, dent8_claim_projection, dent8_claim_edge RESTART IDENTITY",
         )
         .execute(store.pool())
         .await
         .expect("truncate");
+        sqlx::query("UPDATE dent8_id_allocator SET next_value = 0 WHERE name = 'event'")
+            .execute(store.pool())
+            .await
+            .expect("reset allocator");
         (guard, store)
     }
 
@@ -685,10 +784,10 @@ mod tests {
 
         // A low-authority backing fact may exist...
         store
-            .append(assert_event(
+            .append(assert_on_subject(
                 "e2",
                 "fact:B",
-                "mysql",
+                "other",
                 "source:web-scrape",
                 AuthorityLevel::Low,
             ))
@@ -750,8 +849,8 @@ mod tests {
     /// makes the chain-head read-modify-write atomic, so the assigned `global_sequence`s are a
     /// gap-free, duplicate-free `1..=N`, the whole chain verifies, and every fact's
     /// projection equals the fold of its log. This is the adapter's multi-writer guarantee
-    /// (the CLI's snapshot-minted `event:{n}` ids are a separate, documented single-writer
-    /// caveat — here every event id is distinct, the case the adapter must handle cleanly).
+    /// when each candidate already carries a distinct event id; CLI/MCP writers reserve those
+    /// ids from the backend before signing.
     #[tokio::test]
     async fn concurrent_appends_keep_one_consistent_global_chain() {
         const N: usize = 12;
@@ -838,23 +937,22 @@ mod tests {
             .await
             .expect("reinforce A");
         store
-            .append(assert_event(
-                "e3",
-                "fact:B",
-                "mysql",
-                "source:owner",
-                AuthorityLevel::High,
-            ))
-            .await
-            .expect("assert B");
-        store
-            .append(supersede_event(
-                "e4",
-                "fact:A",
-                "fact:B",
-                "source:owner",
-                AuthorityLevel::High,
-            ))
+            .append_many(vec![
+                assert_event(
+                    "e3",
+                    "fact:B",
+                    "mysql",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+                supersede_event(
+                    "e4",
+                    "fact:A",
+                    "fact:B",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+            ])
             .await
             .expect("supersede A by B");
 
@@ -1004,6 +1102,84 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn event_id_reservations_are_unique_ranges() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: DATABASE_URL unset");
+            return;
+        };
+        let (_guard, store) = fresh_store().await;
+
+        assert_eq!(store.reserve_event_ids(2).await.unwrap(), 0);
+        assert_eq!(store.reserve_event_ids(1).await.unwrap(), 2);
+        assert_eq!(store.reserve_event_ids(3).await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn migrate_advances_allocator_past_existing_event_ids() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: DATABASE_URL unset");
+            return;
+        };
+        let (_guard, store) = fresh_store().await;
+        store
+            .append(assert_event(
+                "event:7",
+                "fact:A",
+                "postgres",
+                "source:owner",
+                AuthorityLevel::High,
+            ))
+            .await
+            .expect("append high event id");
+
+        store.migrate().await.expect("re-migrate");
+
+        assert_eq!(store.reserve_event_ids(1).await.unwrap(), 8);
+    }
+
+    #[tokio::test]
+    async fn final_unique_projection_rejects_silent_duplicate_assertion() {
+        let Some(_) = database_url() else {
+            eprintln!("skipping: DATABASE_URL unset");
+            return;
+        };
+        let (_guard, store) = fresh_store().await;
+        store
+            .append(assert_event(
+                "e1",
+                "fact:A",
+                "postgres",
+                "source:owner",
+                AuthorityLevel::High,
+            ))
+            .await
+            .expect("assert A");
+
+        let duplicate = store
+            .append(assert_event(
+                "e2",
+                "fact:B",
+                "mysql",
+                "source:owner",
+                AuthorityLevel::High,
+            ))
+            .await;
+
+        assert!(matches!(
+            duplicate,
+            Err(StoreError::UniquenessViolation { .. })
+        ));
+        assert!(
+            store
+                .load_fact_events(&FactId::new("fact:B").unwrap())
+                .await
+                .unwrap()
+                .is_empty(),
+            "rejected duplicate assertion must roll back"
+        );
+    }
+
     /// The indexed scalar columns are derived by separate bind expressions from `state_json`,
     /// so verify them against the (lossless) folded state directly — a bind/mapping bug here
     /// would otherwise pass both `verify_projection` and the read-side assertions above.
@@ -1038,23 +1214,22 @@ mod tests {
             .await
             .expect("reinforce A");
         store
-            .append(assert_event(
-                "e3",
-                "fact:B",
-                "mysql",
-                "source:owner",
-                AuthorityLevel::High,
-            ))
-            .await
-            .expect("assert B");
-        store
-            .append(supersede_event(
-                "e4",
-                "fact:A",
-                "fact:B",
-                "source:owner",
-                AuthorityLevel::High,
-            ))
+            .append_many(vec![
+                assert_event(
+                    "e3",
+                    "fact:B",
+                    "mysql",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+                supersede_event(
+                    "e4",
+                    "fact:A",
+                    "fact:B",
+                    "source:owner",
+                    AuthorityLevel::High,
+                ),
+            ])
             .await
             .expect("supersede A by B");
 

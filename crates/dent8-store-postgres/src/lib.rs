@@ -6,6 +6,10 @@ pub const EVENT_LOG_SCHEMA_SQL: &str = include_str!("../migrations/postgres/002_
 pub const MATERIALIZATION_SCHEMA_SQL: &str =
     include_str!("../migrations/postgres/003_materialization.sql");
 
+/// The allocator used to reserve CLI/MCP `event:{n}` suffixes before signing events.
+pub const ID_ALLOCATOR_SCHEMA_SQL: &str =
+    include_str!("../migrations/postgres/004_id_allocator.sql");
+
 #[cfg(feature = "adapter")]
 mod adapter;
 #[cfg(feature = "adapter")]
@@ -30,6 +34,11 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 3,
         name: "materialization",
         sql: MATERIALIZATION_SCHEMA_SQL,
+    },
+    Migration {
+        version: 4,
+        name: "id_allocator",
+        sql: ID_ALLOCATOR_SCHEMA_SQL,
     },
 ];
 

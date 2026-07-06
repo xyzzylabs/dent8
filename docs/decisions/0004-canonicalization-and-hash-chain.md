@@ -34,8 +34,9 @@ number formatting.
    pairs share a hash input. **Done.**
 4. Compute canonical bytes **from the typed Rust struct, never from Postgres JSONB**.
    **Done.**
-5. `provenance.recorded_at` is **appender-supplied**; the SQL `DEFAULT now()` is dropped
-   from `dent8_fact_events.recorded_at` and `dent8_fact_edges.created_at`.
+5. `provenance.recorded_at` is **appender-supplied** inside the canonical event; SQL
+   defaults are not used for event timestamps, and `dent8_claim_edge.recorded_at` is copied
+   from the originating event.
    `dent8_replay_runs.started_at` stays DB-generated (operational run metadata, not
    replayable event data). **Done.**
 6. **Done — `FactValue::Json` is canonical by construction.** The variant now holds

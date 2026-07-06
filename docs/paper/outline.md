@@ -148,11 +148,10 @@ as "first to unify/transplant," never "first to invent"):
    witness deployment evaluation.
 7. **Threats to validity** — model-vs-implementation gap; bounded proofs;
    canonicalization is sorted-key `serde_json`, not JCS; the file backend is a
-   single-writer dev store; Postgres concurrency is DB-verified but still needs
-   DB-assigned ids for heavy fan-out; the witness primitive is not an operated service;
-   overlap with Zep [7].
+   single-writer dev store; Postgres concurrency is DB-verified but needs more operational
+   load evidence; the witness primitive is not an operated service; overlap with Zep [7].
 8. **Limitations & future work** — ATMS-style assumption-environment replay;
-   predicate-level volatility policy; DB-assigned ids;
+   predicate-level volatility policy; remote/multi-tenant prepare-commit signing;
    `cargo-fuzz`; append/projection model checking; operated witness; HTTP/SDK/debugger
    surfaces.
 

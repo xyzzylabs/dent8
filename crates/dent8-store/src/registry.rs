@@ -11,9 +11,11 @@
 //!
 //! The registry is an **application-level policy layer above the base firewall**
 //! ([`crate::arbitrate`], which every [`EventStore::append`] runs and cannot be
-//! bypassed). Apply it via [`apply_policy_defaults`] + [`enforce_policy`] *before*
-//! `append`. The base firewall is the unbypassable security floor (no override, no
-//! laundering, canonical hard-alarm); the registry adds per-predicate *configuration*.
+//! bypassed). Apply defaults/floors via [`apply_policy_defaults`] + [`enforce_policy`]
+//! *before* `append`; async transactional stores also use [`validate_unique_projection`]
+//! before commit so stale concurrent writers cannot leave two silent fresh beliefs for a
+//! `unique` predicate. The base firewall is the unbypassable security floor (no override,
+//! no laundering, canonical hard-alarm); the registry adds per-predicate *configuration*.
 //!
 //! The authority floor gates **assertion only** — creating a new authoritative fact. It
 //! deliberately does **not** gate contradiction or reinforcement: a low-authority agent
@@ -22,10 +24,11 @@
 //! hard-alarm. Revising an existing fact goes through supersession, which the base
 //! firewall already gates (the replacing fact must out-rank the incumbent).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use dent8_core::{
-    AuthorityLevel, FactEvent, FactEventKind, Predicate, Subject, TimestampMillis, Ttl,
+    AuthorityLevel, FactEvent, FactEventKind, FactLifecycle, Predicate, Subject, TimestampMillis,
+    Ttl,
 };
 
 use crate::{EventFilter, EventStore, StoreError, replay_subject};
@@ -186,9 +189,73 @@ where
     Ok(())
 }
 
+/// Validate that an already-folded subject/predicate stream still satisfies registry
+/// invariants. Async adapters use this *inside* the append transaction after applying a whole
+/// multi-event batch: it rejects two silent fresh beliefs for a `unique` predicate, while still
+/// allowing explicit contestation and atomic supersession batches whose final projection is
+/// unique.
+pub fn validate_unique_projection(
+    registry: &PredicateRegistry,
+    events: &[FactEvent],
+    now: TimestampMillis,
+) -> Result<(), StoreError> {
+    let subject = replay_subject(events).map_err(StoreError::Replay)?;
+    let fresh: Vec<_> = subject
+        .believed()
+        .filter(|state| !state.is_expired_at(now))
+        .collect();
+    let mut checked = BTreeSet::new();
+
+    for state in &fresh {
+        let key = (
+            state.subject.kind().to_string(),
+            state.subject.key().to_string(),
+            state.predicate.as_str().to_string(),
+        );
+        if !checked.insert(key) {
+            continue;
+        }
+        let Some(policy) = registry.policy_for(&state.subject, &state.predicate) else {
+            continue;
+        };
+        if !policy.unique {
+            continue;
+        }
+        let group: Vec<_> = fresh
+            .iter()
+            .copied()
+            .filter(|other| other.subject == state.subject && other.predicate == state.predicate)
+            .collect();
+        if group.len() <= 1 {
+            continue;
+        }
+
+        let mut accounted = Vec::new();
+        for candidate in &group {
+            if candidate.lifecycle == FactLifecycle::Contested {
+                accounted.push(&candidate.fact_id);
+                accounted.extend(candidate.contradicted_by.iter());
+            }
+        }
+        if group
+            .iter()
+            .any(|candidate| !accounted.contains(&&candidate.fact_id))
+        {
+            return Err(StoreError::UniquenessViolation {
+                predicate: display_key(&state.subject, &state.predicate),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PredicateRegistry, Volatility, apply_policy_defaults, enforce_policy};
+    use super::{
+        PredicateRegistry, Volatility, apply_policy_defaults, enforce_policy,
+        validate_unique_projection,
+    };
     use crate::{EventStore, InMemoryEventStore, StoreError};
     use dent8_core::{
         ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
@@ -264,6 +331,76 @@ mod tests {
             Some(FactValue::Text(value.to_string())),
             authority,
         )
+    }
+
+    #[test]
+    fn final_unique_projection_rejects_silent_duplicate_beliefs() {
+        let registry = PredicateRegistry::coding_agent();
+        let events = vec![
+            assertion(
+                "e1",
+                "fact:A",
+                "repo",
+                "myproj",
+                "database",
+                "postgres",
+                AuthorityLevel::High,
+            ),
+            assertion(
+                "e2",
+                "fact:B",
+                "repo",
+                "myproj",
+                "database",
+                "mysql",
+                AuthorityLevel::High,
+            ),
+        ];
+
+        assert!(matches!(
+            validate_unique_projection(&registry, &events, NOW),
+            Err(StoreError::UniquenessViolation { .. })
+        ));
+    }
+
+    #[test]
+    fn final_unique_projection_allows_explicit_contestation() {
+        let registry = PredicateRegistry::coding_agent();
+        let events = vec![
+            assertion(
+                "e1",
+                "fact:A",
+                "repo",
+                "myproj",
+                "database",
+                "postgres",
+                AuthorityLevel::High,
+            ),
+            assertion(
+                "e2",
+                "fact:B",
+                "repo",
+                "myproj",
+                "database",
+                "mysql",
+                AuthorityLevel::Low,
+            ),
+            event(
+                "e3",
+                "fact:A",
+                "repo",
+                "myproj",
+                "database",
+                FactEventKind::Contradicted {
+                    by: FactId::new("fact:B").expect("fact id"),
+                    basis: ContradictionBasis::SamePredicateDifferentValue,
+                },
+                None,
+                AuthorityLevel::Low,
+            ),
+        ];
+
+        validate_unique_projection(&registry, &events, NOW).expect("contestation is explicit");
     }
 
     fn admit(
