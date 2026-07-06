@@ -531,6 +531,7 @@ pub(crate) fn doctor_agent_mcp_smoke(
     match mcp_smoke_with_server(installed, source) {
         Ok(smoke) => {
             doctor_line(output, "OK", &smoke.message);
+            doctor_agent_mcp_version(output, &smoke.runtime_status);
             (
                 true,
                 Some(DoctorMcpRuntime {
@@ -552,6 +553,42 @@ pub(crate) fn doctor_agent_mcp_smoke(
                 }),
             )
         }
+    }
+}
+
+pub(crate) fn doctor_agent_mcp_version(output: &mut String, runtime_status: &serde_json::Value) {
+    let current = env!("CARGO_PKG_VERSION");
+    let version = runtime_status["server"]["version"].as_str();
+    let binary = runtime_status["server"]["binary_path"].as_str();
+
+    match (version, binary) {
+        (Some(version), Some(binary)) if version == current => doctor_line(
+            output,
+            "OK",
+            &format!("mcp server version: {version} ({binary})"),
+        ),
+        (Some(version), Some(binary)) => doctor_line(
+            output,
+            "WARN",
+            &format!(
+                "mcp server version: {version} ({binary}); doctor is {current} — reinstall or repair the agent MCP config if this is stale"
+            ),
+        ),
+        (Some(version), None) if version == current => {
+            doctor_line(output, "OK", &format!("mcp server version: {version}"));
+        }
+        (Some(version), None) => doctor_line(
+            output,
+            "WARN",
+            &format!(
+                "mcp server version: {version}; doctor is {current} — reinstall or repair the agent MCP config if this is stale"
+            ),
+        ),
+        _ => doctor_line(
+            output,
+            "WARN",
+            "mcp server version: unavailable from runtime_status",
+        ),
     }
 }
 

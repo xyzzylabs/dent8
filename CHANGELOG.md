@@ -9,6 +9,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- `dent8 doctor --agent` now prints the live MCP server version and binary path after
+  `runtime_status` succeeds, and warns when that server version differs from the doctor
+  binary so stale globally installed or repo-local MCP commands are visible without digging
+  into JSON.
+
 ## [0.3.2] - 2026-07-06
 
 ### Added

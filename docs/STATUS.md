@@ -68,6 +68,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `command` + `args` + `cwd` + `env` with `initialize` + `tools/list` + `runtime_status` and
   a bounded timeout. The runtime-status smoke fails if the live MCP server starts against a
   different store backend/path or source identity than the installed agent bundle declares.
+  On success, doctor prints the live MCP server version and binary path, and warns when that
+  version differs from the doctor binary so stale global installs or repo-local wrappers are
+  visible in the text report, not only in `--output json`.
   If the installed config uses `dent8 mcp proxy`, doctor first probes the target daemon socket
   with the config's own `DENT8_GRANT` / `DENT8_IDENTITY_KEY`, reports the authenticated source
   on success, and reports a concrete `dent8 daemon serve --socket ...` hint when the

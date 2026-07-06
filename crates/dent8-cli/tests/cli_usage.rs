@@ -3545,6 +3545,7 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     assert!(stdout.contains("source:codex max=high"));
     assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
     assert!(stdout.contains("mcp smoke: initialize + tools/list + runtime_status OK"));
+    assert!(stdout.contains("mcp server version:"));
     assert!(stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"));
     assert!(stdout.contains("dent8.write_check=ok"));
     assert!(
@@ -3573,6 +3574,65 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     assert_eq!(
         doctor_json["mcp_runtime"]["runtime_status"]["identity"]["source"],
         "source:codex"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn doctor_agent_warns_when_mcp_server_version_differs() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let fake_mcp = temp.file("fake-dent8-mcp.sh");
+    fs::write(
+        &fake_mcp,
+        r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"dent8","version":"0.0.1"}}}'
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"runtime_status"},{"name":"assert"},{"name":"explain"},{"name":"verify"}]}}'
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"isError\":false,\"content\":[],\"structuredContent\":{\"tool\":\"runtime_status\",\"status\":\"ok\",\"schema_version\":1,\"server\":{\"version\":\"0.0.1\",\"binary_path\":\"$0\"},\"store\":{\"backend\":\"file\",\"event_count\":0,\"file_log_path\":\"$DENT8_LOG\"},\"identity\":{\"source\":\"source:codex\"}}}}"
+"#,
+    )
+    .expect("write fake MCP server");
+    make_executable(&fake_mcp);
+
+    let fake_command = fake_mcp.to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--store",
+                "file",
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &fake_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp with fake MCP server",
+    );
+
+    let doctor = run_dent8(&["doctor", "--agent", "codex", "--dir", &dir], &[]);
+    assert_success(&doctor, "doctor --agent codex with stale MCP server");
+    let stdout = stdout(&doctor);
+    assert!(
+        stdout.contains("WARN  mcp server version: 0.0.1"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("doctor is "),
+        "expected doctor version in warning:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("reinstall or repair the agent MCP config"),
+        "{stdout}"
     );
 }
 
