@@ -72,8 +72,9 @@ The local daemon (`dent8 mcp serve --daemon`) is available when many local proce
 share one transport and one source identity. It authenticates each connection with a signed
 session challenge before writes, then attests accepted events daemon-side. It is still
 single-source in v0, so distinct per-agent provenance should use separate stdio subprocesses
-against the same backend, or separate daemon instances. A remote HTTP/streamable transport is
-future work, not part of v0.
+against the same backend, or separate daemon instances. Stdio-only clients can reach the
+daemon through `dent8 mcp proxy`, which authenticates once and then forwards MCP frames over
+the daemon socket. A remote HTTP/streamable transport is future work, not part of v0.
 
 Client-specific examples:
 

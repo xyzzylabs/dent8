@@ -39,6 +39,7 @@ Command groups:
 - `dent8 native scan --agent <profile>`
 - `dent8 native reconcile --agent <profile>`
 - `dent8 mcp serve`
+- `dent8 mcp proxy`
 
 Subjects use `<kind>:<key>` (`person:alice`, `repo:dent8`) so the fact reads left-to-right:
 subject, predicate, value. Authority and source are flags because they are provenance metadata.

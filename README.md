@@ -136,6 +136,15 @@ dent8 doctor --source source:codex       # check the daemon is reachable and you
 dent8 assert repo:app deploy_target production
 ```
 
+For a stdio-only MCP client that should use the same daemon, configure it to run:
+
+```sh
+dent8 mcp proxy
+```
+
+The proxy authenticates to the daemon once, then forwards the client's MCP frames over that
+connection.
+
 Every connection proves the daemon-configured source identity with a signed session challenge,
 and the daemon arbitrates and **attests each write as that source** — so a daemon-written fact
 re-verifies offline exactly like a local one, and many processes build one firewalled belief

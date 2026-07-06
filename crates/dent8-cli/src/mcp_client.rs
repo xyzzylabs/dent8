@@ -1,7 +1,8 @@
 //! A synchronous client for the local dent8 daemon (ADR 0018 PR 5): connect over the Unix
 //! socket, complete the session-challenge handshake with the caller's own signed identity, then
-//! run one write tool. Used by the CLI when `DENT8_DAEMON_SOCKET` routes writes to a shared
-//! daemon, so several agents can share one belief base over one transport.
+//! run one write tool, or bridge stdio MCP through that authenticated connection. Used by the
+//! CLI when `DENT8_DAEMON_SOCKET` routes writes to a shared daemon, and by `dent8 mcp proxy`
+//! when an stdio-only MCP client should talk to that daemon.
 //!
 //! The transport is the same newline-delimited JSON-RPC the daemon already speaks; the client is
 //! plain blocking `std::os::unix::net` (no async runtime — the CLI is synchronous). All crypto
@@ -38,6 +39,32 @@ pub(crate) fn daemon_write(
 /// the handshake fails.
 pub(crate) fn daemon_health(socket_path: &str) -> Result<String, String> {
     Ok(Session::connect(socket_path)?.source)
+}
+
+/// Bridge a stdio MCP client to an already-running local daemon. The proxy authenticates once
+/// with the caller's source key, then forwards newline-delimited JSON-RPC frames between stdin /
+/// stdout and the daemon connection. Notifications are forwarded without waiting for a reply, so
+/// normal MCP clients can send `notifications/initialized` without deadlocking the proxy.
+pub(crate) fn daemon_proxy(socket_path: &str) -> Result<(), String> {
+    let mut session = Session::connect(socket_path)?;
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    for line in stdin.lock().lines() {
+        let line = line.map_err(|error| format!("read stdin: {error}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let expects_response = line_expects_response(&line);
+        write_raw_line(&mut session.writer, &line)?;
+        if expects_response {
+            let response = read_raw_line(&mut session.reader)?;
+            stdout
+                .write_all(response.as_bytes())
+                .and_then(|()| stdout.flush())
+                .map_err(|error| format!("write stdout: {error}"))?;
+        }
+    }
+    Ok(())
 }
 
 /// An authenticated daemon connection: the socket halves plus the source it proved possession
@@ -121,10 +148,26 @@ fn round_trip(
     let mut line =
         serde_json::to_string(request).map_err(|error| format!("encode request: {error}"))?;
     line.push('\n');
+    write_raw_line(writer, &line)?;
+    let response = read_raw_line(reader)?;
+    serde_json::from_str(&response).map_err(|error| format!("decode daemon response: {error}"))
+}
+
+fn write_raw_line(writer: &mut UnixStream, line: &str) -> Result<(), String> {
     writer
         .write_all(line.as_bytes())
+        .and_then(|()| {
+            if line.ends_with('\n') {
+                Ok(())
+            } else {
+                writer.write_all(b"\n")
+            }
+        })
         .and_then(|()| writer.flush())
-        .map_err(|error| format!("write to daemon: {error}"))?;
+        .map_err(|error| format!("write to daemon: {error}"))
+}
+
+fn read_raw_line(reader: &mut BufReader<UnixStream>) -> Result<String, String> {
     let mut response = String::new();
     let read = reader
         .read_line(&mut response)
@@ -132,7 +175,34 @@ fn round_trip(
     if read == 0 {
         return Err("daemon closed the connection".to_string());
     }
-    serde_json::from_str(&response).map_err(|error| format!("decode daemon response: {error}"))
+    Ok(response)
+}
+
+fn line_expects_response(line: &str) -> bool {
+    match serde_json::from_str::<Value>(line) {
+        Ok(message) => message_expects_response(&message),
+        Err(_) => true,
+    }
+}
+
+fn message_expects_response(message: &Value) -> bool {
+    let Some(batch) = message.as_array() else {
+        return request_expects_response(message);
+    };
+    batch.is_empty() || batch.iter().any(request_expects_response)
+}
+
+fn request_expects_response(request: &Value) -> bool {
+    let Some(object) = request.as_object() else {
+        return true;
+    };
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        return true;
+    };
+    if matches!(method, "dent8/hello" | "dent8/prove") {
+        return true;
+    }
+    object.contains_key("id")
 }
 
 /// Map a `tools/call` reply to the local write outcome. A JSON-RPC error (e.g. the read-only
@@ -217,7 +287,7 @@ fn env_path(name: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::map_tool_reply;
+    use super::{map_tool_reply, message_expects_response};
     use crate::ops::OpError;
     use serde_json::json;
 
@@ -288,5 +358,30 @@ mod tests {
             "result": { "isError": true, "content": [{ "type": "text", "text": "REJECTED: x" }] },
         });
         assert!(matches!(map_tool_reply(&reply), Err(OpError::Rejected(_))));
+    }
+
+    #[test]
+    fn proxy_does_not_wait_for_json_rpc_notifications() {
+        assert!(!message_expects_response(&json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        })));
+        assert!(message_expects_response(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize"
+        })));
+        assert!(message_expects_response(&json!([
+            { "jsonrpc": "2.0", "method": "notifications/initialized" },
+            { "jsonrpc": "2.0", "id": 2, "method": "tools/list" }
+        ])));
+        assert!(!message_expects_response(&json!([
+            { "jsonrpc": "2.0", "method": "notifications/initialized" }
+        ])));
+        assert!(message_expects_response(&json!([])));
+        assert!(message_expects_response(&json!({
+            "jsonrpc": "2.0",
+            "method": "dent8/hello"
+        })));
     }
 }

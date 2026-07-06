@@ -125,6 +125,16 @@ dent8 doctor --source source:codex
 dent8 assert person:alice favorite_drink tea
 ```
 
+For a stdio-only MCP client that should use the running daemon instead of launching its own
+store-backed server, use the bridge command:
+
+```sh
+dent8 mcp proxy
+```
+
+`mcp proxy` reads/writes normal stdio MCP on one side, authenticates to the daemon using the
+current `DENT8_GRANT` / `DENT8_IDENTITY_KEY`, and forwards frames over the daemon socket.
+
 Authenticated daemon connections can write through the same firewall and receive
 offline-verifiable write attestations. The daemon is still per-user and single-source in v0:
 use separate stdio MCP subprocesses, or separate daemon instances, when distinct agent

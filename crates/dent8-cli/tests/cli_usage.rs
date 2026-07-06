@@ -4622,6 +4622,100 @@ fn mcp_install_json_reports_dry_run_and_check_state() {
     assert_mcp_install_up_to_date_json(&up_to_date_json);
 }
 
+#[test]
+#[cfg(unix)]
+fn mcp_proxy_bridges_stdio_to_authenticated_daemon() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--store",
+                "sqlite",
+                "--source",
+                "source:owner",
+                "--identity",
+            ],
+            &[("DENT8_ISSUER_KEY", &issuer_key)],
+        ),
+        "init daemon bundle",
+    );
+
+    let mut env = read_test_env_file(&temp.file(".dent8/env"));
+    env.extend(read_test_env_file(&temp.file(".dent8/identity-owner.env")));
+    let socket = temp.file("dent8.sock");
+    let socket_arg = socket.to_string_lossy().into_owned();
+
+    let mut daemon = spawn_daemon(&socket_arg, &env);
+    wait_for_socket(&socket, &mut daemon);
+
+    let input = json_rpc_lines(&[
+        serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+        serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "assert", "arguments": {
+                "subject": "person:alice",
+                "predicate": "favorite_drink",
+                "value": "tea"
+            }}
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "supersede", "arguments": {
+                "subject": "person:alice",
+                "predicate": "favorite_drink",
+                "value": "coffee",
+                "authority": "low"
+            }}
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": { "name": "verify", "arguments": {} }
+        }),
+    ]);
+
+    let proxied = run_dent8_mcp_proxy(&socket_arg, &input, &env);
+    assert_success(&proxied, "mcp proxy");
+    let responses = stdout(&proxied)
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("proxy response JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        responses.len(),
+        4,
+        "notification should not produce a response: {responses:#?}"
+    );
+    assert_eq!(
+        json_response(&responses, 1)["result"]["serverInfo"]["name"],
+        "dent8"
+    );
+    assert_eq!(
+        json_response(&responses, 2)["result"]["structuredContent"]["status"],
+        "accepted"
+    );
+    assert_eq!(
+        json_response(&responses, 3)["result"]["structuredContent"]["status"],
+        "rejected"
+    );
+    assert_eq!(
+        json_response(&responses, 4)["result"]["structuredContent"]["status"],
+        "ok"
+    );
+    assert!(
+        json_response(&responses, 4)["result"]["content"][0]["text"]
+            .as_str()
+            .expect("verify text")
+            .contains("write attestation(s) verify"),
+        "{:#?}",
+        json_response(&responses, 4)
+    );
+}
+
 fn assert_mcp_install_dry_run_json(output: &Value, config_path: &Path) {
     assert_eq!(output["status"], "ok");
     assert_eq!(output["tool"], "mcp install");
@@ -7111,6 +7205,163 @@ fn run_dent8_mcp(input: &str, envs: &[(&str, &str)]) -> Output {
         .expect("write mcp request");
     drop(child.stdin.take());
     child.wait_with_output().expect("run dent8 mcp serve")
+}
+
+#[cfg(unix)]
+fn run_dent8_mcp_proxy(socket: &str, input: &str, envs: &[(String, String)]) -> Output {
+    let mut command = Command::new(dent8_bin());
+    command
+        .args(["mcp", "proxy", "--socket", socket])
+        .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
+        .env_remove("DENT8_AUTHORITY")
+        .env_remove("DENT8_REQUIRE_AUTHORITY")
+        .env_remove("DENT8_TRUST")
+        .env_remove("DENT8_ACTIVE_GRANTS")
+        .env_remove("DENT8_GRANT")
+        .env_remove("DENT8_IDENTITY_KEY")
+        .env_remove("DENT8_ISSUER_KEY")
+        .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_DAEMON_SOCKET")
+        .env_remove("DENT8_WITNESS_KEY")
+        .env_remove("DENT8_WITNESS_PUBKEY")
+        .env_remove("DENT8_WITNESS_LOG")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn dent8 mcp proxy");
+    child
+        .stdin
+        .as_mut()
+        .expect("proxy stdin")
+        .write_all(input.as_bytes())
+        .expect("write proxy request");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("run dent8 mcp proxy")
+}
+
+#[cfg(unix)]
+fn spawn_daemon(socket: &str, envs: &[(String, String)]) -> ChildGuard {
+    let mut command = Command::new(dent8_bin());
+    command
+        .args(["mcp", "serve", "--daemon", "--socket", socket])
+        .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
+        .env_remove("DENT8_AUTHORITY")
+        .env_remove("DENT8_REQUIRE_AUTHORITY")
+        .env_remove("DENT8_TRUST")
+        .env_remove("DENT8_ACTIVE_GRANTS")
+        .env_remove("DENT8_GRANT")
+        .env_remove("DENT8_IDENTITY_KEY")
+        .env_remove("DENT8_ISSUER_KEY")
+        .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_DAEMON_SOCKET")
+        .env_remove("DENT8_WITNESS_KEY")
+        .env_remove("DENT8_WITNESS_PUBKEY")
+        .env_remove("DENT8_WITNESS_LOG")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    ChildGuard::new(command.spawn().expect("spawn dent8 daemon"))
+}
+
+#[cfg(unix)]
+fn wait_for_socket(socket: &Path, daemon: &mut ChildGuard) {
+    for _ in 0..50 {
+        if socket.exists() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let output = daemon.kill_and_output();
+    panic!(
+        "daemon did not create socket {}\nstdout:\n{}\nstderr:\n{}",
+        socket.display(),
+        output
+            .as_ref()
+            .map_or_else(|| "<unavailable>".to_string(), stdout),
+        output
+            .as_ref()
+            .map_or_else(|| "<unavailable>".to_string(), stderr)
+    );
+}
+
+#[cfg(unix)]
+fn read_test_env_file(path: &Path) -> Vec<(String, String)> {
+    fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line
+                .split_once('=')
+                .unwrap_or_else(|| panic!("{} is not KEY=VALUE: {line}", path.display()));
+            Some((key.trim().to_string(), shell_unquote_for_test(value.trim())))
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn shell_unquote_for_test(value: &str) -> String {
+    if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
+        value[1..value.len() - 1].replace("'\\''", "'")
+    } else {
+        value.to_string()
+    }
+}
+
+#[cfg(unix)]
+fn json_rpc_lines(messages: &[Value]) -> String {
+    let mut text = String::new();
+    for message in messages {
+        text.push_str(&serde_json::to_string(message).expect("serialize JSON-RPC message"));
+        text.push('\n');
+    }
+    text
+}
+
+#[cfg(unix)]
+fn json_response(responses: &[Value], id: i64) -> &Value {
+    responses
+        .iter()
+        .find(|response| response["id"] == id)
+        .unwrap_or_else(|| panic!("missing response id {id}: {responses:#?}"))
+}
+
+#[cfg(unix)]
+struct ChildGuard {
+    child: Option<std::process::Child>,
+}
+
+#[cfg(unix)]
+impl ChildGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    fn kill_and_output(&mut self) -> Option<Output> {
+        let mut child = self.child.take()?;
+        let _ = child.kill();
+        child.wait_with_output().ok()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 fn assert_success(output: &Output, context: &str) {

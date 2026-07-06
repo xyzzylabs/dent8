@@ -92,6 +92,37 @@ pub fn serve_command(daemon: bool, socket: Option<&str>) -> i32 {
     }
 }
 
+/// Run a stdio-to-daemon MCP bridge: authenticate to the local Unix-socket daemon once, then
+/// forward the client's JSON-RPC frames over that single authenticated connection.
+#[cfg(all(unix, feature = "async-store"))]
+pub fn proxy_command(socket: Option<&str>) -> i32 {
+    let socket_path = socket
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("DENT8_DAEMON_SOCKET")
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| daemon_socket_path(None));
+    match crate::mcp_client::daemon_proxy(&socket_path.to_string_lossy()) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("mcp proxy: {error}");
+            1
+        }
+    }
+}
+
+/// Non-Unix or storage-backend-less builds cannot connect to the local Unix-socket daemon.
+#[cfg(not(all(unix, feature = "async-store")))]
+pub fn proxy_command(_socket: Option<&str>) -> i32 {
+    eprintln!(
+        "mcp: `proxy` needs a Unix build with a storage backend (e.g. the default \
+         `sqlite` feature); use plain `dent8 mcp serve` for stdio"
+    );
+    1
+}
+
 /// Serve the belief surface over a local Unix-domain socket (ADR 0018): a per-user daemon that
 /// dispatches each newline-delimited JSON-RPC request through the exact same [`dispatch`] the
 /// stdio server uses, so the firewall decision is identical on both transports. Connections

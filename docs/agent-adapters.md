@@ -42,8 +42,9 @@ access to the event tables.
    same globally installed `dent8` binary and the same backend store, but stdio MCP clients
    typically launch one subprocess per client/profile. Run one `dent8 mcp serve` process per
    agent identity when per-agent provenance matters. The local daemon supports
-   session-challenge writes, but each daemon process still proves the single source identity
-   whose key it holds; use separate daemon instances for distinct local source identities.
+   session-challenge writes, and `dent8 mcp proxy` lets stdio-only MCP clients use that daemon,
+   but each daemon process still proves the single source identity whose key it holds; use
+   separate daemon instances for distinct local source identities.
    Future remote HTTP transport should authenticate the source per request without requiring
    the service to hold user source keys.
 5. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,

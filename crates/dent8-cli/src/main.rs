@@ -148,6 +148,7 @@ fn run_cli(cli: Cli) -> i32 {
         },
         Some(CliCommand::Mcp(args)) => match args.command {
             McpCommand::Serve(args) => mcp::serve_command(args.daemon, args.socket.as_deref()),
+            McpCommand::Proxy(args) => mcp::proxy_command(args.socket.as_deref()),
             McpCommand::Install(args) => setup::cmd_mcp_install(&args, cli.output),
         },
         Some(CliCommand::Schema(args)) => match args.command {
@@ -280,16 +281,16 @@ enum CliCommand {
 }
 
 impl CliCommand {
-    /// Whether this command emits a `--output json` result. Everything does, except the two
-    /// commands that have no single JSON result to emit: `mcp serve` *is* the JSON-RPC server (it
-    /// streams protocol frames), and `hook` is a git-hook stdin/stdout filter. A deny-list, not an
-    /// allow-list, so a newly added command is machine-readable by default.
+    /// Whether this command emits a `--output json` result. Everything does, except commands
+    /// that have no single JSON result to emit: `mcp serve` and `mcp proxy` stream JSON-RPC
+    /// frames, and `hook` is a git-hook stdin/stdout filter. A deny-list, not an allow-list, so a
+    /// newly added command is machine-readable by default.
     fn supports_json_output(&self) -> bool {
         !matches!(
             self,
             Self::Hook(_)
                 | Self::Mcp(McpArgs {
-                    command: McpCommand::Serve(_),
+                    command: McpCommand::Serve(_) | McpCommand::Proxy(_),
                 })
         )
     }
@@ -1035,6 +1036,8 @@ enum McpCommand {
     /// Expose the belief surface over JSON-RPC — stdio by default, or a local Unix socket
     /// with `--daemon` (ADR 0018).
     Serve(McpServeArgs),
+    /// Bridge stdio MCP to a running local daemon.
+    Proxy(McpProxyArgs),
     /// Patch an agent MCP config with dent8 and show the resulting file.
     Install(McpInstallArgs),
 }
@@ -1049,6 +1052,14 @@ struct McpServeArgs {
     /// Socket path for `--daemon`. Defaults to `$XDG_RUNTIME_DIR/dent8/dent8.sock` (a per-user
     /// fallback under the temp dir is used when `$XDG_RUNTIME_DIR` is unset, e.g. macOS).
     #[arg(long, value_name = "PATH", requires = "daemon")]
+    socket: Option<String>,
+}
+
+#[derive(Args, Debug)]
+struct McpProxyArgs {
+    /// Socket path for the running daemon. Defaults to `DENT8_DAEMON_SOCKET`, then the same
+    /// per-user path as `mcp serve --daemon`.
+    #[arg(long, value_name = "PATH")]
     socket: Option<String>,
 }
 
