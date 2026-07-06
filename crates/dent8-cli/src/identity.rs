@@ -445,6 +445,12 @@ pub(crate) struct IdentityContext {
     required: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WriteDefaults {
+    pub(crate) source: String,
+    pub(crate) authority: AuthorityLevel,
+}
+
 impl IdentityContext {
     /// Resolve the identity inputs from process env. Byte-identical to the direct env reads
     /// these functions used before ADR 0018 — the CLI's only constructor.
@@ -495,6 +501,20 @@ impl IdentityContext {
             |parent| parent.join(ACTIVE_GRANTS_FILE),
         );
         candidate.exists().then_some(candidate)
+    }
+
+    /// Default write metadata advertised by the active signed source grant. This is intentionally
+    /// only a convenience read: [`enforce_write`] still verifies trust, expiry, scope, active-grant
+    /// status, source-key possession, and requested authority before anything is persisted.
+    pub(crate) fn write_defaults(&self) -> Result<Option<WriteDefaults>, String> {
+        let Some(path) = self.grant_path.as_deref() else {
+            return Ok(None);
+        };
+        let grant = load_grant(path)?;
+        Ok(Some(WriteDefaults {
+            source: grant.grant.source,
+            authority: grant.grant.max_authority,
+        }))
     }
 }
 

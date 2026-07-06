@@ -1496,9 +1496,23 @@ fn missing_write_metadata_gets_targeted_usage() {
         &envs,
     );
     assert_eq!(output.status.code(), Some(2));
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--authority <AUTHORITY>"));
-    assert!(stderr(&output).contains("Usage: dent8 assert"));
+    assert!(stderr(&output).contains("missing --authority"));
+    assert!(stderr(&output).contains("DENT8_GRANT"));
+
+    let output = run_dent8(
+        &[
+            "assert",
+            "person:alice",
+            "favorite_drink",
+            "tea",
+            "--authority",
+            "high",
+        ],
+        &envs,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("missing --source"));
+    assert!(stderr(&output).contains("DENT8_GRANT"));
 }
 
 #[test]
@@ -4592,20 +4606,27 @@ fn identity_bootstrap_writes_bundle_that_doctor_and_writes_use() {
 
     assert_success(
         &run_dent8(
-            &[
-                "assert",
-                "person:alice",
-                "favorite_drink",
-                "tea",
-                "--authority",
-                "high",
-                "--source",
-                "source:codex",
-            ],
+            &["assert", "person:alice", "favorite_drink", "tea"],
             &identity_env,
         ),
-        "signed write from bootstrapped identity",
+        "signed write defaults source and authority from bootstrapped identity",
     );
+
+    let defaulted_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "assert",
+            "person:alice",
+            "favorite_color",
+            "blue",
+        ],
+        &identity_env,
+    );
+    assert_success(&defaulted_json, "defaulted signed write json");
+    let defaulted_json = stdout_json(&defaulted_json);
+    assert_eq!(defaulted_json["source"], "source:codex");
+    assert_eq!(defaulted_json["authority"], "high");
 }
 
 #[test]

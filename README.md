@@ -38,13 +38,14 @@ Five for five. The last one is the tell: retract a poisoned source and dent8 fla
 ## Try it
 
 ```sh
-dent8 init --source user:alice          # local setup: env file + authority registry
+dent8 init --identity --source source:alice # local setup: env + authority + signed identity
 set -a; . .dent8/env; set +a
+. .dent8/identity-alice.env
 dent8 authority add web:scrape low       # let this source write at Low, so the next rejection
                                          # is about arbitration, not a missing grant
 
 # A trusted fact goes in.
-dent8 assert repo:myproj deploy_target production --authority high --source user:alice
+dent8 assert repo:myproj deploy_target production
 
 # A low-authority source tries to overwrite it — the firewall rejects it: Low can't override High.
 dent8 supersede repo:myproj deploy_target staging --authority low --source web:scrape
@@ -53,8 +54,8 @@ dent8 supersede repo:myproj deploy_target staging --authority low --source web:s
 dent8 explain repo:myproj deploy_target
 
 # Derive a fact from it, then retract the source — the derivative is flagged tainted.
-dent8 derive service:api target production --basis repo:myproj deploy_target --authority high --source user:alice
-dent8 retract repo:myproj deploy_target --authority high --source user:alice
+dent8 derive service:api target production --basis repo:myproj deploy_target
+dent8 retract repo:myproj deploy_target
 dent8 verify
 ```
 
@@ -110,7 +111,7 @@ Instead of one dent8 process per agent, run a **per-user daemon** and point writ
 dent8 mcp serve --daemon                 # Unix socket at $XDG_RUNTIME_DIR/dent8/dent8.sock
 export DENT8_DAEMON_SOCKET="$XDG_RUNTIME_DIR/dent8/dent8.sock"
 dent8 doctor                             # check the daemon is reachable and you authenticate
-dent8 assert repo:app deploy_target production --authority high --source you
+dent8 assert repo:app deploy_target production
 ```
 
 Every connection proves its identity with a signed session challenge, and the daemon arbitrates

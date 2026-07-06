@@ -26,12 +26,12 @@ The binary is `dent8`.
 Command groups:
 
 - `dent8 schema postgres`
-- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source>`
-- `dent8 reinforce <subject> <predicate> --authority <level> --source <source>`
-- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`
-- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>`
-- `dent8 expire <subject> <predicate> --authority <level> --source <source>`
-- `dent8 retract <subject> <predicate> --authority <level> --source <source>`
+- `dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>]`
+- `dent8 reinforce <subject> <predicate> [--authority <level>] [--source <source>]`
+- `dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>]`
+- `dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>]`
+- `dent8 expire <subject> <predicate> [--authority <level>] [--source <source>]`
+- `dent8 retract <subject> <predicate> [--authority <level>] [--source <source>]`
 - `dent8 replay <subject> <predicate>`
 - `dent8 explain <subject> <predicate>`
 - `dent8 conflicts`

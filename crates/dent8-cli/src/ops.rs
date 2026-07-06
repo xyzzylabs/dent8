@@ -20,10 +20,10 @@ use dent8_store::{
 use std::str::FromStr;
 
 use crate::{
-    CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs, ReadFactArgs,
-    ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events, attest_events,
-    display_value, enforce_write_authority, fact_value_json, format_receipt, load_store, log_path,
-    next_seq, now_millis, paint_status, parse_predicate, print_json_stdout,
+    CliAuthority, CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs,
+    ReadFactArgs, ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events,
+    attest_events, display_value, enforce_write_authority, fact_value_json, format_receipt,
+    load_store, log_path, next_seq, now_millis, paint_status, parse_predicate, print_json_stdout,
     print_json_stdout_with_code, read_annotation, receipt_fields_json, receipt_json, short,
     status::Status,
 };
@@ -129,6 +129,50 @@ impl Validity {
         event.valid_from = self.from.map(TimestampMillis::from_unix_millis);
         event.valid_to = self.to.map(TimestampMillis::from_unix_millis);
     }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedWriteMeta {
+    pub(crate) authority: AuthorityLevel,
+    pub(crate) source: String,
+}
+
+fn resolve_write_meta(
+    authority: Option<CliAuthority>,
+    source: Option<&str>,
+) -> Result<ResolvedWriteMeta, OpError> {
+    if let (Some(authority), Some(source)) = (authority, source) {
+        return Ok(ResolvedWriteMeta {
+            authority: authority.level(),
+            source: source.to_string(),
+        });
+    }
+
+    let defaults = crate::identity::IdentityContext::from_env()
+        .map_err(OpError::Invalid)?
+        .write_defaults()
+        .map_err(OpError::Invalid)?;
+
+    let authority = authority
+        .map(CliAuthority::level)
+        .or_else(|| defaults.as_ref().map(|defaults| defaults.authority))
+        .ok_or_else(|| {
+            OpError::Invalid(
+                "missing --authority (or configure a signed source grant with DENT8_GRANT)"
+                    .to_string(),
+            )
+        })?;
+    let source = source
+        .map(ToString::to_string)
+        .or_else(|| defaults.map(|defaults| defaults.source))
+        .ok_or_else(|| {
+            OpError::Invalid(
+                "missing --source (or configure a signed source grant with DENT8_GRANT)"
+                    .to_string(),
+            )
+        })?;
+
+    Ok(ResolvedWriteMeta { authority, source })
 }
 
 /// The temporal frame for a read (ADR 0016): `as_of` folds only events recorded at or
@@ -456,10 +500,17 @@ pub(crate) fn op_assert(
 }
 
 pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
-    let view = value_write_json_view("assert", args);
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            let view = value_write_json_view("assert", args, None);
+            return present_write(Err(error), output, &view);
+        }
+    };
+    let view = value_write_json_view("assert", args, Some(&meta));
     run_write(
         "assert",
-        &value_write_arguments(args),
+        &value_write_arguments(args, &meta),
         output,
         &view,
         || {
@@ -469,8 +520,8 @@ pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 &args.subject.key,
                 &args.predicate,
                 &args.value,
-                args.authority.level(),
-                &args.source,
+                meta.authority,
+                &meta.source,
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,
@@ -568,7 +619,7 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
             return present_write(
                 Err(OpError::Invalid(message)),
                 output,
-                &WriteJsonView::derive_without_source(args),
+                &WriteJsonView::derive_without_meta(args),
             );
         }
     };
@@ -578,7 +629,17 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
             return present_write(
                 Err(OpError::Invalid(message)),
                 output,
-                &WriteJsonView::derive_without_source(args),
+                &WriteJsonView::derive_without_meta(args),
+            );
+        }
+    };
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            return present_write(
+                Err(error),
+                output,
+                &WriteJsonView::derive_without_meta(args),
             );
         }
     };
@@ -588,8 +649,8 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
         subject_key: &args.subject.key,
         predicate: &args.predicate,
         value: Some(&args.value),
-        authority: args.authority.level(),
-        source: &args.source,
+        authority: Some(meta.authority),
+        source: Some(&meta.source),
         derived_from: Some(DerivedFromJson {
             subject_kind: &from_subject.kind,
             subject_key: &from_subject.key,
@@ -600,8 +661,8 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
     arguments.insert("subject".into(), subject_arg(&args.subject).into());
     arguments.insert("predicate".into(), args.predicate.clone().into());
     arguments.insert("value".into(), args.value.clone().into());
-    arguments.insert("authority".into(), args.authority.level().name().into());
-    arguments.insert("source".into(), args.source.clone().into());
+    arguments.insert("authority".into(), meta.authority.name().into());
+    arguments.insert("source".into(), meta.source.clone().into());
     arguments.insert(
         "basis".into(),
         format!("{}:{}", from_subject.kind, from_subject.key).into(),
@@ -620,8 +681,8 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
                 &args.subject.key,
                 &args.predicate,
                 &args.value,
-                args.authority.level(),
-                &args.source,
+                meta.authority,
+                &meta.source,
                 &from_subject.kind,
                 &from_subject.key,
                 &from_predicate,
@@ -679,21 +740,21 @@ pub(crate) struct WriteJsonView<'a> {
     subject_key: &'a str,
     predicate: &'a str,
     value: Option<&'a str>,
-    authority: AuthorityLevel,
-    source: &'a str,
+    authority: Option<AuthorityLevel>,
+    source: Option<&'a str>,
     derived_from: Option<DerivedFromJson<'a>>,
 }
 
 impl<'a> WriteJsonView<'a> {
-    fn derive_without_source(args: &'a DeriveWriteArgs) -> Self {
+    fn derive_without_meta(args: &'a DeriveWriteArgs) -> Self {
         Self {
             tool: "derive",
             subject_kind: &args.subject.kind,
             subject_key: &args.subject.key,
             predicate: &args.predicate,
             value: Some(&args.value),
-            authority: args.authority.level(),
-            source: &args.source,
+            authority: args.authority.map(CliAuthority::level),
+            source: args.source.as_deref(),
             derived_from: None,
         }
     }
@@ -702,6 +763,7 @@ impl<'a> WriteJsonView<'a> {
 pub(crate) fn value_write_json_view<'a>(
     tool: &'static str,
     args: &'a ValueWriteArgs,
+    meta: Option<&'a ResolvedWriteMeta>,
 ) -> WriteJsonView<'a> {
     WriteJsonView {
         tool,
@@ -709,8 +771,12 @@ pub(crate) fn value_write_json_view<'a>(
         subject_key: &args.subject.key,
         predicate: &args.predicate,
         value: Some(&args.value),
-        authority: args.authority.level(),
-        source: &args.source,
+        authority: meta
+            .map(|meta| meta.authority)
+            .or_else(|| args.authority.map(CliAuthority::level)),
+        source: meta
+            .map(|meta| meta.source.as_str())
+            .or(args.source.as_deref()),
         derived_from: None,
     }
 }
@@ -718,6 +784,7 @@ pub(crate) fn value_write_json_view<'a>(
 pub(crate) fn fact_write_json_view<'a>(
     tool: &'static str,
     args: &'a FactWriteArgs,
+    meta: Option<&'a ResolvedWriteMeta>,
 ) -> WriteJsonView<'a> {
     WriteJsonView {
         tool,
@@ -725,8 +792,12 @@ pub(crate) fn fact_write_json_view<'a>(
         subject_key: &args.subject.key,
         predicate: &args.predicate,
         value: None,
-        authority: args.authority.level(),
-        source: &args.source,
+        authority: meta
+            .map(|meta| meta.authority)
+            .or_else(|| args.authority.map(CliAuthority::level)),
+        source: meta
+            .map(|meta| meta.source.as_str())
+            .or(args.source.as_deref()),
         derived_from: None,
     }
 }
@@ -766,7 +837,7 @@ pub(crate) fn write_success_json(view: &WriteJsonView<'_>, message: &str) -> ser
         },
         "predicate": view.predicate,
         "value": write_value_json(view.value),
-        "authority": view.authority.name(),
+        "authority": view.authority.map(AuthorityLevel::name),
         "source": view.source,
         "derived_from": derived_from_write_json(view.derived_from.as_ref()),
         "message": message,
@@ -791,7 +862,7 @@ pub(crate) fn write_error_json(view: &WriteJsonView<'_>, error: &OpError) -> ser
     object.insert("value".to_string(), write_value_json(view.value));
     object.insert(
         "authority".to_string(),
-        serde_json::json!(view.authority.name()),
+        serde_json::json!(view.authority.map(AuthorityLevel::name)),
     );
     object.insert("source".to_string(), serde_json::json!(view.source));
     object.insert(
@@ -854,25 +925,25 @@ fn subject_arg(subject: &CliSubject) -> String {
 
 /// The MCP tool arguments for a value write (`assert` / `supersede` / `contradict`): the same
 /// fields the tool schema declares, so the daemon parses them exactly like a stdio client.
-fn value_write_arguments(args: &ValueWriteArgs) -> serde_json::Value {
+fn value_write_arguments(args: &ValueWriteArgs, meta: &ResolvedWriteMeta) -> serde_json::Value {
     let mut object = serde_json::Map::new();
     object.insert("subject".into(), subject_arg(&args.subject).into());
     object.insert("predicate".into(), args.predicate.clone().into());
     object.insert("value".into(), args.value.clone().into());
-    object.insert("authority".into(), args.authority.level().name().into());
-    object.insert("source".into(), args.source.clone().into());
+    object.insert("authority".into(), meta.authority.name().into());
+    object.insert("source".into(), meta.source.clone().into());
     insert_validity(&mut object, args.valid_from, args.valid_to);
     serde_json::Value::Object(object)
 }
 
 /// The MCP tool arguments for a fact write (`retract` / `reinforce` / `expire`): no value, no
 /// validity window.
-fn fact_write_arguments(args: &FactWriteArgs) -> serde_json::Value {
+fn fact_write_arguments(args: &FactWriteArgs, meta: &ResolvedWriteMeta) -> serde_json::Value {
     serde_json::json!({
         "subject": subject_arg(&args.subject),
         "predicate": args.predicate,
-        "authority": args.authority.level().name(),
-        "source": args.source,
+        "authority": meta.authority.name(),
+        "source": meta.source,
     })
 }
 
@@ -1115,10 +1186,17 @@ pub(crate) fn op_supersede(
 /// because all believed incumbents become terminal. Shared by `dent8 supersede` and the
 /// MCP `supersede` tool.
 pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
-    let view = value_write_json_view("supersede", args);
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            let view = value_write_json_view("supersede", args, None);
+            return present_write(Err(error), output, &view);
+        }
+    };
+    let view = value_write_json_view("supersede", args, Some(&meta));
     run_write(
         "supersede",
-        &value_write_arguments(args),
+        &value_write_arguments(args, &meta),
         output,
         &view,
         || {
@@ -1128,8 +1206,8 @@ pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 &args.subject.key,
                 &args.predicate,
                 &args.value,
-                args.authority.level(),
-                &args.source,
+                meta.authority,
+                &meta.source,
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,
@@ -1237,10 +1315,17 @@ pub(crate) fn op_retract(
 /// core fold rejects a retraction that under-ranks its incumbent, so a low-authority actor
 /// cannot delete a trusted fact. Shared by `dent8 retract` and the MCP `retract` tool.
 pub(crate) fn cmd_retract(args: &FactWriteArgs, output: CliOutput) -> i32 {
-    let view = fact_write_json_view("retract", args);
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            let view = fact_write_json_view("retract", args, None);
+            return present_write(Err(error), output, &view);
+        }
+    };
+    let view = fact_write_json_view("retract", args, Some(&meta));
     run_write(
         "retract",
-        &fact_write_arguments(args),
+        &fact_write_arguments(args, &meta),
         output,
         &view,
         || {
@@ -1249,8 +1334,8 @@ pub(crate) fn cmd_retract(args: &FactWriteArgs, output: CliOutput) -> i32 {
                 &args.subject.kind,
                 &args.subject.key,
                 &args.predicate,
-                args.authority.level(),
-                &args.source,
+                meta.authority,
+                &meta.source,
                 &WriteIdentity::Env,
             )
         },
@@ -1384,10 +1469,17 @@ pub(crate) fn build_per_incumbent(
 }
 
 pub(crate) fn cmd_reinforce(args: &FactWriteArgs, output: CliOutput) -> i32 {
-    let view = fact_write_json_view("reinforce", args);
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            let view = fact_write_json_view("reinforce", args, None);
+            return present_write(Err(error), output, &view);
+        }
+    };
+    let view = fact_write_json_view("reinforce", args, Some(&meta));
     run_write(
         "reinforce",
-        &fact_write_arguments(args),
+        &fact_write_arguments(args, &meta),
         output,
         &view,
         || {
@@ -1396,8 +1488,8 @@ pub(crate) fn cmd_reinforce(args: &FactWriteArgs, output: CliOutput) -> i32 {
                 &args.subject.kind,
                 &args.subject.key,
                 &args.predicate,
-                args.authority.level(),
-                &args.source,
+                meta.authority,
+                &meta.source,
                 &WriteIdentity::Env,
             )
         },
@@ -1405,18 +1497,31 @@ pub(crate) fn cmd_reinforce(args: &FactWriteArgs, output: CliOutput) -> i32 {
 }
 
 pub(crate) fn cmd_expire(args: &FactWriteArgs, output: CliOutput) -> i32 {
-    let view = fact_write_json_view("expire", args);
-    run_write("expire", &fact_write_arguments(args), output, &view, || {
-        op_expire(
-            &log_path(),
-            &args.subject.kind,
-            &args.subject.key,
-            &args.predicate,
-            args.authority.level(),
-            &args.source,
-            &WriteIdentity::Env,
-        )
-    })
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            let view = fact_write_json_view("expire", args, None);
+            return present_write(Err(error), output, &view);
+        }
+    };
+    let view = fact_write_json_view("expire", args, Some(&meta));
+    run_write(
+        "expire",
+        &fact_write_arguments(args, &meta),
+        output,
+        &view,
+        || {
+            op_expire(
+                &log_path(),
+                &args.subject.kind,
+                &args.subject.key,
+                &args.predicate,
+                meta.authority,
+                &meta.source,
+                &WriteIdentity::Env,
+            )
+        },
+    )
 }
 
 /// Build the `(events, opposing_fact_id)` for a `contradict`: a fresh opposing assertion
@@ -1543,10 +1648,17 @@ pub(crate) fn op_contradict(
 /// being a `Canonical` incumbent, which hard-alarms. Shared by `dent8 contradict` and the
 /// MCP `contradict` tool.
 pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
-    let view = value_write_json_view("contradict", args);
+    let meta = match resolve_write_meta(args.authority, args.source.as_deref()) {
+        Ok(meta) => meta,
+        Err(error) => {
+            let view = value_write_json_view("contradict", args, None);
+            return present_write(Err(error), output, &view);
+        }
+    };
+    let view = value_write_json_view("contradict", args, Some(&meta));
     run_write(
         "contradict",
-        &value_write_arguments(args),
+        &value_write_arguments(args, &meta),
         output,
         &view,
         || {
@@ -1556,8 +1668,8 @@ pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 &args.subject.key,
                 &args.predicate,
                 &args.value,
-                args.authority.level(),
-                &args.source,
+                meta.authority,
+                &meta.source,
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,

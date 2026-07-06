@@ -9,13 +9,13 @@ The CLI is the first operator and developer surface.
 Initial command groups:
 
 - `dent8 schema postgres`
-- `dent8 assert <subject> <predicate> <value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
-- `dent8 reinforce <subject> <predicate> --authority <level> --source <source>`
-- `dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
-- `dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
-- `dent8 expire <subject> <predicate> --authority <level> --source <source>`
-- `dent8 retract <subject> <predicate> --authority <level> --source <source>`
-- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> --authority <level> --source <source> [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 reinforce <subject> <predicate> [--authority <level>] [--source <source>]`
+- `dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 expire <subject> <predicate> [--authority <level>] [--source <source>]`
+- `dent8 retract <subject> <predicate> [--authority <level>] [--source <source>]`
+- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
 - `dent8 replay <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 explain <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 conflicts`

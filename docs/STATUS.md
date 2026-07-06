@@ -73,16 +73,18 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   and `verify` passes. Diagnostic streams are hidden from normal MCP fact/resource browsing by
   default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections.
-- **`dent8 assert <subject> <predicate> <value> --authority <level> --source <source>
+- **`dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>]
   [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and
   **never reaches the log**. `--valid-from`/`--valid-to` stamp the fact's asserted validity
   interval (ADR 0016): reads treat an elapsed `valid_to` exactly like an elapsed TTL, and an
   inverted interval is rejected. Subjects are written as `<kind>:<key>` (for example,
-  `person:alice` or `repo:dent8`); authority/source are explicit flags because they are
-  provenance metadata, not part of the fact.
-- **`dent8 supersede <subject> <predicate> <new-value> --authority <level> --source <source>
+  `person:alice` or `repo:dent8`); authority/source are provenance metadata, not part of
+  the fact. They can be passed explicitly, or omitted when `DENT8_GRANT` is configured:
+  the CLI then defaults to the grant's source and maximum authority before the normal
+  authority-ceiling and signed-identity checks run.
+- **`dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>]
   [--valid-from MILLIS] [--valid-to MILLIS]`** — revises
   the believed fact via the sanctioned supersession path: it asserts a replacement (stamped
   with the validity interval when given) and
@@ -97,28 +99,28 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   equal-authority replacement — than its incumbent. Reload re-validates
   integrity: a torn write or external edit that leaves two fresh believed facts **or** a
   broken supersession lineage (dangling/cyclic) is rejected, not silently masked.
-- **`dent8 retract <subject> <predicate> --authority <level> --source <source>`** — terminally removes
+- **`dent8 retract <subject> <predicate> [--authority <level>] [--source <source>]`** — terminally removes
   every believed fact for the subject+predicate. Unlike a contradiction (dissent), it is
   **authority-gated** ([ADR 0008](decisions/0008-retraction-authority.md)): a retraction
   that under-ranks its incumbent is rejected — and recorded on the incumbent's stream as a
   survived challenge (ADR 0015) — so a low-authority actor cannot delete a
   trusted fact, and the attempt itself becomes attributed evidence.
-- **`dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`** —
+- **`dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>]`** —
   flags a conflict: asserts an opposing fact and moves the incumbent to `Contested`,
   keeping **both** (paraconsistency, [ADR 0009](decisions/0009-uniqueness-and-contestation.md)).
   This is **dissent** — *not* authority-gated, so a low-authority source can flag a wrong
   fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms
   (and records the rejected challenge on the incumbent, ADR 0015). Takes
   `--valid-from`/`--valid-to` for the opposing fact like `assert`.
-- **`dent8 reinforce <subject> <predicate> --authority <level> --source <source>`** — corroborates the
+- **`dent8 reinforce <subject> <predicate> [--authority <level>] [--source <source>]`** — corroborates the
   believed fact: records an additional source/authority backing the same value, raising
   **earned entrenchment** without restating the value (no value-mismatch).
-- **`dent8 expire <subject> <predicate> --authority <level> --source <source>`** — moves the believed
+- **`dent8 expire <subject> <predicate> [--authority <level>] [--source <source>]`** — moves the believed
   fact(s) to the terminal `Expired` lifecycle. This is an explicit policy close, not TTL
   staleness, and is **authority-gated** like retraction ([ADR 0011](decisions/0011-authority-gated-expiration.md)):
   a lower-authority source cannot expire a higher-authority incumbent.
 - **`dent8 derive <subject> <predicate> <value> --basis <basis-subject> <basis-predicate>
-  --authority <level> --source <source> [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts
+  [--authority <level>] [--source <source>] [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts
   a fact **derived from** another (named by subject, resolved to
   its believed fact id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
@@ -263,7 +265,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   store.
 - **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
-  firewall). A source→authority *ceiling* registry: every write checks the caller-supplied
+  firewall). A source→authority *ceiling* registry: every write checks the requested/defaulted
   `authority` against its `source`'s registered ceiling and **rejects** (does not silently
   cap) a write above it — so a low-trust source cannot mint `canonical`, and the rejection
   names the source, ceiling, and request for debuggability. **Opt-in by default**: enforcement

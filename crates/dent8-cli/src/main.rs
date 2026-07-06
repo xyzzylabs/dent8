@@ -154,11 +154,13 @@ fn run_cli(cli: Cli) -> i32 {
 
 const CLI_AFTER_HELP: &str = "\
 Subject is written as <kind>:<key>, e.g. person:alice or repo:dent8.
-Example: dent8 assert person:alice favorite_drink tea --authority high --source user:alice
+Example: dent8 assert person:alice favorite_drink tea
 
 Storage: a JSON-lines dev log by default (DENT8_LOG, default ./dent8-log.jsonl), or an
 async backend selected by DENT8_STORE_URL, dispatched by scheme (postgres:// needs
---features postgres). authority is one of: low | medium | high | canonical.
+--features postgres). authority is one of: low | medium | high | canonical. Write commands
+accept --source/--authority explicitly, or default them from DENT8_GRANT when signed identity
+is configured.
 Authority ceiling: a source may assert at most its registered max. Enforced once a registry
 exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
 source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
@@ -200,37 +202,37 @@ struct Cli {
 enum CliCommand {
     /// Assert a fact through the firewall, persisted to the log.
     #[command(
-        override_usage = "dent8 assert <SUBJECT> <PREDICATE> <VALUE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 assert <SUBJECT> <PREDICATE> <VALUE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Assert(ValueWriteArgs),
     /// Revise the believed fact, rejected if it cannot out-rank the incumbent.
     #[command(
-        override_usage = "dent8 supersede <SUBJECT> <PREDICATE> <NEW_VALUE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 supersede <SUBJECT> <PREDICATE> <NEW_VALUE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Supersede(ValueWriteArgs),
     /// Remove the believed fact, rejected if it cannot out-rank the incumbent.
     #[command(
-        override_usage = "dent8 retract <SUBJECT> <PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 retract <SUBJECT> <PREDICATE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Retract(FactWriteArgs),
     /// Flag a conflict (dissent): contest the fact, keep both.
     #[command(
-        override_usage = "dent8 contradict <SUBJECT> <PREDICATE> <OPPOSING_VALUE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 contradict <SUBJECT> <PREDICATE> <OPPOSING_VALUE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Contradict(ValueWriteArgs),
     /// Assert a fact derived from another fact, recording a dependency edge.
     #[command(
-        override_usage = "dent8 derive <SUBJECT> <PREDICATE> <VALUE> --from <SOURCE_SUBJECT> <SOURCE_PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 derive <SUBJECT> <PREDICATE> <VALUE> --basis <BASIS_SUBJECT> <BASIS_PREDICATE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Derive(DeriveWriteArgs),
     /// Corroborate the believed fact without restating its value.
     #[command(
-        override_usage = "dent8 reinforce <SUBJECT> <PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 reinforce <SUBJECT> <PREDICATE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Reinforce(FactWriteArgs),
     /// Terminally expire the believed fact.
     #[command(
-        override_usage = "dent8 expire <SUBJECT> <PREDICATE> --authority <AUTHORITY> --source <SOURCE>"
+        override_usage = "dent8 expire <SUBJECT> <PREDICATE> [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Expire(FactWriteArgs),
     /// Explain the believed fact, with an integrity receipt.
@@ -324,12 +326,12 @@ struct ValueWriteArgs {
     predicate: String,
     /// Text value to assert.
     value: String,
-    /// Authority level.
+    /// Authority level. Defaults to the active signed grant's max authority when `DENT8_GRANT` is set.
     #[arg(long, short = 'a', value_enum)]
-    authority: CliAuthority,
-    /// Provenance source for this write.
+    authority: Option<CliAuthority>,
+    /// Provenance source for this write. Defaults to the active signed grant's source when `DENT8_GRANT` is set.
     #[arg(long, short = 's', value_parser = parse_source)]
-    source: String,
+    source: Option<String>,
     /// Valid-time lower bound (unix millis): when the fact starts to hold. Also anchors
     /// TTL freshness. Applies to the assertion this write creates.
     #[arg(long = "valid-from", value_name = "MILLIS")]
@@ -347,12 +349,12 @@ struct FactWriteArgs {
     /// Predicate within the subject's fact stream.
     #[arg(value_parser = parse_predicate)]
     predicate: String,
-    /// Authority level.
+    /// Authority level. Defaults to the active signed grant's max authority when `DENT8_GRANT` is set.
     #[arg(long, short = 'a', value_enum)]
-    authority: CliAuthority,
-    /// Provenance source for this write.
+    authority: Option<CliAuthority>,
+    /// Provenance source for this write. Defaults to the active signed grant's source when `DENT8_GRANT` is set.
     #[arg(long, short = 's', value_parser = parse_source)]
-    source: String,
+    source: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -367,12 +369,12 @@ struct DeriveWriteArgs {
     /// Basis fact this derivative depends on: <basis-subject> <basis-predicate>.
     #[arg(long, required = true, num_args = 2, value_names = ["BASIS_SUBJECT", "BASIS_PREDICATE"])]
     basis: Vec<String>,
-    /// Authority level.
+    /// Authority level. Defaults to the active signed grant's max authority when `DENT8_GRANT` is set.
     #[arg(long, short = 'a', value_enum)]
-    authority: CliAuthority,
-    /// Provenance source for this write.
+    authority: Option<CliAuthority>,
+    /// Provenance source for this write. Defaults to the active signed grant's source when `DENT8_GRANT` is set.
     #[arg(long, short = 's', value_parser = parse_source)]
-    source: String,
+    source: Option<String>,
     /// Valid-time lower bound (unix millis) for the derived assertion (ADR 0016).
     #[arg(long = "valid-from", value_name = "MILLIS")]
     valid_from: Option<i64>,
@@ -1511,7 +1513,7 @@ fn log_path() -> String {
 
 // ---- Source authority registry (authz: cap what a source may *fact*) ----------------
 //
-// dent8 otherwise trusts the caller-supplied `authority` argument. The registry maps a
+// dent8 otherwise trusts the requested/defaulted `authority` value. The registry maps a
 // `source` to the highest authority it may assert; a write above that ceiling is **rejected**
 // (not silently capped, so a laundering attempt stays visible in the error). Enforcement is
 // **opt-in**: it activates once a registry exists (created by `dent8 authority add`); without
