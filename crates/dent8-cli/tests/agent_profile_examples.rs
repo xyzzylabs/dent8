@@ -79,6 +79,7 @@ fn vercel_ai_sdk_example_uses_dent8_mcp_and_source_id() {
 fn operated_witness_example_retains_grant_log_heads() {
     let dockerfile = include_str!("../../../Dockerfile");
     let compose = include_str!("../../../examples/witness-operated/compose.yml");
+    let demo = include_str!("../../../examples/witness-operated/demo.sh");
     let publisher = include_str!("../../../examples/witness-operated/publisher.sh");
     let monitor = include_str!("../../../examples/witness-operated/monitor.sh");
     let systemd_signer =
@@ -93,7 +94,16 @@ fn operated_witness_example_retains_grant_log_heads() {
     assert!(compose.contains("witness-private:/witness/private"));
     assert!(compose.contains("witness-log:/witness/log:ro"));
     assert!(compose.contains("witness-public:/witness/public:ro"));
+    assert!(compose.contains("${DENT8_WITNESS_DB_PORT:-5432}:5432"));
+    assert!(compose.contains("${SIGN_INTERVAL_SECONDS:-15}"));
+    assert!(compose.contains("${PUBLISH_INTERVAL_SECONDS:-15}"));
+    assert!(compose.contains("${MONITOR_INTERVAL_SECONDS:-15}"));
     assert!(dockerfile.contains("/witness/private /witness/log /witness/public"));
+    assert!(demo.contains("DENT8_WITNESS_DB_PORT"));
+    assert!(demo.contains("SIGN_INTERVAL_SECONDS"));
+    assert!(demo.contains("DELETE FROM dent8_event_log"));
+    assert!(demo.contains("monitor: ALARM"));
+    assert!(demo.contains("ROLLBACK"));
     assert!(publisher.contains("--grants"));
     assert!(publisher.contains("DENT8_WITNESS_GRANTS_LOG"));
     assert!(publisher.contains("DENT8_WITNESS_PUBKEY"));

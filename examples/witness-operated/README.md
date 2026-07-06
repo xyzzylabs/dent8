@@ -20,6 +20,17 @@ writer who rewrites or truncates witnessed history is caught even if it also rew
 [`Dockerfile`](../../Dockerfile) (Postgres + SQLite + witness build):
 
 ```sh
+./examples/witness-operated/demo.sh
+```
+
+The demo starts the split with a one-second witness cadence, writes one trusted event, waits
+until that event's head is published and monitor-verifiable, then deletes the event log to
+prove the monitor exits on a `ROLLBACK` alarm. Set `DENT8_WITNESS_KEEP=1` to leave the
+containers/volumes behind for inspection.
+
+Manual run:
+
+```sh
 cd examples/witness-operated
 docker compose up -d --build db signer publisher monitor
 docker compose --profile demo run --rm demo-writer   # one trusted write to witness

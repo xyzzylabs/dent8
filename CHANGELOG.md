@@ -14,6 +14,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `runtime_status` succeeds, and warns when that server version differs from the doctor
   binary so stale globally installed or repo-local MCP commands are visible without digging
   into JSON.
+- Added `examples/witness-operated/demo.sh`, a live Docker Compose E2E that starts the
+  signer/publisher/monitor split, publishes a signed head for one Postgres-backed write, then
+  deletes `dent8_event_log` and confirms the monitor exits on a rollback alarm.
 
 ### Security
 - Hardened the operated-witness compose recipe: the private witness signing key now lives on a

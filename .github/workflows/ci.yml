@@ -148,7 +148,9 @@ jobs:
           docker run --rm dent8:ci --version
           docker run --rm dent8:ci witness doctor writer || test $? -eq 1
       - name: Validate the operated-witness compose file
-        run: docker compose -f examples/witness-operated/compose.yml config --quiet
+        run: |
+          bash -n examples/witness-operated/demo.sh
+          docker compose -f examples/witness-operated/compose.yml config --quiet
 
   # Bounded libFuzzer smoke over the attacker-exposed deserialize -> fold -> canonicalize path
   # (fuzz/fuzz_targets/). 60s per target: enough to re-run the corpus + catch shallow

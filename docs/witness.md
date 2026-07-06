@@ -15,7 +15,10 @@ bare-metal signer/monitor hosts; the monitor alerts by exiting non-zero on a
 signed identity is in use, retaining revocation evidence off-host with the event heads. In
 the compose split, the private signing-key volume is mounted only into the signer; the
 publisher receives the witness logs and public key read-only, then writes to the external
-publication volume.
+publication volume. The runnable Compose demo
+([`examples/witness-operated/demo.sh`](../examples/witness-operated/demo.sh)) starts that split,
+publishes a head for one Postgres-backed write, deletes `dent8_event_log`, and confirms the
+monitor exits on a rollback alarm.
 
 ## Local Dev Setup
 

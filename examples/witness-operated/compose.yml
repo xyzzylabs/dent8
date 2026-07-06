@@ -30,7 +30,7 @@ services:
       POSTGRES_PASSWORD: dent8
       POSTGRES_DB: dent8
     ports:
-      - "5432:5432"
+      - "${DENT8_WITNESS_DB_PORT:-5432}:5432"
     volumes:
       - store:/var/lib/postgresql/data
     healthcheck:
@@ -48,7 +48,7 @@ services:
       DENT8_WITNESS_PUBKEY: /witness/public/witness.key.pub
       DENT8_WITNESS_LOG: /witness/log/witness.jsonl
       DENT8_WITNESS_GRANTS_LOG: /witness/log/witness-grants.jsonl
-      SIGN_INTERVAL_SECONDS: "15"
+      SIGN_INTERVAL_SECONDS: "${SIGN_INTERVAL_SECONDS:-15}"
     volumes:
       - witness-private:/witness/private
       - witness-log:/witness/log
@@ -72,7 +72,7 @@ services:
       DENT8_WITNESS_GRANTS_LOG: /witness/log/witness-grants.jsonl
       PUBLISHED_HEADS: /published/heads.jsonl
       PUBLISHED_GRANTS: /published/grant-heads.jsonl
-      PUBLISH_INTERVAL_SECONDS: "15"
+      PUBLISH_INTERVAL_SECONDS: "${PUBLISH_INTERVAL_SECONDS:-15}"
     volumes:
       - witness-log:/witness/log:ro
       - witness-public:/witness/public:ro
@@ -91,7 +91,7 @@ services:
       DENT8_WITNESS_PUBKEY: /published/witness.key.pub
       PUBLISHED_HEADS: /published/heads.jsonl
       PUBLISHED_GRANTS: /published/grant-heads.jsonl
-      MONITOR_INTERVAL_SECONDS: "15"
+      MONITOR_INTERVAL_SECONDS: "${MONITOR_INTERVAL_SECONDS:-15}"
     volumes:
       - published:/published:ro
       - ./monitor.sh:/opt/dent8/monitor.sh:ro
