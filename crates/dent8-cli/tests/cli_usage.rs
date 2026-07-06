@@ -3814,6 +3814,7 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
     assert_shared_sqlite_all_agents_json(&stdout_json(&all));
 }
 
+#[cfg(feature = "sqlite")]
 fn assert_shared_sqlite_all_agents_json(all: &Value) {
     assert_eq!(all["status"], "ok");
     let agents = all["agents"].as_array().expect("agents");
