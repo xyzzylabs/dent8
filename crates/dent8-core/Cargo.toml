@@ -1,6 +1,6 @@
 [package]
 name = "dent8-core"
-description = "Core claim-event model and invariants for dent8."
+description = "Core fact-event model and invariants for dent8."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
