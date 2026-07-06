@@ -1,9 +1,13 @@
 use std::{
+    collections::BTreeSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::atomic::{AtomicU32, Ordering},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use serde_json::Value;
@@ -4205,6 +4209,89 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
     );
     assert_success(&all, "doctor --all-agents --output json");
     assert_shared_sqlite_all_agents_json(&stdout_json(&all));
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn concurrent_cli_asserts_on_shared_sqlite_store_get_unique_event_ids() {
+    const WRITERS: usize = 8;
+
+    let temp = TempDir::new();
+    let store_url = format!("sqlite://{}", temp.file("dent8.db").display());
+    let envs = [("DENT8_STORE_URL", store_url.as_str())];
+
+    assert_success(
+        &run_dent8(&["facts", "list"], &envs),
+        "pre-migrate sqlite store",
+    );
+
+    let barrier = Arc::new(Barrier::new(WRITERS));
+    let mut handles = Vec::new();
+    for index in 0..WRITERS {
+        let barrier = Arc::clone(&barrier);
+        let store_url = store_url.clone();
+        handles.push(std::thread::spawn(move || {
+            let subject = format!("repo:project-{index}");
+            let value = format!("database-{index}");
+            let source = format!("source:writer-{index}");
+            barrier.wait();
+            run_dent8(
+                &[
+                    "assert",
+                    &subject,
+                    "database",
+                    &value,
+                    "--authority",
+                    "high",
+                    "--source",
+                    &source,
+                ],
+                &[("DENT8_STORE_URL", store_url.as_str())],
+            )
+        }));
+    }
+
+    for (index, handle) in handles.into_iter().enumerate() {
+        let output = handle.join().expect("writer thread should not panic");
+        assert_success(&output, &format!("concurrent writer {index}"));
+    }
+
+    let listed = run_dent8(
+        &[
+            "--output",
+            "json",
+            "facts",
+            "list",
+            "--kind",
+            "repo",
+            "--predicate",
+            "database",
+        ],
+        &envs,
+    );
+    assert_success(&listed, "facts list after concurrent writes");
+    let listed = stdout_json(&listed);
+    assert_eq!(listed["count"], WRITERS, "{listed}");
+
+    let mut event_ids = BTreeSet::new();
+    for index in 0..WRITERS {
+        let subject = format!("repo:project-{index}");
+        let replay = run_dent8(&["--output", "json", "replay", &subject, "database"], &envs);
+        assert_success(&replay, &format!("replay writer {index}"));
+        let replay = stdout_json(&replay);
+        assert_eq!(replay["event_count"], 1, "{replay}");
+        let event_id = replay["events"][0]["event_id"]
+            .as_str()
+            .expect("event id")
+            .to_string();
+        assert!(
+            event_ids.insert(event_id.clone()),
+            "duplicate event id {event_id} in {replay}"
+        );
+    }
+    assert_eq!(event_ids.len(), WRITERS);
+
+    assert_success(&run_dent8(&["verify"], &envs), "verify shared sqlite log");
 }
 
 #[cfg(feature = "sqlite")]
