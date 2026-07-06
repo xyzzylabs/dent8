@@ -12,6 +12,11 @@ The first product boundary is one runtime with three surfaces:
 
 These surfaces share one event model. A debugger that cannot replay the same events accepted by the firewall is not trustworthy.
 
+A future desktop app is part of the **memory debugger/control-plane** surface, not a new
+runtime or storage boundary. It must consume the same receipts and call the same
+CLI/MCP/daemon/future HTTP write path rather than writing events, provider-native memory, or
+database rows directly. See [ADR 0020](decisions/0020-desktop-debugger-control-plane.md).
+
 The integrity semantics behind these surfaces have a formal identity — dent8 is a **belief base** with paraconsistent contradiction tolerance and an authority-as-entrenchment ordering. See [belief-revision.md](belief-revision.md). The adversary the firewall defends against is in [threat-model.md](threat-model.md), and how the invariants are checked is in [formal-verification.md](formal-verification.md).
 
 ## Storage
@@ -43,7 +48,7 @@ Later crates should be added only when they own a real boundary:
 - `dent8-policy`: write/read policy and approval state machines.
 - `dent8-mcp`: MCP transport adapter.
 - `dent8-http`: HTTP API.
-- `dent8-debugger`: debugger query model before the TypeScript UI exists.
+- `dent8-debugger`: debugger query model before the TypeScript/Tauri desktop UI exists.
 
 ## Core Model
 

@@ -153,6 +153,19 @@ Likely routes:
 - `POST /replay`
 - `GET /conflicts`
 
+## Desktop Debugger
+
+The desktop app is accepted as a future product surface, but only as a debugger/control plane
+over the existing integrity boundary ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
+It should make the CLI/MCP/daemon state visible: connected agents, authority ceilings, grants,
+recent accepted/rejected writes, conflicts, stale facts, `explain`/`replay` timelines, native
+scan/reconcile findings, witness coverage, and doctor health.
+
+The desktop app must not become a separate memory provider or private write path. Read/audit
+views should come first. Any future write action must call the same signed, authority-checked
+daemon/HTTP path used by other clients. A TypeScript web debugger should come before a native
+shell; Tauri is the preferred wrapper when a desktop package is justified.
+
 ## SDK
 
 SDKs should be thin wrappers over the HTTP API and shared JSON schemas.

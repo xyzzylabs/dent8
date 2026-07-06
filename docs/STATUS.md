@@ -587,6 +587,12 @@ subject+predicate.
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
   surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
+- **Desktop debugger/control plane** — accepted as a future product surface in
+  [ADR 0020](decisions/0020-desktop-debugger-control-plane.md), but design-only today. It
+  should visualize agents, authority, grants, accepted/rejected writes, conflicts, native
+  scan/reconcile findings, witness coverage, doctor health, and explain/replay timelines over
+  the existing daemon/API contracts. It must not become a separate write path or memory
+  provider.
 - **A *hosted* / operated witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now

@@ -21,6 +21,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 - Added `dent8 native reconcile --agent <profile>` to verify `dent8://<kind>/<key>/<predicate>`
   references in native files against the current dent8 receipt, flagging stale, contested,
   missing, no-longer-believed, or malformed references.
+- Accepted the future desktop direction in ADR 0020: a TypeScript/Tauri debugger/control
+  plane over the existing CLI/MCP/daemon integrity boundary, not a separate memory provider or
+  write path.
 
 ## [0.3.0] - 2026-07-06
 

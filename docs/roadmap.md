@@ -53,7 +53,8 @@ What remains to make it a hardened multi-user product:
   appends and the CLI retries id collisions, but DB-assigned ids remain the end-state for
   heavy write fan-out.
 - **Richer protocol/product surfaces.** The v0 MCP server is useful today; official `rmcp`,
-  richer transports, `resources/subscribe`, prompts, HTTP, SDKs, and a debugger UI are later.
+  richer transports, `resources/subscribe`, prompts, HTTP, SDKs, and a TypeScript/Tauri
+  desktop debugger/control plane are later ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
 - **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
   fixtures, the adversarial corpus, and **`cargo-fuzz` targets** (the
   deserialize→fold→canonicalize path and `CanonicalJson` idempotency, in [`fuzz/`](../fuzz/),
@@ -274,8 +275,8 @@ ONGOING: evals/formal hardening, mainly fuzzing + append/projection model checki
 ```
 
 The dependency chain that originally blocked the MVP is now complete. The next dependency
-chain is product hardening: identity operations -> operated witness -> richer transports /
-debugger surfaces -> SDKs and production deployment packaging.
+chain is product hardening: identity operations -> operated witness -> stable daemon/API
+contracts -> desktop debugger/control plane -> SDKs and production deployment packaging.
 
 ## Later
 
@@ -285,6 +286,8 @@ predicate-level volatility policy · HTTP API · **client SDKs** (`pip install d
 `npm i dent8` with first-class in-process framework adapters — LangChain, LlamaIndex, Vercel AI
 SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/) and
 [examples/vercel-ai-sdk](../examples/vercel-ai-sdk/)) ·
+a TypeScript/Tauri desktop debugger/control plane for agents, receipts, native-memory audits,
+witness status, and replay timelines ·
 adapters for existing memory providers · a managed/hosted witness service (publication
 channel, monitoring, key-rotation automation) for non-repudiation — the
 published-signed-tree-head primitive itself (`witness publish` / `verify-published`, plus

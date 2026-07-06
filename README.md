@@ -153,6 +153,8 @@ library-only vs. design-only. In brief, runnable today:
 
 Run `dent8 --help` for the full command surface. The stock binary needs no services; opt-in
 builds add a Postgres backend (`--features postgres`) and Parquet export (`--features export`).
+The future desktop app is scoped as a debugger/control plane over these same surfaces, not a
+separate memory provider ([ADR 0020](docs/decisions/0020-desktop-debugger-control-plane.md)).
 
 *(Origin: the* dentate gyrus*, the hippocampal structure associated with pattern separation —
 keeping similar memories distinct.)*
