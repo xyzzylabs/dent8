@@ -5,8 +5,8 @@
 //! It speaks just enough MCP to be useful:
 //! - `initialize`, `tools/list`, and `tools/call` for the full belief surface — `assert` /
 //!   `supersede` / `retract` / `contradict` / `explain` / `replay` — plus read/audit tools
-//!   (`list_facts`, `verify`, `conflicts`, `native_scan`, `native_reconcile`) which dispatch
-//!   to the same shared `op_*`
+//!   (`runtime_status`, `list_facts`, `verify`, `conflicts`, `native_scan`,
+//!   `native_reconcile`) which dispatch to the same shared `op_*`
 //!   functions the CLI uses, so the firewall decision is identical on both surfaces;
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
 //!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt);
@@ -27,8 +27,9 @@ use crate::ops::{
     op_explain_receipt, op_reinforce, op_replay, op_retract, op_supersede, with_write_retry,
 };
 use crate::{
-    InitAgent, WriteIdentity, display_value, load_store, log_path, native, parse_authority, short,
-    status::Status, verify_log,
+    InitAgent, WriteIdentity, authority_registry_path, authority_required, display_value,
+    load_authority_registry_at, load_store, log_path, native, parse_authority, short,
+    status::Status, store_url, verify_log, witness,
 };
 
 /// The latest MCP protocol revision this server prefers.
@@ -39,7 +40,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, "2025-06
 /// Server-wide guidance consumed by MCP clients that support `instructions` (including Codex).
 const SERVER_INSTRUCTIONS: &str = "\
 dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, \
-call list_facts or explain. Record stable facts with assert using truthful source and authority. \
+call runtime_status, then list_facts or explain. Record stable facts with assert using truthful source and authority. \
 When the connection has a signed source grant, write tools may omit source and authority. \
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
 Use native_scan/native_reconcile to audit provider-native memory/rules files when available. \
@@ -944,6 +945,7 @@ fn dispatch_tool(
     let key = || subject().map(|(_, key)| key);
     let predicate = || arg(arguments, "predicate");
     match name {
+        "runtime_status" => Ok(runtime_status(path)),
         "list_facts" => list_facts(path, arguments),
         // `verify_log` returns Err for integrity *findings* (taint, lineage, a corrupt log) as
         // well as for a genuine couldn't-run — but for an MCP agent those findings are the
@@ -1234,6 +1236,419 @@ fn dispatch_tool(
         }
         other => Err(ToolError::Unknown(format!("unknown tool: {other}"))),
     }
+}
+
+fn runtime_status(path: &str) -> ToolOutput {
+    let store = runtime_store_status(path);
+    let identity = runtime_identity_status();
+    let authority = runtime_authority_status();
+    let witness = runtime_witness_status();
+    let top_status = if store.load_status == "failed"
+        || authority.load_status == "failed"
+        || identity.load_status == "failed"
+        || witness.load_status == "failed"
+    {
+        "degraded"
+    } else {
+        Status::Ok.as_str()
+    };
+    let text = runtime_status_text(&store, &identity, &authority, &witness);
+    ToolOutput::new(
+        text,
+        json!({
+            "status": top_status,
+            "tool": "runtime_status",
+            "server": {
+                "name": "dent8",
+                "version": env!("CARGO_PKG_VERSION"),
+                "protocol_version": LATEST_PROTOCOL_VERSION,
+                "pid": std::process::id(),
+                "binary_path": std::env::current_exe()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
+                "cwd": std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            },
+            "store": store.to_json(),
+            "authority": authority.to_json(),
+            "identity": identity.to_json(),
+            "witness": witness.to_json(),
+            "env": {
+                "dent8_store_url_set": env_is_nonempty("DENT8_STORE_URL"),
+                "dent8_log_set": env_is_nonempty("DENT8_LOG"),
+                "dent8_authority_set": env_is_nonempty("DENT8_AUTHORITY"),
+                "dent8_grant_set": env_is_nonempty("DENT8_GRANT"),
+                "dent8_active_grants_set": env_is_nonempty("DENT8_ACTIVE_GRANTS"),
+                "dent8_trust_set": env_is_nonempty("DENT8_TRUST"),
+                "dent8_identity_key_set": env_is_nonempty("DENT8_IDENTITY_KEY"),
+                "dent8_witness_log_set": env_is_nonempty("DENT8_WITNESS_LOG"),
+                "dent8_witness_pubkey_set": env_is_nonempty("DENT8_WITNESS_PUBKEY"),
+                "dent8_witness_key_set": env_is_nonempty("DENT8_WITNESS_KEY"),
+            },
+        }),
+    )
+}
+
+#[derive(Debug)]
+struct RuntimeStoreStatus {
+    backend: String,
+    url: Option<String>,
+    path: Option<String>,
+    file_log_path: String,
+    event_count: Option<usize>,
+    load_status: &'static str,
+    load_error: Option<String>,
+}
+
+impl RuntimeStoreStatus {
+    fn to_json(&self) -> Value {
+        json!({
+            "backend": self.backend,
+            "url": self.url,
+            "path": self.path,
+            "file_log_path": self.file_log_path,
+            "event_count": self.event_count,
+            "load_status": self.load_status,
+            "load_error": self.load_error,
+        })
+    }
+}
+
+fn runtime_store_status(path: &str) -> RuntimeStoreStatus {
+    let url = store_url();
+    let backend = url
+        .as_deref()
+        .and_then(|url| url.split_once(':').map(|(scheme, _)| scheme.to_string()))
+        .unwrap_or_else(|| "file".to_string());
+    let store_path = url
+        .as_deref()
+        .and_then(store_path_from_url)
+        .or_else(|| (backend == "file").then(|| path.to_string()));
+    match load_store(path) {
+        Ok(store) => match store.scan_events(&EventFilter::default()) {
+            Ok(events) => RuntimeStoreStatus {
+                backend,
+                url: url.as_deref().map(redact_url_credentials),
+                path: store_path,
+                file_log_path: path.to_string(),
+                event_count: Some(events.len()),
+                load_status: "ok",
+                load_error: None,
+            },
+            Err(error) => RuntimeStoreStatus {
+                backend,
+                url: url.as_deref().map(redact_url_credentials),
+                path: store_path,
+                file_log_path: path.to_string(),
+                event_count: None,
+                load_status: "failed",
+                load_error: Some(error.to_string()),
+            },
+        },
+        Err(error) => RuntimeStoreStatus {
+            backend,
+            url: url.as_deref().map(redact_url_credentials),
+            path: store_path,
+            file_log_path: path.to_string(),
+            event_count: None,
+            load_status: "failed",
+            load_error: Some(error),
+        },
+    }
+}
+
+fn store_path_from_url(url: &str) -> Option<String> {
+    if let Some(path) = url.strip_prefix("sqlite://") {
+        return Some(path.to_string());
+    }
+    None
+}
+
+fn redact_url_credentials(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some((userinfo, host_and_path)) = rest.split_once('@') else {
+        return url.to_string();
+    };
+    if userinfo.is_empty() {
+        url.to_string()
+    } else {
+        format!("{scheme}://<redacted>@{host_and_path}")
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeAuthorityStatus {
+    path: String,
+    required: Option<bool>,
+    configured: bool,
+    source_count: Option<usize>,
+    load_status: &'static str,
+    load_error: Option<String>,
+}
+
+impl RuntimeAuthorityStatus {
+    fn to_json(&self) -> Value {
+        json!({
+            "path": self.path,
+            "required": self.required,
+            "configured": self.configured,
+            "source_count": self.source_count,
+            "load_status": self.load_status,
+            "load_error": self.load_error,
+        })
+    }
+}
+
+fn runtime_authority_status() -> RuntimeAuthorityStatus {
+    let path = authority_registry_path();
+    let required = match authority_required() {
+        Ok(required) => required,
+        Err(error) => {
+            return RuntimeAuthorityStatus {
+                path,
+                required: None,
+                configured: false,
+                source_count: None,
+                load_status: "failed",
+                load_error: Some(error),
+            };
+        }
+    };
+    match load_authority_registry_at(&path, required) {
+        Ok(Some(registry)) => RuntimeAuthorityStatus {
+            path,
+            required: Some(required),
+            configured: true,
+            source_count: Some(registry.sources.len()),
+            load_status: "ok",
+            load_error: None,
+        },
+        Ok(None) => RuntimeAuthorityStatus {
+            path,
+            required: Some(required),
+            configured: false,
+            source_count: Some(0),
+            load_status: "missing",
+            load_error: None,
+        },
+        Err(error) => RuntimeAuthorityStatus {
+            path,
+            required: Some(required),
+            configured: false,
+            source_count: None,
+            load_status: "failed",
+            load_error: Some(error),
+        },
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeIdentityStatus {
+    configured: bool,
+    source: Option<String>,
+    max_authority: Option<&'static str>,
+    trust_path: Option<String>,
+    grant_path: Option<String>,
+    active_grants_path: Option<String>,
+    identity_key_configured: bool,
+    load_status: &'static str,
+    load_error: Option<String>,
+}
+
+impl RuntimeIdentityStatus {
+    fn to_json(&self) -> Value {
+        json!({
+            "configured": self.configured,
+            "source": self.source,
+            "max_authority": self.max_authority,
+            "trust_path": self.trust_path,
+            "grant_path": self.grant_path,
+            "active_grants_path": self.active_grants_path,
+            "identity_key_configured": self.identity_key_configured,
+            "load_status": self.load_status,
+            "load_error": self.load_error,
+        })
+    }
+}
+
+fn runtime_identity_status() -> RuntimeIdentityStatus {
+    let trust_path = nonempty_env("DENT8_TRUST");
+    let grant_path = nonempty_env("DENT8_GRANT");
+    let active_grants_path = nonempty_env("DENT8_ACTIVE_GRANTS");
+    let identity_key_configured = env_is_nonempty("DENT8_IDENTITY_KEY");
+    match crate::identity::IdentityContext::from_env() {
+        Err(error) => RuntimeIdentityStatus {
+            configured: false,
+            source: None,
+            max_authority: None,
+            trust_path,
+            grant_path,
+            active_grants_path,
+            identity_key_configured,
+            load_status: "failed",
+            load_error: Some(error),
+        },
+        Ok(ctx) if !ctx.configured() => RuntimeIdentityStatus {
+            configured: false,
+            source: None,
+            max_authority: None,
+            trust_path,
+            grant_path,
+            active_grants_path,
+            identity_key_configured,
+            load_status: "unconfigured",
+            load_error: None,
+        },
+        Ok(ctx) => match ctx.write_defaults() {
+            Ok(Some(defaults)) => RuntimeIdentityStatus {
+                configured: true,
+                source: Some(defaults.source),
+                max_authority: Some(defaults.authority.name()),
+                trust_path,
+                grant_path,
+                active_grants_path,
+                identity_key_configured,
+                load_status: "ok",
+                load_error: None,
+            },
+            Ok(None) => RuntimeIdentityStatus {
+                configured: true,
+                source: None,
+                max_authority: None,
+                trust_path,
+                grant_path,
+                active_grants_path,
+                identity_key_configured,
+                load_status: "failed",
+                load_error: Some("identity is configured, but DENT8_GRANT is not set".to_string()),
+            },
+            Err(error) => RuntimeIdentityStatus {
+                configured: true,
+                source: None,
+                max_authority: None,
+                trust_path,
+                grant_path,
+                active_grants_path,
+                identity_key_configured,
+                load_status: "failed",
+                load_error: Some(error),
+            },
+        },
+    }
+}
+
+#[derive(Debug)]
+struct RuntimeWitnessStatus {
+    configured: bool,
+    log_path: Option<String>,
+    pubkey_path: Option<String>,
+    signing_key_present: bool,
+    load_status: &'static str,
+    messages: Vec<Value>,
+}
+
+impl RuntimeWitnessStatus {
+    fn to_json(&self) -> Value {
+        json!({
+            "configured": self.configured,
+            "log_path": self.log_path,
+            "pubkey_path": self.pubkey_path,
+            "signing_key_present": self.signing_key_present,
+            "load_status": self.load_status,
+            "messages": self.messages,
+        })
+    }
+}
+
+fn runtime_witness_status() -> RuntimeWitnessStatus {
+    let lines = witness::doctor_status();
+    let configured = env_is_nonempty("DENT8_WITNESS_LOG")
+        || env_is_nonempty("DENT8_WITNESS_PUBKEY")
+        || env_is_nonempty("DENT8_WITNESS_KEY");
+    let load_status = if !configured {
+        "unconfigured"
+    } else if lines.iter().any(|line| !line.ok) {
+        "failed"
+    } else if lines.iter().any(|line| line.level == "WARN") {
+        "warn"
+    } else {
+        "ok"
+    };
+    RuntimeWitnessStatus {
+        configured,
+        log_path: nonempty_env("DENT8_WITNESS_LOG"),
+        pubkey_path: nonempty_env("DENT8_WITNESS_PUBKEY"),
+        signing_key_present: env_is_nonempty("DENT8_WITNESS_KEY"),
+        load_status,
+        messages: lines
+            .into_iter()
+            .map(|line| json!({ "level": line.level, "message": line.message }))
+            .collect(),
+    }
+}
+
+fn runtime_status_text(
+    store: &RuntimeStoreStatus,
+    identity: &RuntimeIdentityStatus,
+    authority: &RuntimeAuthorityStatus,
+    witness: &RuntimeWitnessStatus,
+) -> String {
+    let store_count = store
+        .event_count
+        .map_or_else(|| "unknown".to_string(), |count| count.to_string());
+    let store_target = store
+        .url
+        .as_deref()
+        .or(store.path.as_deref())
+        .unwrap_or("<none>");
+    let identity_text = identity.source.as_ref().map_or_else(
+        || identity.load_status.to_string(),
+        |source| {
+            format!(
+                "source={source}, max_authority={}",
+                identity.max_authority.unwrap_or("unknown")
+            )
+        },
+    );
+    let authority_text = authority.source_count.map_or_else(
+        || authority.load_status.to_string(),
+        |count| format!("{count} source(s)"),
+    );
+    let witness_text = witness
+        .messages
+        .first()
+        .and_then(|message| message.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or(witness.load_status);
+    format!(
+        "dent8 runtime status\n  binary: {}\n  cwd: {}\n  store: {} ({}, events={store_count}, load={})\n  authority: {} ({authority_text})\n  identity: {identity_text}\n  witness: {witness_text}\n",
+        std::env::current_exe().ok().map_or_else(
+            || "<unknown>".to_string(),
+            |path| path.display().to_string()
+        ),
+        std::env::current_dir().ok().map_or_else(
+            || "<unknown>".to_string(),
+            |path| path.display().to_string()
+        ),
+        store.backend,
+        store_target,
+        store.load_status,
+        authority.path,
+    )
+}
+
+fn env_is_nonempty(name: &str) -> bool {
+    nonempty_env(name).is_some()
+}
+
+fn nonempty_env(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn native_scan(arguments: &Value) -> Result<ToolOutput, ToolError> {
@@ -1867,6 +2282,12 @@ fn tool_list() -> Vec<Value> {
     let write_req = ["subject", "predicate"];
     vec![
         tool(
+            "runtime_status",
+            "Report the live MCP server runtime: binary, cwd, selected store URL/path, event count, authority, identity, and witness configuration. Call this before trusting project memory when debugging setup.",
+            &empty,
+            &[],
+        ),
+        tool(
             "list_facts",
             "List known dent8 fact streams and their dent8:// resource URIs. Use before relying on project memory.",
             &list_facts,
@@ -1969,6 +2390,7 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
 
 fn output_schema_for(name: &str) -> Value {
     match name {
+        "runtime_status" => with_tool_error_schema(name, runtime_status_output_schema()),
         "list_facts" => with_tool_error_schema(name, list_facts_output_schema()),
         "verify" => with_tool_error_schema(name, verify_output_schema()),
         "conflicts" => with_tool_error_schema(name, conflicts_output_schema()),
@@ -2021,6 +2443,187 @@ fn with_schema_version_prop(schema: Value) -> Value {
         required.push(json!("schema_version"));
     }
     Value::Object(object)
+}
+
+fn runtime_status_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "degraded"] },
+            "tool": { "const": "runtime_status" },
+            "server": runtime_server_output_schema(),
+            "store": runtime_store_output_schema(),
+            "authority": runtime_authority_output_schema(),
+            "identity": runtime_identity_output_schema(),
+            "witness": runtime_witness_output_schema(),
+            "env": runtime_env_output_schema(),
+        }),
+        &[
+            "status",
+            "tool",
+            "server",
+            "store",
+            "authority",
+            "identity",
+            "witness",
+            "env",
+        ],
+    )
+}
+
+fn runtime_server_output_schema() -> Value {
+    object_schema(
+        json!({
+            "name": { "const": "dent8" },
+            "version": { "type": "string" },
+            "protocol_version": { "type": "string" },
+            "pid": { "type": "integer", "minimum": 0 },
+            "binary_path": nullable_string_schema(),
+            "cwd": nullable_string_schema(),
+        }),
+        &[
+            "name",
+            "version",
+            "protocol_version",
+            "pid",
+            "binary_path",
+            "cwd",
+        ],
+    )
+}
+
+fn runtime_store_output_schema() -> Value {
+    object_schema(
+        json!({
+            "backend": { "type": "string" },
+            "url": nullable_string_schema(),
+            "path": nullable_string_schema(),
+            "file_log_path": { "type": "string" },
+            "event_count": nullable_integer_schema(),
+            "load_status": { "enum": ["ok", "failed"] },
+            "load_error": nullable_string_schema(),
+        }),
+        &[
+            "backend",
+            "url",
+            "path",
+            "file_log_path",
+            "event_count",
+            "load_status",
+            "load_error",
+        ],
+    )
+}
+
+fn runtime_authority_output_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string" },
+            "required": nullable_bool_schema(),
+            "configured": { "type": "boolean" },
+            "source_count": nullable_integer_schema(),
+            "load_status": { "enum": ["ok", "missing", "failed"] },
+            "load_error": nullable_string_schema(),
+        }),
+        &[
+            "path",
+            "required",
+            "configured",
+            "source_count",
+            "load_status",
+            "load_error",
+        ],
+    )
+}
+
+fn runtime_identity_output_schema() -> Value {
+    object_schema(
+        json!({
+            "configured": { "type": "boolean" },
+            "source": nullable_string_schema(),
+            "max_authority": {
+                "anyOf": [
+                    authority_schema(),
+                    { "type": "null" }
+                ]
+            },
+            "trust_path": nullable_string_schema(),
+            "grant_path": nullable_string_schema(),
+            "active_grants_path": nullable_string_schema(),
+            "identity_key_configured": { "type": "boolean" },
+            "load_status": { "enum": ["ok", "unconfigured", "failed"] },
+            "load_error": nullable_string_schema(),
+        }),
+        &[
+            "configured",
+            "source",
+            "max_authority",
+            "trust_path",
+            "grant_path",
+            "active_grants_path",
+            "identity_key_configured",
+            "load_status",
+            "load_error",
+        ],
+    )
+}
+
+fn runtime_witness_output_schema() -> Value {
+    object_schema(
+        json!({
+            "configured": { "type": "boolean" },
+            "log_path": nullable_string_schema(),
+            "pubkey_path": nullable_string_schema(),
+            "signing_key_present": { "type": "boolean" },
+            "load_status": { "enum": ["ok", "warn", "failed", "unconfigured"] },
+            "messages": {
+                "type": "array",
+                "items": object_schema(
+                    json!({
+                        "level": { "enum": ["OK", "WARN", "FAIL"] },
+                        "message": { "type": "string" },
+                    }),
+                    &["level", "message"],
+                ),
+            },
+        }),
+        &[
+            "configured",
+            "log_path",
+            "pubkey_path",
+            "signing_key_present",
+            "load_status",
+            "messages",
+        ],
+    )
+}
+
+fn runtime_env_output_schema() -> Value {
+    object_schema(
+        json!({
+            "dent8_store_url_set": { "type": "boolean" },
+            "dent8_log_set": { "type": "boolean" },
+            "dent8_authority_set": { "type": "boolean" },
+            "dent8_grant_set": { "type": "boolean" },
+            "dent8_active_grants_set": { "type": "boolean" },
+            "dent8_trust_set": { "type": "boolean" },
+            "dent8_identity_key_set": { "type": "boolean" },
+            "dent8_witness_log_set": { "type": "boolean" },
+            "dent8_witness_pubkey_set": { "type": "boolean" },
+            "dent8_witness_key_set": { "type": "boolean" },
+        }),
+        &[
+            "dent8_store_url_set",
+            "dent8_log_set",
+            "dent8_authority_set",
+            "dent8_grant_set",
+            "dent8_active_grants_set",
+            "dent8_trust_set",
+            "dent8_identity_key_set",
+            "dent8_witness_log_set",
+            "dent8_witness_pubkey_set",
+            "dent8_witness_key_set",
+        ],
+    )
 }
 
 fn list_facts_output_schema() -> Value {
@@ -2637,6 +3240,24 @@ fn nullable_string_schema() -> Value {
     json!({
         "anyOf": [
             { "type": "string" },
+            { "type": "null" }
+        ]
+    })
+}
+
+fn nullable_integer_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "integer", "minimum": 0 },
+            { "type": "null" }
+        ]
+    })
+}
+
+fn nullable_bool_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "boolean" },
             { "type": "null" }
         ]
     })
@@ -3558,6 +4179,7 @@ mod tests {
         assert_eq!(
             names,
             [
+                "runtime_status",
                 "list_facts",
                 "verify",
                 "conflicts",
@@ -3616,12 +4238,21 @@ mod tests {
             verify_tool["outputSchema"]["oneOf"][0]["properties"]["status"]["enum"],
             json!(["ok", "integrity_issues"])
         );
+        let runtime_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "runtime_status")
+            .unwrap();
+        assert_eq!(
+            runtime_tool["outputSchema"]["oneOf"][0]["properties"]["store"]["properties"]["event_count"],
+            super::nullable_integer_schema(),
+        );
     }
 
     #[test]
     #[allow(clippy::too_many_lines)]
     fn structured_content_matches_advertised_output_schemas() {
         let (_guard, path) = temp_log();
+        assert_tool_output_matches_schema(&path, "runtime_status", json!({}));
         assert_tool_output_matches_schema(&path, "list_facts", json!({}));
         assert_tool_output_matches_schema(&path, "verify", json!({}));
         assert_tool_output_matches_schema(&path, "conflicts", json!({}));
@@ -3768,6 +4399,10 @@ mod tests {
     #[test]
     fn read_audit_tools_are_useful_to_agents() {
         let (_guard, path) = temp_log();
+        let (err, text) = call_tool_text(&path, "runtime_status", json!({}));
+        assert!(!err, "{text}");
+        assert!(text.contains("dent8 runtime status"), "{text}");
+
         let (err, text) = call_tool_text(&path, "list_facts", json!({}));
         assert!(!err, "{text}");
         assert!(text.contains("no dent8 facts"), "{text}");

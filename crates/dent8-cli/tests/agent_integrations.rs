@@ -10,6 +10,7 @@ use std::{
 use serde_json::{Value, json};
 
 const MCP_TOOLS: &[&str] = &[
+    "runtime_status",
     "list_facts",
     "verify",
     "conflicts",
@@ -189,6 +190,7 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
         .as_str()
         .expect("server instructions");
     assert!(instructions.contains("memory integrity firewall"));
+    assert!(instructions.contains("runtime_status"));
     assert!(instructions.contains("list_facts"));
     assert!(instructions.contains("native_scan"));
 

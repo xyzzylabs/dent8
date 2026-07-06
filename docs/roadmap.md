@@ -242,8 +242,8 @@ shipped after replay/explain proved the loop. A **v0 is built**: `dent8 mcp serv
 synchronous, newline-delimited JSON-RPC 2.0 server over stdio (no async runtime, no new
 heavy deps), handling `initialize` / `tools/list` / `tools/call` for the full belief
 surface (`assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
-`derive` / `explain` / `replay`), read/audit tools (`list_facts` / `verify` / `conflicts` /
-`native_scan` / `native_reconcile`),
+`derive` / `explain` / `replay`), read/audit tools (`runtime_status` / `list_facts` /
+`verify` / `conflicts` / `native_scan` / `native_reconcile`),
 plus `resources/list` / `resources/read` (each fact stream as a `dent8://` resource),
 server instructions for MCP-aware agents, and JSON-RPC batch requests. The tools dispatch to
 the shared `op_*` firewall path, so the same
@@ -253,7 +253,8 @@ tool error).
 **Role.** *Enforce* the firewall at write time: it already rejects missing-provenance /
 sub-floor / non-unique writes (T1) via `op_*`, across the full belief surface
 (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`),
-read/audit tools (`list_facts`/`verify`/`conflicts`/`native_scan`/`native_reconcile`),
+read/audit tools (`runtime_status`/`list_facts`/`verify`/`conflicts`/`native_scan`/
+`native_reconcile`),
 plus `resources/list` / `resources/read`, server instructions, and JSON-RPC batch requests.
 The freshness filter on reads (T4) is applied — `explain` headline-flags a stale fact and
 the receipt carries `fresh` + `expires_at`.

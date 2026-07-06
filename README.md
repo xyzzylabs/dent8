@@ -145,6 +145,8 @@ library-only vs. design-only. In brief, runnable today:
   `DENT8_STORE_URL`.
 - **Signed identity** with grant history + revocation, the **witness** transparency log, and an
   MCP server (`dent8 mcp serve`) — all in the stock binary.
+- MCP `runtime_status` diagnostics so agents can see the live binary, store, identity,
+  authority, and witness configuration before trusting a long-running server.
 - Machine-readable `--output json` across the read/write/audit surface, shell completions, and
   Parquet **export** for offline DuckDB analysis (`--features export`).
 - Read-only native memory/rules audit with `dent8 native scan --agent <profile>` and receipt

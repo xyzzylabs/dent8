@@ -196,12 +196,16 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   binary — for offline forensics/audit/replay. Read-only export; the log stays the source of
   truth. ([examples/duckdb/](../examples/duckdb/), [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing read/audit tools
-  (`list_facts` / `verify` / `conflicts` / `native_scan` / `native_reconcile`) and the
+  (`runtime_status` / `list_facts` / `verify` / `conflicts` / `native_scan` /
+  `native_reconcile`) and the
   **full belief surface** as tools to agent
   clients — `assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
   `derive` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
-  The initialize response includes server instructions that tell MCP-aware agents to inspect
-  dent8 before relying on durable project facts and to treat rejected writes as safety signals.
+  `runtime_status` reports the live server binary, cwd, selected store URL/path, event count,
+  authority registry, signed identity, and witness configuration, so agents can detect stale
+  MCP subprocesses or wrong stores before trusting project memory. The initialize response
+  includes server instructions that tell MCP-aware agents to call `runtime_status`, inspect
+  dent8 before relying on durable project facts, and treat rejected writes as safety signals.
   Tool definitions advertise `outputSchema` for every structured result. Tool calls return
   human-readable `content` plus MCP 2025-11-25 `structuredContent` with stable agent fields:
   `status`, `accepted_events` (one entry per committed event, including event hash),

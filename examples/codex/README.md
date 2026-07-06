@@ -60,7 +60,8 @@ source identity bundle, and Codex MCP config referenced above. It keeps the issu
 Then ask Codex to use dent8:
 
 ```text
-Before relying on durable project facts, inspect dent8 with list_facts or explain.
+Before relying on durable project facts, inspect dent8 with `runtime_status`, then
+`list_facts` or `explain`.
 Record stable project facts in dent8 using source:codex and the lowest adequate authority.
 Use contradict for uncertain conflicts and supersede only when replacing a believed fact.
 Run verify before making broad changes that depend on remembered facts.

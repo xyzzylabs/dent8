@@ -46,11 +46,13 @@ dent8 init --identity --source source:assistant
 }
 ```
 
-The agent then gets these tools — `list_facts`, `verify`, `conflicts`, `assert`,
-`supersede`, `retract`, `contradict`, `reinforce`, `expire`, `derive`, `explain`,
-`replay` — plus readable `dent8://{kind}/{key}/{predicate}` resources. A rejected write
-comes back as a tool **error with the reason**, so the agent learns *why* (e.g.
-"repo.database requires authority high, got low"). For an operational backend, set
+The agent then gets these tools — `runtime_status`, `list_facts`, `verify`, `conflicts`,
+`assert`, `supersede`, `retract`, `contradict`, `reinforce`, `expire`, `derive`, `explain`,
+`replay` — plus readable `dent8://{kind}/{key}/{predicate}` resources. `runtime_status`
+shows the live binary, cwd, selected store, authority, identity, and witness configuration,
+so agents can catch stale MCP subprocesses or wrong stores before trusting project memory. A
+rejected write comes back as a tool **error with the reason**, so the agent learns *why*
+(e.g. "repo.database requires authority high, got low"). For an operational backend, set
 `DENT8_STORE_URL`; `sqlite://` works in the stock build, while `postgres://` needs a
 `--features postgres` build.
 
@@ -87,8 +89,9 @@ believed fact:
 ```text
 $ ./demo.sh
 {... "result": { "serverInfo": { "name": "dent8", ... } } }          # initialize
-{... "result": { "tools": [ {"name":"list_facts"}, {"name":"assert"}, ... ] } } # tools/list
-{... "no dent8 facts recorded yet" ... }                              # list_facts
+{... "result": { "tools": [ {"name":"runtime_status"}, {"name":"list_facts"}, ... ] } } # tools/list
+{... "dent8 runtime status" ... }                                      # runtime_status
+{... "no dent8 facts recorded yet" ... }                               # list_facts
 {... "structuredContent": {"status":"accepted","accepted_events":[...],"receipt":{...}} ... } # assert
 {... "structuredContent": {"status":"rejected","rejection_reason":"..."} ... "isError": true } # supersede
 {... "value : \"postgres\" ... lifecycle : Active ..." }             # explain — the trusted fact stood

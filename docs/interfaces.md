@@ -52,6 +52,7 @@ Source: [MCP tools specification](https://modelcontextprotocol.io/specification/
 
 Current v0 MCP tools:
 
+- `runtime_status`
 - `list_facts`
 - `verify`
 - `conflicts`
@@ -66,6 +67,11 @@ Current v0 MCP tools:
 - `derive`
 - `explain`
 - `replay`
+
+`runtime_status` is read-only and reports the live server binary, cwd, selected store
+URL/path, event count, authority registry, signed identity, and witness configuration.
+It exists so agents can detect stale MCP subprocesses or wrong stores before relying on
+project memory.
 
 Tool definitions advertise `outputSchema` for every `structuredContent` shape. Tool results
 keep human-readable `content`, and also return MCP 2025-11-25 `structuredContent` for
@@ -82,6 +88,8 @@ as a second text content block.
 Recommended behavior:
 
 - Treat writes as candidate events through the firewall.
+- Call `runtime_status` first when debugging setup or before trusting a long-running MCP
+  server's view of project memory.
 - Carry evidence/provenance fields for assertions; signed identity may provide source and
   authority defaults, but explicit fields must still satisfy the same grant/ceiling checks.
 - Make stale, contested, expired, or superseded facts visible to clients.

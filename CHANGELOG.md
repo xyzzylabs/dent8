@@ -10,6 +10,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- Added a read-only MCP `runtime_status` tool that reports the live server binary, cwd,
+  selected store URL/path, event count, authority registry, signed identity, and witness
+  configuration before an agent trusts project memory.
 - Added a v0.3 upgrade note covering the format-v2 break, re-ingestion path, and
   MCP/JSON automation changes.
 - Hardened the operated witness recipe so its packaged publisher/monitor retain and verify

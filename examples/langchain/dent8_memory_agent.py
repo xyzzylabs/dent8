@@ -2,8 +2,8 @@
 """Use dent8 as a LangChain agent's memory firewall, over MCP.
 
 dent8 exposes its full belief surface (assert / supersede / retract / verify /
-conflicts / list_facts / ...) as MCP tools via ``dent8 mcp serve``. This wires that
-server into a LangGraph ReAct agent with ``langchain-mcp-adapters``, so the agent
+runtime_status / conflicts / list_facts / ...) as MCP tools via ``dent8 mcp serve``.
+This wires that server into a LangGraph ReAct agent with ``langchain-mcp-adapters``, so the agent
 records and reads project facts *through the firewall*: a low-authority or stale
 write is rejected, contradictions surface, and every fact is replayable.
 

@@ -28,7 +28,8 @@ Re-run `dent8 mcp install --agent grok-build` to regenerate the config later.
 ## Prompt Grok Build
 
 ```text
-Before relying on durable project facts, inspect dent8 with list_facts or explain.
+Before relying on durable project facts, inspect dent8 with `runtime_status`, then
+`list_facts` or `explain`.
 Record stable project facts in dent8 using source:grok-build and the lowest adequate authority.
 Use contradict for uncertain conflicts and supersede only when replacing a believed fact.
 Run verify before broad edits that depend on remembered facts.

@@ -4,7 +4,7 @@
   "workspace_mode": "in_place",
   "requested_provider": "openai",
   "requested_model": "gpt-4o-mini",
-  "prompt": "Inspect dent8 with list_facts before relying on durable project facts. Record stable project facts in dent8 using source:hecate and the lowest adequate authority. Run verify before making broad edits that depend on remembered facts.",
+  "prompt": "Inspect dent8 with runtime_status, then list_facts or explain before relying on durable project facts. Record stable project facts in dent8 using source:hecate and the lowest adequate authority. Run verify before making broad edits that depend on remembered facts.",
   "mcp_servers": [
     {
       "name": "dent8",

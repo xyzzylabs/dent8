@@ -8,8 +8,9 @@ can't silently override a trusted fact, contradictions surface instead of overwr
 every fact is replayable with an integrity receipt.
 
 dent8 ships the server already: `dent8 mcp serve` (stdio JSON-RPC) exposes the full belief
-surface as MCP tools — `assert`, `supersede`, `retract`, `contradict`, `reinforce`, `expire`,
-`derive`, `verify`, `conflicts`, `list_facts`, `explain`, `replay`. See [`../mcp/`](../mcp/)
+surface as MCP tools — `runtime_status`, `assert`, `supersede`, `retract`, `contradict`,
+`reinforce`, `expire`, `derive`, `verify`, `conflicts`, `list_facts`, `explain`, `replay`.
+See [`../mcp/`](../mcp/)
 for the protocol and a no-LLM `demo.sh`.
 
 ## LangChain (Python)

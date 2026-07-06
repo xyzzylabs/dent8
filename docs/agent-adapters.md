@@ -33,7 +33,8 @@ access to the event tables.
    the selected profile's guard posture. `dent8 native reconcile --agent <profile>` verifies
    explicit `dent8://<kind>/<key>/<predicate>` references against current dent8 receipts and
    flags stale, contested, no-longer-believed, missing, or malformed references. The same
-   audits are exposed to agents over MCP as read-only `native_scan` / `native_reconcile`;
+   diagnostics/audits are exposed to agents over MCP as read-only `runtime_status`,
+   `native_scan`, and `native_reconcile`;
    `doctor --agent` runs the read-only scan. This is audit, not import.
 4. **Signed source identity, default build.** Use `dent8 init --agent <profile>` or
    `dent8 init --identity --source <source>` to give each agent a distinct source key and
