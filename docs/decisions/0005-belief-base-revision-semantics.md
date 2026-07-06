@@ -19,7 +19,7 @@ and demands global consistency — neither of which dent8 wants.
 Adopt **belief-base revision** (Hansson), not classical AGM, as dent8's formal
 identity:
 
-- dent8's "memory" is a fold/projection over an immutable `ClaimEvent` base, not a
+- dent8's "memory" is a fold/projection over an immutable `FactEvent` base, not a
   deductively-closed set. The base, and its history, are authoritative.
 - **dent8 deliberately does not satisfy the Recovery postulate.** Retract-then-
   reassert must not resurrect dependents; the re-assertion carries fresh provenance
@@ -29,7 +29,7 @@ identity:
   keep the store non-trivial, surface it — never silently merge `A` and `¬A`.
 - `Authority` is an **epistemic-entrenchment** ordering, kept strictly separate from
   `Confidence` (evidential strength). Entrenchment decides what is surrendered first.
-- dent8 makes **no claim of logical closure or an entailment engine**; it implements
+- dent8 makes **no fact of logical closure or an entailment engine**; it implements
   the *operational spirit* of revision operators over opaque triples.
 
 ## Consequences
@@ -43,7 +43,7 @@ Positive:
 Negative:
 
 - The mapping of asserted/superseded/retracted onto expansion/revision/contraction is
-  *inspirational*, not rigorous — must be stated as such to avoid overclaiming.
+  *inspirational*, not rigorous — must be stated as such to avoid overfacting.
 - "Belief-base framing" is principled grounding, **not** a novel mechanism (bitemporal
   DBs already provide "history matters"); it must not be sold as a contribution.
 

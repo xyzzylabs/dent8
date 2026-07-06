@@ -41,19 +41,19 @@ Two honest boundaries frame everything below:
 
 **What dent8 produces.** A preference triple is *(context, chosen, rejected)*. dent8's
 supersession graph yields these directly: for a subject+predicate, the **superseded
-claim is `rejected`** and the **superseding claim is `chosen`**, with
+fact is `rejected`** and the **superseding fact is `chosen`**, with
 `SupersessionReason` as the labeled basis — and `UserCorrection` supersessions are
 gold-standard *human* preferences. Contradiction edges (with authority/freshness basis)
-give preferences over conflicting claims; [counterfactual replay](novelty.md)
+give preferences over conflicting facts; [counterfactual replay](novelty.md)
 (`replay_*_with_policy` + `diff_states`) can synthesize additional contrastive pairs
 under different trust policies.
 
 **Why dent8 beats a plain preference set.** Preference-data *quality* is the known
 weakness of DPO-style methods. dent8 addresses it head-on:
 
-- **Poisoning filter.** `EntityProjection::unearned_supersessions` flags
+- **Poisoning filter.** `SubjectProjection::unearned_supersessions` flags
   `AuthorityDowngrade` and `WeakerEntrenchment` supersessions — so you can **drop the
-  pairs where the "preferred" claim was an attacker's injection**, instead of training
+  pairs where the "preferred" fact was an attacker's injection**, instead of training
   on them. No plain preference corpus can do this.
 - **Confidence weighting.** Authority-weighted corroboration
   (`corroboration_at_or_above`) and the `confidence` field rank how trustworthy each
@@ -61,7 +61,7 @@ weakness of DPO-style methods. dent8 addresses it head-on:
 - **Provenance.** Every pair traces to its source/evidence, so a dataset can be audited
   and bad sources purged retroactively.
 
-**Caveat.** These are preferences over *beliefs* (which claim about a subject+predicate
+**Caveat.** These are preferences over *beliefs* (which fact about a subject+predicate
 to hold), not over arbitrary generations. They train factual/memory revision behavior,
 not response aesthetics.
 
@@ -73,8 +73,8 @@ reward function. A candidate memory action gets:
 
 - **+** if it survives replay, carries provenance + ≥1 evidence, respects authority
   arbitration, and is fresh;
-- **−** if it introduces a hidden contradiction, uses a TTL-stale claim in a decision
-  (observable via `claim.used_in_decision` on an expired claim), triggers an
+- **−** if it introduces a hidden contradiction, uses a TTL-stale fact in a decision
+  (observable via `fact.used_in_decision` on an expired fact), triggers an
   `unearned_supersession`, or leaves a `lineage_issue` (dangling/cyclic supersession).
 
 Because replay is deterministic and the audits are pure functions, the reward is
@@ -99,7 +99,7 @@ This needs only the audit functions plus an export — no model, no RL loop.
 
 ## 4. SFT — moderate fit
 
-dent8 yields clean *(context, correct memory operation)* labels: given existing claims
+dent8 yields clean *(context, correct memory operation)* labels: given existing facts
 and a new fact, the ground-truth transition (assert / reinforce / contradict /
 supersede / retract) is fixed by the firewall + replay invariants. Good for training a
 memory agent's **write decisions** or for teaching a model to **attach proper
@@ -141,14 +141,14 @@ traces are product-critical rather than merely interesting.
   management, not general intelligence.
 - **The dataset product is not built.** The event-log export exists, but there is no
   preference/reward dataset schema, materializer, split/version manifest, or trainer
-  integration. Pitching dent8 as a "fine-tuning tool" would be exactly the overclaim the
+  integration. Pitching dent8 as a "fine-tuning tool" would be exactly the overfact the
   rest of the docs avoid — it is a *substrate provider* feeding an external trainer.
 - **Belief preferences ≠ response preferences.** The DPO mapping produces preferences
-  over claims, which is a narrower (and arguably cleaner) signal than typical RLHF
+  over facts, which is a narrower (and arguably cleaner) signal than typical RLHF
   response-preference data.
 - **Garbage-in caveats carry over.** Authority is asserted not proven, corroboration is
   Sybil-resistant only when authority-weighted (see [threat-model.md](../threat-model.md)),
-  and a poisoned-but-well-formed claim can still be learned. The *filtering* dent8 adds
+  and a poisoned-but-well-formed fact can still be learned. The *filtering* dent8 adds
   reduces, not eliminates, bad training signal.
 
 ## Why this is a real positioning angle

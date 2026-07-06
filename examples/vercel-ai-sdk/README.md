@@ -2,7 +2,7 @@
 
 Use dent8 from a TypeScript app built with the Vercel AI SDK by exposing
 `dent8 mcp serve` as an MCP tool source. The AI SDK discovers dent8's tools, then the model
-records and reads facts through the same claim-event firewall used by the CLI: low-authority
+records and reads facts through the same fact-event firewall used by the CLI: low-authority
 overrides are rejected, stale facts are flagged, contradictions remain explainable, and every
 accepted write has replayable provenance.
 

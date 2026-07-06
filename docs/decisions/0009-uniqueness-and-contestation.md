@@ -11,34 +11,34 @@ a uniqueness violation.
 ## Context
 
 The coding-agent predicate registry marks facts like `repo.database` **unique**: at most
-one *believed* claim per subject+predicate ([registry](../../crates/dent8-store/src/registry.rs)).
-Independently, dent8's belief-revision identity is **paraconsistent**: a `claim.contradicted`
-moves the incumbent to `Contested` and *preserves* both the claim and its
+one *believed* fact per subject+predicate ([registry](../../crates/dent8-store/src/registry.rs)).
+Independently, dent8's belief-revision identity is **paraconsistent**: a `fact.contradicted`
+moves the incumbent to `Contested` and *preserves* both the fact and its
 `contradicted_by` edge — "localize the contradiction, keep the store non-trivial, surface
 it" ([ADR 0005](0005-belief-base-revision-semantics.md), [belief-revision.md](../belief-revision.md)).
 
 These collide. The sanctioned way to *flag* a conflict — `dent8 contradict` — asserts an
-opposing claim and contests the incumbent, leaving **two** believed claims (the `Contested`
+opposing fact and contests the incumbent, leaving **two** believed facts (the `Contested`
 incumbent and its `Active` contradictor) for one unique subject+predicate. A naïve
-uniqueness rule ("at most one believed claim, full stop") would either forbid contradiction
+uniqueness rule ("at most one believed fact, full stop") would either forbid contradiction
 entirely or reject a legitimately-contested log on reload (the same false-positive class as
 the [ADR 0008](0008-retraction-authority.md) `SupersededByInvalidated` regression).
 
 ## Decision
 
-**Uniqueness is over *mutually-consistent* believed claims, and contestation is the
+**Uniqueness is over *mutually-consistent* believed facts, and contestation is the
 explicit exception.** Concretely:
 
-- A unique predicate is *violated* only when **more than one fresh believed claim exists
+- A unique predicate is *violated* only when **more than one fresh believed fact exists
   and none of them is `Contested`** — i.e. a *silent* duplication, the corruption the
   invariant exists to catch.
-- When at least one believed claim is `Contested`, the set is a **surfaced conflict**, not
+- When at least one believed fact is `Contested`, the set is a **surfaced conflict**, not
   a violation. The firewall has done its job (the disagreement is visible and auditable);
   resolving it is a separate, deliberate act (`supersede` installs a winner; `retract`
   removes one side).
 - Contradiction is **dissent**, so it is *not* authority-gated (a low-authority source may
   contest a high-authority fact), with the one exception that a contradiction against a
-  `Canonical` claim is a hard alarm, not a soft contest ([ADR 0007](0007-authority-as-entrenchment.md)).
+  `Canonical` fact is a hard alarm, not a soft contest ([ADR 0007](0007-authority-as-entrenchment.md)).
   This is the deliberate asymmetry: dissent (`contradict`) is cheap; override (`supersede`)
   and removal (`retract`) must out-rank the incumbent.
 
@@ -63,9 +63,9 @@ Negative:
 
 ## Follow-Up
 
-- [DONE] `dent8 contradict` (asserts the opposing claim + a `Contradicted` event on the
+- [DONE] `dent8 contradict` (asserts the opposing fact + a `Contradicted` event on the
   incumbent, atomically; a `Canonical` incumbent hard-alarms).
-- [DONE] `validate_unique_log` exempts a set containing a `Contested` claim.
+- [DONE] `validate_unique_log` exempts a set containing a `Contested` fact.
 - Future: a `dent8 resolve` shortcut (supersede that also clears the contest), and surfacing
   the full contradictor list in `explain` rather than just a count.
 - Grounded in [ADR 0005](0005-belief-base-revision-semantics.md) (paraconsistent

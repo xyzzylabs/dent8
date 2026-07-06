@@ -42,7 +42,7 @@ Graphiti's. It already ships much of dent8's headline list: per-edge valid-time
 contradiction handling via **edge invalidation** (not deletion — the older edge's
 `t_invalid` is set to the invalidating edge's `t_valid`), supersession in place of
 deletion, and a **non-lossy** episode store providing provenance from extracted facts
-back to source messages [2]. **dent8 cannot claim provenance, temporal validity,
+back to source messages [2]. **dent8 cannot fact provenance, temporal validity,
 supersession, or contradiction edges as unique.** What Graphiti does *not* do: it
 resolves contradictions purely by **recency** — it "consistently prioritizes new
 information when determining edge invalidation" [2], arbitrated by neither source
@@ -58,7 +58,7 @@ retrieval and can sit beneath or beside a graph store.
 
 **Letta / MemGPT** is an OS-style tiered-context manager (core/archival/recall
 memory edited by the agent itself) — orchestration of the context window, not
-auditable claim integrity; no provenance, contradiction edges, supersession history,
+auditable fact integrity; no provenance, contradiction edges, supersession history,
 or replay as first-class features [3]. It is complementary: dent8 could sit beneath
 it as the audited store of record. **A-MEM** models memory as an evolving
 Zettelkasten note graph whose "memory evolution" retroactively rewrites the
@@ -66,7 +66,7 @@ attributes of historical notes when new memories arrive [4] — closer to Mem0's
 mutate model than to an append-only log. **Cognee** adds a typed knowledge graph
 with optional temporal extraction [5], richer structure than vector stores but
 oriented to modeling event sequence in *content*, not integrity-as-substrate. The
-official **MCP "memory" server** is a minimal entity/relation/observation knowledge
+official **MCP "memory" server** is a minimal subject/relation/observation knowledge
 graph with no integrity semantics whatsoever [6]; dent8 could ship an MCP server
 whose differentiator is exactly these guarantees. **CoALA** is a conceptual taxonomy
 (working/episodic/semantic/procedural memory), useful vocabulary for positioning,
@@ -88,7 +88,7 @@ not prior art that implements integrity [7].
 Two cells deserve blunt honesty:
 
 - **Temporal validity.** dent8 now has `observed_at` + `valid_from` + `valid_to`
-  (ADR 0016) and **applies freshness on reads** — `ClaimState::is_fresh_at` drives the
+  (ADR 0016) and **applies freshness on reads** — `FactState::is_fresh_at` drives the
   `fresh` flag and `explain`'s freshness annotation, bounding the full window
   `[valid_from, expires_at)` (a future `valid_from` reads `[not yet valid]`, an elapsed
   `valid_to`/TTL reads `[stale — no longer valid]`), with `expires_at()` taking the *earliest* of
@@ -131,9 +131,9 @@ dent8's time fields — transaction-time `recorded_at` plus valid-time
 `observed_at`/`valid_from`/`valid_to` — are an instance of bitemporal modeling (valid vs
 transaction time, standardized in SQL:2011), but PostgreSQL does not implement
 SQL:2011 temporal tables natively, so freshness and "replay as-of T" must be
-enforced in the `replay_claim` fold, not delegated to the database [9].
+enforced in the `replay_fact` fold, not delegated to the database [9].
 
-**Provenance.** W3C PROV-DM provides a standard vocabulary (Entity/Activity/Agent
+**Provenance.** W3C PROV-DM provides a standard vocabulary (Subject/Activity/Agent
 plus `wasGeneratedBy`/`wasAttributedTo`/`wasDerivedFrom`/`wasInvalidatedBy`) onto
 which dent8's provenance, authority, evidence, and edge model map cleanly, enabling
 an interoperable analytical export [10]. Honest caveat: PROV models trust only
@@ -150,7 +150,7 @@ RFC 8785
 [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md)); note it is an
 *Informational* RFC (Independent Submission stream), it sorts property
 names by UTF-16 code units, and it constrains numbers to IEEE-754 doubles and errors
-on NaN/Infinity — once a hazard for arbitrary numeric content inside `ClaimValue::Json`,
+on NaN/Infinity — once a hazard for arbitrary numeric content inside `FactValue::Json`,
 now mitigated since `CanonicalJson` parses with `serde_json` (which itself rejects
 NaN/Infinity); it never affected `confidence`/timestamps (already integers) [11]. Beyond a
 linear chain, RFC 6962 (Certificate Transparency) shows how domain-separated
@@ -204,10 +204,10 @@ good *vocabulary*, not a novel *mechanism* — bitemporal DBs (XTDB/Datomic) alr
 provide "history matters, retract doesn't resurrect" without naming Hansson.
 
 dent8's defensible wedge is narrower and should be stated precisely: **the
-combination treated as substrate rather than feature** — an append-only `ClaimEvent`
+combination treated as substrate rather than feature** — an append-only `FactEvent`
 log as the single typed, hash-verified source of truth, deterministic replay
 (`projection == fold(events)`), and, above all, **typed authority-weighted
-supersession** (a regular-user write must not override a high-authority claim — a
+supersession** (a regular-user write must not override a high-authority fact — a
 direct mitigation for MINJA-style poisoning that Graphiti's recency-only arbitration
 cannot offer). The honest caveat has moved from "not built" to "not yet hardened as
 an operated product": the headline differentiator is now enforced at the write

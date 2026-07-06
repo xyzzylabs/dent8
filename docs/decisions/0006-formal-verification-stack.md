@@ -8,7 +8,7 @@ Accepted.
 
 ## Context
 
-dent8 makes strong correctness claims (deterministic replay, `projection ==
+dent8 makes strong correctness facts (deterministic replay, `projection ==
 fold(events)`, terminal immutability, tamper-evidence, serializable concurrent
 writes) but has only example-based unit tests. No single Rust verification tool
 covers all of these: bounded model checkers cannot do unbounded proofs or
@@ -22,7 +22,7 @@ the codebase:
 
 1. **proptest / bolero** (now, against the pure core) — fold determinism,
    `projection == fold`, reinforced-value-stability, terminal immutability,
-   single-assertion prefix, claim isolation, contradiction-edge symmetry,
+   single-assertion prefix, fact isolation, contradiction-edge symmetry,
    higher-authority basis, cross-stream lineage, canonicalization stability.
 2. **Kani** (after hashing exists) — bounded panic-/overflow-freedom of `apply_event`
    over all event kinds; fold-determinism and terminal-immutability up to length *N*;
@@ -37,7 +37,7 @@ the codebase:
 
 Positive:
 
-- Each claim is checked by a tool that can actually check it.
+- Each fact is checked by a tool that can actually check it.
 - Honest public framing: "property-tested + bounded-model-checked + concurrency-
   model-checked," never blanket "formally verified."
 

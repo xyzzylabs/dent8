@@ -6,9 +6,9 @@ Date: 2026-06-26
 
 Accepted; **implemented in `dent8-core`** (supersession arbitration + canonical
 hard-alarm + non-resurrection proof), **earned entrenchment v0** (authority-weighted
-corroboration + the `unearned_supersessions` entity-level audit), and **survived-challenge
+corroboration + the `unearned_supersessions` subject-level audit), and **survived-challenge
 recording** ([ADR 0015](0015-survived-challenge-recording.md): `ChallengeRejected` events +
-Sybil-resistant `ClaimState.survived_challenges`, plus the opt-in earned-supersession gate).
+Sybil-resistant `FactState.survived_challenges`, plus the opt-in earned-supersession gate).
 Remaining future: uniqueness-constrained predicates and transactional store-layer
 enforcement.
 
@@ -19,22 +19,22 @@ recency-only contradiction resolution ("consistently prioritizes new information
 and the cleanest mitigation for MINJA-style memory poisoning (a privilege-less user
 must not override a high-authority fact). Originally `apply_event` applied every
 `Superseded`/`Contradicted` event identically and ignored `Authority` entirely — the
-differentiator was a design claim with no code. This ADR's decision is now built.
+differentiator was a design fact with no code. This ADR's decision is now built.
 
 ## Decision
 
 Make `Authority` an **epistemic-entrenchment ordering that arbitrates conflict
 resolution in the core fold**, separate from `Confidence`:
 
-- A `claim.superseded` whose replacing claim does **not** strictly out-rank the
-  superseded active claim is rejected (or down-ranked), not silently applied. This
+- A `fact.superseded` whose replacing fact does **not** strictly out-rank the
+  superseded active fact is rejected (or down-ranked), not silently applied. This
   operationalizes the invariant "higher-authority supersession requires an explicit
   basis."
-- A `claim.contradicted` against an `AuthorityLevel::Canonical` (or uniqueness-
-  constrained predicate) claim is a **hard alarm** (a new `TransitionError`), not a
+- A `fact.contradicted` against an `AuthorityLevel::Canonical` (or uniqueness-
+  constrained predicate) fact is a **hard alarm** (a new `TransitionError`), not a
   soft transition to `Contested` — the LFI "gentle-explosion" tier.
 - `Confidence` never substitutes for `Authority` in arbitration; a high-confidence
-  low-authority claim cannot override a low-confidence high-authority one.
+  low-authority fact cannot override a low-confidence high-authority one.
 
 ## Consequences
 
@@ -58,7 +58,7 @@ Negative:
   `CanonicalContradiction`), with unit tests + an exhaustive 5×5-lattice
   non-resurrection test and a `#[cfg(kani)]` harness.
 - [DONE] Earned entrenchment v0: authority-weighted `corroborating_sources` /
-  `corroboration_at_or_above` on `ClaimState`, and `EntityProjection::unearned_supersessions`
+  `corroboration_at_or_above` on `FactState`, and `SubjectProjection::unearned_supersessions`
   (`AuthorityDowngrade`, `WeakerEntrenchment` — now weighing earned entrenchment =
   corroboration + survived challenges, ADR 0017; Sybil-resistant), tested.
 - Enforce the arbitration *transactionally* in the store layer once the Postgres

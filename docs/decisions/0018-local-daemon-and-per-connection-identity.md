@@ -25,7 +25,7 @@ and Ed25519-attests the write to the right source.
 
 ### The one fact that decides the design
 
-ADR 0013's write attestation is an Ed25519 signature over the **entire final `ClaimEvent`**:
+ADR 0013's write attestation is an Ed25519 signature over the **entire final `FactEvent`**:
 `attest_events` signs `dent8_core::attestation_message(event)` and `verify_event_attestation`
 re-derives that same message from the stored event. But the server mints three fields the
 client cannot predict *before* arbitration:
@@ -40,7 +40,7 @@ daemon persist it *cannot re-verify offline* against `op_*`-produced bytes witho
 **prepare→commit round-trip** that freezes `seq`/`recorded_at` before append — which fights the
 advisory-lock-serialized concurrency model — or (b) a **daemon-held per-source key** — which
 reopens the multi-tenant key-custody problem the scheme exists to eliminate. This is the
-load-bearing identity claim of three of the four panel proposals (rmcp-OAuth, REST+envelope,
+load-bearing identity fact of three of the four panel proposals (rmcp-OAuth, REST+envelope,
 minimal-zero-dep), and it is false as written. Only a design that keeps attestation
 **server-side and unchanged** — and instead makes the *signer* a per-request value — survives.
 The one deployment where that is not a custody violation is a **local, per-user daemon**: it

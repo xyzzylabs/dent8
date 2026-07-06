@@ -18,7 +18,7 @@ cargo run -q -p dent8 -- schema postgres
 
 ## Design Expectations
 
-- Model memory as claim events, not mutable memory items.
+- Model memory as fact events, not mutable memory items.
 - Keep replay deterministic.
 - Preserve provenance, evidence, authority, TTL, and lifecycle state.
 - Add tests for state transitions and invariants when changing domain behavior.

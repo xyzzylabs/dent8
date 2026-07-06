@@ -3,9 +3,9 @@
 This dossier is the synthesized output of a multi-source, fact-checked research pass
 on dent8's design space (agent-memory integrity, belief revision, formal
 verification, provenance/tamper-evidence, and academic positioning). It is the
-*entry point*; the depth lives in the topical docs it links. Claims here were
+*entry point*; the depth lives in the topical docs it links. Facts here were
 produced by parallel web-search agents, then adversarially fact-checked (16
-load-bearing claims: 14 supported, 1 refuted, 1 qualified). Corrections from that
+load-bearing facts: 14 supported, 1 refuted, 1 qualified). Corrections from that
 pass are folded into the topical docs and noted below.
 
 ## Executive summary
@@ -46,19 +46,19 @@ pass are folded into the topical docs and noted below.
    → [roadmap.md](../roadmap.md), [threat-model.md](../threat-model.md)
 
 5. **Publish in two stages.** A model + belief-revision-semantics workshop paper is
-   claimable from the core semantics and runnable slice; the systems/security paper
+   factable from the core semantics and runnable slice; the systems/security paper
    should wait for stronger operational evidence: fuzzing/model checking, operated
    witness deployment, and clearer production identity operations. →
    [paper/outline.md](../paper/outline.md)
 
 6. **Defensible novelty is compositional, and an adversarial pass killed every
-   single-primitive claim.** The surviving directions route through authority
+   single-primitive fact.** The surviving directions route through authority
    arbitration — **implemented**. All three top directions now have a built+tested v0:
    rank 1 (verified non-resurrection, exhaustive + Kani harness), rank 2
    (policy-counterfactual replay: `EpistemicPolicy` + `replay_*_with_policy` +
    `diff_states`), and rank 3 (earned entrenchment: authority-weighted corroboration +
    `unearned_supersessions` audit + the challenge-survival half — ADR 0015: rejected
-   challenges recorded as `claim.challenge_rejected` feeding `ClaimState.survived_challenges`,
+   challenges recorded as `fact.challenge_rejected` feeding `FactState.survived_challenges`,
    on by default, plus the opt-in earned-supersession gate `DENT8_ENTRENCHMENT_GATE`).
    Rank 3 also now feeds survived challenges *into* arbitration (ADR 0017: the gate weighs
    earned entrenchment = corroboration + survived challenges).
@@ -71,7 +71,7 @@ pass are folded into the topical docs and noted below.
 | Belief-base + Recovery-non-postulate framing | Hansson; AGM | [ADR 0005](../decisions/0005-belief-base-revision-semantics.md) |
 | Paraconsistent contradiction tolerance ("contested") | LFI / paraconsistency | [belief-revision.md](../belief-revision.md) |
 | Authority-as-entrenchment arbitration | AGM entrenchment | [roadmap.md](../roadmap.md) / [ADR 0007](../decisions/0007-authority-as-entrenchment.md) |
-| LFI hard-alarm tier on canonical claims | Logics of Formal Inconsistency | [belief-revision.md](../belief-revision.md) §Adopt-3 |
+| LFI hard-alarm tier on canonical facts | Logics of Formal Inconsistency | [belief-revision.md](../belief-revision.md) §Adopt-3 |
 | Sorted-key `serde_json` canonical form (**not** JCS) | project invariant; RFC 8785 kept as contrast | [ADR 0004](../decisions/0004-canonicalization-and-hash-chain.md) |
 | RFC 6962 domain-separated leaf/node hashing | Certificate Transparency | [storage.md](../storage.md) |
 | W3C PROV-DM export mapping | W3C Recommendation | [related-work.md](../related-work.md) |
@@ -89,12 +89,12 @@ pass are folded into the topical docs and noted below.
   sorted-key `serde_json` form instead, and documents that it is **not JCS** in
   [storage.md](../storage.md) / [ADR 0004](../decisions/0004-canonicalization-and-hash-chain.md).
 - **Critic corrections folded in:** confidence float hazard was overstated
-  (`Confidence` is `u16`; only `ClaimValue::Json` was at risk, now canonicalized via the
+  (`Confidence` is `u16`; only `FactValue::Json` was at risk, now canonicalized via the
   `CanonicalJson` newtype); the temporal-validity
   matrix cell downgraded ✓→◐ (at the time: no `valid_to`, freshness-only; the freshness
   evaluator, and in v0.2.0 `valid_to` intervals plus `--as-of`/`--valid-at` time-travel reads
   per ADR 0016, have since shipped); TTL/authority
-  arbitration flagged as design-only everywhere they are claimed; "AWS originated the
+  arbitration flagged as design-only everywhere they are facted; "AWS originated the
   P language" reworded (P: Microsoft/UC Berkeley); LOC corrected to ~470 non-test.
 
 ## Novelty risks (kept deliberately visible)
@@ -113,7 +113,7 @@ These are the reviewer objections the project must pre-empt, not hide:
    PROV). Only *typed authority-as-entrenchment arbitration* is uncommon in this
    space.
 3. **Belief-base framing is vocabulary, not a novel mechanism** — bitemporal DBs
-   already give "history matters, retract doesn't resurrect." Claim it as principled
+   already give "history matters, retract doesn't resurrect." Fact it as principled
    grounding, not as a contribution.
 4. **On the temporal axis dent8 now has closed valid-time intervals** (ADR 0016):
    `valid_to` via `--valid-from`/`--valid-to`, an elapsed `valid_to` bounds read-time
@@ -121,7 +121,7 @@ These are the reviewer objections the project must pre-empt, not hide:
    time-travel reads — so it is no longer *behind* Zep on the missing-`valid_to` axis. Frame
    the remaining difference precisely: dent8 treats `valid_to` as an asserted read-time
    freshness/validity bound, not a running lifecycle edge-invalidation — so state the exact
-   bitemporal gap rather than claiming either a missing interval or full parity.
+   bitemporal gap rather than facting either a missing interval or full parity.
 5. **Deterministic replay alone is not unique** — Zep/Graphiti reconstruct from
    episodes too. The precise differentiator is the *typed, hash-verified,
    single-source-of-truth* log.

@@ -6,7 +6,7 @@ dent8 is a memory integrity platform, not a memory provider. The platform owns c
 
 The first product boundary is one runtime with three surfaces:
 
-- Memory firewall: validates claim-event writes before they alter projections.
+- Memory firewall: validates fact-event writes before they alter projections.
 - Versioned memory store: persists immutable events and materialized current state.
 - Memory debugger: replays event streams and explains why state looks the way it does.
 
@@ -23,7 +23,7 @@ The durable storage design is the append-only event log, its projection, the edg
 ```text
 dent8/
   crates/
-    dent8-core/            # claim-event model, lifecycle state machine, invariants
+    dent8-core/            # fact-event model, lifecycle state machine, invariants
     dent8-store/           # store traits (sync EventStore + async AsyncEventStore), replay boundary
     dent8-store-postgres/  # Postgres migrations and adapter (AsyncEventStore)
     dent8-store-sqlite/    # embedded SQLite adapter (AsyncEventStore) — the second backend
@@ -47,18 +47,18 @@ Later crates should be added only when they own a real boundary:
 
 ## Core Model
 
-The primitive is `ClaimEvent`.
+The primitive is `FactEvent`.
 
-Each event belongs to a claim stream identified by `claim_id`. A claim stream starts with `claim.asserted`; later events can reinforce, contradict, supersede, expire, retract, retrieve, use the claim in a decision, or record a rejected challenge (`claim.challenge_rejected`, ADR 0015).
+Each event belongs to a fact stream identified by `fact_id`. A fact stream starts with `fact.asserted`; later events can reinforce, contradict, supersede, expire, retract, retrieve, use the fact in a decision, or record a rejected challenge (`fact.challenge_rejected`, ADR 0015).
 
 Core fields:
 
 - `event_id`
-- `claim_id`
+- `fact_id`
 - `event_type`
 - `subject`
 - `predicate`
-- `claim_value`
+- `fact_value`
 - `confidence`
 - `authority`
 - `ttl`
@@ -89,7 +89,7 @@ Retrieval and decision-use events are audit events. They do not change lifecycle
 
 ## Write Path
 
-1. Normalize input into a candidate claim event.
+1. Normalize input into a candidate fact event.
 2. Validate required provenance, evidence, authority, TTL, and schema shape.
 3. Read relevant active/contested projections for the same subject and predicate.
 4. Detect duplicate, contradiction, or supersession candidates.
@@ -100,7 +100,7 @@ Retrieval and decision-use events are audit events. They do not change lifecycle
 
 ## Read Path
 
-Reads should return claim state plus integrity metadata:
+Reads should return fact state plus integrity metadata:
 
 - lifecycle state
 - freshness and TTL

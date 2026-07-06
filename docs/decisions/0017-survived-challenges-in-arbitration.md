@@ -9,18 +9,18 @@ Accepted.
 ## Context
 
 ADR 0015 built survived-challenge *recording*: a challenge the firewall rejects on strength
-is written to the incumbent's stream as a `claim.challenge_rejected` event, accumulating
-`ClaimState.survived_challenges` (Sybil-resistant `survived_challenges_at_or_above`). Its
+is written to the incumbent's stream as a `fact.challenge_rejected` event, accumulating
+`FactState.survived_challenges` (Sybil-resistant `survived_challenges_at_or_above`). Its
 closing note deferred one thing on purpose:
 
 > Survived challenges are **recorded but not yet consulted by arbitration** … Feeding them
-> into the supersession gate (a claim that survived N high challenges demands more than
+> into the supersession gate (a fact that survived N high challenges demands more than
 > corroboration parity to displace) is future work, deliberately separate: the recording must
 > exist and accumulate honestly before any gate consumes it.
 
 Meanwhile the opt-in earned-supersession gate (ADR 0015, `DENT8_ENTRENCHMENT_GATE=1`) and the
-always-on `EntityProjection::unearned_supersessions` audit both weigh **corroboration only**
-at equal authority. That is half of "earned entrenchment": a claim is entrenched both by
+always-on `SubjectProjection::unearned_supersessions` audit both weigh **corroboration only**
+at equal authority. That is half of "earned entrenchment": a fact is entrenched both by
 *independent backing* (corroboration) and by *having been attacked and stood*
 (survived challenges). A fact that beat two high-authority takeover attempts is more
 entrenched than a never-tested one with the same single backer — but today an equal-authority
@@ -35,7 +35,7 @@ earned_entrenchment_at_or_above(L) = corroboration_at_or_above(L) + survived_cha
 ```
 
 Both terms count only backers / challengers at authority ≥ `L`, so minting low-authority
-sources or challenges cannot inflate it. Add `ClaimState::earned_entrenchment_at_or_above`.
+sources or challenges cannot inflate it. Add `FactState::earned_entrenchment_at_or_above`.
 
 ### The gate now weighs both halves
 
@@ -45,7 +45,7 @@ incumbent's earned entrenchment strictly exceeds the challenger's. A `supersede`
 *fresh* replacement (corroboration 1 — its asserter — and 0 survived challenges, so earned
 entrenchment 1), so the gate condition is exactly "incumbent earned entrenchment > 1". The
 consequence is the intended one: **surviving even a single equal-or-higher-authority
-challenge raises a claim's entrenchment to 2, so it resists the next fresh equal-authority
+challenge raises a fact's entrenchment to 2, so it resists the next fresh equal-authority
 replacement** — protection derived from challenge-survival, the novelty-rank-3 property.
 
 A rejection under the gate is itself a survived challenge, recorded like any other. Its
@@ -60,7 +60,7 @@ the *gating* is opt-in, unchanged from ADR 0015.
 
 ### The audit agrees with the gate
 
-`EntityProjection::unearned_supersessions` uses the same earned-entrenchment measure, so the
+`SubjectProjection::unearned_supersessions` uses the same earned-entrenchment measure, so the
 always-on detector and the write-time gate render the same verdict on "unearned." Its
 `WeakerCorroboration` finding is renamed `WeakerEntrenchment`
 (`incumbent_entrenchment` / `challenger_entrenchment`) — a `dent8-store` API change, not a

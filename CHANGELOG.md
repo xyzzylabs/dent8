@@ -13,14 +13,15 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 - **`fact` vocabulary + event format v2.** The central concept is now **fact** everywhere — the
   library types (`ClaimEvent` → `FactEvent`, `ClaimState` → `FactState`, `ClaimValue` →
   `FactValue`, `ClaimId` → `FactId`, `ClaimEventId` → `FactEventId`, `ClaimEventKind` →
-  `FactEventKind`, `ClaimLifecycle` → `FactLifecycle`), the methods (`load_claim_events` →
-  `load_fact_events`, `replay_claim` → `replay_fact`, `believed_claim_ids` → `believed_fact_ids`),
-  and the **on-disk event format**: the field `claim_id` → `fact_id`, fact ids are `fact:…`
-  (was `claim:…`), and `authority` is lowercase (`"high"`, not `"High"`) so it round-trips with
-  the `--authority high` you type. `CANON_VERSION` is bumped to **2**; every event's hash
-  therefore changes, so a v1 log **does not verify against this build** and must be re-ingested
-  from source (there is no in-place migration). This withdraws the pre-1.0 format-stability
-  promise for this one break; from v2 onward the intent is additive-only again.
+  `FactEventKind`, `ClaimLifecycle` → `FactLifecycle`; and separately `EntityRef` → `Subject`),
+  the methods (`load_claim_events` → `load_fact_events`, `replay_claim` → `replay_fact`,
+  `believed_claim_ids` → `believed_fact_ids`), and the **on-disk event format**: the field
+  `claim_id` → `fact_id`, fact ids are `fact:…` (was `claim:…`), and `authority` is lowercase
+  (`"high"`, not `"High"`) so it round-trips with the `--authority high` you type. `CANON_VERSION`
+  is bumped to **2**; every event's hash therefore changes, so a v1 log **does not verify against
+  this build** and must be re-ingested from source (there is no in-place migration). This
+  withdraws the pre-1.0 format-stability promise for this one break; from v2 onward the intent is
+  additive-only again.
 
 ### Added
 - **Local Unix-socket MCP daemon with per-connection identity**
@@ -56,7 +57,7 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   valid-time write surface (assert/supersede/contradict/derive all carry it).
 - **Unearned-supersession advisories in `verify`**
   ([ADR 0017](docs/decisions/0017-survived-challenges-in-arbitration.md)): `dent8 verify`
-  now surfaces `EntityProjection::unearned_supersessions` (previously computed but wired into
+  now surfaces `SubjectProjection::unearned_supersessions` (previously computed but wired into
   nothing) as **advisories** — a supersession admitted by the base firewall whose replacement
   did not out-entrench the incumbent. Advisory, not a failure (enable
   `DENT8_ENTRENCHMENT_GATE` to reject at write time); `verify` stays `OK`, and `--output
@@ -73,7 +74,7 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 - **Survived challenges feed arbitration**
   ([ADR 0017](docs/decisions/0017-survived-challenges-in-arbitration.md)): the opt-in
-  earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`) and the entity-level
+  earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`) and the subject-level
   unearned-supersession audit now weigh **earned entrenchment** = authority-weighted
   corroboration + survived challenges (both Sybil-resistant). A fact that survived an
   equal-authority challenge (ADR 0015) resists the next fresh equal-authority replacement —
@@ -125,9 +126,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 - **Survived-challenge recording + earned-supersession gate**
   ([ADR 0015](docs/decisions/0015-survived-challenge-recording.md)): a challenge the
   firewall rejects on strength (insufficient/laundered authority, the canonical
-  hard-alarm) is now recorded on the incumbent's stream as a `claim.challenge_rejected`
+  hard-alarm) is now recorded on the incumbent's stream as a `fact.challenge_rejected`
   event — with the *challenger's* provenance and effective authority, so under signed
-  identity the attack attempt carries the attacker's own attestation. `ClaimState` gains
+  identity the attack attempt carries the attacker's own attestation. `FactState` gains
   Sybil-resistant `survived_challenges` (the "attacked and stood" half of earned
   entrenchment); `explain`/MCP receipts report the count; `replay` shows each survival.
   Recording is on by default (`DENT8_RECORD_CHALLENGES=0` opts out). The
@@ -207,7 +208,7 @@ The first release: the complete v0 surface as developed on `main`.
   `examples/witness/demo.sh` runs the writer/signer/monitor split end to end and proves an
   externally published head rejects event-log rollback.
 - **Evidence-dependency edges + retraction taint** (ADR 0010): `dent8 derive` records a
-  claim→claim derivation; `dent8 verify` flags a believed claim deriving from a
+  fact→fact derivation; `dent8 verify` flags a believed fact deriving from a
   retracted/expired source ("poison does not survive in derivatives").
 - **Operator surfaces**: `dent8 verify` (integrity check — real stored-chain re-verification
   on Postgres), `dent8 facts list` (known fact streams, with diagnostic streams hidden by

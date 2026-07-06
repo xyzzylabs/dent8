@@ -8,7 +8,7 @@ produce; the corpus freezes exactly how dent8's write-boundary firewall resolves
 evals/
   fixtures/<name>.events.jsonl   # the authored event stream (DENT8_LOG format, one event/line),
                                  #   INCLUDING any write the firewall is expected to reject
-  replay/<name>.expected.json    # the frozen outcome: chain head, per-claim end-state,
+  replay/<name>.expected.json    # the frozen outcome: chain head, per-fact end-state,
                                  #   rejected writes (with a stable category), retraction taint
 ```
 
@@ -29,7 +29,7 @@ UPDATE_GOLDEN=1 cargo test -p dent8-store --test evals_corpus  # regenerate afte
 
 | scenario | family | what it freezes |
 | --- | --- | --- |
-| `beginner_to_senior` | `project_fact_correction` | an authority-sufficient supersession installs the new value; the old claim goes `Superseded` |
+| `beginner_to_senior` | `project_fact_correction` | an authority-sufficient supersession installs the new value; the old fact goes `Superseded` |
 | `ttl_expiry` | `ttl_expiry` | a finite-TTL fact with no `Expired` event is still `Active` but **`fresh=false`** at a later clock (the T4 stale-read axis) |
 | `summary_drift` | `summary_drift` / retraction taint ([ADR 0010](../docs/decisions/0010-evidence-edges-and-retraction-taint.md)) | a derived summary outlives the retraction of its source and is flagged **tainted** — poison does not silently survive in derivatives |
 | `consistency_required` | `T5_canonical_contradiction` | a contradiction of a `Canonical` fact is **rejected** (`CanonicalContradiction`), not softened to `Contested` |
@@ -37,9 +37,9 @@ UPDATE_GOLDEN=1 cargo test -p dent8-store --test evals_corpus  # regenerate afte
 
 ## Relationship to the other eval surfaces
 
-- **`crates/dent8-core/tests/golden_replay.rs`** freezes the *single-claim* encoding + `apply_event`
+- **`crates/dent8-core/tests/golden_replay.rs`** freezes the *single-fact* encoding + `apply_event`
   fold (every event must apply). This corpus runs the *store-level firewall* over whole,
-  often multi-claim streams that intentionally include **rejected** writes.
+  often multi-fact streams that intentionally include **rejected** writes.
 - **`crates/dent8-evals`** (run as `dent8 eval`) is the firewall-vs-recency *benchmark* —
   booleans proving the firewall blocks attacks a recency-only baseline falls to. This corpus is
   the frozen *fixture* form of the same kinds of scenarios, byte-for-byte regression-guarded.

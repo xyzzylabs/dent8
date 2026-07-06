@@ -50,15 +50,15 @@ Prefer verbs that name integrity actions rather than generic memory actions. For
 
 Event type strings use dotted names:
 
-- `claim.asserted`
-- `claim.reinforced`
-- `claim.contradicted`
-- `claim.superseded`
-- `claim.expired`
-- `claim.retracted`
-- `claim.retrieved`
-- `claim.used_in_decision`
-- `claim.challenge_rejected`
+- `fact.asserted`
+- `fact.reinforced`
+- `fact.contradicted`
+- `fact.superseded`
+- `fact.expired`
+- `fact.retracted`
+- `fact.retrieved`
+- `fact.used_in_decision`
+- `fact.challenge_rejected`
 
 Use past-tense event names because events are immutable facts. Commands can be imperative; events should describe what happened.
 
@@ -66,16 +66,16 @@ Use past-tense event names because events are immutable facts. Commands can be i
 
 Postgres tables use the `dent8_` prefix:
 
-- `dent8_claim_events`
-- `dent8_claim_projections`
-- `dent8_claim_edges`
+- `dent8_fact_events`
+- `dent8_fact_projections`
+- `dent8_fact_edges`
 - `dent8_replay_runs`
 
 ## IDs
 
 Use explicit prefixes in text IDs during early development:
 
-- `claim_...`
+- `fact_...`
 - `event_...`
 - `evidence_...`
 - `source_...`

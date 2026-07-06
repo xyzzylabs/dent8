@@ -25,22 +25,22 @@ official **`rmcp` SDK** (the v0 stdio server already does tools, resources, and 
 batches, and reads apply freshness), and a **hosted witness service** (the cadence signer
 `witness serve` and publication `witness publish`/`verify-published` ship with a packaged
 operated signer/publisher/monitor split — only *hosting* it as a managed service remains).
-The plan separates what is *claimable now* from what is *gated on
-implementation*, and is explicit about the weakest novelty claims. Prior art and the
+The plan separates what is *factable now* from what is *gated on
+implementation*, and is explicit about the weakest novelty facts. Prior art and the
 fact-checked basis are in [related-work.md](../related-work.md) and
 [research/dossier.md](../research/dossier.md).
 
 ## Title options
 
-1. *dent8: Memory Integrity for LLM Agents via an Event-Sourced Claim Model with
+1. *dent8: Memory Integrity for LLM Agents via an Event-Sourced Fact Model with
    Replayable Belief Revision*
-2. *Claims, Not Memories: An Append-Only, Bitemporal Belief Base for Auditable Agent
+2. *Facts, Not Memories: An Append-Only, Bitemporal Belief Base for Auditable Agent
    Memory*
 3. *Integrity as Substrate: Provenance, Contradiction, and Supersession as
    First-Class Primitives for Agent Memory*
 
 Option 1 is the safest banner. Option 2 leads with the belief-base framing (the most
-defensible theoretical hook). Option 3 overclaims "substrate" relative to a
+defensible theoretical hook). Option 3 overfacts "substrate" relative to a
 pre-runtime codebase — avoid for an academic venue.
 
 ## Abstract / thesis (one paragraph)
@@ -52,7 +52,7 @@ a durable attack surface, with query-only injection achieving >95% success and
 persisting across sessions [3]. We argue *memory integrity*, not memory persistence,
 is the missing primitive, and that it should be the substrate rather than a feature
 bolted onto a vector or graph store. dent8 models every belief as a stream of
-immutable `ClaimEvent`s (subject+predicate+value with confidence, authority, TTL,
+immutable `FactEvent`s (subject+predicate+value with confidence, authority, TTL,
 provenance, evidence, and bitemporal validity); materialized memory is a
 deterministic fold over the ordered log, so retraction and supersession leave an
 auditable trace instead of destroying history. We formalize the lifecycle as a state
@@ -71,9 +71,9 @@ verifiable invariants.
 
 ## Contributions
 
-- **An event-sourced claim model** in which provenance, evidence, authority,
+- **An event-sourced fact model** in which provenance, evidence, authority,
   freshness/TTL, contradiction, and supersession are first-class typed fields on an
-  immutable `ClaimEvent`, and materialized memory is `fold(events)` — so "delete" is
+  immutable `FactEvent`, and materialized memory is `fold(events)` — so "delete" is
   a recorded `retracted`/`superseded` event, not data loss.
 - **A belief-revision semantics for the lifecycle state machine**, mapped explicitly
   onto *belief-base* (non-closed) revision and kernel contraction rather than
@@ -101,7 +101,7 @@ verifiable invariants.
 
 ### Novelty positioning (read [research/novelty.md](../research/novelty.md))
 
-An adversarial novelty pass killed every *single-primitive* claim against 2026 prior
+An adversarial novelty pass killed every *single-primitive* fact against 2026 prior
 art (TOKI [19]-class typed contradiction algebras, MemLineage Merkle provenance,
 confidence-gated admission). dent8's defensible novelty is **compositional and
 substrate-derived**, and it routes through authority arbitration in `apply_event` —
@@ -109,10 +109,10 @@ substrate-derived**, and it routes through authority arbitration in `apply_event
 two strongest, defensible contributions to lead with (both *medium* novelty, pitched
 as "first to unify/transplant," never "first to invent"):
 
-1. **Verified non-resurrection** — a machine-checked invariant that, once a claim is
+1. **Verified non-resurrection** — a machine-checked invariant that, once a fact is
    superseded by authority *A*, no sequence of sub-*A* events can return it to the
    believed set. Turns a MINJA/PoisonedRAG-class attack from an empirical ASR into a
-   *refuted reachability claim* — the cheapest credible novelty flag.
+   *refuted reachability fact* — the cheapest credible novelty flag.
 2. **Policy-counterfactual replay** — re-folding the same hash-chained log under a
    swapped `EpistemicPolicy` (distrust a source, raise the authority floor), with zero
    LLM calls — distinct from the stochastic remove-and-rerun "counterfactual" of 2026
@@ -127,7 +127,7 @@ as "first to unify/transplant," never "first to invent"):
    graph [7]; Letta/MemGPT; MCP memory server; AGM & belief bases [1][2];
    paraconsistency/LFI [4]; bitemporal DBs and SQL:2011 [12]; event sourcing & schema
    evolution [13]; tamper-evident logs [9].
-3. **Model & semantics** — `ClaimEvent` and typed IDs; the lifecycle state machine;
+3. **Model & semantics** — `FactEvent` and typed IDs; the lifecycle state machine;
    fold/projection; the bitemporal axes (`observed_at`/`valid_from` vs `recorded_at`
    [12]); belief-base mapping and the Recovery non-postulate [2].
 4. **Invariants & formal verification** — the invariant list (grounded in
@@ -165,11 +165,11 @@ as "first to unify/transplant," never "first to invent"):
   `projection == fold(events)` and "fresh reads exclude expired."
 - **Property tests.** `proptest`/stateful with an independent reference model:
   determinism, no-transition-after-terminal, reinforced-value-stability, single-
-  `asserted`-prefix, claim isolation. Escalate the most critical to Kani for bounded
+  `asserted`-prefix, fact isolation. Escalate the most critical to Kani for bounded
   coverage [5].
 - **Adversarial poisoning.** Replay PoisonedRAG/MINJA-style injection sequences [3]
   and assert that low-authority writes do not auto-supersede high-authority active
-  claims (vs Graphiti's recency-only arbitration [7]), that poisoned writes are quarantined or out-ranked, and
+  facts (vs Graphiti's recency-only arbitration [7]), that poisoned writes are quarantined or out-ranked, and
   that the audit log + hash-chain trace every poisoned write to its provenance.
   *(Note: this depends on authority arbitration — cite the MemConflict-style scenario
   with its not-yet-peer-reviewed caveat.)*
@@ -179,16 +179,16 @@ as "first to unify/transplant," never "first to invent"):
   MCP memory on *these* axes — **not** retrieval F1/LOCOMO, where dent8 does not
   compete.
 
-## Weakest novelty claims & how to strengthen
+## Weakest novelty facts & how to strengthen
 
 - **"Bitemporal + supersession + provenance are our differentiators."** Weakest
-  claim: Zep ships all three [7]. *Strengthen* by reframing as the *combination* and
+  fact: Zep ships all three [7]. *Strengthen* by reframing as the *combination* and
   making **authority-weighted supersession** the headline (Graphiti arbitrates
   contradictions by recency only — "consistently prioritizes new information" [7]).
 - **"Belief-revision semantics."** Weak if stated as AGM compliance. *Strengthen* by
-  claiming the *operational spirit of belief-base revision* and disclaiming closure +
+  facting the *operational spirit of belief-base revision* and disfacting closure +
   Recovery [1][2].
-- **"Formally verified."** Overclaims. *Strengthen* to "property-tested + bounded-
+- **"Formally verified."** Overfacts. *Strengthen* to "property-tested + bounded-
   model-checked, fold optionally deductively verified, concurrency model-checked" —
   and ship the proofs [5][8].
 - **"Tamper-evident hash-chain + external anchor."** Built+tested in `dent8-core`
@@ -201,7 +201,7 @@ as "first to unify/transplant," never "first to invent"):
   built too — `witness serve` is the cadence signer and `witness publish`/`verify-published`
   retain signed heads off-host, with a packaged operated split (Docker Compose + systemd,
   `examples/witness-operated/`); only a hosted/managed witness service remains future.
-  *Claim tamper-resistance only with the off-writer witness-key assumption.*
+  *Fact tamper-resistance only with the off-writer witness-key assumption.*
 - **"Pattern separation" framing.** A loose neuroscience analogy; CA3 pattern
   *completion* does not map at all. *Strengthen* by defining pattern separation as a
   testable invariant (distinct subject+predicate streams never merge; near-duplicate
@@ -218,7 +218,7 @@ as "first to unify/transplant," never "first to invent"):
   venues for the poisoning evaluation; a systems/DB venue once the adapter and
   replay runtime exist.
 - **Sequencing:** publish a short workshop/preprint on the *model and belief-revision
-  semantics* now (claimable from `dent8-core` alone); gate the systems/security paper
+  semantics* now (factable from `dent8-core` alone); gate the systems/security paper
   on the replay runtime, the hash-chain, authority arbitration, and a populated
   `evals/`. Conflating the two before the runtime exists is the single biggest
   credibility risk.

@@ -10,7 +10,7 @@ derived from it. Every fact it keeps carries where it came from, and you can rep
 
 Most agent memory is *newest-write-wins*: the last thing written becomes the truth. That's
 how a scraped web page silently overwrites a decision your team made, and how a retracted
-source leaves its conclusions behind. dent8 treats memory as an **append-only log of claim
+source leaves its conclusions behind. dent8 treats memory as an **append-only log of fact
 events** — each carrying provenance, authority, and evidence — and **arbitrates every write**
 against what is already believed.
 
@@ -64,11 +64,11 @@ firewall path run through the real CLI:
 
 ## How it works
 
-The primitive is a **claim event**, not a generic memory item. Every write is arbitrated at
+The primitive is a **fact event**, not a generic memory item. Every write is arbitrated at
 one unbypassable boundary (`EventStore::append`) before it is persisted:
 
 - **Authority-weighted arbitration** — a write cannot override a fact of higher authority, and
-  dent8 checks the *actual* authority behind a revision, not just what the event claims (so
+  dent8 checks the *actual* authority behind a revision, not just what the event facts (so
   laundering a weak fact through a high-authority-looking event is caught).
 - **Paraconsistent contradiction** — disagreement is *kept* as a contested pair rather than
   silently resolved; but contradicting a `canonical` fact is a hard alarm, not a soft contest.

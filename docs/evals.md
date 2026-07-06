@@ -35,15 +35,15 @@ The file-based fixture corpus this strategy calls for lives under
 [`evals/`](../evals/README.md), generated and verified by
 [`crates/dent8-store/tests/evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs). Each
 scenario freezes a whole stream's **firewall outcome** — admitted vs rejected writes, the
-per-claim end-state, read-time freshness, and retraction taint — to
+per-fact end-state, read-time freshness, and retraction taint — to
 `evals/fixtures/<name>.events.jsonl` + `evals/replay/<name>.expected.json`, so a regression in
 arbitration, the canonical hard-alarm, freshness, or the evidence-edge taint is caught as a
 snapshot mismatch (regenerate with `UPDATE_GOLDEN=1`). It covers `beginner_to_senior`
 (`project_fact_correction`), **`ttl_expiry`** (read-time staleness), **`summary_drift`**
 (retraction taint, [ADR 0010](decisions/0010-evidence-edges-and-retraction-taint.md)),
 `consistency_required` (the canonical hard-alarm), and `low_authority_injection` (MINJA).
-Unlike the single-claim encoding goldens in
-[`golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs), these are multi-claim and
+Unlike the single-fact encoding goldens in
+[`golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs), these are multi-fact and
 include writes the firewall is **expected to reject**.
 
 ## Layers
@@ -59,20 +59,20 @@ include writes the firewall is **expected to reject**.
 
 Initial invariants:
 
-- A claim stream must start with `claim.asserted`.
-- `claim.asserted` must include a value and at least one evidence reference.
-- `claim.reinforced` cannot change the claim value.
+- A fact stream must start with `fact.asserted`.
+- `fact.asserted` must include a value and at least one evidence reference.
+- `fact.reinforced` cannot change the fact value.
 - Terminal states cannot be mutated by lifecycle events.
-- Contradicted claims become `contested` unless already terminal.
-- Superseded claims must point at the replacing claim.
-- Expired claims must not be returned as fresh context — the freshness evaluator `ClaimState::is_expired_at` is built and tested **and applied on reads**: `explain` headline-flags a stale fact and the receipt carries `fresh`/`expires_at`; closed `valid_to` validity intervals are applied on reads too — an elapsed asserted `valid_to` reads stale exactly like an elapsed TTL, since `ClaimState::expires_at()` is the earliest of the TTL bound and `valid_to` ([ADR 0016](decisions/0016-valid-time-and-time-travel-reads.md); see [threat-model.md](threat-model.md) T4).
-- Retrieval events must not alter claim lifecycle.
+- Contradicted facts become `contested` unless already terminal.
+- Superseded facts must point at the replacing fact.
+- Expired facts must not be returned as fresh context — the freshness evaluator `FactState::is_expired_at` is built and tested **and applied on reads**: `explain` headline-flags a stale fact and the receipt carries `fresh`/`expires_at`; closed `valid_to` validity intervals are applied on reads too — an elapsed asserted `valid_to` reads stale exactly like an elapsed TTL, since `FactState::expires_at()` is the earliest of the TTL bound and `valid_to` ([ADR 0016](decisions/0016-valid-time-and-time-travel-reads.md); see [threat-model.md](threat-model.md) T4).
+- Retrieval events must not alter fact lifecycle.
 - Replaying the same ordered event stream must produce the same projection.
 - Projection rows must be derivable from the event log.
 - Event hashes must form a tamper-evident chain once hashing lands.
-- Claim isolation: events on one `claim_id` never perturb another claim's projection.
-- Higher-authority supersession requires an explicit basis (replacing claim out-ranks) — enforced in `apply_event` (`InsufficientAuthority`); exercised by the exhaustive lattice test.
-- Cross-stream lineage: a `superseded_by` target exists, is not itself invalidated, and forms no cycle — checked by `EntityProjection::lineage_issues` (`replay_entity`), tested.
+- Fact isolation: events on one `fact_id` never perturb another fact's projection.
+- Higher-authority supersession requires an explicit basis (replacing fact out-ranks) — enforced in `apply_event` (`InsufficientAuthority`); exercised by the exhaustive lattice test.
+- Cross-stream lineage: a `superseded_by` target exists, is not itself invalidated, and forms no cycle — checked by `SubjectProjection::lineage_issues` (`replay_entity`), tested.
 - Canonicalization stability: `canonicalize(deserialize(canonicalize(e))) == canonicalize(e)`.
 - Re-assertion after retraction does not restore prior dependents (Recovery not satisfied).
 
@@ -83,20 +83,20 @@ generated and verified by the corpus harness above. Families marked *(frozen)* a
 golden fixtures there; the rest are designed and exercised by the adversarial corpus
 and/or the unit/property tests but not yet frozen as file fixtures.
 
-- `basic_assertion`: one claim becomes active.
+- `basic_assertion`: one fact becomes active.
 - `reinforcement_same_value`: evidence increases without changing value.
 - `reinforcement_value_mismatch`: replay rejects mutation disguised as reinforcement.
-- `same_predicate_conflict`: two claims conflict on the same subject/predicate.
-- `authority_supersession`: higher-authority claim replaces weaker claim.
-- `ttl_expiry`: fresh claim becomes read-time stale at a later clock. *(frozen.)*
-- `poisoned_source_retraction`: source invalidation **flags** (taints) the claims derived from
+- `same_predicate_conflict`: two facts conflict on the same subject/predicate.
+- `authority_supersession`: higher-authority fact replaces weaker fact.
+- `ttl_expiry`: fresh fact becomes read-time stale at a later clock. *(frozen.)*
+- `poisoned_source_retraction`: source invalidation **flags** (taints) the facts derived from
   it via `DerivedFrom` evidence edges — surfaced, not auto-retracted (ADR 0010). *(Built — the
   adversarial corpus; the frozen file form is `summary_drift`.)*
 - `stale_context_use`: retrieved event records use of stale memory.
 - `summary_drift`: a derived summary outlives the retraction of its source and is flagged tainted. *(frozen.)*
 - `project_fact_correction`: a project fact is corrected via supersession and replayed (`beginner_to_senior`). *(frozen.)*
-- `consistency_required`: a contradiction against a `canonical`/uniqueness-constrained claim hard-alarms instead of softly contesting (the LFI tier; see [belief-revision.md](belief-revision.md)). *(frozen.)*
-- `low_authority_injection`: a low-authority write must not auto-supersede a high-authority active claim (MINJA-style poisoning; see [threat-model.md](threat-model.md)). *(frozen.)*
+- `consistency_required`: a contradiction against a `canonical`/uniqueness-constrained fact hard-alarms instead of softly contesting (the LFI tier; see [belief-revision.md](belief-revision.md)). *(frozen.)*
+- `low_authority_injection`: a low-authority write must not auto-supersede a high-authority active fact (MINJA-style poisoning; see [threat-model.md](threat-model.md)). *(frozen.)*
 
 ## Property Tests
 
@@ -104,9 +104,9 @@ Use `proptest` once dependencies are introduced.
 
 Generators should produce:
 
-- Valid claim streams.
-- Invalid claim streams.
-- Interleaved streams for the same entity.
+- Valid fact streams.
+- Invalid fact streams.
+- Interleaved streams for the same subject.
 - Authority gradients.
 - TTL boundary cases.
 - Contradiction and supersession graphs.
@@ -115,7 +115,7 @@ Properties should assert:
 
 - Deterministic replay.
 - No lifecycle event after terminal state is accepted.
-- Claims never become active again without a new claim id.
+- Facts never become active again without a new fact id.
 - Projection equals fold(event log).
 - Contradiction edges are symmetric at query time even if stored directionally.
 - Higher-authority supersession requires an explicit basis — enforced in `apply_event`; see the exhaustive lattice + non-resurrection test in `dent8-core`.
@@ -142,7 +142,7 @@ Minimum database checks:
 
 - Migrations apply from empty database.
 - `event_id` and `event_hash` uniqueness hold.
-- `claim.asserted` cannot omit value or evidence.
+- `fact.asserted` cannot omit value or evidence.
 - Projection update and event append are atomic.
 - Concurrent contradiction writes serialize into deterministic outcomes.
 

@@ -5,7 +5,7 @@ Status: Accepted
 ## Context
 
 `dent8 authority` already provides a source -> authority ceiling: once an authority registry
-exists, a source cannot claim above its registered maximum. That is authz. It does not prove
+exists, a source cannot fact above its registered maximum. That is authz. It does not prove
 authn: a caller can still pass `--source source:owner` unless the write boundary verifies that
 the caller holds the key for that source.
 
@@ -101,7 +101,7 @@ DENT8_IDENTITY_KEY=.dent8/identities/source_codex.key
 
 This defends against:
 
-- an unregistered or low-trust agent claiming to be a higher-authority source;
+- an unregistered or low-trust agent facting to be a higher-authority source;
 - copying a signed grant without also holding the source private key;
 - raising the requested authority above the grant ceiling;
 - using a grant outside its optional subject scope or after expiration;

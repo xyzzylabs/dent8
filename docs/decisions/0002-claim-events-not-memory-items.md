@@ -1,4 +1,4 @@
-# 0002: Claim Events, Not Memory Items
+# 0002: Fact Events, Not Memory Items
 
 Date: 2026-06-26
 
@@ -12,9 +12,9 @@ Agent memory systems often expose stored memories as mutable items, summaries, e
 
 ## Decision
 
-The core primitive is `ClaimEvent`.
+The core primitive is `FactEvent`.
 
-"Memory" is an agent-facing projection over claim events, not the internal unit of truth.
+"Memory" is an agent-facing projection over fact events, not the internal unit of truth.
 
 ## Consequences
 
@@ -33,7 +33,7 @@ Negative:
 
 ## Follow-Up
 
-- Extend property tests around claim streams.
+- Extend property tests around fact streams.
 - Define stable JSON serialization for events.
 - Implement event hashing and replay verification.
 

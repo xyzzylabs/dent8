@@ -35,10 +35,10 @@ Human-facing output supports `--color auto|always|never`; structured adapter sur
 should keep using plain data fields rather than ANSI formatting.
 
 Several of these are already backed by library functions in `dent8-store` and need
-only a CLI/store wiring: entity-level replay
-(`replay_entity` → `EntityProjection` with `lineage_issues`), `conflicts`
-(`EntityProjection::contested`), and freshness (`ClaimState::is_expired_at`).
-Counterfactual replay (`replay_claim_with_policy` / `replay_entity_with_policy` +
+only a CLI/store wiring: subject-level replay
+(`replay_entity` → `SubjectProjection` with `lineage_issues`), `conflicts`
+(`SubjectProjection::contested`), and freshness (`FactState::is_expired_at`).
+Counterfactual replay (`replay_fact_with_policy` / `replay_entity_with_policy` +
 `diff_states`) is available for a future `explain --distrust`-style surface.
 
 ## MCP
@@ -80,7 +80,7 @@ Recommended behavior:
 
 - Treat writes as candidate events through the firewall.
 - Require evidence/provenance fields for assertions.
-- Make stale, contested, expired, or superseded claims visible to clients.
+- Make stale, contested, expired, or superseded facts visible to clients.
 - Put the core usage workflow in MCP server instructions so Codex, Claude Code, Gemini CLI,
   Devin/Cascade, Cursor, Grok Build, Hecate, and other MCP-aware agent hosts know to inspect
   dent8 before relying on durable project facts.
@@ -105,7 +105,7 @@ transport and per-request source authentication; that is design-only today.
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.
 These hooks are not an alternate write path; they run `dent8 verify` and block direct edits
-to provider-native memory/rules files that would bypass the claim-event firewall. The
+to provider-native memory/rules files that would bypass the fact-event firewall. The
 adapter design is tracked in
 [`agent-adapters.md`](agent-adapters.md).
 
@@ -117,8 +117,8 @@ Source: [MCP resources specification](https://modelcontextprotocol.io/specificat
 
 Possible resources:
 
-- `dent8://claims/{claim_id}`
-- `dent8://entities/{subject_type}/{subject_key}`
+- `dent8://facts/{fact_id}`
+- `dent8://subjects/{subject_type}/{subject_key}`
 - `dent8://replays/{replay_id}`
 - `dent8://conflicts`
 - `dent8://schema/postgres`
@@ -132,13 +132,13 @@ instead of becoming a generic memory provider.
 
 Likely routes:
 
-- `POST /claims/assert`
-- `POST /claims/{claim_id}/reinforce`
-- `POST /claims/{claim_id}/contradict`
-- `POST /claims/{claim_id}/supersede`
-- `GET /claims/{claim_id}`
-- `GET /claims/{claim_id}/explain`
-- `GET /entities/{subject_type}/{subject_key}/context`
+- `POST /facts/assert`
+- `POST /facts/{fact_id}/reinforce`
+- `POST /facts/{fact_id}/contradict`
+- `POST /facts/{fact_id}/supersede`
+- `GET /facts/{fact_id}`
+- `GET /facts/{fact_id}/explain`
+- `GET /subjects/{subject_type}/{subject_key}/context`
 - `POST /replay`
 - `GET /conflicts`
 

@@ -1,12 +1,12 @@
 # Belief Revision: dent8's Formal Identity
 
 dent8 was designed bottom-up from an engineering intuition — keep an append-only
-log of claims, fold it into a current view, and never silently destroy history.
+log of facts, fold it into a current view, and never silently destroy history.
 That intuition independently re-derives several results from a decades-deep formal
 literature on how rational agents change their minds. Naming that literature is
 not decoration: it gives dent8 a vocabulary, a set of theorems, and — crucially —
 a set of *postulates dent8 deliberately violates*, which is exactly the precision
-a memory-integrity product needs to defend its claims.
+a memory-integrity product needs to defend its facts.
 
 This document is the conceptual backbone for [domain-model.md](domain-model.md).
 It states which mappings are rigorous and which are inspirational, and turns the
@@ -59,27 +59,27 @@ the data model in [`crates/dent8-core/src/model.rs`](../crates/dent8-core/src/mo
 
 | dent8 construct | Formal operation | Rigor |
 |---|---|---|
-| `claim.asserted` into a fresh stream | **Expansion** of a base | Inspirational |
-| `claim.superseded` (`Superseded { by, reason }`) | **Revision** (replace value, keep consistency) | Inspirational |
-| `claim.retracted` (`Retracted { reason }`) | **Contraction** / kernel contraction | Inspirational |
-| `contested` on `claim.contradicted` | **Paraconsistent toleration** of inconsistency | Rigorous (architectural) |
+| `fact.asserted` into a fresh stream | **Expansion** of a base | Inspirational |
+| `fact.superseded` (`Superseded { by, reason }`) | **Revision** (replace value, keep consistency) | Inspirational |
+| `fact.retracted` (`Retracted { reason }`) | **Contraction** / kernel contraction | Inspirational |
+| `contested` on `fact.contradicted` | **Paraconsistent toleration** of inconsistency | Rigorous (architectural) |
 | `Authority` vs `Confidence` | **Entrenchment** vs probability/evidential strength | Rigorous (architectural) |
-| `claim.expired` / TTL | **Defeasible/temporal defeat** | Inspirational — TTL read surface built; explicit expiration authority-gated |
-| `dent8_claim_edges` | **TMS justifications** | Rigorous (data-structure level) |
-| `replay_claim` fold → projection | TMS **labelling pass** / non-monotonic consequence | Rigorous as motivation |
+| `fact.expired` / TTL | **Defeasible/temporal defeat** | Inspirational — TTL read surface built; explicit expiration authority-gated |
+| `dent8_fact_edges` | **TMS justifications** | Rigorous (data-structure level) |
+| `replay_fact` fold → projection | TMS **labelling pass** / non-monotonic consequence | Rigorous as motivation |
 
 **Why the operator mappings are "inspirational," not rigorous.** AGM and even
 Hansson reason over *logical formulas* with entailment. dent8 stores opaque
-`subject + predicate + value` triples (`EntityRef`, `Predicate`, `ClaimValue`) with
-**no deductive closure and no entailment engine**. dent8 must not claim "AGM
-compliance." It can honestly claim it implements the *operational spirit* of
+`subject + predicate + value` triples (`Subject`, `Predicate`, `FactValue`) with
+**no deductive closure and no entailment engine**. dent8 must not fact "AGM
+compliance." It can honestly fact it implements the *operational spirit* of
 belief-base revision — and "base" is the load-bearing word.
 
 **Why belief-base, not belief-set, is the right anchor.** dent8's "memory" is a
-fold/projection over the immutable `ClaimEvent` log (`apply_event`); it stores
-asserted claims, not their closure. The *same projection can arise from different
+fold/projection over the immutable `FactEvent` log (`apply_event`); it stores
+asserted facts, not their closure. The *same projection can arise from different
 event histories, and the history matters*. dent8 **deliberately does not satisfy
-Recovery**: retracting a claim and later re-asserting it must *not* silently
+Recovery**: retracting a fact and later re-asserting it must *not* silently
 resurrect everything that depended on the original, because the new assertion
 carries different `Provenance` and `Evidence`. This is the answer to the inevitable
 "this isn't real AGM" objection: correct — it is belief-base revision, and Recovery
@@ -105,7 +105,7 @@ formally separate from evidential strength [1].
 > `apply_event` arbitrates supersession by authority and hard-alarms canonical
 > contradictions, with a runnable exhaustive non-resurrection test and a `#[cfg(kani)]`
 > harness. A v0 of **earned entrenchment** (item 2's refinement) is also built —
-> authority-weighted corroboration on `ClaimState` plus an entity-level
+> authority-weighted corroboration on `FactState` plus an subject-level
 > unearned-supersession audit. Still *design intent*: item 4 (JTMS-vs-ATMS), the
 > freshness *read surface* (item 5's evaluator exists), and transactional enforcement at
 > the store layer. The "survived-challenge" half of earned entrenchment is **built**:
@@ -114,21 +114,21 @@ formally separate from evidential strength [1].
 > and [research/novelty.md](research/novelty.md).
 
 1. **Name belief-base revision (Hansson) and paraconsistency/LFI as the backbone**
-   in the domain model, and explicitly disclaim Recovery and AGM-set compliance.
+   in the domain model, and explicitly disfact Recovery and AGM-set compliance.
    Cite kernel contraction for retraction semantics [2][4].
 2. **Authority as an entrenchment ordering that drives supersession resolution.**
    *Implemented:* `apply_event`'s `Superseded` arm rejects a challenger whose authority
    is strictly below the incumbent's (`InsufficientAuthority`), with confidence kept
    separate. Tested directly (`lower_authority_supersession_is_rejected`,
    `equal_authority_supersession_succeeds`) and exhaustively over the 5×5 authority
-   lattice. *Earned entrenchment v0 built:* `ClaimState` tracks authority-weighted
-   corroboration (`corroboration_at_or_above`), and `EntityProjection::unearned_supersessions`
-   audits supersessions against the replacing claim's real authority and earned entrenchment
+   lattice. *Earned entrenchment v0 built:* `FactState` tracks authority-weighted
+   corroboration (`corroboration_at_or_above`), and `SubjectProjection::unearned_supersessions`
+   audits supersessions against the replacing fact's real authority and earned entrenchment
    — authority-weighted corroboration plus survived challenges — (`AuthorityDowngrade`,
    `WeakerEntrenchment`; Sybil-resistant, ADR 0017). *Challenge-survival
    half now built (ADR 0015):* a rejected challenge is recorded on the incumbent's stream
-   (`ClaimEventKind::ChallengeRejected`, carrying the challenger's provenance and effective
-   authority) and accumulated into `ClaimState.survived_challenges`, read Sybil-resistantly
+   (`FactEventKind::ChallengeRejected`, carrying the challenger's provenance and effective
+   authority) and accumulated into `FactState.survived_challenges`, read Sybil-resistantly
    via `survived_challenges_at_or_above` — on by default (`DENT8_RECORD_CHALLENGES=0` opts
    out) — plus an opt-in write-time earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`).
    Feeding survived challenges *into* arbitration is done too (ADR 0017: the gate weighs
@@ -136,19 +136,19 @@ formally separate from evidential strength [1].
    ([research/novelty.md](research/novelty.md) rank 3).
 3. **The LFI "gentle explosion" tier.** *Implemented:* `apply_event`'s `Contradicted`
    arm returns `TransitionError::CanonicalContradiction` for a contradiction against
-   an `AuthorityLevel::Canonical` claim, while ordinary contradictions still localize
-   to `contested` (tested: `contradicting_a_canonical_claim_hard_alarms`,
-   `contradicting_a_non_canonical_claim_still_contests`). *Still future:* extending the
+   an `AuthorityLevel::Canonical` fact, while ordinary contradictions still localize
+   to `contested` (tested: `contradicting_a_canonical_fact_hard_alarms`,
+   `contradicting_a_non_canonical_fact_still_contests`). *Still future:* extending the
    hard-alarm to predicates flagged *uniqueness-constrained* (no such flag exists in
    the model yet).
-4. **Treat `dent8_claim_edges` as TMS justifications; decide JTMS vs ATMS.** dent8
+4. **Treat `dent8_fact_edges` as TMS justifications; decide JTMS vs ATMS.** dent8
    today is JTMS-like (one projection, one labelling). The "memory debugger"
-   differentiator is the ATMS capability — replay claims under an assumption
+   differentiator is the ATMS capability — replay facts under an assumption
    *environment* ("trust only `High`+ authority sources") to answer "what does
    memory look like if I distrust source Z." This shapes the replay API and
    deserves its own decision record [3].
 5. **Frame TTL/expiry as principled non-monotonic defeat.** The read-time freshness
-   evaluator and CLI/MCP receipt surface are built; explicit `claim.expired` is a
+   evaluator and CLI/MCP receipt surface are built; explicit `fact.expired` is a
    separate authority-gated terminal close (ADR 0011). `valid_to` closed valid-time intervals
    are built (ADR 0016): `assert`/`supersede`/`contradict`/`derive` take
    `--valid-from`/`--valid-to`, reads fold `valid_to` into `expires_at` (the earliest of the
@@ -158,7 +158,7 @@ formally separate from evidential strength [1].
 
 **Deliberately do NOT:**
 
-1. **Do not build an entailment engine or claim AGM compliance.** Opaque triples by
+1. **Do not build an entailment engine or fact AGM compliance.** Opaque triples by
    design; logical closure is out of scope.
 2. **Do not enforce global consistency.** AGM's Consistency postulate is the
    *opposite* of the contested state. Local, auditable inconsistency is a feature.

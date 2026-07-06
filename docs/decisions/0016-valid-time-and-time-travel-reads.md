@@ -27,10 +27,10 @@ now-only:
 
 ### 1. `valid_to` — the asserted end of validity
 
-`ClaimEvent.valid_to: Option<TimestampMillis>`, folded into
-`ClaimState.valid_to` at assertion (like `ttl`). Read-time freshness bounds the full
-validity window `[valid_from, expires_at)`: `ClaimState::expires_at()` is the *earliest* of
-the TTL bound and `valid_to` (the upper bound), and `ClaimState::is_fresh_at(now)` also
+`FactEvent.valid_to: Option<TimestampMillis>`, folded into
+`FactState.valid_to` at assertion (like `ttl`). Read-time freshness bounds the full
+validity window `[valid_from, expires_at)`: `FactState::expires_at()` is the *earliest* of
+the TTL bound and `valid_to` (the upper bound), and `FactState::is_fresh_at(now)` also
 requires `now >= valid_from` — a fact whose `valid_from` is in the future is **not yet
 valid** (`is_not_yet_valid_at`), read as not-fresh with a distinct `[not yet valid]` headline
 rather than `[stale]`. `explain`'s receipt carries `fresh`, `not_yet_valid`, and the
@@ -42,7 +42,7 @@ Validation rejects `valid_to <= valid_from` when both are set. Expiry is inclusi
 upper boundary (`expires_at <= now` is stale) and the lower bound is inclusive too
 (`now >= valid_from` is valid), matching the existing TTL comparison.
 
-`ClaimState` stores `valid_from` distinctly from `freshness_anchor` (which still falls back
+`FactState` stores `valid_from` distinctly from `freshness_anchor` (which still falls back
 to `observed_at`/`recorded_at` for the TTL anchor): only an asserted `valid_from` gates the
 lower bound, so a future TTL anchor from `observed_at` does not accidentally read as
 not-yet-valid.
@@ -50,7 +50,7 @@ not-yet-valid.
 ### 2. The write surface completes the interval
 
 `assert`, `supersede`, `contradict`, and `derive` gain `--valid-from <millis>` / `--valid-to
-<millis>` (the shared value-write surface): `assert` stamps its claim; `supersede` and
+<millis>` (the shared value-write surface): `assert` stamps its fact; `supersede` and
 `contradict` stamp the *replacement* / *opposing* assertion they create; `derive` stamps the
 derived assertion. Setting `valid_from` also restores its intended role as the freshness anchor.
 
@@ -75,7 +75,7 @@ They compose: `--as-of T --valid-at T` reads the log as of `T` and judges freshn
 optional-field rule — so events written before it keep byte-identical canonical form and
 stored hashes; **no `CANON_VERSION` bump**. (Unlike `observed_at`/`valid_from`, which
 predate the rule and serialize as explicit `null`s, absence is omitted.)
-`ClaimState.valid_to` is `#[serde(default)]` for previously materialized projections.
+`FactState.valid_to` is `#[serde(default)]` for previously materialized projections.
 
 ## Consequences
 

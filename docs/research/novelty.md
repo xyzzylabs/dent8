@@ -34,7 +34,7 @@ All three top-ranked directions depend on the same prerequisite — the
 which is **now implemented and tested** in `crates/dent8-core/src/state.rs`:
 `apply_event`'s `Superseded` arm rejects a challenger whose authority is strictly
 below the incumbent's, and the `Contradicted` arm hard-alarms against a canonical
-claim.
+fact.
 
 The rank-1 theorem *proves a property of it* (and now has a runnable exhaustive proof
 + a `#[cfg(kani)]` harness — see rank 1 below); rank-2 *varies it*; rank-3 *feeds it*.
@@ -44,18 +44,18 @@ With the prerequisite built, all three are now buildable rather than blocked.
 
 ### 1. Verified non-resurrection — *machine-checked anti-poisoning invariant* (rank 1)
 
-**Idea.** Discharge **one** integrity theorem: *once a claim is superseded by an event
+**Idea.** Discharge **one** integrity theorem: *once a fact is superseded by an event
 of authority A, no sequence of events all below A can ever return it to the believed/
 `Active` set in any reachable projection.* This converts a MINJA/PoisonedRAG-class
-attack from an empirical attack-success-rate into a **refuted reachability claim.**
+attack from an empirical attack-success-rate into a **refuted reachability fact.**
 
 **Status: partially built.** The authority gate is implemented; the invariant is
 *proven now* over the full 5×5 `AuthorityLevel` lattice by the runnable exhaustive
 test `authority_monotone_supersession_and_non_resurrection`, and a `#[cfg(kani)]`
 harness (`supersession_is_authority_monotone_and_non_resurrecting`) ships ready for
-`cargo kani`. Remaining for the *paper* claim: actually run Kani (not installed here)
+`cargo kani`. Remaining for the *paper* fact: actually run Kani (not installed here)
 and/or a Creusot/Verus unbounded proof of the fold, and extend from the single-stream
-fold to the cross-stream projection (resurrection-via-new-`claim_id`).
+fold to the cross-stream projection (resurrection-via-new-`fact_id`).
 
 **Why defensible (medium).** The closest occupied cells are disjoint along orthogonal
 axes: the Isabelle/AFP AGM mechanization has machine-checked proofs but no authority
@@ -70,7 +70,7 @@ poisoning-integrity theorem" — *not* "first verified belief revision."
 
 **Build:** the gate + exhaustive proof are done; the remaining Kani/Creusot run and
 cross-stream extension are medium. **Paper:** the cheapest credible novelty flag (a
-proof, not an ASR number) — and the closest to claimable today.
+proof, not an ASR number) — and the closest to factable today.
 
 ### 2. Policy-counterfactual replay — *re-fold under a swapped epistemic policy* (rank 2)
 
@@ -78,17 +78,17 @@ proof, not an ASR number) — and the closest to claimable today.
 identity (a strict superset of current behavior). A what-if query swaps one knob —
 *"distrust `source:web-scrape`"*, *"raise the authority floor to High"* — and re-folds
 the **same** log, returning the alternate belief set plus a structural diff (which
-claims flip `Active`↔`Contested`↔`Superseded`, which contradiction edges and evidence
+facts flip `Active`↔`Contested`↔`Superseded`, which contradiction edges and evidence
 appear/disappear), with **zero model invocations.** This is the ATMS
 assumption-environment idea, made concrete and deterministic.
 
 **Status: prototyped and tested.** Implemented in `crates/dent8-core/src/policy.rs`
 (`EpistemicPolicy` with three trust knobs — `distrusted_sources`, `authority_floor`,
-`confidence_floor`) and `crates/dent8-store/src/lib.rs` (`replay_claim_with_policy`,
+`confidence_floor`) and `crates/dent8-store/src/lib.rs` (`replay_fact_with_policy`,
 `StateDiff`, `diff_states`). The headline counterfactual is tested: distrusting a
-superseding source keeps the claim `Active`, and the diff reports the flip.
+superseding source keeps the fact `Active`, and the diff reports the flip.
 Design refinements vs the original sketch: (1) the *as-of freshness clock* is **not** a
-policy knob — freshness is a separate read-time predicate (`ClaimState::is_expired_at`)
+policy knob — freshness is a separate read-time predicate (`FactState::is_expired_at`)
 so valid-time staleness is never conflated with the event-driven lifecycle; (2) the
 *contradiction-resolution rule* is not yet swappable (hard-coded in `apply_event`) — a
 documented future knob.
@@ -103,38 +103,38 @@ combines (a) epistemic-policy as the knob, (b) a contradiction/supersession life
 as the evaluator, (c) poisoning as the target, with (d) exact no-LLM-rerun
 reproducibility. That intersection is empty.
 
-**Build:** core mechanism done; remaining for a paper claim is a swappable
-contradiction-resolution rule and an over-an-entity (multi-claim) replay surface.
+**Build:** core mechanism done; remaining for a paper fact is a swappable
+contradiction-resolution rule and an over-an-subject (multi-fact) replay surface.
 **Paper:** a memory debugger no agent-memory system offers.
 
 ### 3. Earned entrenchment — *protection derived from challenge-survival* (rank 3)
 
-**Idea.** Derive a claim's revision-resistance threshold from the event history rather
-than declaring it: a non-prioritized operator whose credibility bar for revising claim
+**Idea.** Derive a fact's revision-resistance threshold from the event history rather
+than declaring it: a non-prioritized operator whose credibility bar for revising fact
 C is a pure, replayable **fold** over the log — the count of authority-weighted
 supersession attempts C survived from sources ≥ its own authority, plus the number of
-distinct independent authorities that re-asserted it. A claim that withstood
-high-authority challenges accrues entrenchment and forces incoming claims to clear a
+distinct independent authorities that re-asserted it. A fact that withstood
+high-authority challenges accrues entrenchment and forces incoming facts to clear a
 higher bar; the decision is explainable ("protected because it survived these 4
 challenges") and deterministically replayable because entrenchment is a *fold*, not
 stored state.
 
-**Status: v0 built and tested.** `ClaimState` tracks `corroborating_sources`
+**Status: v0 built and tested.** `FactState` tracks `corroborating_sources`
 (distinct backers → highest authority each backed at) with `corroboration()` and the
-Sybil-resistant `corroboration_at_or_above(level)`; `EntityProjection::unearned_supersessions`
-audits each supersession against the replacing claim's *actual* state, flagging
+Sybil-resistant `corroboration_at_or_above(level)`; `SubjectProjection::unearned_supersessions`
+audits each supersession against the replacing fact's *actual* state, flagging
 `AuthorityDowngrade` (replacement is really lower-authority than its stated event) and
 `WeakerEntrenchment` (less authority-weighted earned entrenchment — corroboration plus
 survived challenges, ADR 0017 — at equal authority). The Sybil
 flood is defeated in code (qualified count, not raw) and tested. **The
 "survived supersession attempts" half is built too** ([ADR 0015](../decisions/0015-survived-challenge-recording.md)):
-the op boundary records a rejected challenge as a `claim.challenge_rejected` event on the
+the op boundary records a rejected challenge as a `fact.challenge_rejected` event on the
 incumbent's stream — challenger provenance, effective authority, Sybil-resistant
-`survived_challenges_at_or_above` on `ClaimState` — and the earned-entrenchment audit is
+`survived_challenges_at_or_above` on `FactState` — and the earned-entrenchment audit is
 enforceable at write time via the opt-in earned-supersession gate
 (`DENT8_ENTRENCHMENT_GATE=1`). Survived challenges are now **fed into arbitration**
 ([ADR 0017](../decisions/0017-survived-challenges-in-arbitration.md)): the gate and the
-audit weigh *earned entrenchment* = corroboration + survived challenges, so a claim that
+audit weigh *earned entrenchment* = corroboration + survived challenges, so a fact that
 survived an equal-authority challenge resists the next fresh equal-authority replacement —
 protection literally derived from challenge-survival. Remaining open: weighting survival
 differently from corroboration (summed 1:1 today) or consulting it in the default path.
@@ -163,7 +163,7 @@ authority-weighting (not raw count), and stated honestly.
   identity-channel-separation invariant defending against ShadowMerge-style merge
   attacks (the rigorous, testable form of the "pattern separation" origin story).
 
-## Killed — do not claim these as novel
+## Killed — do not fact these as novel
 
 | Killed candidate | Prior art that kills it |
 |---|---|
@@ -179,7 +179,7 @@ Spot-checked and **confirmed real** (titles verified against arXiv):
 
 - TOKI — *A Bitemporal Operator Algebra for Contradiction Resolution in LLM-Agent Persistent Memory* ([arXiv:2606.06240](https://arxiv.org/abs/2606.06240))
 - *Adaptive Memory Admission Control for LLM Agents* ([arXiv:2603.04549](https://arxiv.org/abs/2603.04549))
-- *Memory Poisoning Attack and Defense on Memory Based LLM-Agents* ([arXiv:2601.05504](https://arxiv.org/abs/2601.05504)) — note: its specific "logs every rejection to a durable audit log" claim is **not** confirmed from the abstract; the candidate it killed had a second, solid ground.
+- *Memory Poisoning Attack and Defense on Memory Based LLM-Agents* ([arXiv:2601.05504](https://arxiv.org/abs/2601.05504)) — note: its specific "logs every rejection to a durable audit log" fact is **not** confirmed from the abstract; the candidate it killed had a second, solid ground.
 - MemLineage — *Lineage-Guided Enforcement for LLM Agent Memory* ([arXiv:2605.14421](https://arxiv.org/abs/2605.14421))
 
 **Not yet verified** (surfaced by the vetting agents; verify before citing in the
@@ -193,10 +193,10 @@ Receipts.
 and tested, with the exhaustive non-resurrection proof and a `#[cfg(kani)]` harness.
 
 **[DONE] Rank 2, policy-counterfactual replay** — `EpistemicPolicy` +
-`replay_claim_with_policy` + `diff_states`, prototyped and tested (see rank 2 above).
+`replay_fact_with_policy` + `diff_states`, prototyped and tested (see rank 2 above).
 
 **Now:** (1) run the Kani harness in CI (`cargo kani`) and/or add a Creusot/Verus
 unbounded fold proof to upgrade rank 1 from "exhaustive over the lattice" to
 "machine-checked"; (2) extend rank 2 with a swappable contradiction-resolution rule
-and an entity-level (multi-claim) counterfactual surface; (3) carry the arbitration
+and an subject-level (multi-fact) counterfactual surface; (3) carry the arbitration
 into the transactional write path, which now exists through the Postgres adapter.

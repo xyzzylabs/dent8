@@ -1,7 +1,7 @@
-# dent8: Memory Integrity for LLM Agents via an Event-Sourced Claim Model with Replayable Belief Revision
+# dent8: Memory Integrity for LLM Agents via an Event-Sourced Fact Model with Replayable Belief Revision
 
 **Draft preprint.** This is a working draft generated against the current implementation;
-every "built" claim below maps to code and tests in the dent8 repository
+every "built" fact below maps to code and tests in the dent8 repository
 ([STATUS.md](../STATUS.md) is the authoritative built-vs-planned ledger). Section
 numbering follows [outline.md](outline.md). Author/affiliation blocks are placeholders.
 
@@ -16,7 +16,7 @@ durable attack surface: a privilege-less user can poison an agent's long-term me
 through query-only interaction with >95% success, persisting across sessions and users
 [3]. We argue the missing primitive is *memory integrity*, not memory persistence, and
 that integrity should be the **source of truth** rather than a feature bolted onto a vector
-or graph store. dent8 models every belief as a stream of immutable `ClaimEvent`s — a
+or graph store. dent8 models every belief as a stream of immutable `FactEvent`s — a
 subject–predicate–value triple carrying confidence, authority, a time-to-live, provenance,
 evidence, and bitemporal validity — and materializes memory as a deterministic fold over
 the ordered log, so retraction and supersession leave an auditable trace instead of
@@ -24,7 +24,7 @@ destroying history. We formalize the belief lifecycle as a state machine whose t
 instantiate the operational spirit of **belief-base** revision (Hansson) rather than
 logically-closed AGM revision [1][2], and justify contradiction-tolerance through the
 inconsistency-vs-triviality distinction of paraconsistent logic [4]. The integrity layer
-is a **write-path firewall**: it rejects a lower-authority claim that attempts to override
+is a **write-path firewall**: it rejects a lower-authority fact that attempts to override
 a higher-authority one (and the *laundered* variant of that attack), hard-alarms a
 contradiction against a canonical fact, admits low-authority *dissent* without letting it
 override, and authority-gates *removal*. We give a layered correctness argument —
@@ -57,7 +57,7 @@ The usual responses edit memory *in place* (overwrite the old value [11]) or arb
 conflicts by *recency* (newest write wins [7]). Both discard exactly the information an
 auditor or a defense needs: the prior value, its provenance, and the basis on which it was
 replaced. We take the opposite stance. **Memory integrity is the source of truth.** Every belief
-is an append-only stream of immutable claim events; the believed state is a pure function
+is an append-only stream of immutable fact events; the believed state is a pure function
 of that log; and every state change — assertion, reinforcement, supersession, retraction,
 contradiction — is itself a recorded, replayable event. "Delete" becomes a `retracted`
 event, not data loss; "update" becomes a `superseded` event that preserves the lineage.
@@ -66,14 +66,14 @@ This reframing lets us treat conflict resolution as **belief revision** with an 
 epistemic ordering (authority), rather than an implicit recency heuristic, and lets us
 *verify* properties of that revision. Our contributions:
 
-1. **An event-sourced claim model** (§4) where provenance, evidence, authority,
+1. **An event-sourced fact model** (§4) where provenance, evidence, authority,
    freshness, contradiction, and supersession are first-class typed fields, and
    materialized memory is `fold(events)`.
 2. **A belief-revision semantics** (§5) for the lifecycle, mapped onto *belief-base*
    (non-closed) revision with a deliberate failure of the Recovery postulate, and
    authority modeled as epistemic entrenchment kept separate from confidence.
 3. **A write-path integrity firewall** (§6) — authority-weighted supersession and
-   retraction, anti-laundering, a paraconsistent contested state, a canonical-claim
+   retraction, anti-laundering, a paraconsistent contested state, a canonical-fact
    hard-alarm, and read-time freshness.
 4. **A layered correctness argument** (§7): exhaustive bounded authority-lattice tests and
    Kani model checking of *non-resurrection*, plus a tamper-evident hash chain and an
@@ -84,7 +84,7 @@ epistemic ordering (authority), rather than an implicit recency heuristic, and l
 ## 2. Threat model
 
 The adversary of record is a **malicious end-user** with query-only access who can cause
-the agent to write attacker-chosen claims (the MINJA case [3]); a **compromised source**
+the agent to write attacker-chosen facts (the MINJA case [3]); a **compromised source**
 that feeds false tool output or documents; and a **low-authority agent** attempting to
 override higher-authority facts. An **operator with database access** is partially in
 scope — we make tampering *evident* and, under an external-witness assumption,
@@ -111,7 +111,7 @@ adopt its operational spirit and deliberately *reject* Recovery (§5) [2].
 
 **Paraconsistency.** Classical logic trivializes under contradiction (ex falso quodlibet).
 Paraconsistent logic separates inconsistency from triviality [4]; dent8's `contested`
-lifecycle localizes a contradiction and preserves both claims rather than dropping one or
+lifecycle localizes a contradiction and preserves both facts rather than dropping one or
 exploding.
 
 **Temporal data and event sourcing.** Bitemporality (transaction time vs valid time,
@@ -124,9 +124,9 @@ and JSON canonicalization [6] inform the hash chain and the anchor — including
 asymmetric (Ed25519 signed-tree-head) variant, whose published head is verifiable with the
 public key alone.
 
-## 4. The claim-event model
+## 4. The fact-event model
 
-A `ClaimEvent` is the sole primitive. It carries a typed subject (`EntityRef`, a
+A `FactEvent` is the sole primitive. It carries a typed subject (`Subject`, a
 kind+key), a predicate, an optional value, a `Confidence` (probabilistic, `u16`
 milliprobability), an `Authority` (an ordered epistemic level `Unknown < Low < Medium <
 High < Canonical`, with optional issuer/scope), a `Ttl`, mandatory provenance (source,
@@ -135,24 +135,24 @@ actor, tool, run, input digest, `recorded_at`), evidence references, and the bit
 `Superseded{by, reason}`, `Contradicted{by, basis}`, `Retracted{reason}`, `Expired`,
 `Retrieved`, `UsedInDecision`, or `ChallengeRejected{challenge, by, rejection}`.
 
-The believed state of a claim is `fold(apply_event, events)` over its ordered stream.
-`apply_event` is a total function from `(Option<ClaimState>, &ClaimEvent)` to
-`Result<ClaimState, TransitionError>`. Materialization is therefore deterministic and
+The believed state of a fact is `fold(apply_event, events)` over its ordered stream.
+`apply_event` is a total function from `(Option<FactState>, &FactEvent)` to
+`Result<FactState, TransitionError>`. Materialization is therefore deterministic and
 replayable: the same ordered log always yields the same projection, and any divergence
 between a stored projection and `fold(log)` is a defect by definition. A second projection,
-`replay_entity`, folds *all* claim streams for one subject independently and enables
+`replay_entity`, folds *all* fact streams for one subject independently and enables
 cross-stream checks (supersession-lineage integrity, earned entrenchment).
 
 ## 5. Belief-revision semantics
 
 The lifecycle state machine instantiates *belief-base* revision rather than AGM. Three
-design commitments follow. First, the base is the (non-closed) set of believed claims; we
+design commitments follow. First, the base is the (non-closed) set of believed facts; we
 do not compute logical closure. Second, **Recovery is deliberately not satisfied**:
-re-asserting a previously retracted claim does not restore its old dependents or edges; the
-re-assertion is a fresh claim with fresh provenance. This blocks a "claim-laundering" path
+re-asserting a previously retracted fact does not restore its old dependents or edges; the
+re-assertion is a fresh fact with fresh provenance. This blocks a "fact-laundering" path
 (retract, then re-assert to silently resurrect a dependency graph). Third, **authority is
 epistemic entrenchment** and is kept categorically separate from confidence: a
-high-confidence low-authority claim cannot override a low-confidence high-authority one.
+high-confidence low-authority fact cannot override a low-confidence high-authority one.
 Contradiction is handled paraconsistently — a `Contradicted` event moves the incumbent to
 `Contested` and *appends* to its `contradicted_by` edge set, localizing the inconsistency
 and keeping the store non-trivial.
@@ -170,28 +170,28 @@ and dissenting.
 
 Base firewall (unbypassable, inside `append`):
 
-- **Authority-weighted supersession.** A `Superseded` event whose replacing claim does not
+- **Authority-weighted supersession.** A `Superseded` event whose replacing fact does not
   out-rank (or tie) the incumbent is rejected (`InsufficientAuthority`). This is the direct
   mitigation for low-privilege memory injection.
-- **Anti-laundering.** Because a supersession names a *replacing claim*, an attacker could
-  over-state the supersession event's authority while backing it with a weak claim. The
-  firewall resolves the replacing claim's *actual* authority and rejects the laundered case
+- **Anti-laundering.** Because a supersession names a *replacing fact*, an attacker could
+  over-state the supersession event's authority while backing it with a weak fact. The
+  firewall resolves the replacing fact's *actual* authority and rejects the laundered case
   (`LaunderedAuthority`).
 - **Authority-gated retraction.** Removal is terminal, so a `Retracted` event is gated
   exactly like supersession: a lower-authority actor cannot delete a higher-authority fact.
 - **Dissent is free.** A `Contradicted` event is *not* authority-gated — any source may
   flag a fact as contested — with one exception: a contradiction against a `Canonical`
-  claim is a **hard alarm** (`CanonicalContradiction`, the paraconsistent "gentle
+  fact is a **hard alarm** (`CanonicalContradiction`, the paraconsistent "gentle
   explosion" tier), not a soft contest.
 
 Application-level registry (per-predicate policy, applied before `append`):
 
 - **Authority floor + uniqueness with contestation.** A predicate can require a minimum
-  authority to assert and be marked *unique* (at most one **fresh** believed claim).
-  Uniqueness is over *mutually-consistent* believed claims; an explicitly contested set (a
-  `Contested` claim plus the contradictors it names) is a surfaced conflict, not a
+  authority to assert and be marked *unique* (at most one **fresh** believed fact).
+  Uniqueness is over *mutually-consistent* believed facts; an explicitly contested set (a
+  `Contested` fact plus the contradictors it names) is a surfaced conflict, not a
   violation.
-- **Freshness.** A read-time predicate excludes TTL-expired claims from "fresh" reads
+- **Freshness.** A read-time predicate excludes TTL-expired facts from "fresh" reads
   without deleting them; freshness is a separate axis from the event-driven lifecycle.
 
 The net guarantee of the base firewall, stated operationally: *a low-privilege source can
@@ -222,13 +222,13 @@ and publishes the head on a cadence.
 ## 7. Formal verification
 
 We make a layered, deliberately-bounded correctness argument rather than an unqualified
-"formally verified" claim. The security-critical invariant is **non-resurrection**: once a
-claim is superseded (or retracted) by authority *A*, no later event of authority below *A*
+"formally verified" fact. The security-critical invariant is **non-resurrection**: once a
+fact is superseded (or retracted) by authority *A*, no later event of authority below *A*
 returns it to the believed set. We establish it two ways over the finite five-level
 authority lattice:
 
 - **Exhaustive bounded tests.** For all 25 (incumbent, challenger) pairs, a supersession is
-  accepted iff the challenger does not under-rank the incumbent, and a terminal claim
+  accepted iff the challenger does not under-rank the incumbent, and a terminal fact
   cannot be resurrected by any later event — including a canonical one. A parallel test
   covers retraction.
 - **Bounded model checking (Kani).** The same property is checked symbolically over all
@@ -247,7 +247,7 @@ future work [8].
 dent8 is a Rust workspace (edition 2024, `rustc` 1.95, `unsafe_code = "forbid"`, clippy
 pedantic) of five crates: `dent8-core` (model, fold, hashing, anchor), `dent8-store`
 (the `EventStore` trait, the firewall `arbitrate`, an in-memory backend, the coding-agent
-registry, policy-counterfactual and entity replay), `dent8-evals` (the adversarial
+registry, policy-counterfactual and subject replay), `dent8-evals` (the adversarial
 corpus), `dent8` (the runnable surface), and `dent8-store-postgres` (the operational
 schema, adapter pending). The base firewall *is* `EventStore::append`: every write passes
 base arbitration (override-gate, anti-laundering, canonical hard-alarm), with no
@@ -270,7 +270,7 @@ built — `dent8 witness`).
 ## 9. Evaluation
 
 We evaluate *integrity*, not retrieval quality, with a reproducible adversarial corpus
-(`dent8-evals`). Each scenario is a concrete attack — a sequence of claim events a
+(`dent8-evals`). Each scenario is a concrete attack — a sequence of fact events a
 poisoning adversary might submit — run two ways: through the **real firewall**
 (`EventStore::append`) and through a **recency-only baseline** that resolves conflicts by
 "newest write wins" with no authority arbitration (the strategy dent8 argues against). An
@@ -306,7 +306,7 @@ concurrency.
   bounded [5].
 - **Canonicalization is not frozen to JCS.** The canonical form is a sorted-key
   `serde_json` encoding, not RFC 8785/JCS; it may coincide only for narrow inputs
-  without UTF-16 key-order or number-format differences. Embedded `ClaimValue::Json`
+  without UTF-16 key-order or number-format differences. Embedded `FactValue::Json`
   is itself canonicalized (a
   `CanonicalJson` newtype, sorted-key + compact, re-applied on deserialize), so the bytes
   invariant holds for it too; freezing the *outer* encoding to JCS for cross-implementation
@@ -329,14 +329,14 @@ concurrency.
 
 ## 11. Novelty positioning
 
-An adversarial novelty pass refuted every *single-primitive* claim against 2026 prior art.
-dent8's defensible novelty is **compositional**, led by two medium-novelty claims pitched
+An adversarial novelty pass refuted every *single-primitive* fact against 2026 prior art.
+dent8's defensible novelty is **compositional**, led by two medium-novelty facts pitched
 as "first to unify/transplant," never "first to invent":
 
-1. **Verified non-resurrection** — a machine-checked invariant that, once a claim is
+1. **Verified non-resurrection** — a machine-checked invariant that, once a fact is
    superseded/retracted by authority *A*, no sub-*A* sequence returns it to the believed
    set. This turns a MINJA/PoisonedRAG-class attack from an empirical success rate into a
-   *refuted reachability claim*.
+   *refuted reachability fact*.
 2. **Policy-counterfactual replay** — re-folding the same hash-chained log under a swapped
    `EpistemicPolicy` (distrust a source, raise the authority floor) with zero LLM calls,
    distinct from stochastic remove-and-rerun "counterfactuals."
@@ -348,7 +348,7 @@ explicitly **not** on retrieval F1/LOCOMO, where dent8 does not compete.
 
 ## 12. Conclusion and future work
 
-dent8 reframes agent memory as an integrity problem and shows that an event-sourced claim
+dent8 reframes agent memory as an integrity problem and shows that an event-sourced fact
 model with authority-weighted belief revision can make poisoning *visible, attributable,
 and — for the headline non-resurrection property — refutable by construction*, with a
 reproducible adversarial evaluation and a tamper-evident log made tamper-resistant under an
@@ -362,7 +362,7 @@ work — a hosted/managed witness service (the cadence signer `witness serve` an
 `witness publish`/`verify-published` ship with a packaged operated split), the official `rmcp` SDK
 (the v0 server already does tools, resources, and batches), and a broader
 property/fixture suite.
-A short workshop paper on the model and belief-revision semantics is claimable now; the
+A short workshop paper on the model and belief-revision semantics is factable now; the
 full systems/security paper should follow the operational backend.
 
 ## References

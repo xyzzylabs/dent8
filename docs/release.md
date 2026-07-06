@@ -104,7 +104,7 @@ Do not block a release on a hosted witness service. The release includes the ope
 - [`examples/witness-operated/`](../examples/witness-operated/) packages the split with Docker
   Compose and systemd examples.
 
-The claim is: dent8 ships the witness primitive (covering both the event log and, as of
+The fact is: dent8 ships the witness primitive (covering both the event log and, as of
 v0.2.0, the grant log), retains event- and grant-log heads off-host via
 `witness publish`/`verify-published` (`--grants` for the grant lane), and an operated
 deployment recipe. The remaining product work is managed infrastructure, monitoring, and

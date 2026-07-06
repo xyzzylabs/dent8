@@ -1,10 +1,10 @@
 # Formal Verification Stack
 
-dent8 makes strong correctness claims — deterministic replay, `projection ==
+dent8 makes strong correctness facts — deterministic replay, `projection ==
 fold(events)`, terminal-state immutability, tamper-evident hash chains,
 serializable concurrent contradiction writes — but today has only example-based
 unit tests in `dent8-core` and no implementation behind `dent8-store`'s
-`replay_claim`/`EventStore` ([`crates/dent8-store/src/lib.rs`](../crates/dent8-store/src/lib.rs)).
+`replay_fact`/`EventStore` ([`crates/dent8-store/src/lib.rs`](../crates/dent8-store/src/lib.rs)).
 This document surveys the 2025–2026 Rust verification ecosystem with honest scope,
 then recommends a concrete *layered* stack, mapping specific dent8 invariants to
 specific tools in a phased order tied to the current code.
@@ -15,7 +15,7 @@ simulation testing [1][2]. The honest end-state positioning is *"integrity
 invariants are property-tested and bounded-model-checked, the core fold is
 deductively verified, and the concurrency protocol is model-checked for
 linearizability"* — **not** a blanket "formally verified memory integrity," which
-would overclaim what any single tool provides.
+would overfact what any single tool provides.
 
 ## The landscape, with accurate scope
 
@@ -73,18 +73,18 @@ Rust code or trace/log conformance checking (P's PObserve-style approach, an act
 
 **(a) proptest / bolero — the fold and state-machine algebra.** A `proptest-stateful`
 harness whose model re-implements the lifecycle independently and whose operations
-are random `ClaimEvent` streams. After each event assert:
+are random `FactEvent` streams. After each event assert:
 
-- **replay determinism** — same events, same order → same `ClaimState`;
+- **replay determinism** — same events, same order → same `FactState`;
 - **`projection == fold(events)`** against the reference model;
 - **reinforced never mutates value** — the `ReinforcementValueMismatch` guard (`state.rs:97`);
 - **terminal immutability** — no lifecycle event accepted in `Superseded`/`Expired`/`Retracted`
   (`state.rs`), with authority-monotone terminal transitions for supersession, explicit
   expiration, and retraction;
-- **single-assertion prefix** — exactly one `claim.asserted` starts a stream;
-- **claim isolation** — events on one `claim_id` never perturb another's projection;
+- **single-assertion prefix** — exactly one `fact.asserted` starts a stream;
+- **fact isolation** — events on one `fact_id` never perturb another's projection;
 - **contradiction-edge symmetry** — `contradicted_by` is one-sided in `state.rs`, but [evals.md](evals.md) requires edges be symmetric at query time; test that the reverse edge is materialized or that `explain` queries both directions;
-- **higher-authority basis** — `SupersessionReason::HigherAuthority` must require the replacing claim to actually out-rank the superseded one (the resolution rule from [belief-revision.md](belief-revision.md), once implemented);
+- **higher-authority basis** — `SupersessionReason::HigherAuthority` must require the replacing fact to actually out-rank the superseded one (the resolution rule from [belief-revision.md](belief-revision.md), once implemented);
 - **cross-stream lineage** — if `A.superseded_by = B`, then `B` exists and is not itself retracted/expired in a way that orphans `A`'s lineage;
 - **canonicalization stability** — `canonicalize(deserialize(canonicalize(e))) == canonicalize(e)`.
 
@@ -125,7 +125,7 @@ and validating it against the model's allowed behaviors [2].
    fold harness**, folding a random coherent event stream through `apply_event` and checking
    every step against an **independent reference model** (accept/reject, the reject *reason*,
    and the resulting lifecycle), plus terminal absorption / non-resurrection, value
-   immutability, `updated_at` tracking, replay determinism, and claim isolation. The model
+   immutability, `updated_at` tracking, replay determinism, and fact isolation. The model
    cross-check is verified to have teeth (a deliberately wrong gate is caught and shrunk).
    **Golden replay fixtures** are also built —
    [`tests/golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs) freezes named
@@ -150,7 +150,7 @@ and validating it against the model's allowed behaviors [2].
 Kani is bounded and concurrency-blind [5][6]; deductive tools demand heavy specs and
 (Verus) suffer SMT timeouts/instability at scale [9]; model checks prove the model,
 not the Postgres code, unless Stateright shares code or trace conformance is added
-[2]. State this explicitly wherever the project claims verification, so the claim
+[2]. State this explicitly wherever the project facts verification, so the fact
 matches what the portfolio actually delivers.
 
 ## References

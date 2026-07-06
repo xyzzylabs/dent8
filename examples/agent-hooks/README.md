@@ -2,7 +2,7 @@
 
 These examples add a local guard around agent-native memory and rules files. They do not
 replace MCP. The main write path is still `dent8 mcp serve`, where every candidate fact enters
-the claim-event firewall.
+the fact-event firewall.
 
 Use hooks for three narrow jobs:
 

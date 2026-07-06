@@ -6,12 +6,12 @@ Date: 2026-06-26
 
 Accepted; **implemented** in `dent8-core/src/hash.rs`. One item amended from the
 original plan (JCS → serde_json sorted-key form) and two recorded as decided below
-(`schema_version`, `ClaimValue::Json`).
+(`schema_version`, `FactValue::Json`).
 
 ## Context
 
 `AppendReceipt` promises an `event_hash`, and schema 001 has
-`previous_event_hash`/`event_hash` columns, but `ClaimEvent` derives no
+`previous_event_hash`/`event_hash` columns, but `FactEvent` derives no
 serialization and the canonicalization format was explicitly left unresolved.
 Tamper-evidence is only as strong as deterministic bytes: two logically-equal events
 must produce byte-identical input to the hash regardless of map order, whitespace, or
@@ -19,7 +19,7 @@ number formatting.
 
 ## Decision
 
-1. Derive `serde::{Serialize, Deserialize}` on `ClaimEvent` and sub-types. **Done.**
+1. Derive `serde::{Serialize, Deserialize}` on `FactEvent` and sub-types. **Done.**
 2. **Amended:** canonicalize with a **sorted-key `serde_json` form** (`to_value` →
    `to_vec`), **not RFC 8785 (JCS)**. The original plan named JCS; the implementation
    does not implement JCS (key order is UTF-8 byte order, not UTF-16; number/escape
@@ -35,12 +35,12 @@ number formatting.
 4. Compute canonical bytes **from the typed Rust struct, never from Postgres JSONB**.
    **Done.**
 5. `provenance.recorded_at` is **appender-supplied**; the SQL `DEFAULT now()` is dropped
-   from `dent8_claim_events.recorded_at` and `dent8_claim_edges.created_at`.
+   from `dent8_fact_events.recorded_at` and `dent8_fact_edges.created_at`.
    `dent8_replay_runs.started_at` stays DB-generated (operational run metadata, not
    replayable event data). **Done.**
-6. **Done — `ClaimValue::Json` is canonical by construction.** The variant now holds
+6. **Done — `FactValue::Json` is canonical by construction.** The variant now holds
    [`CanonicalJson`](../../crates/dent8-core/src/model.rs), a newtype with a private field
-   built only via `ClaimValue::json` / `CanonicalJson::new`, which parse the input and
+   built only via `FactValue::json` / `CanonicalJson::new`, which parse the input and
    re-emit it sorted-key + compact (and reject invalid JSON). The canonicalization is
    **re-applied on `Deserialize`**, so the invariant also holds on the trusted-reload path,
    not just at the write boundary. Embedded JSON differing only in key order/whitespace now
@@ -66,7 +66,7 @@ number formatting.
    When v2 is needed, do *not* bump the `CANON_VERSION` constant in `hash_leaf` on its
    own — that would re-hash every existing event under `2` and raise a false tamper alarm
    on the whole log. Instead, in the same change:
-   1. add a per-event `schema_version: u8` field to `ClaimEvent` with
+   1. add a per-event `schema_version: u8` field to `FactEvent` with
       `#[serde(default = "…v1")]` and **exclude it from `canonical_bytes`** (mix it into
       the leaf where the constant is today);
    2. mix `event.schema_version` into the leaf instead of the constant.
@@ -77,7 +77,7 @@ number formatting.
    witness/anchor signature over it all still verify, with **no data migration**. New
    events carry `2` and the v2 rules; verification dispatches per event. Because the
    backfill-to-v1 is free at that point, adding the field now would be premature churn (it
-   touches every `ClaimEvent` construction site) for no integrity gain. The single rule to
+   touches every `FactEvent` construction site) for no integrity gain. The single rule to
    preserve the property: **never change the leaf-mixed version without a per-event field
    to record it.**
 
@@ -88,7 +88,7 @@ Positive:
 - Tamper-evidence and cross-implementation deterministic replay become real, not
   slogans.
 - Domain separation keeps a future transparency-log/Merkle upgrade non-breaking.
-- The narrow `ClaimValue::Json` canonicalization (a type-enforced newtype) avoids
+- The narrow `FactValue::Json` canonicalization (a type-enforced newtype) avoids
   over-engineering the integer fields while closing the one gap in the bytes invariant.
 
 Negative:
@@ -103,7 +103,7 @@ Negative:
 - [DONE] `canonical_bytes`, `event_hash`/`hash_chain`, and tests
   (`canonicalize(deserialize(canonicalize(e))) == canonicalize(e)`, key-order
   independence, injective genesis/`previous`, tamper-cascade).
-- [DONE] `ClaimValue::Json` is canonical by construction via the `CanonicalJson` newtype
+- [DONE] `FactValue::Json` is canonical by construction via the `CanonicalJson` newtype
   (item 6) — canonicalized on build *and* on deserialize, with unit + hash-equality tests.
 - [DONE] Wired `hash_chain` into the Postgres transactional append (populate
   `event_hash`/`previous_event_hash`, reverify on replay).

@@ -10,7 +10,7 @@ Tagline: Pattern separation for agent memory.
 
 ## Thesis
 
-Long-running agents need memory integrity, not just memory persistence. A stored memory is useful only if an agent can tell where it came from, whether it is fresh, what evidence supports it, whether stronger evidence replaced it, and whether it conflicts with other claims.
+Long-running agents need memory integrity, not just memory persistence. A stored memory is useful only if an agent can tell where it came from, whether it is fresh, what evidence supports it, whether stronger evidence replaced it, and whether it conflicts with other facts.
 
 dent8 exists to make those integrity properties explicit and replayable.
 
@@ -21,12 +21,12 @@ Memory integrity platform for agentic systems.
 It combines three surfaces over one event model:
 
 - Memory firewall: validates writes and read eligibility.
-- Versioned memory store: records append-only claim events and projections.
+- Versioned memory store: records append-only fact events and projections.
 - Memory debugger: explains provenance, replay, drift, contradictions, and supersession.
 
 ## Differentiator
 
-dent8 should not become "another memory provider." The differentiator is that memory is governed by an event-sourced claim model with provenance, authority, freshness, contradiction handling, supersession, replay, and auditability built in from the first release.
+dent8 should not become "another memory provider." The differentiator is that memory is governed by an event-sourced fact model with provenance, authority, freshness, contradiction handling, supersession, replay, and auditability built in from the first release.
 
 Stated precisely (and honestly): no single one of those primitives is novel — Zep/Graphiti, PROV, SQL:2011, and transparency logs cover most of them ([related-work.md](related-work.md)). The defensible wedge is the *combination as substrate* plus **typed authority-weighted supersession** as a poisoning mitigation. Formally, dent8 is a **belief base** with paraconsistent contradiction tolerance ([belief-revision.md](belief-revision.md)). The headline arbitration is **enforced at the write boundary** (`EventStore::append`) and runnable end-to-end — the CLI/MCP run on either a file dev store or, with `DENT8_STORE_URL`, a transactional async backend (embedded SQLite in stock builds, or DB-verified Postgres with `--features postgres`). The remaining gap is *productization* — operating signed source identity well (key distribution/rotation and stronger secret storage; the default CLI includes `dent8 init --identity`, `dent8 init --agent <profile>`, and `dent8 identity`) and an operated witness service (the signed-tree-head witness *primitive* is built — `dent8 witness`) — see [STATUS.md](STATUS.md).
 
@@ -51,7 +51,7 @@ Example facts:
 
 ## First Principles
 
-- Claims are event streams.
+- Facts are event streams.
 - State is replayed, not trusted blindly.
 - Reads must expose integrity metadata.
 - Provenance and evidence are mandatory for accepted assertions.

@@ -16,7 +16,7 @@ now runs end to end through the CLI and MCP surfaces:
 
 - **The firewall is enforced at the write boundary** (`EventStore::append` via
   `arbitrate`): authority-weighted supersession, the LFI canonical hard-alarm, and
-  entity-aware anti-laundering — runnable via the lifecycle CLI commands, `dent8 eval`,
+  subject-aware anti-laundering — runnable via the lifecycle CLI commands, `dent8 eval`,
   `examples/firewall/demo.sh`, and `dent8 mcp serve`.
 - serde + `canonical_bytes` + `event_hash`/`hash_chain` are wired into append and
   verification; the Postgres adapter stores and re-verifies the global chain.
@@ -80,13 +80,13 @@ mechanisms are built; the remaining bullets here are refinements, not blockers.
   (`InsufficientAuthority`), confidence kept separate. Tested directly and
   exhaustively over the 5×5 authority lattice, with a `#[cfg(kani)]` non-resurrection
   harness. *([belief-revision.md](belief-revision.md) §Adopt-2.)*
-- **[DONE] Earned entrenchment v0 (novelty rank 3).** `ClaimState` tracks
+- **[DONE] Earned entrenchment v0 (novelty rank 3).** `FactState` tracks
   authority-weighted `corroborating_sources` (`corroboration_at_or_above`, Sybil-
-  resistant); `EntityProjection::unearned_supersessions` audits each supersession
-  against the replacing claim's *actual* authority and **earned entrenchment**, flagging
+  resistant); `SubjectProjection::unearned_supersessions` audits each supersession
+  against the replacing fact's *actual* authority and **earned entrenchment**, flagging
   `AuthorityDowngrade` and `WeakerEntrenchment`. The "survived-challenge" half is
   **built too** ([ADR 0015](decisions/0015-survived-challenge-recording.md)): a rejected
-  challenge is recorded on the incumbent's stream as `claim.challenge_rejected` (with the
+  challenge is recorded on the incumbent's stream as `fact.challenge_rejected` (with the
   challenger's provenance and effective authority; Sybil-resistant
   `survived_challenges_at_or_above`), and both the always-on unearned-supersession audit and
   the opt-in earned-supersession gate (`DENT8_ENTRENCHMENT_GATE=1`) now weigh *earned
@@ -96,10 +96,10 @@ mechanisms are built; the remaining bullets here are refinements, not blockers.
   *([research/novelty.md](research/novelty.md) rank 3.)*
 - **[DONE] LFI "gentle-explosion" tier.** `apply_event`'s `Contradicted` arm returns
   `CanonicalContradiction` for a contradiction against an `AuthorityLevel::Canonical`
-  claim; ordinary contradictions still localize to `Contested`. Future: uniqueness-
+  fact; ordinary contradictions still localize to `Contested`. Future: uniqueness-
   constrained predicates (no such flag in the model yet).
   *([belief-revision.md](belief-revision.md) §Adopt-3.)*
-- **[DONE] Read-time freshness evaluator + read surface.** `ClaimState::is_fresh_at(now)`
+- **[DONE] Read-time freshness evaluator + read surface.** `FactState::is_fresh_at(now)`
   bounds the full validity window `[valid_from, expires_at)` — TTL and the asserted
   `valid_to`/`valid_from` (ADR 0016) — kept separate from the lifecycle, and `explain` (CLI +
   the MCP `explain` tool + `resources/read`) now **applies** it: a still-`Active` fact past
@@ -108,21 +108,21 @@ mechanisms are built; the remaining bullets here are refinements, not blockers.
   `not_yet_valid` + the `valid_from`/`expires_at` window.
   *(Invariant T4 in [threat-model.md](threat-model.md); remaining residuals tracked there.)*
 - **[DONE] Policy-counterfactual replay (novelty rank 2).** `EpistemicPolicy`
-  (distrusted sources, authority floor, confidence floor) + `replay_claim_with_policy`
+  (distrusted sources, authority floor, confidence floor) + `replay_fact_with_policy`
   + `diff_states` re-fold the same log under different trust assumptions, with zero
   model calls. *([research/novelty.md](research/novelty.md) rank 2.)*
-- **[DONE] Cross-stream lineage check.** `replay_entity` folds all of an entity's
-  claim streams into an `EntityProjection`; `lineage_issues()` flags dangling
-  supersession, supersession-by-an-invalidated-claim, and supersession cycles
+- **[DONE] Cross-stream lineage check.** `replay_entity` folds all of an subject's
+  fact streams into an `SubjectProjection`; `lineage_issues()` flags dangling
+  supersession, supersession-by-an-invalidated-fact, and supersession cycles
   (including self-supersession). `dent8 verify` surfaces lineage issues and retraction
   taint; a richer debugger/explain tree remains future product work.
   Contradiction-edge integrity is deliberately out of scope (a contradictor may live
-  in another entity).
+  in another subject).
 
 ## Canonical Serialization And Hash Chain — Done
 
 **Status.** Built and tested in [`dent8-core/src/hash.rs`](../crates/dent8-core/src/hash.rs):
-serde derives on the `ClaimEvent` graph; `canonical_bytes` (sorted-key `serde_json`
+serde derives on the `FactEvent` graph; `canonical_bytes` (sorted-key `serde_json`
 form — **not** JCS); `event_hash`/`hash_chain` (SHA-256, injective length-framed leaf,
 `0x00` RFC 6962 domain separation); `CANON_VERSION` as the schema version. Tests cover
 key-order independence, round-trip stability, injective genesis/`previous`, and
@@ -133,7 +133,7 @@ dropped. See [storage.md](storage.md) §Canonicalization and
 **Crates.** `serde`, `serde_json`, `sha2`, `hex` (no `serde_jcs` — JCS interop is not
 needed yet).
 
-**Remaining.** No MVP blocker remains here. `ClaimValue::Json` canonicalization — ADR 0004
+**Remaining.** No MVP blocker remains here. `FactValue::Json` canonicalization — ADR 0004
 item 6 — is **done** via the `CanonicalJson` newtype. A real JCS implementation remains
 deferred until there is a concrete cross-language interoperability requirement.
 
@@ -193,7 +193,7 @@ documented and pinned by tests; MCP is JSON-RPC by construction.)
 
 ## Evals Harness — Mostly Built
 
-**Why.** Integrity claims are only credible if measured.
+**Why.** Integrity facts are only credible if measured.
 
 **Status.** Mostly built. The `dent8-evals` adversarial corpus exists, and `proptest` suites
 cover invariants (a): [`proptest_invariants.rs`](../crates/dent8-core/tests/proptest_invariants.rs)
@@ -201,7 +201,7 @@ cover invariants (a): [`proptest_invariants.rs`](../crates/dent8-core/tests/prop
 round-trips, tamper localization, anchor accept/reject) and
 [`proptest_fold.rs`](../crates/dent8-core/tests/proptest_fold.rs) (the stateful `apply_event`
 fold vs an independent reference model: accept/reject + reason + lifecycle, terminal
-absorption, value immutability, replay determinism, claim isolation). **Golden replay
+absorption, value immutability, replay determinism, fact isolation). **Golden replay
 fixtures** are built too: [`golden_replay.rs`](../crates/dent8-core/tests/golden_replay.rs)
 freezes named event streams ([`tests/golden/replay/`](../crates/dent8-core/tests/golden/replay))
 as canonical `.events.jsonl` + an `.expected.json` (chain head + replayed-state summary), so
@@ -209,7 +209,7 @@ an encoding/hash/fold change is caught as a snapshot mismatch (regenerate with
 `UPDATE_GOLDEN=1`). The **file-based scenario-family corpus** under
 [`evals/`](../evals/README.md) is seeded too:
 [`evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs) freezes whole-stream firewall
-outcomes (admitted vs rejected writes, per-claim end-state, read-time freshness, retraction
+outcomes (admitted vs rejected writes, per-fact end-state, read-time freshness, retraction
 taint) for `beginner_to_senior`, `ttl_expiry`, `summary_drift`, `consistency_required`, and
 `low_authority_injection`. Robustness tests cover adversarial deserialization and
 panic-freedom over malformed but parseable event streams. **`cargo-fuzz` is built**: libFuzzer

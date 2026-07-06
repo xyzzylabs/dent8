@@ -11,7 +11,7 @@ Accepted.
 Signed source identity (ADR 0012) verifies at the write boundary that the caller holds the
 source private key — but the proof was ephemeral: the write-payload signature was checked
 in-process and **discarded**. Nothing persisted let anyone re-verify, after the fact, that an
-event was actually written by the key its source claims. Review flagged the sign-then-discard
+event was actually written by the key its source facts. Review flagged the sign-then-discard
 as ceremony: it added nothing over the key/grant match check, and the event log carried no
 cryptographic attribution.
 
@@ -70,7 +70,7 @@ This adds, over ADR 0012:
 This does **not** provide:
 
 - **Grant-validity-at-write-time.** Verification checks the signature against the *embedded*
-  key. Whether that key was granted the claimed source/authority **at the time of the write**
+  key. Whether that key was granted the facted source/authority **at the time of the write**
   requires grant history (grants can rotate/expire); today's check answers "is this the
   content that key signed", and the write-boundary gate (ADR 0012) answers entitlement at
   write time. A future grant-history log could close the gap retroactively.

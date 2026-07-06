@@ -3,7 +3,7 @@
 A Python or TypeScript app — LangChain, LlamaIndex, the Vercel AI SDK, Mastra — doesn't exec
 provider hooks, so the [native-memory hook guard](../agent-hooks/) doesn't apply: *you* own
 every memory write. Wire dent8 in as a **memory firewall over MCP** instead. The agent records
-and reads project facts through dent8's claim-event firewall, so a low-authority or stale write
+and reads project facts through dent8's fact-event firewall, so a low-authority or stale write
 can't silently override a trusted fact, contradictions surface instead of overwriting, and
 every fact is replayable with an integrity receipt.
 

@@ -18,11 +18,11 @@ in [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md).
 - `append(event) -> AppendReceipt` — validate the transition against current state,
   then atomically persist the immutable event, update its projection, and write
   graph edges. Returns the assigned `global_sequence` and the computed `event_hash`.
-- `load_claim_events(claim_id)` — ordered events for one claim stream.
-- `scan_events(filter)` — ordered events by claim / subject+predicate / sequence.
+- `load_fact_events(fact_id)` — ordered events for one fact stream.
+- `scan_events(filter)` — ordered events by fact / subject+predicate / sequence.
 
-`replay_claim(events)` (a pure free function, not a backend method) folds an ordered
-slice into `Option<ClaimState>` via `apply_event`. Any backend that returns events
+`replay_fact(events)` (a pure free function, not a backend method) folds an ordered
+slice into `Option<FactState>` via `apply_event`. Any backend that returns events
 in `global_sequence` order gets identical replay — which is the whole point: the
 backend stores bytes; the *meaning* lives in `dent8-core`.
 
@@ -60,10 +60,10 @@ These are backend-independent invariants (mechanized per
 The log decomposes into four record kinds (named generically; the Postgres DDL
 below is one realization):
 
-- **`claim_events`** — the immutable event log (the source of truth).
-- **`claim_projections`** — current lifecycle projection (a cache derivable from the
+- **`fact_events`** — the immutable event log (the source of truth).
+- **`fact_projections`** — current lifecycle projection (a cache derivable from the
   log).
-- **`claim_edges`** — the contradiction / supersession / reinforcement / evidence
+- **`fact_edges`** — the contradiction / supersession / reinforcement / evidence
   graph (`reinforces` · `contradicts` · `supersedes` · `uses_as_evidence`).
 - **`replay_runs`** — replay and invariant-check reports (record a signed tree head
   — root/last hash + event count — so two runs are externally comparable).
@@ -75,7 +75,7 @@ Tamper-evidence is only as strong as **deterministic bytes**. The chain columns
 are **implemented in [`dent8-core/src/hash.rs`](../crates/dent8-core/src/hash.rs)** and
 tested. See [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md). What is done:
 
-1. `serde::{Serialize, Deserialize}` are derived on `ClaimEvent` and sub-types.
+1. `serde::{Serialize, Deserialize}` are derived on `FactEvent` and sub-types.
 2. `canonical_bytes` produces a **sorted-key canonical form via `serde_json`** (route
    through a `BTreeMap`-backed `Value`, emit compact). This is **not RFC 8785 (JCS)**:
    keys sort by UTF-8 byte order (JCS uses UTF-16 code units) and number/escape rules
@@ -85,8 +85,8 @@ tested. See [ADR 0004](decisions/0004-canonicalization-and-hash-chain.md). What 
    without bumping `CANON_VERSION`. (Switching to real JCS via a `serde_jcs` crate is
    only warranted if cross-implementation interop is needed — it is not yet, so the
    dependency is deliberately avoided.)
-3. **`ClaimValue::Json` is canonical by construction (ADR 0004 item 6, resolved).** The
-   variant holds `CanonicalJson`, a newtype built only via `ClaimValue::json` /
+3. **`FactValue::Json` is canonical by construction (ADR 0004 item 6, resolved).** The
+   variant holds `CanonicalJson`, a newtype built only via `FactValue::json` /
    `CanonicalJson::new`, which parse and re-emit sorted-key + compact (rejecting invalid
    JSON) and re-canonicalize on deserialize. Two semantically-equal JSON blobs differing
    only in key order/whitespace therefore hash identically — the bytes invariant now holds
@@ -140,27 +140,27 @@ exposed in-crate as `EVENT_LOG_SCHEMA_SQL` / `MATERIALIZATION_SCHEMA_SQL` (and p
 
 **Chain semantics (the `EventStore` contract).** The hash chain is **global**: each
 `event_hash` links to the previous event across the *whole* log (by `global_sequence`),
-not to the previous event of the same claim. This matches the in-memory backend
+not to the previous event of the same fact. This matches the in-memory backend
 (`InMemoryEventStore`) and the eventual RFC 6962-style signed-tree-head ambition — there
 is one tamper-evident head for the entire log. The cost is that **appends must be
 serialized** (each depends on the global head). A faithful Postgres backend therefore
 reads the previous hash by `MAX(global_sequence)` over *all* rows and serializes the
-append (a single-writer path or an advisory lock), not a per-`claim_id` `FOR UPDATE`,
+append (a single-writer path or an advisory lock), not a per-`fact_id` `FOR UPDATE`,
 which would not order global appends. *(This is a one-way door; revisit only if write
-throughput — not the v0 concern for an integrity store — forces a per-claim chain plus a
-separate Merkle layer over claim heads.)*
+throughput — not the v0 concern for an integrity store — forces a per-fact chain plus a
+separate Merkle layer over fact heads.)*
 
 **Append transaction shape** (one `BEGIN/COMMIT`, serialized):
 
-1. **firewall** (`dent8_store::arbitrate`): load the claim's events, `replay_claim`,
+1. **firewall** (`dent8_store::arbitrate`): load the fact's events, `replay_fact`,
    `apply_event` to gate the transition, and — for a supersession — resolve the
-   *replacing claim's actual authority* and reject an over-stated (laundered) one;
+   *replacing fact's actual authority* and reject an over-stated (laundered) one;
 2. take the global append lock and read the previous `event_hash`
    (`MAX(global_sequence)`);
 3. compute the `event_hash` (`dent8_core::event_hash`, chained to that previous);
-4. insert into `dent8_claim_events`;
-5. upsert `dent8_claim_projections`;
-6. insert `dent8_claim_edges`;
+4. insert into `dent8_fact_events`;
+5. upsert `dent8_fact_projections`;
+6. insert `dent8_fact_edges`;
 7. commit. If any step fails, nothing is visible. The firewall (step 1) must run *inside*
    the same serialized transaction so the arbitrated state cannot change before the append.
 
@@ -182,10 +182,10 @@ settle.
 the scalar columns needed to index and arbitrate. It implements the append-transaction
 shape above — advisory-lock-serialized, firewall-in-transaction via the *shared*
 `arbitrate_events`, global-chain hash — and now also **materializes the derived caches in
-the same transaction** (migration 003): it folds the post-append `ClaimState` via the shared
-`apply_event` and upserts it into `dent8_claim_projection` (so `materialized_projection`
-reads the believed state without re-folding), and records the claim→claim relationship into
-`dent8_claim_edge` (supersedes / contradicts / reinforces). These are derived caches, not a
+the same transaction** (migration 003): it folds the post-append `FactState` via the shared
+`apply_event` and upserts it into `dent8_fact_projection` (so `materialized_projection`
+reads the believed state without re-folding), and records the fact→fact relationship into
+`dent8_fact_edge` (supersedes / contradicts / reinforces). These are derived caches, not a
 second source of truth: `verify_projection` re-folds the log and asserts `projection ==
 fold(log)`. (Timestamps in migration 003 are `BIGINT` Unix milliseconds matching
 `TimestampMillis`, and the exact folded state is kept as `state_json` for lossless reads;
@@ -238,7 +238,7 @@ DuckDB and Parquet are **not** runtime write stores. The write path stays the ev
 **Built (`dent8-export` + `dent8 export`).** `dent8 export [out.parquet]` writes the whole
 log — backend-aware, so it snapshots the file *or* the Postgres log — to a flattened,
 columnar Parquet table, **one row per event**. The queryable scalars are promoted to columns
-(`sequence`, `event_id`, `claim_id`, `kind`, `subject_kind`, `subject_key`, `predicate`,
+(`sequence`, `event_id`, `fact_id`, `kind`, `subject_kind`, `subject_key`, `predicate`,
 `value` + a `value_kind` discriminator (`text`/`json`/`redacted`, or null when absent — so
 redacted is never confused with absent), `authority` (a stable name, not a debug string),
 `source`, `actor`, `recorded_at_ms`); the `DerivedFrom` dependency edges
@@ -252,9 +252,9 @@ dent8 export audit.parquet
 # writes by source
 duckdb -c "SELECT source, count(*) AS writes FROM 'audit.parquet' GROUP BY 1 ORDER BY 2 DESC"
 # the dependency graph (what was derived from what)
-duckdb -c "SELECT claim_id, UNNEST(derived_from) AS source_claim FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
-# current believed value per claim id (latest event wins)
-duckdb -c "SELECT claim_id, last(value ORDER BY sequence) FROM 'audit.parquet' GROUP BY 1"
+duckdb -c "SELECT fact_id, UNNEST(derived_from) AS source_fact FROM 'audit.parquet' WHERE derived_from IS NOT NULL"
+# current believed value per fact id (latest event wins)
+duckdb -c "SELECT fact_id, last(value ORDER BY sequence) FROM 'audit.parquet' GROUP BY 1"
 ```
 
 Use it for replay analysis, forensics, benchmark aggregation, and debugger views; keep

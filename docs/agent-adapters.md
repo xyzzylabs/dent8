@@ -4,7 +4,7 @@ dent8 should meet agents where they already keep durable context, but it should 
 provider-specific memory provider. The invariant is simple:
 
 > Native memory/rules files are projection and integration surfaces. The source of truth is
-> still the dent8 claim-event log.
+> still the dent8 fact-event log.
 
 ## Adapter layers
 
@@ -26,7 +26,7 @@ provider-specific memory provider. The invariant is simple:
    `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
    authority candidate events. Imported facts need provenance and review.
 5. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
-   receipts. Exported files should carry dent8 claim ids and hash receipts in comments.
+   receipts. Exported files should carry dent8 fact ids and hash receipts in comments.
 6. **Reconcile, design-only.** Compare native files with dent8 projections and report stale,
    superseded, unverified, or low-authority facts that are still visible to an agent.
 
@@ -51,7 +51,7 @@ receipt-bearing and auditable.
 The first production-worthy adapter flow is:
 
 ```text
-agent -> dent8 MCP assert/supersede/retract -> claim-event log
+agent -> dent8 MCP assert/supersede/retract -> fact-event log
 native memory/rules hook -> guard bypasses and run verify
 operator -> review explain/replay/conflicts
 future export -> regenerate native rules with receipts

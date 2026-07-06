@@ -10,7 +10,7 @@ Accepted.
 
 ADR 0013 made every write carry a persisted attestation: proof that *this key signed this
 content*. Its documented non-goal is **entitlement at write time**: whether that key was
-granted the claimed source/authority *when the event was written*. Today that cannot be
+granted the facted source/authority *when the event was written*. Today that cannot be
 answered retroactively:
 
 - `active-grants.json` holds only the **current** grant per source. Rotation overwrites the
@@ -31,7 +31,7 @@ before `T`**, **not revoked before `T`**, and **not expired at `T`**?
 **A. A separate, signed, hash-chained grant log** — an append-only JSONL beside
 `trust.json` / `active-grants.json` in the identity bundle.
 
-**B. Grants as claim events in the main event log** — a reserved `identity:` subject kind,
+**B. Grants as fact events in the main event log** — a reserved `identity:` subject kind,
 reusing the chain, witness, attestation, and replay machinery.
 
 B is philosophically attractive (the identity plane becomes replayable beliefs) but breaks a
@@ -57,7 +57,7 @@ One JSON line per lifecycle action:
   "grant_signature": "<hex of the SignedSourceGrant's issuer signature>",
   "source": "source:codex",
   "public_key": "<hex source verifying key>",
-  "max_authority": "High",
+  "max_authority": "high",
   "scope": "*",
   "expires_at_ms": null,
   "at_ms": 1782970000000,

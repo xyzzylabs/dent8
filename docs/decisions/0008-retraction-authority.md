@@ -1,4 +1,4 @@
-# 0008: Retraction Authority (gate `claim.retracted` before shipping `dent8 retract`)
+# 0008: Retraction Authority (gate `fact.retracted` before shipping `dent8 retract`)
 
 Date: 2026-06-27
 
@@ -25,15 +25,15 @@ high-authority fact**. Three gates that protect supersession do *not* apply to r
 - The registry's authority floor and uniqueness (`registry.rs`) gate **only**
   `Asserted`. A `Retracted` candidate passes untouched.
 
-`Retracted` is terminal (`ClaimLifecycle::is_terminal`), so a successful low-authority
+`Retracted` is terminal (`FactLifecycle::is_terminal`), so a successful low-authority
 retraction permanently kills a trusted fact — the same MINJA threat (T1) that authority-
 weighted supersession exists to stop. Today this is *latent*: no CLI verb and nothing
 outside `#[cfg(test)]` constructs a `Retracted` event, so it is a pre-emptive design gate,
 not a live vulnerability.
 
 Retraction is **not** the same as dissent. A low-authority `Contradicted` is deliberately
-admitted (it moves a claim to `Contested` and preserves it, and a contradiction against a
-`Canonical` claim trips the hard-alarm — see [ADR 0007](0007-authority-as-entrenchment.md)).
+admitted (it moves a fact to `Contested` and preserves it, and a contradiction against a
+`Canonical` fact trips the hard-alarm — see [ADR 0007](0007-authority-as-entrenchment.md)).
 Retraction *removes* the belief. So it must **not** inherit the contradiction/dissent
 exemption.
 
@@ -43,11 +43,11 @@ exemption.
 strictly under-ranks the incumbent is rejected with the existing
 `TransitionError::InsufficientAuthority`, enforced in `apply_event`'s `Retracted` arm —
 the same gate the `Superseded` arm applies. Equal-or-higher authority is admitted (a
-source can retract its own claim with its own authority).
+source can retract its own fact with its own authority).
 
 One correction to the framing above: unlike supersession, retraction carries **no backing
-claim**, so there is no laundering indirection (an over-stated *event* authority backed by
-a weaker *claim*). The supersession-only `arbitrate` anti-laundering check therefore has no
+fact**, so there is no laundering indirection (an over-stated *event* authority backed by
+a weaker *fact*). The supersession-only `arbitrate` anti-laundering check therefore has no
 retraction analogue, and the `apply_event` stated-authority gate is the *complete* check.
 Retraction is **not** subjected to the registry's `Asserted`-only floor (the
 incumbent-relative gate is stronger), and `from_trusted_events` reload still treats the
@@ -55,7 +55,7 @@ log as already-arbitrated (the gate lives at write time, like the others).
 
 Candidates **not** chosen, kept as future refinements:
 
-2. **Asserter-only** — only the source that made a claim (or a strictly higher one) may
+2. **Asserter-only** — only the source that made a fact (or a strictly higher one) may
    retract it. Needs the retractor's identity checked against the incumbent's provenance,
    not just authority levels.
 3. **Reason-scoped** — `RetractionReason::PoisoningDetected` / `SourceInvalidated` could be
@@ -93,7 +93,7 @@ Residual risk:
   `authority_monotone_retraction_and_non_resurrection`, and a `#[cfg(kani)]` proof
   `retraction_is_authority_monotone_and_non_resurrecting`.
 - [DONE] `dent8 retract <subject> <predicate> --authority <level> --source <source>` removes **every**
-  believed claim for the subject+predicate, each authority-gated; a low-authority retract
+  believed fact for the subject+predicate, each authority-gated; a low-authority retract
   of a high fact is rejected.
 - Future: option 2 (asserter-identity) / option 3 (reason-scoped trust-and-safety
   retraction) if needed; and the retraction-cascade to dependents (the second half of T8).

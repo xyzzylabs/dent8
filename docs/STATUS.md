@@ -1,6 +1,6 @@
 # dent8 Implementation Status
 
-**Single source of truth for what is built.** If any other doc's "what works" claim
+**Single source of truth for what is built.** If any other doc's "what works" fact
 contradicts this file, this file wins. Three tiers, because the distinction that
 matters most is *"a tested function exists"* vs *"a user can run it"*:
 
@@ -91,26 +91,26 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   firewall's **anti-laundering rejects a revision that cannot out-rank each incumbent**;
   the end state is unique because all incumbents become terminal. A rejection lost on
   strength is **recorded on the incumbent's stream** as a survived challenge
-  (`claim.challenge_rejected`, ADR 0015; `DENT8_RECORD_CHALLENGES=0` opts out), and the
+  (`fact.challenge_rejected`, ADR 0015; `DENT8_RECORD_CHALLENGES=0` opts out), and the
   opt-in `DENT8_ENTRENCHMENT_GATE=1` additionally rejects an equal-authority replacement
   with strictly weaker authority-weighted **earned entrenchment** — corroboration plus
   survived challenges (ADR 0017), so a fact that survived a challenge resists the next fresh
   equal-authority replacement — than its incumbent. Reload re-validates
-  integrity: a torn write or external edit that leaves two fresh believed claims **or** a
+  integrity: a torn write or external edit that leaves two fresh believed facts **or** a
   broken supersession lineage (dangling/cyclic) is rejected, not silently masked.
 - **`dent8 retract <subject> <predicate> --authority <level> --source <source>`** — terminally removes
-  every believed claim for the subject+predicate. Unlike a contradiction (dissent), it is
+  every believed fact for the subject+predicate. Unlike a contradiction (dissent), it is
   **authority-gated** ([ADR 0008](decisions/0008-retraction-authority.md)): a retraction
   that under-ranks its incumbent is rejected — and recorded on the incumbent's stream as a
   survived challenge (ADR 0015) — so a low-authority actor cannot delete a
   trusted fact, and the attempt itself becomes attributed evidence.
 - **`dent8 contradict <subject> <predicate> <opposing-value> --authority <level> --source <source>`** —
-  flags a conflict: asserts an opposing claim and moves the incumbent to `Contested`,
+  flags a conflict: asserts an opposing fact and moves the incumbent to `Contested`,
   keeping **both** (paraconsistency, [ADR 0009](decisions/0009-uniqueness-and-contestation.md)).
   This is **dissent** — *not* authority-gated, so a low-authority source can flag a wrong
   fact without overriding it; the exception is a `Canonical` incumbent, which hard-alarms
   (and records the rejected challenge on the incumbent, ADR 0015). Takes
-  `--valid-from`/`--valid-to` for the opposing claim like `assert`.
+  `--valid-from`/`--valid-to` for the opposing fact like `assert`.
 - **`dent8 reinforce <subject> <predicate> --authority <level> --source <source>`** — corroborates the
   believed fact: records an additional source/authority backing the same value, raising
   **earned entrenchment** without restating the value (no value-mismatch).
@@ -121,7 +121,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 derive <subject> <predicate> <value> --from <source-subject> <source-predicate>
   --authority <level> --source <source> [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts
   a fact **derived from** another (named by subject, resolved to
-  its believed claim id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
+  its believed fact id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
   "poison does not survive in derivatives" differentiator, demonstrated by the
   `poisoned_source_retraction` eval.
@@ -159,7 +159,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
   that content-edit tamper-detection there is `dent8 witness verify`'s job. On **both** it also
-  reports **retraction taint** — a still-believed claim deriving from a retracted/expired source
+  reports **retraction taint** — a still-believed fact deriving from a retracted/expired source
   (`TAINTED: X derives from Y`). On identity builds it also re-verifies every persisted
   **write attestation** (ADR 0013) and, when a grant log is present, resolves each attested
   event's **entitlement at write time** — entitled / unentitled (an integrity failure) /
@@ -172,8 +172,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
   contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
   the self-demonstrating "why dent8" benchmark. Supports `--output json`.
-- **`dent8 conflicts`** — lists every contested fact (in dispute) across all entities, showing
-  **both** rival claims (value + authority + lifecycle). Supports `--output json`.
+- **`dent8 conflicts`** — lists every contested fact (in dispute) across all subjects, showing
+  **both** rival facts (value + authority + lifecycle). Supports `--output json`.
 - **`dent8 export [out.parquet]`** — the **analytical/export lane** (behind `--features
   export`). Writes the whole log — backend-aware, so the file *or* the Postgres log — to a
   flattened, columnar **Parquet** table (one row per event; the queryable scalars promoted to
@@ -191,7 +191,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   Tool definitions advertise `outputSchema` for every structured result. Tool calls return
   human-readable `content` plus MCP 2025-11-25 `structuredContent` with stable agent fields:
   `status`, `accepted_events` (one entry per committed event, including event hash),
-  current-state receipt fields (`claim_id`, `event_hash`, `replay_position`, `current_value`,
+  current-state receipt fields (`fact_id`, `event_hash`, `replay_position`, `current_value`,
   `receipt_kind: "current_state"`, `receipt`), and `rejection_reason` when a firewall write
   is refused. The server prefers protocol `2025-11-25`, also negotiates `2025-06-18`, and
   includes a serialized JSON mirror as a second text content block for clients that ignore
@@ -255,7 +255,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`, `.windsurf/rules`,
   `.windsurfrules`), runs `dent8 verify` on session/post-write audit modes, and exits `2`
   when `DENT8_HOOK_ENFORCE=1` blocks a direct native-memory write that would bypass the
-  claim-event firewall. It is a bypass guard around provider files, not an alternate dent8
+  fact-event firewall. It is a bypass guard around provider files, not an alternate dent8
   store.
 - **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
@@ -272,7 +272,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   it per instance). Caveats: a grant's `issuer`/`scope` are **recorded but not enforced** in
   v0 (scope does not restrict predicates); the ceiling is an `op_*`-layer check, so a process
   calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
-  boundary. The ceiling caps *what a source may claim*; use signed source identity below to
+  boundary. The ceiling caps *the authority a source may assert*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary. Supports `--output json`
   for `list`/`add`/`remove`.
 - **`dent8 identity bootstrap | status | repair-env | rotate-source | revoke |
@@ -381,14 +381,14 @@ reload), not silently believed — but the operational store with atomic append 
 is **Postgres**. The file backend exists so the firewall loop is usable and to prove
 a *second* `EventStore` backend behind the same contract.
 
-`explain` exits 0 whenever a claim exists (believed *or* terminal — a retracted/superseded
-fact still has an auditable receipt) and exits 1 only when no claim exists for the
+`explain` exits 0 whenever a fact exists (believed *or* terminal — a retracted/superseded
+fact still has an auditable receipt) and exits 1 only when no fact exists for the
 subject+predicate.
 
 ## Library — implemented and tested, not exposed
 
 **`dent8-core`:**
-- `ClaimEvent` model, lifecycle state machine, terminal immutability, replay fold.
+- `FactEvent` model, lifecycle state machine, terminal immutability, replay fold.
 - Authority-weighted supersession, expiration, **and retraction** arbitration
   (`InsufficientAuthority`, [ADR 0008](decisions/0008-retraction-authority.md),
   [ADR 0011](decisions/0011-authority-gated-expiration.md)) + canonical contradiction hard-alarm
@@ -397,14 +397,14 @@ subject+predicate.
   `cargo kani`; a green CI job is a tracked follow-up — Kani's pinned nightly does not yet
   build this edition-2024 workspace).
 - Read-time freshness evaluator over the full validity window `[valid_from, expires_at)`
-  (`ClaimState::is_fresh_at` / `is_not_yet_valid_at` / `is_expired_at`, ADR 0016).
+  (`FactState::is_fresh_at` / `is_not_yet_valid_at` / `is_expired_at`, ADR 0016).
 - Earned-entrenchment (ADR 0017): authority-weighted `earned_entrenchment_at_or_above` =
   `corroboration_at_or_above` + `survived_challenges_at_or_above` (both Sybil-resistant halves).
 - Canonicalization + hash chain (`canonical_bytes`, `event_hash`, `hash_chain`):
   serde, SHA-256, injective length-framed leaf, `0x00` domain separation. **Not JCS**
   (sorted-key `serde_json` form — see [storage.md](storage.md)). The "logically-equal →
   identical bytes" invariant holds for **all** fields including embedded JSON:
-  `ClaimValue::Json` is the `CanonicalJson` newtype, canonical by construction and
+  `FactValue::Json` is the `CanonicalJson` newtype, canonical by construction and
   re-canonicalized on deserialize (ADR 0004 item 6, resolved).
 - **External anchor** (`anchor_head` / `verify_anchor` / `ChainAnchor`): an HMAC-SHA256
   commitment to `(count, head)` under a witness key (zero new deps), giving
@@ -428,7 +428,7 @@ subject+predicate.
   fold harness**: a random coherent event stream folded through `apply_event` is checked
   step-by-step against an **independent reference model** (accept/reject, reject *reason*,
   resulting lifecycle), plus **terminal absorption / non-resurrection**, value immutability,
-  `updated_at` tracking, replay determinism, and claim isolation. The cross-check is verified
+  `updated_at` tracking, replay determinism, and fact isolation. The cross-check is verified
   to catch a deliberately wrong model gate.
   [`tests/proptest_robustness.rs`](../crates/dent8-core/tests/proptest_robustness.rs) — the
   **robustness** complement: the untrusted-input pipeline (parse → `event_hash`/`hash_chain` →
@@ -447,20 +447,20 @@ subject+predicate.
   chain, and the fold against silent drift (regenerate with `UPDATE_GOLDEN=1`).
 - **Scenario-family golden corpus** ([`evals/`](../evals/README.md), harness
   [`dent8-store/tests/evals_corpus.rs`](../crates/dent8-store/tests/evals_corpus.rs)): the
-  file-based fixture corpus from [evals.md](evals.md). Unlike the single-claim goldens above,
-  these are often **multi-claim** streams that include writes the firewall is **expected to
+  file-based fixture corpus from [evals.md](evals.md). Unlike the single-fact goldens above,
+  these are often **multi-fact** streams that include writes the firewall is **expected to
   reject**; each `evals/replay/<name>.expected.json` freezes the whole-stream firewall outcome —
-  admitted vs rejected writes (with a stable category), per-claim end-state, read-time
+  admitted vs rejected writes (with a stable category), per-fact end-state, read-time
   freshness, and retraction taint — for `beginner_to_senior`, `ttl_expiry`, `summary_drift`,
   `consistency_required`, and `low_authority_injection`.
 
 **`dent8-store`:**
-- `replay_claim` / `replay_claim_with_policy` + `diff_states` (policy-counterfactual replay).
-- `replay_entity` / `EntityProjection` (`lineage_issues`, `unearned_supersessions`).
+- `replay_fact` / `replay_fact_with_policy` + `diff_states` (policy-counterfactual replay).
+- `replay_entity` / `SubjectProjection` (`lineage_issues`, `unearned_supersessions`).
 - **The firewall** is `EventStore::append` itself (via `arbitrate`): every write is
   arbitrated and there is **no un-arbitrated write path**. It rejects a low-stated-authority
   supersession *and* a laundered one (over-stated event authority backed by a low-authority
-  claim). Reachable via lifecycle CLI writes, `dent8 doctor --write-check`, `dent8 eval`, and
+  fact). Reachable via lifecycle CLI writes, `dent8 doctor --write-check`, `dent8 eval`, and
   `dent8 mcp serve`.
 - `InMemoryEventStore` (test + file-backed CLI dev backend, not operational) +
   `IntegrityReceipt` / `explain` / `explain_subject` + global-chain `verify_chain`
@@ -479,12 +479,12 @@ subject+predicate.
 
 **`dent8-store-postgres` (`--features adapter`):**
 - **`PostgresEventStore`** (v0 async sqlx adapter) — `connect`/`migrate`/`append`/
-  `load_claim_events`/`scan_events`/`verify_chain` over the `dent8_event_log` table
+  `load_fact_events`/`scan_events`/`verify_chain` over the `dent8_event_log` table
   (migration 002). Transactional append serialized by an advisory lock for the global
   chain; the firewall reuses `arbitrate_events`; the canonical event is stored as JSONB.
 - **Materialized projection + edge graph** (migration 003): each accepted append also folds
-  the post-append `ClaimState` (via the shared `apply_event`) into `dent8_claim_projection`
-  and records the claim→claim relationship into `dent8_claim_edge`, in the same transaction.
+  the post-append `FactState` (via the shared `apply_event`) into `dent8_fact_projection`
+  and records the fact→fact relationship into `dent8_fact_edge`, in the same transaction.
   `materialized_projection` reads the believed state without re-folding; `edges_from` reads
   the supersession/contradiction/reinforcement graph; `verify_projection` re-folds and
   asserts `projection == fold(log)`. Derived caches, not a second source of truth.
