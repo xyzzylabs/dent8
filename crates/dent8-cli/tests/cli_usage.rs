@@ -2990,6 +2990,78 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
 }
 
 #[test]
+fn doctor_agent_reports_native_memory_bypass_guard_posture() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent codex --install-mcp",
+    );
+
+    let missing = run_dent8(&["doctor", "--agent", "codex", "--dir", &dir], &[]);
+    assert_success(&missing, "doctor --agent codex before hook install");
+    let missing_stdout = stdout(&missing);
+    assert!(
+        missing_stdout.contains("WARN  bypass guard: no native-memory guard found at")
+            && missing_stdout.contains(".codex/hooks.json")
+            && missing_stdout.contains("examples/agent-hooks/codex"),
+        "{missing_stdout}"
+    );
+
+    let hook_path = temp.file(".codex/hooks.json");
+    fs::write(
+        &hook_path,
+        include_str!("../../../examples/agent-hooks/codex/hooks.sample.json"),
+    )
+    .expect("install codex hook sample");
+
+    let guarded = run_dent8(
+        &[
+            "--output", "json", "doctor", "--agent", "codex", "--dir", &dir,
+        ],
+        &[],
+    );
+    assert_success(&guarded, "doctor --agent codex after hook install");
+    let guarded = stdout_json(&guarded);
+    assert!(
+        guarded["sections"]["ok"]
+            .as_array()
+            .expect("ok sections")
+            .iter()
+            .any(|check| check["message"].as_str().is_some_and(
+                |message| message.contains("bypass guard: native-memory guard is enforced")
+            )),
+        "{guarded}"
+    );
+    assert!(
+        guarded["sections"]["warn"]
+            .as_array()
+            .expect("warn sections")
+            .iter()
+            .all(|check| !check["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("bypass guard:"))),
+        "{guarded}"
+    );
+}
+
+#[test]
 fn identity_repair_env_recovers_stale_agent_bundle_active_grants() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();

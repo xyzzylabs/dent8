@@ -65,7 +65,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   the expected command is read from the installed config; pass it only to assert a specific
   expected command. By default it is read-only; with `--repair`, it first repairs the
   generated identity env from the current signed grant and refreshes the selected agent's
-  installed MCP config from the generated bundle, then runs the normal checks. With
+  installed MCP config from the generated bundle, then runs the normal checks. It also reports
+  a best-effort **bypass guard** posture for known hook-capable profiles: OK when an installed
+  native-memory hook config references `dent8 hook native-memory-guard` with
+  `DENT8_HOOK_ENFORCE=1`, WARN when the hook is missing/advisory, and WARN/unknown for
+  profiles whose hook schema is host-specific. With
   `--write-check`, it runs an explicit acceptance probe through the installed MCP server
   against the configured store: a high-authority internal diagnostic fact
   (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a low-authority supersession to

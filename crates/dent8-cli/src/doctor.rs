@@ -258,6 +258,7 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
             return DoctorReport { output, ok: false };
         }
     };
+    doctor_agent_bypass_guard(&mut output, agent, &dir);
 
     let expected_command = expected_doctor_mcp_command(args, &dir);
     match validate_installed_agent_config(&bundle_env, &installed, expected_command.as_deref()) {
@@ -317,6 +318,163 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
     }
 
     DoctorReport { output, ok }
+}
+
+pub(crate) fn doctor_agent_bypass_guard(
+    output: &mut String,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) {
+    match inspect_agent_bypass_guard(agent, dir) {
+        BypassGuardStatus::Enforced(path) => doctor_line(
+            output,
+            "OK",
+            &format!(
+                "bypass guard: native-memory guard is enforced in {}",
+                path.display()
+            ),
+        ),
+        BypassGuardStatus::Advisory(path) => doctor_line(
+            output,
+            "WARN",
+            &format!(
+                "bypass guard: native-memory guard exists in {} but is not enforced; set DENT8_HOOK_ENFORCE=1",
+                path.display()
+            ),
+        ),
+        BypassGuardStatus::Missing(path) => doctor_line(
+            output,
+            "WARN",
+            &format!(
+                "bypass guard: no native-memory guard found at {}; install the profile from examples/agent-hooks/{}",
+                path.display(),
+                agent.cli_name()
+            ),
+        ),
+        BypassGuardStatus::Unreadable(path, error) => doctor_line(
+            output,
+            "WARN",
+            &format!(
+                "bypass guard: could not inspect {}: {error}",
+                path.display()
+            ),
+        ),
+        BypassGuardStatus::Unvalidated(reason) => {
+            doctor_line(output, "WARN", &format!("bypass guard: {reason}"));
+        }
+    }
+}
+
+pub(crate) enum BypassGuardStatus {
+    Enforced(std::path::PathBuf),
+    Advisory(std::path::PathBuf),
+    Missing(std::path::PathBuf),
+    Unreadable(std::path::PathBuf, String),
+    Unvalidated(String),
+}
+
+pub(crate) fn inspect_agent_bypass_guard(
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> BypassGuardStatus {
+    let Some(path) = agent_hook_config_path(agent, dir) else {
+        return BypassGuardStatus::Unvalidated(agent_hook_unvalidated_message(agent, dir));
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return BypassGuardStatus::Missing(path);
+        }
+        Err(error) => return BypassGuardStatus::Unreadable(path, error.to_string()),
+    };
+    let parsed = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(parsed) => parsed,
+        Err(error) => return BypassGuardStatus::Unreadable(path, format!("invalid JSON: {error}")),
+    };
+    let mut strings = Vec::new();
+    collect_json_strings(&parsed, &mut strings);
+    let has_guard = strings
+        .iter()
+        .any(|text| text.contains("dent8 hook native-memory-guard"));
+    let has_write_mode = strings
+        .iter()
+        .any(|text| text.contains("DENT8_HOOK_MODE=guard-native-memory-write"));
+    let enforced = strings.iter().any(|text| {
+        let text = text.to_ascii_lowercase();
+        text.contains("dent8_hook_enforce=1")
+            || text.contains("dent8_hook_enforce=true")
+            || text.contains("dent8_hook_enforce=yes")
+            || text.contains("dent8_hook_enforce=on")
+    });
+    if has_guard && has_write_mode && enforced {
+        BypassGuardStatus::Enforced(path)
+    } else if has_guard {
+        BypassGuardStatus::Advisory(path)
+    } else {
+        BypassGuardStatus::Missing(path)
+    }
+}
+
+pub(crate) fn agent_hook_config_path(
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let root = doctor_project_root_for(dir)?;
+    match agent {
+        InitAgent::Codex => Some(root.join(".codex/hooks.json")),
+        InitAgent::ClaudeCode => Some(root.join(".claude/settings.json")),
+        InitAgent::Gemini => Some(root.join(".gemini/settings.json")),
+        InitAgent::Cascade => Some(root.join(".windsurf/hooks.json")),
+        InitAgent::Cursor | InitAgent::GrokBuild | InitAgent::Hecate => None,
+    }
+}
+
+pub(crate) fn doctor_project_root_for(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if dir.file_name().is_some_and(|name| name == ".dent8") {
+        return dir.parent().map(std::path::Path::to_path_buf);
+    }
+    None
+}
+
+pub(crate) fn agent_hook_unvalidated_message(agent: InitAgent, dir: &std::path::Path) -> String {
+    if doctor_project_root_for(dir).is_none() {
+        return format!(
+            "cannot infer a native-memory hook config path from --dir {}; use a .dent8 directory or inspect examples/agent-hooks/{} manually",
+            dir.display(),
+            agent.cli_name()
+        );
+    }
+    match agent {
+        InitAgent::Cursor => {
+            "Cursor hook schema is version-dependent; install MCP first, then version-check a native-memory guard manually from examples/agent-hooks/cursor".to_string()
+        }
+        InitAgent::GrokBuild => {
+            "Grok Build hook support is host-dependent; reuse the Claude/Hecate guard profile only when the host exposes compatible hooks".to_string()
+        }
+        InitAgent::Hecate => {
+            "Hecate distributes policy to child agents; inspect the supervised child agent hook profile rather than one Hecate-local file".to_string()
+        }
+        InitAgent::Codex | InitAgent::ClaudeCode | InitAgent::Gemini | InitAgent::Cascade => {
+            "native-memory hook profile is not validated for this agent".to_string()
+        }
+    }
+}
+
+pub(crate) fn collect_json_strings<'a>(value: &'a serde_json::Value, strings: &mut Vec<&'a str>) {
+    match value {
+        serde_json::Value::String(text) => strings.push(text),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_json_strings(item, strings);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_json_strings(item, strings);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
 }
 
 pub(crate) fn expected_doctor_mcp_command(

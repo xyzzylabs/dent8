@@ -184,6 +184,14 @@ identity env or installed MCP env, `dent8 doctor --agent <profile> --repair --wr
 repairs the generated env from the current signed grant, refreshes the selected MCP config,
 and then reruns those checks.
 
+`doctor --agent` also reports native-memory bypass posture. For Codex, Claude Code, Gemini,
+and Cascade it inspects the expected hook config and reports OK only when it finds
+`dent8 hook native-memory-guard` in enforced write-guard mode (`DENT8_HOOK_ENFORCE=1`). A
+missing hook is a WARN, not a failure: MCP remains the dent8 integrity boundary, but native
+memory/rules files are not guarded against direct writes. Cursor, Grok Build, and Hecate are
+reported as WARN/unknown because their hook surface is host- or supervisor-specific; validate
+those manually from [`examples/agent-hooks/`](../examples/agent-hooks/).
+
 ## Witness flow
 
 `dent8 init --witness` writes verification config into `.dent8/env`:

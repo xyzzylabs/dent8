@@ -47,6 +47,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   JSON-capable by default.
 
 ### Added
+- **`doctor --agent` reports native-memory bypass posture.** For checked hook profiles (Codex,
+  Claude Code, Gemini, Cascade), doctor now inspects the expected hook config and reports OK only
+  when `dent8 hook native-memory-guard` is present in enforced write-guard mode. Missing/advisory
+  hooks are WARNs; Cursor, Grok Build, and Hecate report WARN/unknown because their hook surfaces
+  are host-specific.
 - **Signed identity defaults for CLI/MCP writes.** When `DENT8_GRANT` is configured, CLI and
   stdio MCP write commands can omit `--source` and/or `--authority`: dent8 defaults them from the
   active grant's source and maximum authority, then runs the same authority-ceiling, grant, and
