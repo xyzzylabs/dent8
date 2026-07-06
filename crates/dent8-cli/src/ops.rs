@@ -748,8 +748,14 @@ pub(crate) fn derived_from_write_json(value: Option<&DerivedFromJson<'_>>) -> se
 }
 
 pub(crate) fn write_success_json(view: &WriteJsonView<'_>, message: &str) -> serde_json::Value {
+    // Mirror the MCP write surface: a `contradict` records dissent (the subject becomes
+    // contested); every other write is an admitted assertion.
+    let status = match view.tool {
+        "contradict" => Status::Contested,
+        _ => Status::Accepted,
+    };
     serde_json::json!({
-        "status": Status::Ok.as_str(),
+        "status": status.as_str(),
         "tool": view.tool,
         "accepted": true,
         "subject": {

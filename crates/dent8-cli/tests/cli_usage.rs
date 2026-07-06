@@ -433,7 +433,7 @@ fn write_commands_emit_machine_readable_json() {
     assert_success(&asserted, "assert --output json");
     let asserted = stdout_json(&asserted);
     assert_eq!(asserted["schema_version"], 1);
-    assert_eq!(asserted["status"], "ok");
+    assert_eq!(asserted["status"], "accepted");
     assert_eq!(asserted["tool"], "assert");
     assert_eq!(asserted["accepted"], true);
     assert_eq!(asserted["subject"]["key"], "alice");
@@ -521,7 +521,7 @@ fn derived_write_json_includes_source_fact() {
     );
     assert_success(&derived, "derive --output json");
     let derived = stdout_json(&derived);
-    assert_eq!(derived["status"], "ok");
+    assert_eq!(derived["status"], "accepted");
     assert_eq!(derived["tool"], "derive");
     assert_eq!(derived["derived_from"]["subject"]["kind"], "person");
     assert_eq!(derived["derived_from"]["subject"]["key"], "alice");
@@ -661,7 +661,7 @@ fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
     assert_eq!(verify.status.code(), Some(1));
     assert!(stderr(&verify).is_empty(), "{}", stderr(&verify));
     let verify = stdout_json(&verify);
-    assert_eq!(verify["status"], "failed");
+    assert_eq!(verify["status"], "integrity_issues");
     assert_eq!(verify["ok"], false);
     assert!(
         verify["findings"]

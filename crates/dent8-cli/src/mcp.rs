@@ -768,9 +768,9 @@ impl ToolError {
 
     fn status(&self) -> &'static str {
         match self {
-            Self::Unknown(_) | Self::Invalid(_) => "invalid",
-            Self::Rejected(_) => "rejected",
-            Self::Failed(_) => "failed",
+            Self::Unknown(_) | Self::Invalid(_) => Status::Invalid.as_str(),
+            Self::Rejected(_) => Status::Rejected.as_str(),
+            Self::Failed(_) => Status::Failed.as_str(),
         }
     }
 }

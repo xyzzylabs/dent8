@@ -22,6 +22,13 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   this build** and must be re-ingested from source (there is no in-place migration). This
   withdraws the pre-1.0 format-stability promise for this one break; from v2 onward the intent is
   additive-only again.
+- **CLI belief-surface `status` now mirrors MCP.** The `--output json` `status` field on the CLI
+  reports the same value the MCP tool does for the same operation: a write reports `accepted`
+  (`contradict` reports `contested`) instead of the old generic `ok`; `verify` reports
+  `integrity_issues` (not `failed`) when the hash chain is broken; and `explain` reports
+  `contested` for a disputed fact. The `accepted` boolean on write output is unchanged. A
+  consumer that keyed on the CLI's old `status: "ok"` for a successful write must read `accepted`
+  / `contested` (or the `accepted` boolean) instead.
 
 ### Added
 - **`schema_version` on every machine payload.** Each `--output json` object and every MCP

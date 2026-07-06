@@ -1575,7 +1575,13 @@ fn receipt_json(tool: &str, receipt: &IntegrityReceipt) -> serde_json::Value {
     let object = value
         .as_object_mut()
         .expect("receipt fields should serialize as an object");
-    object.insert("status".to_string(), serde_json::json!(Status::Ok.as_str()));
+    // Mirror MCP: a contested fact reads `contested`, not `ok`.
+    let status = if receipt.lifecycle == FactLifecycle::Contested {
+        Status::Contested
+    } else {
+        Status::Ok
+    };
+    object.insert("status".to_string(), serde_json::json!(status.as_str()));
     object.insert("tool".to_string(), serde_json::json!(tool));
     value
 }
@@ -2602,7 +2608,7 @@ fn verify_json(ok: bool, report: &str) -> serde_json::Value {
         .map(str::to_string)
         .collect::<Vec<_>>();
     serde_json::json!({
-        "status": if ok { Status::Ok.as_str() } else { Status::Failed.as_str() },
+        "status": if ok { Status::Ok.as_str() } else { Status::IntegrityIssues.as_str() },
         "tool": "verify",
         "ok": ok,
         "summary": first_line(report),
