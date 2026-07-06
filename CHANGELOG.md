@@ -111,6 +111,15 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `UnearnedSupersession::WeakerCorroboration` → `WeakerEntrenchment` (a non-serialized API
   type).
 
+### Changed
+- **`witness` is now real clap subcommands.** `dent8 witness <keygen|sign|verify|verify-published|
+  head|publish|serve|doctor>` are parsed like every other command instead of a hand-rolled
+  catch-all, so `witness` gets real `--help`, `--output json` works in any position (including
+  after the subcommand, via global-flag propagation), and unknown subcommands get clap's own
+  diagnostics. The grammar is unchanged (`--grants`, `doctor <writer|signer|both>` with the
+  `verifier`/`local` aliases, `serve [interval] [max-heads]`), so existing invocations keep
+  working.
+
 ### Fixed
 - **`conflicts --output json` reported `status: "ok"` while listing live disputes.** A non-empty
   result now reports `status: "contested"` (an empty one still reports `ok`), so a machine

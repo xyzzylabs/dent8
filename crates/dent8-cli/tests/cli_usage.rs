@@ -2012,6 +2012,24 @@ fn assert_witness_keygen_json(fixture: &WitnessJsonFixture) {
 }
 
 #[cfg(feature = "witness")]
+#[test]
+fn witness_accepts_the_output_flag_after_the_subcommand() {
+    // Real subcommands (not a trailing catch-all) mean the global `--output` works *after* the
+    // subcommand too, via clap global-arg propagation — the shared contract every command has.
+    let temp = TempDir::new();
+    let key = temp.file("witness.key").to_string_lossy().into_owned();
+    let keygen = run_dent8(
+        &["witness", "keygen", "--output", "json"],
+        &[("DENT8_WITNESS_KEY", key.as_str())],
+    );
+    assert_success(&keygen, "witness keygen --output json (trailing)");
+    assert!(stderr(&keygen).is_empty(), "{}", stderr(&keygen));
+    let keygen = stdout_json(&keygen);
+    assert_eq!(keygen["status"], "ok");
+    assert_eq!(keygen["tool"], "witness keygen");
+}
+
+#[cfg(feature = "witness")]
 fn assert_witness_sign_head_and_verify_json(fixture: &WitnessJsonFixture) {
     let sign_env = fixture.sign_env();
     let verify_env = fixture.verify_env();

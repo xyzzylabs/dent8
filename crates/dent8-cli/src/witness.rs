@@ -114,24 +114,6 @@ fn print_witness_fault(
     }
 }
 
-fn print_witness_usage(output: CliOutput, tool: &str, usage: &str) -> i32 {
-    match output {
-        CliOutput::Text => {
-            eprintln!("usage: {usage}");
-            2
-        }
-        CliOutput::Json => print_json_stdout_with_code(
-            &serde_json::json!({
-                "status": "invalid",
-                "tool": tool,
-                "usage": usage,
-                "message": "invalid witness command arguments",
-            }),
-            2,
-        ),
-    }
-}
-
 fn signed_head_json(sth: &SignedTreeHead) -> serde_json::Value {
     serde_json::to_value(sth).expect("signed tree head should serialize")
 }
@@ -334,15 +316,10 @@ pub fn sign(output: CliOutput) -> i32 {
 /// diagnostics (`started` / `warning` / `error` / `stopped`) on stderr — so a collector
 /// tailing stdout sees exactly the signed-head record stream.
 #[allow(clippy::too_many_lines)] // one linear loop, two lanes, two output modes
-pub fn serve(args: &[String], output: CliOutput) -> i32 {
+pub fn serve(interval_seconds: Option<u64>, max_heads: Option<u64>, output: CliOutput) -> i32 {
     // Floor the interval at 1s: a 0s interval whose head target is never reached on a static log
     // would busy-spin the CPU (and hammer the DB on the Postgres backend).
-    let interval = args
-        .first()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5)
-        .max(1);
-    let max_heads = args.get(1).and_then(|value| value.parse::<u64>().ok());
+    let interval = interval_seconds.unwrap_or(5).max(1);
     let serve_error = |message: &str| match output {
         CliOutput::Text => eprintln!("{message}"),
         CliOutput::Json => eprintln!(
@@ -590,18 +567,8 @@ pub fn head(output: CliOutput) -> i32 {
 /// append a local head behind the already-published sequence, treats an identical latest head
 /// as idempotent, and verifies the resulting published sequence against the current log before
 /// writing.
-pub fn publish(args: &[String], output: CliOutput) -> i32 {
-    let (path, grants_path) = match args {
-        [path] => (path, None),
-        [path, flag, grants] if flag == "--grants" => (path, Some(grants)),
-        _ => {
-            return print_witness_usage(
-                output,
-                PUBLISH_TOOL,
-                "dent8 witness publish <published-heads.jsonl> [--grants <published-grants.jsonl>]",
-            );
-        }
-    };
+pub fn publish(published_heads: &str, grants_path: Option<&str>, output: CliOutput) -> i32 {
+    let path = published_heads;
     let outcome = match publish_outcome(path) {
         Ok(outcome) => outcome,
         Err((status, message, code)) => {
@@ -610,7 +577,7 @@ pub fn publish(args: &[String], output: CliOutput) -> i32 {
     };
     let grants = match grants_path {
         Some(grants_path) => match publish_grants_outcome(grants_path) {
-            Ok(grants_outcome) => Some((grants_path.as_str(), grants_outcome)),
+            Ok(grants_outcome) => Some((grants_path, grants_outcome)),
             Err((status, message, code)) => {
                 return print_witness_fault(output, PUBLISH_TOOL, status, &message, code);
             }
@@ -906,18 +873,12 @@ pub fn verify(output: CliOutput) -> i32 {
 /// artifact, Git history, object storage, another host) and contain JSON lines printed by
 /// `dent8 witness head`.
 #[allow(clippy::too_many_lines)] // two lanes (event heads + grant-log heads) in one linear pass
-pub fn verify_published(args: &[String], output: CliOutput) -> i32 {
-    let (path, grants_path) = match args {
-        [path] => (path, None),
-        [path, flag, grants] if flag == "--grants" => (path, Some(grants)),
-        _ => {
-            return print_witness_usage(
-                output,
-                VERIFY_PUBLISHED_TOOL,
-                "dent8 witness verify-published <published-heads.jsonl> [--grants <published-grants.jsonl>]",
-            );
-        }
-    };
+pub fn verify_published(
+    published_heads: &str,
+    grants_path: Option<&str>,
+    output: CliOutput,
+) -> i32 {
+    let path = published_heads;
     let events = match load_events() {
         Ok(events) => events,
         Err(error) => {
@@ -1126,18 +1087,11 @@ fn warn_if_published_grants_trail(published_count: u64, current_count: u64) {
 }
 
 /// Check witness operator readiness for one side of the deployment boundary.
-pub fn doctor(args: &[String], output: CliOutput) -> i32 {
-    let role = match args {
-        [role] if role == "writer" || role == "verifier" => WitnessDoctorRole::Writer,
-        [role] if role == "signer" => WitnessDoctorRole::Signer,
-        [role] if role == "both" || role == "local" => WitnessDoctorRole::Both,
-        _ => {
-            return print_witness_usage(
-                output,
-                DOCTOR_TOOL,
-                "dent8 witness doctor <writer|signer|both>",
-            );
-        }
+pub fn doctor(role: crate::WitnessRole, output: CliOutput) -> i32 {
+    let role = match role {
+        crate::WitnessRole::Writer => WitnessDoctorRole::Writer,
+        crate::WitnessRole::Signer => WitnessDoctorRole::Signer,
+        crate::WitnessRole::Both => WitnessDoctorRole::Both,
     };
 
     let lines = role.doctor_lines();

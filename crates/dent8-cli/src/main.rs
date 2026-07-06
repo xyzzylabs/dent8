@@ -150,7 +150,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Schema(args)) => match args.command {
             SchemaCommand::Postgres => cmd_schema_postgres(cli.output),
         },
-        Some(CliCommand::Witness(args)) => run_witness(&args.args, cli.output),
+        Some(CliCommand::Witness(args)) => run_witness(&args.command, cli.output),
     }
 }
 
@@ -996,9 +996,64 @@ struct McpInstallArgs {
 
 #[derive(Args, Debug)]
 struct WitnessArgs {
-    /// Passed through to the witness feature implementation.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    args: Vec<String>,
+    #[command(subcommand)]
+    command: WitnessCommand,
+}
+
+/// Transparency-log (witness) operations. Real subcommands so `witness` shares the same clap
+/// parsing, `--output json`, and help as every other command (ADR 0011/0014).
+#[derive(Subcommand, Debug)]
+enum WitnessCommand {
+    /// Generate a witness signing keypair.
+    Keygen,
+    /// Sign the current event-log head into the signed-head log.
+    Sign,
+    /// Verify the local signed-head log against the event log.
+    Verify,
+    /// Verify a published heads file, optionally cross-checking a published grants file.
+    VerifyPublished {
+        /// Published signed heads (JSON-lines).
+        published_heads: String,
+        /// Published grants (JSON-lines) to cross-check.
+        #[arg(long)]
+        grants: Option<String>,
+    },
+    /// Print the current event-log head.
+    Head,
+    /// Publish the current head, and optionally the grant history, to a file.
+    Publish {
+        /// Destination path for the published signed heads (JSON-lines).
+        published_heads: String,
+        /// Also publish the grant history to this path (JSON-lines).
+        #[arg(long)]
+        grants: Option<String>,
+    },
+    /// Long-running signer: sign the head as the log grows (streams NDJSON to stderr).
+    Serve {
+        /// Seconds between growth checks (floored at 1; default 5).
+        interval_seconds: Option<u64>,
+        /// Stop after signing this many heads.
+        max_heads: Option<u64>,
+    },
+    /// Diagnose the witness setup for a role.
+    Doctor {
+        /// Which side to check: the writer, the signer, or both.
+        #[arg(value_enum)]
+        role: WitnessRole,
+    },
+}
+
+/// The side of the witness split to diagnose (`witness doctor`).
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum WitnessRole {
+    /// The writing side (formerly also spelled `verifier`).
+    #[value(alias = "verifier")]
+    Writer,
+    /// The signing side.
+    Signer,
+    /// Both sides on one host (formerly also spelled `local`).
+    #[value(alias = "local")]
+    Both,
 }
 
 static COLOR_MODE: AtomicU8 = AtomicU8::new(0);
@@ -1263,111 +1318,44 @@ fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
 
 /// Dispatch `dent8 witness <sub>`. Feature-gated: without `--features witness` the command
 /// exists only to explain how to enable it.
-fn run_witness(args: &[String], output: CliOutput) -> i32 {
-    // `witness` takes raw args (clap's trailing catch-all), so a trailing `--output json` —
-    // the position every clap-native command accepts — would otherwise be swallowed as an
-    // unknown subcommand token and die with a usage error. Strip an embedded `--output` here
-    // and let it override the global flag.
-    let (args, output) = match extract_witness_output(args, output) {
-        Ok(extracted) => extracted,
-        Err(message) => {
-            eprintln!("{message}");
-            return 2;
-        }
-    };
-    let args = args.as_slice();
+#[cfg_attr(not(feature = "witness"), expect(unused_variables))]
+fn run_witness(command: &WitnessCommand, output: CliOutput) -> i32 {
     #[cfg(not(feature = "witness"))]
-    {
-        let _ = args;
-        match output {
-            CliOutput::Text => {
-                eprintln!("`dent8 witness` requires a build with `--features witness`");
-                2
-            }
-            CliOutput::Json => print_json_stdout_with_code(
-                &serde_json::json!({
-                    "status": "failed",
-                    "tool": "witness",
-                    "required_feature": "witness",
-                    "message": "`dent8 witness` requires a build with `--features witness`",
-                }),
-                2,
-            ),
-        }
-    }
-    #[cfg(feature = "witness")]
-    match args {
-        [sub] if sub == "keygen" => witness::keygen(output),
-        [sub] if sub == "sign" => witness::sign(output),
-        [sub] if sub == "verify" => witness::verify(output),
-        [sub, rest @ ..] if sub == "verify-published" => witness::verify_published(rest, output),
-        [sub] if sub == "head" => witness::head(output),
-        [sub, rest @ ..] if sub == "publish" => witness::publish(rest, output),
-        [sub, rest @ ..] if sub == "serve" => witness::serve(rest, output),
-        [sub, rest @ ..] if sub == "doctor" => witness::doctor(rest, output),
-        _ => witness_usage_error(output),
-    }
-}
-
-/// Pull an embedded `--output <text|json>` / `--output=<text|json>` out of the raw witness
-/// args. Returns the remaining args and the effective output (embedded wins over the global
-/// flag); errors on a missing or invalid value, mirroring clap's own diagnostics.
-fn extract_witness_output(
-    args: &[String],
-    global: CliOutput,
-) -> Result<(Vec<String>, CliOutput), String> {
-    let mut remaining = Vec::with_capacity(args.len());
-    let mut output = global;
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if let Some(value) = arg.strip_prefix("--output=") {
-            output = parse_witness_output_value(value)?;
-        } else if arg == "--output" {
-            let Some(value) = iter.next() else {
-                return Err(
-                    "error: a value is required for '--output <OUTPUT>' but none was supplied \
-                     [possible values: text, json]"
-                        .to_string(),
-                );
-            };
-            output = parse_witness_output_value(value)?;
-        } else {
-            remaining.push(arg.clone());
-        }
-    }
-    Ok((remaining, output))
-}
-
-fn parse_witness_output_value(value: &str) -> Result<CliOutput, String> {
-    match value {
-        "text" => Ok(CliOutput::Text),
-        "json" => Ok(CliOutput::Json),
-        other => Err(format!(
-            "error: invalid value '{other}' for '--output <OUTPUT>' [possible values: text, json]"
-        )),
-    }
-}
-
-#[cfg(feature = "witness")]
-fn witness_usage_error(output: CliOutput) -> i32 {
-    let usage = "dent8 witness <keygen | sign | verify | verify-published \
-                 <published-heads.jsonl> [--grants <published-grants.jsonl>] | head | publish \
-                 <published-heads.jsonl> [--grants <published-grants.jsonl>] | serve \
-                 [interval-seconds] [max-heads] | doctor <writer|signer|both>>";
-    match output {
+    return match output {
         CliOutput::Text => {
-            eprintln!("usage: {usage}");
+            eprintln!("`dent8 witness` requires a build with `--features witness`");
             2
         }
         CliOutput::Json => print_json_stdout_with_code(
             &serde_json::json!({
-                "status": "invalid",
+                "status": Status::Failed.as_str(),
                 "tool": "witness",
-                "usage": usage,
-                "message": "invalid witness command",
+                "required_feature": "witness",
+                "message": "`dent8 witness` requires a build with `--features witness`",
             }),
             2,
         ),
+    };
+
+    #[cfg(feature = "witness")]
+    match command {
+        WitnessCommand::Keygen => witness::keygen(output),
+        WitnessCommand::Sign => witness::sign(output),
+        WitnessCommand::Verify => witness::verify(output),
+        WitnessCommand::VerifyPublished {
+            published_heads,
+            grants,
+        } => witness::verify_published(published_heads, grants.as_deref(), output),
+        WitnessCommand::Head => witness::head(output),
+        WitnessCommand::Publish {
+            published_heads,
+            grants,
+        } => witness::publish(published_heads, grants.as_deref(), output),
+        WitnessCommand::Serve {
+            interval_seconds,
+            max_heads,
+        } => witness::serve(*interval_seconds, *max_heads, output),
+        WitnessCommand::Doctor { role } => witness::doctor(*role, output),
     }
 }
 
