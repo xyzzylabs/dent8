@@ -48,8 +48,9 @@ DENT8_BIN=target/debug/dent8 DENT8_EXPECT_WITNESS=1 scripts/release-acceptance.s
 ```
 
 The script initializes a throwaway project with the Codex profile, signed identity, a stock
-SQLite backend, and an MCP config; then it runs `doctor --agent --write-check`,
-`assert`, `facts list`, `explain`, and `verify`. It also exercises the witness smoke
+SQLite backend, and the default project-local Codex MCP config; then it runs
+`doctor --agent --write-check`, `doctor --all-agents --write-check`, `assert`, `facts list`,
+`explain`, and `verify`. It also exercises the witness smoke
 (`keygen -> sign -> verify -> publish -> verify-published`), since the witness is a stock
 command.
 

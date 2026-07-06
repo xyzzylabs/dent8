@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fresh-install acceptance path for v0.1.0.
+# Fresh-install acceptance path for a dent8 release.
 #
 # By default this builds the stock `dent8` package and tests the installed-user shape in a
 # temporary project. Set DENT8_BIN=/path/to/dent8 to test an already installed/release binary.
@@ -71,7 +71,6 @@ unset DENT8_STORE_URL \
   DENT8_WITNESS_PUBKEY \
   DENT8_WITNESS_KEY
 
-MCP_CONFIG="$PROJECT/codex-config.toml"
 ISSUER_KEY="$WORK/issuer.key"
 
 echo "# init: Codex profile, signed identity, stock SQLite backend, MCP config"
@@ -80,7 +79,6 @@ echo "# init: Codex profile, signed identity, stock SQLite backend, MCP config"
   --store sqlite \
   --issuer-key "$ISSUER_KEY" \
   --install-mcp \
-  --mcp-config "$MCP_CONFIG" \
   --mcp-command "$BIN" \
   --output json >"$OUT/init.json"
 
@@ -88,10 +86,16 @@ echo "# doctor: installed MCP smoke + trusted write check"
 "$BIN" doctor \
   --agent codex \
   --dir .dent8 \
-  --mcp-config "$MCP_CONFIG" \
   --mcp-command "$BIN" \
   --write-check \
   --output json >"$OUT/doctor.json"
+
+echo "# doctor: aggregate installed-agent gate"
+"$BIN" doctor \
+  --all-agents \
+  --dir .dent8 \
+  --write-check \
+  --output json >"$OUT/doctor-all-agents.json"
 
 set -a
 . .dent8/env
