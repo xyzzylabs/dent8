@@ -18,6 +18,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `dent8/hello`/`dent8/prove` while each daemon process remains single-source.
 - Added `dent8 native scan --agent <profile>` as a read-only audit of provider-native
   memory/rules files, with size/hash/mtime, receipt-marker detection, and guard posture.
+- Added `dent8 native reconcile --agent <profile>` to verify `dent8://<kind>/<key>/<predicate>`
+  references in native files against the current dent8 receipt, flagging stale, contested,
+  missing, no-longer-believed, or malformed references.
 
 ## [0.3.0] - 2026-07-06
 

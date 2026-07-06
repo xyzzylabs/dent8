@@ -195,6 +195,113 @@ fn native_scan_reports_agent_memory_files_and_receipt_markers() {
 }
 
 #[test]
+fn native_reconcile_verifies_dent8_receipt_references() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert alice fact",
+    );
+    fs::write(
+        temp.file("AGENTS.md"),
+        "Alice's current drink receipt: dent8://person/alice/favorite_drink\n",
+    )
+    .expect("write AGENTS.md");
+
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let reconciled = run_dent8(
+        &[
+            "--output",
+            "json",
+            "native",
+            "reconcile",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+        ],
+        &envs,
+    );
+    assert_success(&reconciled, "native reconcile --output json");
+    let reconciled = stdout_json(&reconciled);
+    assert_eq!(reconciled["status"], "ok");
+    assert_eq!(reconciled["tool"], "native reconcile");
+    assert_eq!(reconciled["summary"]["references"], 1);
+    assert_eq!(reconciled["summary"]["ok"], 1);
+    assert_eq!(reconciled["summary"]["failures"], 0);
+    assert_eq!(reconciled["summary"]["files_with_references"], 1);
+
+    let reference = reconciled["references"]
+        .as_array()
+        .expect("references array")
+        .first()
+        .expect("first reference");
+    assert_eq!(reference["status"], "ok");
+    assert_eq!(
+        reference["reference"]["uri"],
+        "dent8://person/alice/favorite_drink"
+    );
+    assert_eq!(reference["receipt"]["value"]["text"], "tea");
+}
+
+#[test]
+fn native_reconcile_reports_missing_and_invalid_receipts() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+    fs::write(
+        temp.file("AGENTS.md"),
+        "Missing: dent8://person/bob/favorite_drink\nBroken: dent8://broken\n",
+    )
+    .expect("write AGENTS.md");
+
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let reconciled = run_dent8(
+        &[
+            "--output",
+            "json",
+            "native",
+            "reconcile",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+        ],
+        &envs,
+    );
+    assert_eq!(reconciled.status.code(), Some(1));
+    let reconciled = stdout_json(&reconciled);
+    assert_eq!(reconciled["status"], "failed");
+    assert_eq!(reconciled["summary"]["references"], 2);
+    assert_eq!(reconciled["summary"]["failures"], 2);
+    assert_eq!(reconciled["summary"]["missing"], 1);
+    assert_eq!(reconciled["summary"]["invalid"], 1);
+
+    let statuses = reconciled["references"]
+        .as_array()
+        .expect("references array")
+        .iter()
+        .map(|reference| reference["status"].as_str().expect("status"))
+        .collect::<Vec<_>>();
+    assert!(statuses.contains(&"missing"), "{statuses:?}");
+    assert!(statuses.contains(&"invalid"), "{statuses:?}");
+}
+
+#[test]
 fn read_audit_commands_emit_machine_readable_json() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

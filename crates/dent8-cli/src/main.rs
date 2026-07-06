@@ -144,6 +144,7 @@ fn run_cli(cli: Cli) -> i32 {
         },
         Some(CliCommand::Native(args)) => match args.command {
             NativeCommand::Scan(args) => native::cmd_native_scan(&args, cli.output),
+            NativeCommand::Reconcile(args) => native::cmd_native_reconcile(&args, cli.output),
         },
         Some(CliCommand::Mcp(args)) => match args.command {
             McpCommand::Serve(args) => mcp::serve_command(args.daemon, args.socket.as_deref()),
@@ -947,6 +948,8 @@ struct NativeArgs {
 enum NativeCommand {
     /// Read-only audit of provider-native memory/rules files.
     Scan(NativeScanArgs),
+    /// Verify dent8 receipt references found in provider-native memory/rules files.
+    Reconcile(NativeReconcileArgs),
 }
 
 #[derive(Args, Debug)]
@@ -960,6 +963,25 @@ pub(crate) struct NativeScanArgs {
     /// Project root to scan. Defaults to the parent of --dir when --dir is .dent8, else cwd.
     #[arg(long, value_name = "ROOT")]
     root: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct NativeReconcileArgs {
+    /// Agent profile whose native memory/rules posture should be audited.
+    #[arg(long, value_enum)]
+    agent: InitAgent,
+    /// Directory for dent8's local project config. Used to infer the project root.
+    #[arg(long, default_value = ".dent8", value_name = "DIR")]
+    dir: String,
+    /// Project root to scan. Defaults to the parent of --dir when --dir is .dent8, else cwd.
+    #[arg(long, value_name = "ROOT")]
+    root: Option<String>,
+    /// Replay the dent8 store as-of this Unix millisecond timestamp.
+    #[arg(long, value_name = "MILLIS")]
+    as_of: Option<i64>,
+    /// Evaluate fact freshness/validity at this Unix millisecond timestamp.
+    #[arg(long, value_name = "MILLIS")]
+    valid_at: Option<i64>,
 }
 
 #[derive(Args, Debug)]

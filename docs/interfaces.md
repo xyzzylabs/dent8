@@ -111,6 +111,10 @@ These hooks are not an alternate write path; they run `dent8 verify` and block d
 to provider-native memory/rules files that would bypass the fact-event firewall.
 `dent8 native scan --agent <profile>` is the read-only audit counterpart: it inventories
 known native files/rules, hashes them, flags dent8 receipt markers, and reports guard posture.
+`dent8 native reconcile --agent <profile>` goes one step deeper for explicit
+`dent8://<kind>/<key>/<predicate>` references: it resolves each through the same receipt
+path as `explain` and fails on stale, contested, no-longer-believed, missing, or malformed
+references. It still does not import prose or write native files.
 The adapter design is tracked in
 [`agent-adapters.md`](agent-adapters.md).
 

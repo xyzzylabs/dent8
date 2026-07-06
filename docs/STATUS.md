@@ -277,6 +277,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   contains dent8 receipt markers (`dent8://`, `fact_id` + `event_hash`, etc.), and includes
   the selected agent's native-memory guard posture. This is audit only: it does not import
   native text as facts and does not write provider-native files. Supports `--output json`.
+- **`dent8 native reconcile --agent <profile> [--dir .dent8] [--root PATH]`** — a read-only
+  receipt check for provider-native files. It scans the same native surfaces, extracts explicit
+  `dent8://<kind>/<key>/<predicate>` references, and resolves each through the normal dent8
+  read path (`explain` semantics, including `--as-of` and `--valid-at`). A reference is OK only
+  when it resolves to a fresh, non-terminal, non-contested current receipt; stale,
+  not-yet-valid, contested, no-longer-believed, missing, or malformed references are audit
+  failures. Native files with no receipt references are reported but do not fail by default.
+  This still does not infer facts from prose and does not write provider-native files. Supports
+  `--output json`.
 - **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
   firewall). A source→authority *ceiling* registry: every write checks the requested/defaulted

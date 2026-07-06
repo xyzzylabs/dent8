@@ -197,7 +197,10 @@ memory/rules files are not guarded against direct writes. Cursor, Grok Build, an
 reported as WARN/unknown because their hook surface is host- or supervisor-specific; validate
 those manually from [`examples/agent-hooks/`](../examples/agent-hooks/). `doctor --agent` also
 runs the read-only `dent8 native scan --agent <profile>` audit and reports how many native
-memory/rules files are visible and how many carry dent8 receipt markers.
+memory/rules files are visible and how many carry dent8 receipt markers. Run
+`dent8 native reconcile --agent <profile>` when native files contain explicit
+`dent8://<kind>/<key>/<predicate>` receipt references and you want to fail on stale,
+contested, missing, no-longer-believed, or malformed references.
 
 ## Witness flow
 

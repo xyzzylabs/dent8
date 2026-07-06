@@ -28,10 +28,12 @@ access to the event tables.
    `dent8 hook native-memory-guard` to run `dent8 verify` and block direct native
    memory/rules writes that would bypass dent8. Provider profiles live in
    [`examples/agent-hooks/`](../examples/agent-hooks/).
-3. **Native scan, built.** `dent8 native scan --agent <profile>` inventories provider-native
-   memory/rules files, hashes them, reports dent8 receipt markers, and includes the selected
-   profile's guard posture. `doctor --agent` runs the same read-only scan. This is audit, not
-   import.
+3. **Native scan/reconcile, built.** `dent8 native scan --agent <profile>` inventories
+   provider-native memory/rules files, hashes them, reports dent8 receipt markers, and includes
+   the selected profile's guard posture. `dent8 native reconcile --agent <profile>` verifies
+   explicit `dent8://<kind>/<key>/<predicate>` references against current dent8 receipts and
+   flags stale, contested, no-longer-believed, missing, or malformed references. `doctor
+   --agent` runs the read-only scan. This is audit, not import.
 4. **Signed source identity, default build.** Use `dent8 init --agent <profile>` or
    `dent8 init --identity --source <source>` to give each agent a distinct source key and
    issuer-signed grant (`DENT8_GRANT` + `DENT8_IDENTITY_KEY`). Several agents can use the
@@ -47,8 +49,9 @@ access to the event tables.
    authority candidate events. Imported facts need provenance and review.
 6. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
    receipts. Exported files should carry dent8 fact ids and hash receipts in comments.
-7. **Reconcile, design-only.** Compare native files with dent8 projections and report stale,
-   superseded, unverified, or low-authority facts that are still visible to an agent.
+7. **Native rewrite/reconcile loop, design-only.** Go beyond explicit receipt references:
+   compare native prose with dent8 projections, propose import candidates, and regenerate
+   receipt-bearing provider-native files.
 
 ## Provider stance
 
@@ -75,4 +78,5 @@ agent -> dent8 MCP assert/supersede/retract -> fact-event log
 native memory/rules hook -> guard bypasses and run verify
 operator -> review explain/replay/conflicts
 future export -> regenerate native rules with receipts
+native reconcile -> verify generated receipt references stay current
 ```
