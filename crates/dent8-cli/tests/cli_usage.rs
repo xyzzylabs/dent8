@@ -4214,26 +4214,57 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
 #[cfg(feature = "sqlite")]
 #[test]
 fn concurrent_cli_asserts_on_shared_sqlite_store_get_unique_event_ids() {
-    const WRITERS: usize = 8;
-
     let temp = TempDir::new();
     let store_url = format!("sqlite://{}", temp.file("dent8.db").display());
-    let envs = [("DENT8_STORE_URL", store_url.as_str())];
+    assert_concurrent_cli_asserts_get_unique_event_ids(&store_url, "sqlite-project", "sqlite");
+}
+
+#[cfg(feature = "postgres")]
+#[test]
+fn concurrent_cli_asserts_on_shared_postgres_store_get_unique_event_ids() {
+    let Ok(store_url) = std::env::var("DATABASE_URL") else {
+        eprintln!("skipping Postgres CLI concurrency test: DATABASE_URL is not set");
+        return;
+    };
+    if store_url.is_empty() {
+        eprintln!("skipping Postgres CLI concurrency test: DATABASE_URL is empty");
+        return;
+    }
+
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock should be after Unix epoch")
+        .as_nanos();
+    let subject_key_prefix = format!("postgres-project-{}-{nonce}", std::process::id());
+    assert_concurrent_cli_asserts_get_unique_event_ids(&store_url, &subject_key_prefix, "postgres");
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+fn assert_concurrent_cli_asserts_get_unique_event_ids(
+    store_url: &str,
+    subject_key_prefix: &str,
+    backend_label: &str,
+) {
+    const WRITERS: usize = 8;
+
+    let envs = [("DENT8_STORE_URL", store_url)];
 
     assert_success(
         &run_dent8(&["facts", "list"], &envs),
-        "pre-migrate sqlite store",
+        &format!("pre-migrate {backend_label} store"),
     );
 
     let barrier = Arc::new(Barrier::new(WRITERS));
     let mut handles = Vec::new();
     for index in 0..WRITERS {
         let barrier = Arc::clone(&barrier);
-        let store_url = store_url.clone();
+        let store_url = store_url.to_owned();
+        let subject_key_prefix = subject_key_prefix.to_owned();
+        let backend_label = backend_label.to_owned();
         handles.push(std::thread::spawn(move || {
-            let subject = format!("repo:project-{index}");
-            let value = format!("database-{index}");
-            let source = format!("source:writer-{index}");
+            let subject = format!("repo:{subject_key_prefix}-{index}");
+            let value = format!("database-{backend_label}-{index}");
+            let source = format!("source:{backend_label}-writer-{index}");
             barrier.wait();
             run_dent8(
                 &[
@@ -4256,28 +4287,35 @@ fn concurrent_cli_asserts_on_shared_sqlite_store_get_unique_event_ids() {
         assert_success(&output, &format!("concurrent writer {index}"));
     }
 
-    let listed = run_dent8(
-        &[
-            "--output",
-            "json",
-            "facts",
-            "list",
-            "--kind",
-            "repo",
-            "--predicate",
-            "database",
-        ],
-        &envs,
-    );
-    assert_success(&listed, "facts list after concurrent writes");
-    let listed = stdout_json(&listed);
-    assert_eq!(listed["count"], WRITERS, "{listed}");
-
     let mut event_ids = BTreeSet::new();
     for index in 0..WRITERS {
-        let subject = format!("repo:project-{index}");
+        let subject_key = format!("{subject_key_prefix}-{index}");
+        let subject = format!("repo:{subject_key}");
+        let listed = run_dent8(
+            &[
+                "--output",
+                "json",
+                "facts",
+                "list",
+                "--kind",
+                "repo",
+                "--key",
+                &subject_key,
+                "--predicate",
+                "database",
+            ],
+            &envs,
+        );
+        assert_success(
+            &listed,
+            &format!("{backend_label} facts list for writer {index}"),
+        );
+        let listed = stdout_json(&listed);
+        assert_eq!(listed["count"], 1, "{listed}");
+        assert_eq!(listed["facts"][0]["subject"]["key"], subject_key.as_str());
+
         let replay = run_dent8(&["--output", "json", "replay", &subject, "database"], &envs);
-        assert_success(&replay, &format!("replay writer {index}"));
+        assert_success(&replay, &format!("{backend_label} replay writer {index}"));
         let replay = stdout_json(&replay);
         assert_eq!(replay["event_count"], 1, "{replay}");
         let event_id = replay["events"][0]["event_id"]
@@ -4291,7 +4329,10 @@ fn concurrent_cli_asserts_on_shared_sqlite_store_get_unique_event_ids() {
     }
     assert_eq!(event_ids.len(), WRITERS);
 
-    assert_success(&run_dent8(&["verify"], &envs), "verify shared sqlite log");
+    assert_success(
+        &run_dent8(&["verify"], &envs),
+        &format!("verify shared {backend_label} log"),
+    );
 }
 
 #[cfg(feature = "sqlite")]
