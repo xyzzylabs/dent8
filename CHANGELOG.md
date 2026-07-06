@@ -23,6 +23,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `runtime_status`, then verifies write authentication when `DENT8_GRANT` and
   `DENT8_IDENTITY_KEY` are set.
 
+### Fixed
+- Hardened async-backend CLI/MCP writes under concurrent processes: SQLite and Postgres now
+  reserve event-id ranges at the backend boundary before signing, so competing writers do not
+  mint the same `event:{n}` from stale snapshots. Regression coverage now includes concurrent
+  CLI writer tests for embedded SQLite and live Postgres.
+
 ## [0.3.1] - 2026-07-06
 
 ### Added

@@ -1,16 +1,18 @@
 use std::{
-    collections::BTreeSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Output, Stdio},
-    sync::{
-        Arc, Barrier,
-        atomic::{AtomicU32, Ordering},
-    },
+    sync::atomic::{AtomicU32, Ordering},
 };
 
 use serde_json::Value;
+
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Barrier},
+};
 
 #[test]
 fn alice_fact_round_trips_with_subject_and_metadata_flags() {
@@ -3168,7 +3170,7 @@ fn mcp_install_json_reports_daemon_proxy_args() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn doctor_agent_reports_unreachable_daemon_proxy_config() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -3252,7 +3254,7 @@ fn doctor_agent_reports_unreachable_daemon_proxy_config() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn doctor_agent_smokes_reachable_daemon_proxy_config() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -3305,7 +3307,7 @@ fn doctor_agent_smokes_reachable_daemon_proxy_config() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn daemon_status_reports_unreachable_socket() {
     let temp = TempDir::new();
     let socket = temp
@@ -3343,7 +3345,7 @@ fn daemon_status_reports_unreachable_socket() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn daemon_status_reports_reachable_runtime_and_auth() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -5202,7 +5204,7 @@ fn mcp_install_json_reports_dry_run_and_check_state() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn mcp_proxy_bridges_stdio_to_authenticated_daemon() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -7787,7 +7789,7 @@ fn run_dent8_mcp(input: &str, envs: &[(&str, &str)]) -> Output {
     child.wait_with_output().expect("run dent8 mcp serve")
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn run_dent8_mcp_proxy(socket: &str, input: &str, envs: &[(String, String)]) -> Output {
     let mut command = Command::new(dent8_bin());
     command
@@ -7823,7 +7825,7 @@ fn run_dent8_mcp_proxy(socket: &str, input: &str, envs: &[(String, String)]) -> 
     child.wait_with_output().expect("run dent8 mcp proxy")
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn spawn_daemon(socket: &str, envs: &[(String, String)]) -> ChildGuard {
     let mut command = Command::new(dent8_bin());
     command
@@ -7850,7 +7852,7 @@ fn spawn_daemon(socket: &str, envs: &[(String, String)]) -> ChildGuard {
     ChildGuard::new(command.spawn().expect("spawn dent8 daemon"))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn wait_for_socket(socket: &Path, daemon: &mut ChildGuard) {
     for _ in 0..50 {
         if socket.exists() {
@@ -7871,7 +7873,7 @@ fn wait_for_socket(socket: &Path, daemon: &mut ChildGuard) {
     );
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn read_test_env_file(path: &Path) -> Vec<(String, String)> {
     fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()))
@@ -7889,14 +7891,14 @@ fn read_test_env_file(path: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn env_refs(envs: &[(String, String)]) -> Vec<(&str, &str)> {
     envs.iter()
         .map(|(key, value)| (key.as_str(), value.as_str()))
         .collect()
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn shell_unquote_for_test(value: &str) -> String {
     if value.len() >= 2 && value.starts_with('\'') && value.ends_with('\'') {
         value[1..value.len() - 1].replace("'\\''", "'")
@@ -7905,7 +7907,7 @@ fn shell_unquote_for_test(value: &str) -> String {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn json_rpc_lines(messages: &[Value]) -> String {
     let mut text = String::new();
     for message in messages {
@@ -7915,7 +7917,7 @@ fn json_rpc_lines(messages: &[Value]) -> String {
     text
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 fn json_response(responses: &[Value], id: i64) -> &Value {
     responses
         .iter()
@@ -7923,12 +7925,12 @@ fn json_response(responses: &[Value], id: i64) -> &Value {
         .unwrap_or_else(|| panic!("missing response id {id}: {responses:#?}"))
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 struct ChildGuard {
     child: Option<std::process::Child>,
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 impl ChildGuard {
     fn new(child: std::process::Child) -> Self {
         Self { child: Some(child) }
@@ -7941,7 +7943,7 @@ impl ChildGuard {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "async-store"))]
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {

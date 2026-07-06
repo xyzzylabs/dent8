@@ -618,14 +618,15 @@ subject+predicate.
   build (selected in `load_store`/`append_events` via `connect_backend`; multi-event ops use the transactional
   `append_many`, and the Postgres load re-runs the same `validate_unique_log` integrity gate
   as the file path) — **CI-verified** end-to-end against live Postgres (the `postgres` job runs
-  a live `assert → supersede → explain → verify`). **Concurrency:**
+  a live `assert → supersede → explain → verify` plus concurrent CLI writers). **Concurrency:**
   the *adapter*
   is **tested** multi-writer-safe — a DB-gated test fires 12 genuinely concurrent appends and
   asserts they serialize (via a transaction-scoped advisory lock) into one gap-free,
   duplicate-free global chain that verifies, with every projection still `== fold(log)`. The
   CLI/MCP reserve `event:{n}` id ranges from async backends before signing, so concurrent
-  processes do not mint the same id from the same snapshot. Reserved ids are unique, not
-  gap-free: a later rejected write can leave an unused suffix, while append order remains
+  processes do not mint the same id from the same snapshot; the CLI path has regression
+  coverage for both embedded SQLite and live Postgres. Reserved ids are unique, not gap-free:
+  a later rejected write can leave an unused suffix, while append order remains
   `global_sequence` plus the hash chain. Async adapters also recheck the final projection for
   touched unique predicates inside the append transaction, so two stale concurrent writers
   cannot silently land duplicate fresh beliefs. **Integrity is unconditional** — every committed

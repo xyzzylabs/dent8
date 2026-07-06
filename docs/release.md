@@ -35,6 +35,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+Run the feature-shape gates that CI keeps honest:
+
+```sh
+cargo clippy -p dent8 --no-default-features --all-targets -- -D warnings
+cargo test -p dent8 --no-default-features
+cargo clippy -p dent8 --features postgres --all-targets -- -D warnings
+cargo clippy -p dent8 --features export --all-targets -- -D warnings
+cargo test -p dent8-export
+```
+
 Run the release acceptance path:
 
 ```sh
@@ -54,6 +64,18 @@ SQLite backend, and the default project-local Codex MCP config; then it runs
 `explain`, and `verify`. It also exercises the witness smoke
 (`keygen -> sign -> verify -> publish -> verify-published`), since the witness is a stock
 command.
+
+Run the live Postgres gate when preparing a release locally:
+
+```sh
+docker compose up -d --wait
+DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \
+  cargo test -p dent8 --features postgres --test cli_usage \
+    concurrent_cli_asserts_on_shared_postgres_store_get_unique_event_ids
+DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \
+  cargo test -p dent8-store-postgres --features adapter
+docker compose down
+```
 
 ## Packaging
 
