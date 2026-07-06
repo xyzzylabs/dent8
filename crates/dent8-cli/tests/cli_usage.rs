@@ -2981,7 +2981,7 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     assert!(stdout.contains(".dent8 env: agent bundle is complete"));
     assert!(stdout.contains(&format!("command={mcp_command}")));
     assert!(stdout.contains("agent mcp config: up to date"));
-    assert!(stdout.contains("source:codex max=High"));
+    assert!(stdout.contains("source:codex max=high"));
     assert!(stdout.contains("identity source: grant source matches doctor source source:codex"));
     assert!(stdout.contains("mcp smoke: initialize + tools/list OK"));
     assert!(stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"));
@@ -3698,7 +3698,7 @@ fn agent_add_preserves_existing_authority_ceiling_when_reused() {
         "repeat agent add after manual authority lowering",
     );
     assert!(
-        stdout(&repeated).contains("authority ceiling=Medium"),
+        stdout(&repeated).contains("authority ceiling=medium"),
         "agent add should preserve the existing lowered ceiling unless --authority is explicit; stdout:\n{}",
         stdout(&repeated)
     );
@@ -5010,7 +5010,7 @@ fn identity_status_reports_bundle_and_expiry() {
         status_stdout.contains("source=source:codex"),
         "{status_stdout}"
     );
-    assert!(status_stdout.contains("max=High"), "{status_stdout}");
+    assert!(status_stdout.contains("max=high"), "{status_stdout}");
     assert!(
         status_stdout.contains("grant expiry: expires at 4102444800000"),
         "{status_stdout}"
@@ -5064,7 +5064,7 @@ fn identity_status_reports_bundle_and_expiry() {
                 .as_str()
                 .is_some_and(|message| message.contains("grant:")
                     && message.contains("source=source:codex")
-                    && message.contains("max=High"))),
+                    && message.contains("max=high"))),
         "{status_json}"
     );
 }
@@ -5788,7 +5788,7 @@ fn signed_identity_grant_is_required_and_bound_to_the_write() {
         &identity_env,
     );
     assert_eq!(too_high.status.code(), Some(2));
-    assert!(stderr(&too_high).contains("may assert at most High"));
+    assert!(stderr(&too_high).contains("may assert at most high"));
 
     let out_of_scope = run_dent8(
         &[

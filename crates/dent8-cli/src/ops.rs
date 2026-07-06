@@ -447,7 +447,7 @@ pub(crate) fn op_assert(
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
     Ok(format!(
-        "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?})\n  \
+        "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority})\n  \
          seq={}  hash={}",
         receipt.global_sequence,
         short(&receipt.event_hash)
@@ -553,7 +553,7 @@ pub(crate) fn op_derive(
         .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
     append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
     Ok(format!(
-        "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority:?}, \
+        "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority}, \
          derived from {from_kind}:{from_key} {from_predicate})\n  seq={}  hash={}",
         receipt.global_sequence,
         short(&receipt.event_hash)
@@ -1014,7 +1014,7 @@ pub(crate) fn op_supersede(
         && authority < policy.authority_floor
     {
         return Err(OpError::Rejected(format!(
-            "REJECTED: {subject_kind}.{predicate} requires authority {:?}, got {authority:?}",
+            "REJECTED: {subject_kind}.{predicate} requires authority {}, got {authority}",
             policy.authority_floor
         )));
     }
@@ -1100,7 +1100,7 @@ pub(crate) fn op_supersede(
     let facts = if count == 1 { "fact" } else { "facts" };
     Ok(format!(
         "ACCEPTED  superseded {count} believed {facts} of {subject_kind}:{subject_key} \
-         {predicate}: {previous} -> \"{new_value}\"  (authority={authority:?})\n  \
+         {predicate}: {previous} -> \"{new_value}\"  (authority={authority})\n  \
          new believed fact {replacement_fact_id}"
     ))
 }
@@ -1225,7 +1225,7 @@ pub(crate) fn op_retract(
     let facts = if count == 1 { "fact" } else { "facts" };
     Ok(format!(
         "ACCEPTED  retracted {count} believed {facts} of {subject_kind}:{subject_key} \
-         {predicate}  (authority={authority:?})"
+         {predicate}  (authority={authority})"
     ))
 }
 
@@ -1283,7 +1283,7 @@ pub(crate) fn op_reinforce(
     let count = events.len();
     Ok(format!(
         "ACCEPTED  reinforced {count} believed fact(s) of {subject_kind}:{subject_key} \
-         {predicate}  (authority={authority:?})"
+         {predicate}  (authority={authority})"
     ))
 }
 
@@ -1527,7 +1527,7 @@ pub(crate) fn op_contradict(
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
     Ok(format!(
         "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
-         (authority={authority:?})\n  both are now believed; resolve with `supersede` (install a \
+         (authority={authority})\n  both are now believed; resolve with `supersede` (install a \
          winner) or `retract`. new fact {opposing_fact_id}",
         display_value(&incumbent.value)
     ))

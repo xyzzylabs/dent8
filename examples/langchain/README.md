@@ -36,7 +36,7 @@ python dent8_memory_agent.py
 ```
 
 A rejected write comes back as a tool **error with the reason** (e.g. "repo.database requires
-authority High, got Low"), so the model learns *why* instead of silently overwriting trusted
+authority high, got low"), so the model learns *why* instead of silently overwriting trusted
 memory.
 
 ## LangChain.js (TypeScript)

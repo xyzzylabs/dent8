@@ -587,7 +587,7 @@ impl fmt::Display for StoreError {
             } => write!(
                 f,
                 "firewall rejected the write: supersession by a weaker fact \
-                 (challenger {challenger:?} is below incumbent {incumbent:?})"
+                 (challenger {challenger} is below incumbent {incumbent})"
             ),
             Self::UnbackedSupersession(fact) => write!(
                 f,
@@ -599,7 +599,7 @@ impl fmt::Display for StoreError {
                 actual,
             } => write!(
                 f,
-                "policy rejected the write: {predicate} requires authority {floor:?}, got {actual:?}"
+                "policy rejected the write: {predicate} requires authority {floor}, got {actual}"
             ),
             Self::UniquenessViolation { predicate } => write!(
                 f,

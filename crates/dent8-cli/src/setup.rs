@@ -174,7 +174,7 @@ pub(crate) fn agent_add_inner(args: &AgentAddArgs) -> Result<AgentAddOutcome, St
         .unwrap_or(identity.max_authority);
     if authority_ceiling > identity.max_authority {
         return Err(format!(
-            "existing signed identity for {source} has max={:?}, below requested authority \
+            "existing signed identity for {source} has max={}, below requested authority \
              ceiling {:?}; rotate or reissue the source grant before raising the authority \
              ceiling",
             identity.max_authority, authority_ceiling
@@ -287,7 +287,7 @@ pub(crate) fn agent_add_base_message(
 ) -> String {
     let identity_action = if identity.reused { "reused" } else { "created" };
     format!(
-        "added dent8 agent {} in {}\n  source: {} authority ceiling={:?}\n  store: {}\n  authority: {}\n  identity: {identity_action} grant {} (max={:?}, source key: {}, env: {}, active grants: {})",
+        "added dent8 agent {} in {}\n  source: {} authority ceiling={}\n  store: {}\n  authority: {}\n  identity: {identity_action} grant {} (max={}, source key: {}, env: {}, active grants: {})",
         agent.cli_name(),
         dir.display(),
         identity.source,
@@ -576,7 +576,7 @@ pub(crate) fn init_base_message(
         format!("\n\nAgent wiring:\n  see {}", agent.example_path())
     });
     format!(
-        "initialized dent8 in {}\n  authority: {} (granted {} max={:?})\n  store: {}\n  env: {}{}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
+        "initialized dent8 in {}\n  authority: {} (granted {} max={})\n  store: {}\n  env: {}{}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
         dir.display(),
         authority_path.display(),
         source,

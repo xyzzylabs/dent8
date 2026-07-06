@@ -180,6 +180,14 @@ impl AuthorityLevel {
     }
 }
 
+impl fmt::Display for AuthorityLevel {
+    /// The lowercase [`AuthorityLevel::name`], so error messages read like the input (`high`)
+    /// rather than the Rust variant (`High`). Use `{}` — not `{:?}` — in user-facing messages.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Authority {
     pub level: AuthorityLevel,

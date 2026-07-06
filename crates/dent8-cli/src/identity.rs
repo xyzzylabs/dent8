@@ -111,7 +111,7 @@ pub(crate) struct BootstrapOutput {
 impl BootstrapOutput {
     pub(crate) fn message(&self) -> String {
         format!(
-            "bootstrapped signed identity in {}\n  issuer: {} ({})\n  source: {} max={:?} scope={}\n  trust: {}\n  active grants: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
+            "bootstrapped signed identity in {}\n  issuer: {} ({})\n  source: {} max={} scope={}\n  trust: {}\n  active grants: {}\n  grant: {}\n  source key: {}\n  env: {}\n\nNext:\n  set -a\n  . {}\n  set +a\n  dent8 doctor --source {} --write-check",
             self.bundle_dir.display(),
             self.issuer,
             self.issuer_key_path.display(),
@@ -305,7 +305,7 @@ struct GrantVerifyOutput {
 impl GrantVerifyOutput {
     fn message(&self) -> String {
         format!(
-            "OK: grant for {} max={:?} issuer={}",
+            "OK: grant for {} max={} issuer={}",
             self.grant.source, self.grant.max_authority, self.grant.issuer
         )
     }
@@ -1698,7 +1698,7 @@ fn verify_grant_matches_write(
     }
     if auth.authority > grant.max_authority {
         return Err(format!(
-            "identity grant: source {:?} may assert at most {:?}, but requested {:?}",
+            "identity grant: source {:?} may assert at most {}, but requested {}",
             grant.source, grant.max_authority, auth.authority
         ));
     }

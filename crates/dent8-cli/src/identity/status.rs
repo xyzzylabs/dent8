@@ -103,7 +103,7 @@ pub(super) fn identity_status(
 
     match verify_grant(&grant, &trust, now_millis()) {
         Ok(()) => lines.push(DoctorLine::ok(format!(
-            "grant: {} (source={} max={:?} issuer={} scope={} expires_at_ms={})",
+            "grant: {} (source={} max={} issuer={} scope={} expires_at_ms={})",
             paths.grant_file.display(),
             grant.grant.source,
             grant.grant.max_authority,
@@ -333,7 +333,7 @@ fn doctor_grant(
     };
     match verify_grant(&grant, trust, now) {
         Ok(()) => lines.push(DoctorLine::ok(format!(
-            "identity grant: {grant_file} (source={} max={:?} issuer={} scope={})",
+            "identity grant: {grant_file} (source={} max={} issuer={} scope={})",
             grant.grant.source,
             grant.grant.max_authority,
             grant.grant.issuer,

@@ -376,7 +376,7 @@ impl fmt::Display for TransitionError {
                 challenger,
             } => write!(
                 f,
-                "insufficient authority: {challenger:?} may not override or remove an incumbent of {incumbent:?}"
+                "insufficient authority: {challenger} may not override or remove an incumbent of {incumbent}"
             ),
             Self::CanonicalContradiction => {
                 f.write_str("a canonical fact cannot be contradicted; supersede it with equal authority instead")

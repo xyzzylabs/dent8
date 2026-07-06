@@ -1844,8 +1844,8 @@ fn ceiling_check(
     let ceiling = registry.ceiling(source);
     if requested > ceiling {
         return Err(ops::OpError::Rejected(format!(
-            "authority ceiling: source {source:?} may assert at most {ceiling:?}, but requested \
-             {requested:?} (grant it with `dent8 authority add {source} <max>`)"
+            "authority ceiling: source {source:?} may assert at most {ceiling}, but requested \
+             {requested} (grant it with `dent8 authority add {source} <max>`)"
         )));
     }
     Ok(())
@@ -1904,10 +1904,7 @@ fn format_authority_list(outcome: &AuthorityListOutcome) -> String {
                 } else {
                     ""
                 };
-                format!(
-                    "{source}  max={:?}{issuer}{scope}{note}",
-                    grant.max_authority
-                )
+                format!("{source}  max={}{issuer}{scope}{note}", grant.max_authority)
             })
             .collect::<Vec<_>>()
             .join("\n"),
@@ -2017,7 +2014,7 @@ fn cmd_authority_add(
     );
     match save_authority_registry(&registry) {
         Ok(()) => {
-            let message = format!("granted {source} a max authority of {max_authority:?}");
+            let message = format!("granted {source} a max authority of {max_authority}");
             match output {
                 CliOutput::Text => {
                     println!("{message}");
@@ -2398,7 +2395,7 @@ fn unearned_supersession_advisories(events: &[FactEvent]) -> Vec<String> {
                     incumbent,
                     challenger,
                 } => format!(
-                    "{superseded} replaced by {by} at lower authority ({incumbent:?} -> {challenger:?})",
+                    "{superseded} replaced by {by} at lower authority ({incumbent} -> {challenger})",
                 ),
                 UnearnedSupersession::WeakerEntrenchment {
                     superseded,

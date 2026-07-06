@@ -284,7 +284,7 @@ pub(crate) fn entitlement_at(
     }
     if authority > grant.max_authority {
         return Entitlement::Unentitled(format!(
-            "the write asserts {authority:?} but the active grant for {source} caps at {:?}",
+            "the write asserts {authority} but the active grant for {source} caps at {}",
             grant.max_authority
         ));
     }

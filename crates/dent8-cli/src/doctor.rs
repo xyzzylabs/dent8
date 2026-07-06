@@ -1292,7 +1292,7 @@ pub(crate) fn doctor_authority(output: &mut String, source: &str) -> Result<(), 
         Some(registry) => {
             let grant = registry.sources.get(source);
             let source_note = match grant {
-                Some(grant) => format!("; {source} max={:?}", grant.max_authority),
+                Some(grant) => format!("; {source} max={}", grant.max_authority),
                 None => format!("; {source} is not granted"),
             };
             let level = if grant.is_some() { "OK" } else { "WARN" };
