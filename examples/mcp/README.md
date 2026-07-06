@@ -74,7 +74,9 @@ session challenge before writes, then attests accepted events daemon-side. It is
 single-source in v0, so distinct per-agent provenance should use separate stdio subprocesses
 against the same backend, or separate daemon instances. Stdio-only clients can reach the
 daemon through `dent8 mcp proxy`, which authenticates once and then forwards MCP frames over
-the daemon socket. A remote HTTP/streamable transport is future work, not part of v0.
+the daemon socket. `dent8 mcp install --agent <profile> --use-daemon` writes that proxy
+command into known agent configs; `--daemon-socket PATH` pins a non-default daemon socket.
+A remote HTTP/streamable transport is future work, not part of v0.
 
 Client-specific examples:
 

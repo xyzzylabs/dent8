@@ -44,6 +44,7 @@ pub(crate) fn cmd_mcp_install(args: &McpInstallArgs, output: CliOutput) -> i32 {
         args.config.as_deref(),
         args.command.as_deref(),
         args.local_bin,
+        mcp_server_args(args.use_daemon, args.daemon_socket.as_deref()),
         mode,
     ) {
         Ok(outcome) => match output {
@@ -180,6 +181,7 @@ pub(crate) fn agent_add_inner(args: &AgentAddArgs) -> Result<AgentAddOutcome, St
         args.mcp_config.clone(),
         args.mcp_command.clone(),
         args.mcp_local_bin,
+        McpInstallTransport::new(args.mcp_use_daemon, args.mcp_daemon_socket.clone()),
         mcp_config::InstallMode::Write,
     );
     Ok(AgentAddOutcome {
@@ -326,6 +328,8 @@ pub(crate) fn agent_add_json(args: &AgentAddArgs, outcome: &AgentAddOutcome) -> 
             "mcp_config": args.mcp_config.as_deref(),
             "mcp_command": args.mcp_command.as_deref(),
             "mcp_local_bin": args.mcp_local_bin,
+            "mcp_use_daemon": args.mcp_use_daemon,
+            "mcp_daemon_socket": args.mcp_daemon_socket.as_deref(),
         },
     })
 }
@@ -395,8 +399,37 @@ pub(crate) struct McpInstallAttempt {
     config: Option<String>,
     command: Option<String>,
     local_bin: bool,
+    transport: McpInstallTransport,
+    args: Vec<String>,
     mode: mcp_config::InstallMode,
     result: Result<PreparedMcpInstall, String>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct McpInstallTransport {
+    use_daemon: bool,
+    daemon_socket: Option<String>,
+}
+
+impl McpInstallTransport {
+    pub(crate) fn new(use_daemon: bool, daemon_socket: Option<String>) -> Self {
+        Self {
+            use_daemon,
+            daemon_socket,
+        }
+    }
+
+    fn is_daemon(&self) -> bool {
+        self.use_daemon || self.daemon_socket.is_some()
+    }
+
+    fn daemon_socket(&self) -> Option<&str> {
+        self.daemon_socket.as_deref()
+    }
+
+    fn args(&self) -> Vec<String> {
+        mcp_server_args(self.use_daemon, self.daemon_socket())
+    }
 }
 
 impl McpInstallAttempt {
@@ -413,6 +446,11 @@ impl McpInstallAttempt {
                     message.push_str(" --config ");
                     message.push_str(&shell_quote(config));
                 }
+                append_mcp_install_transport_flags(
+                    &mut message,
+                    self.transport.use_daemon,
+                    self.transport.daemon_socket(),
+                );
                 message
             }
         }
@@ -577,6 +615,7 @@ pub(crate) fn init_mcp_install(
         args.mcp.mcp_config.clone(),
         args.mcp.mcp_command.clone(),
         args.mcp.mcp_local_bin,
+        McpInstallTransport::new(args.mcp.mcp_use_daemon, args.mcp.mcp_daemon_socket.clone()),
         mode,
     )))
 }
@@ -587,14 +626,17 @@ pub(crate) fn mcp_install_attempt(
     config: Option<String>,
     command: Option<String>,
     local_bin: bool,
+    transport: McpInstallTransport,
     mode: mcp_config::InstallMode,
 ) -> McpInstallAttempt {
+    let args = transport.args();
     let result = install_mcp_config_prepared_detail(
         agent,
         dir,
         config.as_deref(),
         command.as_deref(),
         local_bin,
+        args.clone(),
         mode,
     );
     McpInstallAttempt {
@@ -603,6 +645,8 @@ pub(crate) fn mcp_install_attempt(
         config,
         command,
         local_bin,
+        transport,
+        args,
         mode,
         result,
     }
@@ -647,6 +691,8 @@ pub(crate) fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::V
             "agent": args.agent.map(InitAgent::cli_name),
             "identity": args.identity,
             "install_mcp": args.mcp.install_mcp,
+            "mcp_use_daemon": args.mcp.mcp_use_daemon,
+            "mcp_daemon_socket": args.mcp.mcp_daemon_socket.as_deref(),
         },
     })
 }
@@ -720,8 +766,12 @@ pub(crate) fn mcp_install_attempt_json(install: &McpInstallAttempt) -> serde_jso
             "dry_run": install.mode == mcp_config::InstallMode::DryRun,
             "check": install.mode == mcp_config::InstallMode::Check,
             "requested_command": install.command.as_deref(),
+            "requested_args": install.args.as_slice(),
             "command_written": outcome.prepared.command.as_str(),
+            "args_written": outcome.args.as_slice(),
             "local_bin": install.local_bin,
+            "use_daemon": install.transport.is_daemon(),
+            "daemon_socket": install.transport.daemon_socket(),
             "exit_code": outcome.exit_code(),
             "config": {
                 "path": outcome.config.path().display().to_string(),
@@ -745,7 +795,10 @@ pub(crate) fn mcp_install_attempt_json(install: &McpInstallAttempt) -> serde_jso
             "dry_run": install.mode == mcp_config::InstallMode::DryRun,
             "check": install.mode == mcp_config::InstallMode::Check,
             "requested_command": install.command.as_deref(),
+            "requested_args": install.args.as_slice(),
             "local_bin": install.local_bin,
+            "use_daemon": install.transport.is_daemon(),
+            "daemon_socket": install.transport.daemon_socket(),
             "exit_code": 1,
             "message": message.as_str(),
         }),
@@ -758,9 +811,10 @@ pub(crate) fn install_mcp_config_prepared(
     config: Option<&str>,
     command: Option<&str>,
     local_bin: bool,
+    args: Vec<String>,
     mode: mcp_config::InstallMode,
 ) -> Result<String, String> {
-    install_mcp_config_prepared_detail(agent, dir, config, command, local_bin, mode)
+    install_mcp_config_prepared_detail(agent, dir, config, command, local_bin, args, mode)
         .map(|install| install.message())
 }
 
@@ -770,6 +824,7 @@ pub(crate) fn install_mcp_config_prepared_detail(
     config: Option<&str>,
     command: Option<&str>,
     local_bin: bool,
+    args: Vec<String>,
     mode: mcp_config::InstallMode,
 ) -> Result<PreparedMcpInstall, String> {
     let prepared = prepare_mcp_command(dir, command, local_bin, mode)?;
@@ -779,13 +834,19 @@ pub(crate) fn install_mcp_config_prepared_detail(
         dent8_dir: dir,
         config_path: config.map(std::path::PathBuf::from),
         command: prepared.command.clone(),
+        args: args.clone(),
         mode,
     })?;
-    Ok(PreparedMcpInstall { prepared, config })
+    Ok(PreparedMcpInstall {
+        prepared,
+        args,
+        config,
+    })
 }
 
 pub(crate) struct PreparedMcpInstall {
     prepared: PreparedMcpCommand,
+    args: Vec<String>,
     config: mcp_config::InstallResult,
 }
 
@@ -832,8 +893,12 @@ pub(crate) fn mcp_install_json(
         "dry_run": args.dry_run,
         "check": args.check,
         "requested_command": args.command.as_deref(),
+        "requested_args": mcp_server_args(args.use_daemon, args.daemon_socket.as_deref()),
         "command_written": outcome.prepared.command.as_str(),
+        "args_written": outcome.args.as_slice(),
         "local_bin": args.local_bin,
+        "use_daemon": args.use_daemon || args.daemon_socket.is_some(),
+        "daemon_socket": args.daemon_socket.as_deref(),
         "exit_code": outcome.exit_code(),
         "config": {
             "path": outcome.config.path().display().to_string(),
@@ -886,9 +951,52 @@ pub(crate) fn mcp_install_error_json(
         "dry_run": args.dry_run,
         "check": args.check,
         "requested_command": args.command.as_deref(),
+        "requested_args": mcp_server_args(args.use_daemon, args.daemon_socket.as_deref()),
         "local_bin": args.local_bin,
+        "use_daemon": args.use_daemon || args.daemon_socket.is_some(),
+        "daemon_socket": args.daemon_socket.as_deref(),
         "message": message,
     })
+}
+
+pub(crate) fn mcp_server_args(use_daemon: bool, daemon_socket: Option<&str>) -> Vec<String> {
+    let proxy = use_daemon || daemon_socket.is_some();
+    let mut args = vec![
+        "mcp".to_string(),
+        if proxy { "proxy" } else { "serve" }.to_string(),
+    ];
+    if let Some(socket) = daemon_socket {
+        args.push("--socket".to_string());
+        args.push(socket.to_string());
+    }
+    args
+}
+
+pub(crate) fn append_mcp_install_transport_flags(
+    command_line: &mut String,
+    use_daemon: bool,
+    daemon_socket: Option<&str>,
+) {
+    if let Some(socket) = daemon_socket {
+        command_line.push_str(" --daemon-socket ");
+        command_line.push_str(&shell_quote(socket));
+    } else if use_daemon {
+        command_line.push_str(" --use-daemon");
+    }
+}
+
+pub(crate) fn mcp_transport_from_args(args: &[String]) -> (bool, Option<&str>) {
+    if args.first().map(String::as_str) != Some("mcp")
+        || args.get(1).map(String::as_str) != Some("proxy")
+    {
+        return (false, None);
+    }
+    let socket = args.windows(2).find_map(|window| {
+        (window[0] == "--socket")
+            .then(|| window[1].as_str())
+            .filter(|socket| !socket.is_empty())
+    });
+    (true, socket)
 }
 
 pub(crate) struct LocalMcpBinary {

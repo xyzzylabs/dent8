@@ -13,6 +13,7 @@ pub(crate) struct InstallOptions {
     pub(crate) dent8_dir: PathBuf,
     pub(crate) config_path: Option<PathBuf>,
     pub(crate) command: String,
+    pub(crate) args: Vec<String>,
     pub(crate) mode: InstallMode,
 }
 
@@ -171,6 +172,9 @@ pub(crate) fn install(options: &InstallOptions) -> Result<InstallResult, String>
     if options.command.trim().is_empty() {
         return Err("MCP command must not be empty".to_string());
     }
+    if options.args.is_empty() || options.args.iter().any(String::is_empty) {
+        return Err("MCP args must not contain empty values".to_string());
+    }
     let dent8_dir = absolute_path(&options.dent8_dir)?;
     let env = load_agent_env(&dent8_dir, options.agent)?;
     let target = target_config_path(options.agent, options.config_path.as_deref(), &dent8_dir)?;
@@ -184,17 +188,20 @@ pub(crate) fn install(options: &InstallOptions) -> Result<InstallResult, String>
         ConfigFormat::CodexToml => patch_codex_toml(
             existing.as_deref().unwrap_or_default(),
             &options.command,
+            &options.args,
             &env,
         )?,
         ConfigFormat::McpServersJson => patch_mcp_servers_json(
             existing.as_deref().unwrap_or_default(),
             options.agent,
             &options.command,
+            &options.args,
             &env,
         )?,
         ConfigFormat::HecateTaskJson => patch_hecate_task_json(
             existing.as_deref().unwrap_or_default(),
             &options.command,
+            &options.args,
             &env,
         )?,
     };
@@ -437,6 +444,7 @@ fn config_format(agent: InitAgent) -> ConfigFormat {
 fn patch_codex_toml(
     existing: &str,
     command: &str,
+    server_args: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut doc = if existing.trim().is_empty() {
@@ -449,10 +457,11 @@ fn patch_codex_toml(
 
     let mut server = Table::new();
     server["command"] = value(command);
-    let mut args = Array::new();
-    args.push("mcp");
-    args.push("serve");
-    server["args"] = value(args);
+    let mut toml_args = Array::new();
+    for arg in server_args {
+        toml_args.push(arg.as_str());
+    }
+    server["args"] = value(toml_args);
     server["startup_timeout_sec"] = value(20);
     server["tool_timeout_sec"] = value(60);
     let mut env_table = Table::new();
@@ -500,13 +509,14 @@ fn patch_mcp_servers_json(
     existing: &str,
     agent: InitAgent,
     command: &str,
+    args: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut root = parse_json_object(existing, "MCP config")?;
     let servers = object_entry(root.as_object_mut().expect("root object"), "mcpServers")?;
     servers.insert(
         "dent8".to_string(),
-        mcp_server_json(agent, command, env, false),
+        mcp_server_json(agent, command, args, env, false),
     );
     serde_json::to_string_pretty(&root)
         .map(ensure_trailing_newline)
@@ -516,6 +526,7 @@ fn patch_mcp_servers_json(
 fn patch_hecate_task_json(
     existing: &str,
     command: &str,
+    args: &[String],
     env: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let mut root = parse_json_object(existing, "Hecate config")?;
@@ -525,7 +536,7 @@ fn patch_hecate_task_json(
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
         .ok_or_else(|| "Hecate config field mcp_servers must be an array".to_string())?;
-    let server = mcp_server_json(InitAgent::Hecate, command, env, true);
+    let server = mcp_server_json(InitAgent::Hecate, command, args, env, true);
     if let Some(existing) = servers
         .iter_mut()
         .find(|value| value.get("name").and_then(Value::as_str) == Some("dent8"))
@@ -732,6 +743,7 @@ fn object_entry<'a>(
 fn mcp_server_json(
     agent: InitAgent,
     command: &str,
+    args: &[String],
     env: &BTreeMap<String, String>,
     hecate_shape: bool,
 ) -> Value {
@@ -740,7 +752,7 @@ fn mcp_server_json(
         server.insert("name".to_string(), json!("dent8"));
     }
     server.insert("command".to_string(), json!(command));
-    server.insert("args".to_string(), json!(["mcp", "serve"]));
+    server.insert("args".to_string(), json!(args));
     server.insert("env".to_string(), json!(env));
     match agent {
         InitAgent::ClaudeCode => {

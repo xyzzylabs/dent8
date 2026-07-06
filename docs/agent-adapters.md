@@ -44,7 +44,9 @@ access to the event tables.
    agent identity when per-agent provenance matters. The local daemon supports
    session-challenge writes, and `dent8 mcp proxy` lets stdio-only MCP clients use that daemon,
    but each daemon process still proves the single source identity whose key it holds; use
-   separate daemon instances for distinct local source identities.
+   `dent8 mcp install --agent <profile> --use-daemon` (or `--daemon-socket PATH`) to patch a
+   known agent config to proxy mode, and use separate daemon instances for distinct local source
+   identities.
    Future remote HTTP transport should authenticate the source per request without requiring
    the service to hold user source keys.
 5. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,

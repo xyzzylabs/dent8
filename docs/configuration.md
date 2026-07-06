@@ -126,6 +126,12 @@ This writes `.dent8/bin/dent8`, a tiny wrapper that execs
 `.dent8/target-sqlite/debug/dent8`; it avoids Cargo locks/rebuilds during MCP startup while
 letting doctor verify the wrapper, configured store support, witness support when configured,
 and stale prebuilt binaries.
+To make a stdio-only MCP client use an already running local daemon, add
+`--mcp-use-daemon` on `init` / `agent add`, or `--use-daemon` on `mcp install`; this writes
+`dent8 mcp proxy`. Use `--mcp-daemon-socket PATH` / `--daemon-socket PATH` to pin a
+non-default daemon socket in the installed config. The daemon is single-source in v0, so use
+separate stdio server subprocesses against the same backend, or separate daemon instances,
+when per-agent provenance matters.
 `dent8 identity status` command checks the bundle, active-grant registry, grant, source key,
 issuer key when supplied, and expiry.
 `dent8 identity repair-env --dir .dent8 --source <source>` rewrites generated

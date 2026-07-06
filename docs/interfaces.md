@@ -109,15 +109,17 @@ separate memory semantics; every write still enters through the shared firewall 
 
 Transport status: v0 supports stdio plus a local Unix-socket daemon. `dent8 mcp install`
 writes configs that launch the globally installed `dent8` binary (`command = "dent8"` by
-default, overrideable with `--command`). Several agents can share one belief base either by
-pointing separate stdio server subprocesses at the same backend and registries, while keeping
-distinct grant/key env values for provenance, or by connecting to one local daemon that
-requires the session-challenge handshake before writes. `dent8 mcp proxy` is the stdio bridge
-for clients that cannot speak Unix sockets directly: it authenticates to the daemon once, then
-forwards MCP frames over that connection. The daemon supports authenticated writes, but each
-daemon process is still single-source: use separate stdio subprocesses or separate daemon
-instances when per-agent provenance matters. A remote HTTP/streamable transport remains
-design-only today.
+default, overrideable with `--command`) and, by default, pass `["mcp", "serve"]`. Several
+agents can share one belief base either by pointing separate stdio server subprocesses at the
+same backend and registries, while keeping distinct grant/key env values for provenance, or by
+connecting to one local daemon that requires the session-challenge handshake before writes.
+`dent8 mcp proxy` is the stdio bridge for clients that cannot speak Unix sockets directly: it
+authenticates to the daemon once, then forwards MCP frames over that connection. The installer
+can write proxy mode with `--use-daemon`, or `--daemon-socket PATH` for
+`["mcp", "proxy", "--socket", PATH]`. The daemon supports authenticated writes, but each daemon
+process is still single-source: use separate stdio subprocesses or separate daemon instances
+when per-agent provenance matters. A remote HTTP/streamable transport remains design-only
+today.
 
 Optional native-memory guard profiles live under
 [`examples/agent-hooks/`](../examples/agent-hooks/) and call `dent8 hook native-memory-guard`.

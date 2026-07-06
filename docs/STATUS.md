@@ -18,7 +18,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
   [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
   [--witness] [--witness-log PATH] [--witness-pubkey PATH]
-  [--install-mcp] [--mcp-config PATH] [--mcp-command COMMAND] [--mcp-dry-run|--mcp-check]`** —
+  [--install-mcp] [--mcp-config PATH] [--mcp-command COMMAND|--mcp-local-bin]
+  [--mcp-use-daemon] [--mcp-daemon-socket PATH] [--mcp-dry-run|--mcp-check]`** —
   bootstraps an adoptable local setup: creates the dent8 config directory, writes an
   authority registry granting a chosen source (default `source:local` / High), creates a
   shell-loadable env file (`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`, and either
@@ -32,7 +33,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   deliberately does **not** put `DENT8_WITNESS_KEY` in the writer env. With
   `--install-mcp`, it also patches the selected agent's MCP config and prints the resulting
   file; the MCP install step can be rendered (`--mcp-dry-run`) or checked without writing
-  (`--mcp-check`). If the MCP patch fails after init (for example invalid TOML/JSON), init
+  (`--mcp-check`). `--mcp-use-daemon` writes `dent8 mcp proxy` instead of `dent8 mcp serve`;
+  `--mcp-daemon-socket PATH` writes `dent8 mcp proxy --socket PATH`. If the MCP patch fails
+  after init (for example invalid TOML/JSON), init
   reports the partial success and prints the follow-up `dent8 mcp install ...` command instead
   of hiding the created `.dent8` bundle. Supports `--output json` with structured paths,
   store/authority/identity/witness fields, and nested MCP install state. It refuses to rewrite
@@ -40,7 +43,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   material.
 - **`dent8 agent add --agent <profile> [--dir .dent8] [--authority <level>]
   [--issuer ISSUER] [--issuer-key PATH] [--mcp-config PATH]
-  [--mcp-command COMMAND|--mcp-local-bin]`** —
+  [--mcp-command COMMAND|--mcp-local-bin] [--mcp-use-daemon] [--mcp-daemon-socket PATH]`** —
   adds a known agent profile to an existing shared `.dent8/` bundle. It requires
   `DENT8_STORE_URL` in the generated env, so a second agent cannot accidentally share another
   agent's file-dev log. It creates or reuses/repairs the selected source's signed identity
@@ -48,7 +51,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   patches the selected agent's MCP config, prints the resulting file, and prints the follow-up
   `dent8 doctor --agent <profile> --dir <dir> --write-check` command. If a bundle has multiple
   trusted issuers, pass `--issuer`; Hecate still needs `--mcp-config` because there is no
-  stable project-local config path to infer. Supports `--output json` with structured identity,
+  stable project-local config path to infer. `--mcp-use-daemon` / `--mcp-daemon-socket` patch
+  the config to run `dent8 mcp proxy` against a local daemon instead of launching a direct
+  stdio server. Supports `--output json` with structured identity,
   authority, store, MCP install, and follow-up doctor fields.
 - **`dent8 doctor [--agent <profile>|--all-agents] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND|--mcp-local-bin] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
@@ -263,11 +268,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   source identity; distinct per-agent provenance should still use separate stdio server
   subprocesses against the same backend, or separate daemon instances.
 - **`dent8 mcp install --agent <profile> [--dir .dent8] [--config PATH]
-  [--command COMMAND|--local-bin] [--dry-run|--check]`** — patches the selected agent's MCP config with
+  [--command COMMAND|--local-bin] [--use-daemon] [--daemon-socket PATH]
+  [--dry-run|--check]`** — patches the selected agent's MCP config with
   the local dent8 server entry, writes the file atomically, and prints the resulting file.
+  By default it writes `args = ["mcp", "serve"]`; `--use-daemon` writes
+  `["mcp", "proxy"]`, and `--daemon-socket PATH` writes
+  `["mcp", "proxy", "--socket", PATH]` so stdio-only clients can use a running local daemon.
   `--dry-run` renders the expected file without writing; `--check` does not write and exits
   `0` only when the existing file already matches. Supports `--output json` with structured
-  config action, rendered contents, and local-bin wrapper metadata. It reads the generated
+  config action, generated argv, rendered contents, and local-bin wrapper metadata. It reads the generated
   `.dent8/env` plus the selected source's identity env instead of asking the user to paste paths
   by hand. Built-in defaults cover Codex
   (`.codex/config.toml`), Claude Code/Grok Build (`.mcp.json`), Cursor

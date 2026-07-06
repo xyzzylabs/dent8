@@ -3018,6 +3018,147 @@ fn mcp_install_local_bin_requires_prebuilt_target_before_writing() {
 }
 
 #[test]
+fn mcp_install_can_write_daemon_proxy_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let socket = temp.file("dent8.sock").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex",
+    );
+
+    let install = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--daemon-socket",
+            &socket,
+        ],
+        &[],
+    );
+    assert_success(&install, "mcp install --daemon-socket");
+
+    let config = fs::read_to_string(temp.file(".codex/config.toml")).expect("codex mcp config");
+    assert!(config.contains("command = \"dent8\""));
+    assert!(
+        config.contains(&format!(
+            "args = [\"mcp\", \"proxy\", \"--socket\", \"{socket}\"]"
+        )),
+        "{config}"
+    );
+
+    let checked = run_dent8(
+        &[
+            "mcp",
+            "install",
+            "--agent",
+            "codex",
+            "--dir",
+            &dir,
+            "--daemon-socket",
+            &socket,
+            "--check",
+        ],
+        &[],
+    );
+    assert_success(&checked, "mcp install --daemon-socket --check");
+
+    let serve_check = run_dent8(
+        &[
+            "mcp", "install", "--agent", "codex", "--dir", &dir, "--check",
+        ],
+        &[],
+    );
+    assert_eq!(serve_check.status.code(), Some(1));
+    assert!(
+        stdout(&serve_check).contains("MCP config needs update:"),
+        "{}",
+        stdout(&serve_check)
+    );
+}
+
+#[test]
+fn mcp_install_json_reports_daemon_proxy_args() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "claude-code",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent claude-code --store sqlite",
+    );
+
+    let dry_run_json = run_dent8(
+        &[
+            "--output",
+            "json",
+            "mcp",
+            "install",
+            "--agent",
+            "claude-code",
+            "--dir",
+            &dir,
+            "--use-daemon",
+            "--dry-run",
+        ],
+        &[],
+    );
+    assert_success(
+        &dry_run_json,
+        "mcp install --use-daemon --dry-run --output json",
+    );
+    let output = stdout_json(&dry_run_json);
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["use_daemon"], true);
+    assert_eq!(output["daemon_socket"], Value::Null);
+    assert_eq!(
+        output["requested_args"],
+        serde_json::json!(["mcp", "proxy"])
+    );
+    assert_eq!(output["args_written"], serde_json::json!(["mcp", "proxy"]));
+    let rendered = serde_json::from_str::<Value>(
+        output["config"]["contents"]
+            .as_str()
+            .expect("rendered config"),
+    )
+    .expect("rendered config JSON parses");
+    assert_eq!(
+        rendered["mcpServers"]["dent8"]["args"],
+        serde_json::json!(["mcp", "proxy"])
+    );
+}
+
+#[test]
 fn doctor_agent_accepts_local_bin_install() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -3913,6 +4054,64 @@ fn agent_add_emits_machine_readable_json() {
     assert!(
         temp.file(".dent8/identity-claude-code.env").exists(),
         "agent add should create a per-source identity env"
+    );
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn agent_add_can_install_daemon_proxy_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "codex",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "init --agent codex --store sqlite",
+    );
+
+    let added = run_dent8(
+        &[
+            "--output",
+            "json",
+            "agent",
+            "add",
+            "--agent",
+            "cursor",
+            "--dir",
+            &dir,
+            "--issuer-key",
+            &issuer_key,
+            "--mcp-use-daemon",
+        ],
+        &[],
+    );
+    assert_success(&added, "agent add --mcp-use-daemon");
+    let added = stdout_json(&added);
+    assert_eq!(added["status"], "ok");
+    assert_eq!(
+        added["mcp_install"]["args_written"],
+        serde_json::json!(["mcp", "proxy"])
+    );
+    assert_eq!(added["requested"]["mcp_use_daemon"], true);
+
+    let config = fs::read_to_string(temp.file(".cursor/mcp.json")).expect("cursor mcp config");
+    let parsed = serde_json::from_str::<Value>(&config).expect("cursor mcp JSON");
+    assert_eq!(
+        parsed["mcpServers"]["dent8"]["args"],
+        serde_json::json!(["mcp", "proxy"])
     );
 }
 

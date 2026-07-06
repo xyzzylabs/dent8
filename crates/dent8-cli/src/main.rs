@@ -521,6 +521,14 @@ struct InitMcpArgs {
     /// Use .dent8/bin/dent8, a wrapper around a prebuilt .dent8/target-sqlite/debug/dent8.
     #[arg(long, requires = "install_mcp")]
     mcp_local_bin: bool,
+    /// Install the MCP client config to connect through `dent8 mcp proxy` instead of
+    /// launching a store-backed stdio server directly.
+    #[arg(long, requires = "install_mcp")]
+    mcp_use_daemon: bool,
+    /// Socket path written into the installed `dent8 mcp proxy --socket PATH` command.
+    /// Implies daemon-proxy mode.
+    #[arg(long, value_name = "PATH", requires = "install_mcp")]
+    mcp_daemon_socket: Option<String>,
     /// Render the MCP config change after init without writing it.
     #[arg(long, requires = "install_mcp", conflicts_with = "mcp_check")]
     mcp_dry_run: bool,
@@ -579,6 +587,14 @@ struct AgentAddArgs {
     /// Use .dent8/bin/dent8, a wrapper around a prebuilt .dent8/target-sqlite/debug/dent8.
     #[arg(long)]
     mcp_local_bin: bool,
+    /// Patch the agent config to connect through `dent8 mcp proxy` instead of launching a
+    /// store-backed stdio server directly.
+    #[arg(long, visible_alias = "use-daemon")]
+    mcp_use_daemon: bool,
+    /// Socket path written into the installed `dent8 mcp proxy --socket PATH` command.
+    /// Implies daemon-proxy mode.
+    #[arg(long, visible_alias = "daemon-socket", value_name = "PATH")]
+    mcp_daemon_socket: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -1064,6 +1080,7 @@ struct McpProxyArgs {
 }
 
 #[derive(Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct McpInstallArgs {
     /// Agent profile whose MCP config should be patched.
     #[arg(long, value_enum)]
@@ -1080,6 +1097,14 @@ struct McpInstallArgs {
     /// Use .dent8/bin/dent8, a wrapper around a prebuilt .dent8/target-sqlite/debug/dent8.
     #[arg(long)]
     local_bin: bool,
+    /// Patch the agent config to connect through `dent8 mcp proxy` instead of launching a
+    /// store-backed stdio server directly.
+    #[arg(long)]
+    use_daemon: bool,
+    /// Socket path written into the installed `dent8 mcp proxy --socket PATH` command.
+    /// Implies daemon-proxy mode.
+    #[arg(long, value_name = "PATH")]
+    daemon_socket: Option<String>,
     /// Render the resulting file without writing it.
     #[arg(long, conflicts_with = "check")]
     dry_run: bool,

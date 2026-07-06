@@ -14,8 +14,10 @@ use dent8_core::AuthorityLevel;
 
 use crate::identity;
 use crate::setup::{
-    LocalMcpBinary, install_mcp_config_prepared, is_executable_file, local_mcp_binary,
-    local_mcp_build_command, local_mcp_missing_target_message, render_local_mcp_wrapper,
+    LocalMcpBinary, append_mcp_install_transport_flags, install_mcp_config_prepared,
+    is_executable_file, local_mcp_binary, local_mcp_build_command,
+    local_mcp_missing_target_message, mcp_server_args, mcp_transport_from_args,
+    render_local_mcp_wrapper,
 };
 use crate::witness;
 use crate::{
@@ -903,6 +905,7 @@ pub(crate) fn repair_agent_mcp_config(
         args.mcp_config.as_deref(),
         command.as_deref(),
         use_local_bin,
+        repair_agent_mcp_args(args, agent, dir),
         mcp_config::InstallMode::Write,
     )
 }
@@ -959,6 +962,20 @@ pub(crate) fn agent_env_error_with_repair_hint(
     }
 }
 
+pub(crate) fn repair_agent_mcp_args(
+    args: &DoctorArgs,
+    agent: InitAgent,
+    dir: &std::path::Path,
+) -> Vec<String> {
+    mcp_config::load_installed_server(
+        agent,
+        dir,
+        args.mcp_config.as_deref().map(std::path::Path::new),
+    )
+    .ok()
+    .map_or_else(|| mcp_server_args(false, None), |installed| installed.args)
+}
+
 pub(crate) fn agent_mcp_config_error_with_repair_hint(
     error: &str,
     agent: InitAgent,
@@ -995,6 +1012,12 @@ pub(crate) fn mcp_install_repair_command(
             command_line.push_str(" --command ");
             command_line.push_str(&shell_quote(command));
         }
+    }
+    if let Ok(installed) =
+        mcp_config::load_installed_server(agent, dir, config.map(std::path::Path::new))
+    {
+        let (use_daemon, daemon_socket) = mcp_transport_from_args(&installed.args);
+        append_mcp_install_transport_flags(&mut command_line, use_daemon, daemon_socket);
     }
     command_line
 }

@@ -142,6 +142,14 @@ For a stdio-only MCP client that should use the same daemon, configure it to run
 dent8 mcp proxy
 ```
 
+The installer can write that proxy command into known agent configs:
+
+```sh
+dent8 mcp install --agent codex --use-daemon
+# or pin a non-default socket:
+dent8 mcp install --agent codex --daemon-socket /path/to/dent8.sock
+```
+
 The proxy authenticates to the daemon once, then forwards the client's MCP frames over that
 connection.
 

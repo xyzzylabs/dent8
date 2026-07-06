@@ -9,6 +9,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- Added daemon-proxy install modes for known agent configs: `dent8 mcp install --use-daemon`
+  / `--daemon-socket PATH`, plus `dent8 init --mcp-use-daemon` /
+  `--mcp-daemon-socket PATH` and matching `dent8 agent add` flags. These write `dent8 mcp
+  proxy` argv into the MCP config so stdio-only clients can use a running local daemon.
+
 ## [0.3.1] - 2026-07-06
 
 ### Added

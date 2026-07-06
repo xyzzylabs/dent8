@@ -132,6 +132,14 @@ store-backed server, use the bridge command:
 dent8 mcp proxy
 ```
 
+Known agent configs can be patched to use that bridge:
+
+```sh
+dent8 mcp install --agent codex --use-daemon
+# or pin a non-default daemon socket:
+dent8 mcp install --agent codex --daemon-socket /path/to/dent8.sock
+```
+
 `mcp proxy` reads/writes normal stdio MCP on one side, authenticates to the daemon using the
 current `DENT8_GRANT` / `DENT8_IDENTITY_KEY`, and forwards frames over the daemon socket.
 
