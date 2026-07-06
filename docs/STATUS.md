@@ -477,8 +477,9 @@ subject+predicate.
   default TTL, and uniqueness, enforced via `enforce_policy` / `apply_policy_defaults`.
   Ships `repo.database`, `repo.test_command`, `dependency.version`, `branch.status`,
   `user.preference`.
-- `EventStore` trait — implemented in-memory; the Postgres adapter is written but not yet
-  DB-verified (below).
+- `EventStore` / `AsyncEventStore` traits — implemented by the in-memory/file path and the
+  async SQLite/Postgres adapters. Postgres and SQLite are DB-backed adapters of the same
+  firewall boundary, not separate architectures.
 - `arbitrate_events` — the **pure, I/O-free firewall decision** over loaded event streams,
   shared by the in-memory backend and the Postgres adapter so they cannot diverge.
 

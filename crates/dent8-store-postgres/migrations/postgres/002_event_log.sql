@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS dent8_event_log (
     predicate TEXT NOT NULL,
     previous_event_hash TEXT,
     event_hash TEXT NOT NULL UNIQUE,
-    -- The canonical claim event. Source of truth for replay; the scalar columns above are
+    -- The canonical fact event. Source of truth for replay; the scalar columns above are
     -- derived from it for indexing and must never disagree with it.
     event_json JSONB NOT NULL
 );

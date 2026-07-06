@@ -1,5 +1,5 @@
 # The witness signer as a systemd service, for bare-metal signer hosts. Install the dent8
-# binary (a --features witness build), provision /etc/dent8/witness.env with:
+# binary, provision /etc/dent8/witness.env with:
 #   DENT8_STORE_URL=postgres://…      (read access to the event store)
 #   DENT8_WITNESS_KEY=/var/lib/dent8/witness.key
 #   DENT8_WITNESS_LOG=/var/lib/dent8/witness.jsonl

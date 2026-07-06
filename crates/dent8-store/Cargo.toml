@@ -1,6 +1,6 @@
 [package]
 name = "dent8-store"
-description = "Storage and replay boundaries for dent8 claim events."
+description = "Storage and replay boundaries for dent8 fact events."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

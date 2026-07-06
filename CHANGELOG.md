@@ -250,7 +250,7 @@ The first release: the complete v0 surface as developed on `main`.
   configured in a `--no-default-features` build, when identity material points at a missing
   trust registry, when the grant source/key/scope does not match the write, or when the write
   exceeds the grant's authority ceiling ([ADR 0012](docs/decisions/0012-signed-source-identity.md)).
-- **Witness** (`dent8 witness`, `--features witness`): Ed25519 signed tree heads with
+- **Witness** (`dent8 witness`): Ed25519 signed tree heads with
   `keygen` / `sign` / `verify` / `verify-published` / `head` / `publish` / `serve` (cadence
   signer) to detect a history rewrite or event-log rollback against locally witnessed or
   externally published heads; externally retained heads keep that evidence available even if
