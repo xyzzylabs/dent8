@@ -17,11 +17,16 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 - Added `examples/witness-operated/demo.sh`, a live Docker Compose E2E that starts the
   signer/publisher/monitor split, publishes a signed head for one Postgres-backed write, then
   deletes `dent8_event_log` and confirms the monitor exits on a rollback alarm.
+- Added a manual `workflow_dispatch` CI job for the live operated-witness rollback demo, so
+  maintainers can regression-test the full Compose signer/publisher/monitor split on demand.
 
 ### Changed
 - Refreshed the README firewall GIF/tape: the walkthrough now starts with a clearer headline,
   supports opt-in reader pauses via `DENT8_DEMO_PAUSE`, and keeps the final witness caveat on
   its own readable line.
+- Updated the Docker CI actions to their Node 24 releases (`docker/setup-buildx-action@v4`
+  and `docker/build-push-action@v7`) to remove the GitHub Actions Node 20 deprecation
+  annotation.
 
 ### Security
 - Hardened the operated-witness compose recipe: the private witness signing key now lives on a

@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      operated_witness_demo:
+        description: "Run the live operated-witness Docker Compose rollback demo"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -134,9 +141,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -151,6 +158,20 @@ jobs:
         run: |
           bash -n examples/witness-operated/demo.sh
           docker compose -f examples/witness-operated/compose.yml config --quiet
+
+  # Full live E2E for the operated witness deployment recipe. This builds the packaged image
+  # through Compose, writes one Postgres-backed event, waits until the signer/publisher/monitor
+  # split publishes a count-1 head, deletes the event log, and requires the monitor to alarm on
+  # rollback. It is manual because it is heavier and exercises Docker Compose timing.
+  operated-witness-demo:
+    name: operated witness rollback E2E (manual)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operated_witness_demo }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run operated-witness rollback demo
+        run: ./examples/witness-operated/demo.sh
 
   # Bounded libFuzzer smoke over the attacker-exposed deserialize -> fold -> canonicalize path
   # (fuzz/fuzz_targets/). 60s per target: enough to re-run the corpus + catch shallow
