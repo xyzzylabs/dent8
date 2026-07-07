@@ -231,6 +231,7 @@ written into `.dent8/env`. For local development, generate and use it explicitly
 
 ```sh
 DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness keygen
+export DENT8_WITNESS_GRANTS_LOG=.dent8/witness-grants.jsonl
 DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness sign
 dent8 doctor
 dent8 witness verify

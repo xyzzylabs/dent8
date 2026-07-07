@@ -206,6 +206,7 @@ keeping similar memories distinct.)*
 - [Installation](docs/installation.md) — cargo, release binaries, and first setup
 - [Implementation Status](docs/STATUS.md) — single source of truth for what is built
 - [Configuration](docs/configuration.md) — every env var and Cargo feature
+- [Dogfood Workflow](docs/dogfood.md) — how this repo uses dent8 as its own project memory
 - [Changelog](CHANGELOG.md)
 
 **Design**

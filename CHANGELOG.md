@@ -10,6 +10,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- Added a local dogfood workflow (`docs/dogfood.md` and `examples/dogfood/demo.sh`) that
+  validates this repo's real `.dent8` setup: durable facts, signed identity, low-authority
+  rejection, witness coverage, and installed-agent doctor checks.
 - `dent8 doctor --agent` now prints the live MCP server version and binary path after
   `runtime_status` succeeds, and warns when that server version differs from the doctor
   binary so stale globally installed or repo-local MCP commands are visible without digging
