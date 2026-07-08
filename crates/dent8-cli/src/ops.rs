@@ -2218,6 +2218,10 @@ pub(crate) fn op_list_subjects_with_freshness(
 
 pub(crate) fn is_diagnostic_fact_stream(kind: &str, key: &str, predicate: &str) -> bool {
     (kind == "diagnostic" && predicate.starts_with("dent8."))
+        // A subject-scoped source's write-check probes its scoped subject (the one subject
+        // it may write about) under a `dent8.write_check.<run-id>` predicate; hide those
+        // probe streams from browse surfaces like the `diagnostic:` ones.
+        || predicate.starts_with("dent8.write_check")
         || (kind == "person" && key.starts_with("alice-doctor-") && predicate == "favorite_drink")
 }
 

@@ -687,6 +687,227 @@ fn scoped_and_issuer_capped_grants_are_enforced_end_to_end() {
 }
 
 #[test]
+fn doctor_write_check_probes_within_a_subject_scoped_grant() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", registry.as_str()),
+        ("DENT8_REQUIRE_AUTHORITY", "1"),
+    ];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "authority",
+                "add",
+                "source:scoped",
+                "high",
+                "operator",
+                "repo:app",
+            ],
+            &envs,
+        ),
+        "add subject-scoped grant",
+    );
+
+    // A correctly-scoped source passes doctor: the probe targets the scoped subject (the
+    // one subject the source may write about), not an out-of-scope diagnostic: subject.
+    let doctor = run_dent8(
+        &["doctor", "--source", "source:scoped", "--write-check"],
+        &envs,
+    );
+    assert_success(&doctor, "doctor --write-check for a scoped source");
+    let report = stdout(&doctor);
+    assert!(
+        report.contains("write-check: accepted trusted repo:app dent8.write_check."),
+        "{report}"
+    );
+    assert!(
+        report.contains("rejected low-authority tampered value"),
+        "{report}"
+    );
+    // The probe never persisted an out-of-scope write.
+    let log_contents = fs::read_to_string(&log).expect("write-check log");
+    assert!(
+        !log_contents.contains("\"kind\":\"diagnostic\""),
+        "{log_contents}"
+    );
+
+    // Repeatable: a second run probes under a fresh per-run predicate.
+    assert_success(
+        &run_dent8(
+            &["doctor", "--source", "source:scoped", "--write-check"],
+            &envs,
+        ),
+        "second doctor --write-check for a scoped source",
+    );
+
+    // The scoped probe streams stay hidden from browse surfaces like diagnostic: ones.
+    let listed = run_dent8(&["facts", "list"], &envs);
+    assert_success(&listed, "facts list after scoped write-check");
+    let listed_stdout = stdout(&listed);
+    assert!(
+        !listed_stdout.contains("dent8.write_check"),
+        "{listed_stdout}"
+    );
+    assert!(
+        listed_stdout.contains("diagnostic stream(s) hidden"),
+        "{listed_stdout}"
+    );
+
+    // An unauthorized source still fails the write-check.
+    let unauthorized = run_dent8(
+        &["doctor", "--source", "source:evil", "--write-check"],
+        &envs,
+    );
+    assert_eq!(
+        unauthorized.status.code(),
+        Some(1),
+        "{}",
+        stdout(&unauthorized)
+    );
+    let unauthorized = stdout(&unauthorized);
+    assert!(
+        unauthorized.contains("FAIL  write-check:"),
+        "{unauthorized}"
+    );
+    assert!(unauthorized.contains("authority ceiling"), "{unauthorized}");
+}
+
+#[test]
+fn authority_remove_refuses_to_orphan_dependent_grants_without_force() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", registry.as_str()),
+    ];
+
+    assert_success(
+        &run_dent8(&["authority", "add", "source:lead", "high"], &envs),
+        "add lead grant",
+    );
+    assert_success(
+        &run_dent8(
+            &["authority", "add", "source:bot", "medium", "source:lead"],
+            &envs,
+        ),
+        "add delegated bot grant",
+    );
+
+    // Removing the issuer would loosen its delegate to an operator root: refused.
+    let refused = run_dent8(&["authority", "remove", "source:lead"], &envs);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    let refused = stderr(&refused);
+    assert!(refused.contains("source:bot"), "{refused}");
+    assert!(refused.contains("--force"), "{refused}");
+    // The refusal changed nothing: the delegate still writes within its grant.
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "uses_database",
+                "postgres",
+                "--authority",
+                "medium",
+                "--source",
+                "source:bot",
+            ],
+            &envs,
+        ),
+        "delegated write after refused removal",
+    );
+
+    // --force cascades the revocation down the delegation chain.
+    let forced = run_dent8(
+        &[
+            "--output",
+            "json",
+            "authority",
+            "remove",
+            "source:lead",
+            "--force",
+        ],
+        &envs,
+    );
+    assert_success(&forced, "authority remove --force");
+    let forced = stdout_json(&forced);
+    assert_eq!(forced["status"], "ok");
+    assert_eq!(forced["source"], "source:lead");
+    assert_eq!(forced["also_revoked"][0], "source:bot");
+
+    // The orphaned delegate authorizes nothing until re-parented: deny-by-default.
+    let orphaned = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "build_tool",
+            "cargo",
+            "--authority",
+            "low",
+            "--source",
+            "source:bot",
+        ],
+        &envs,
+    );
+    assert_eq!(orphaned.status.code(), Some(1), "{}", stderr(&orphaned));
+    assert!(
+        stderr(&orphaned).contains("authority ceiling"),
+        "{}",
+        stderr(&orphaned)
+    );
+
+    // A grant nothing depends on is removed without --force, exactly as before.
+    assert_success(
+        &run_dent8(&["authority", "add", "source:solo", "low"], &envs),
+        "add standalone grant",
+    );
+    assert_success(
+        &run_dent8(&["authority", "remove", "source:solo"], &envs),
+        "remove standalone grant",
+    );
+}
+
+#[test]
+fn authority_add_refuses_an_issuer_cycle_in_both_insertion_orders() {
+    let temp = TempDir::new();
+    let registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [("DENT8_AUTHORITY", registry.as_str())];
+
+    // Order one: a names b as issuer (an operator root so far)...
+    assert_success(
+        &run_dent8(&["authority", "add", "source:a", "high", "source:b"], &envs),
+        "add a issued by b",
+    );
+    // ...so adding b issued by a would complete the cycle: refused.
+    let refused = run_dent8(&["authority", "add", "source:b", "high", "source:a"], &envs);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("issuer cycle"),
+        "{}",
+        stderr(&refused)
+    );
+
+    // The reverse insertion order is refused the same way.
+    fs::remove_file(&registry).expect("reset registry");
+    assert_success(
+        &run_dent8(&["authority", "add", "source:b", "high", "source:a"], &envs),
+        "add b issued by a",
+    );
+    let refused = run_dent8(&["authority", "add", "source:a", "high", "source:b"], &envs);
+    assert_eq!(refused.status.code(), Some(2), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("issuer cycle"),
+        "{}",
+        stderr(&refused)
+    );
+}
+
+#[test]
 fn authority_defaults_seeds_the_human_ci_agent_profile() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

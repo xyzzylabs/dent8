@@ -95,7 +95,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   against the configured store: a high-authority internal diagnostic fact
   (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a low-authority supersession to
   a tampered value from the same configured source is rejected, `explain` still returns `ok`,
-  and `verify` passes. Diagnostic streams are hidden from normal MCP fact/resource browsing by
+  and `verify` passes. The probe is **scope-aware**: for a subject-scoped source (by its
+  authority-registry grant chain or its signed identity grant) it targets the scoped subject
+  itself under a per-run `dent8.write_check.<run-id>` predicate — a legitimately-authorized
+  write through the unchanged write gate, never an out-of-scope one — so a correctly-scoped
+  source passes doctor while an unauthorized source still fails. Diagnostic streams
+  (including scoped write-check probes) are hidden from normal MCP fact/resource browsing by
   default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections,
   and `doctor --agent --output json` also includes a structured `mcp_runtime` object with the
@@ -383,8 +388,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   failures. Native files with no receipt references are reported but do not fail by default.
   This still does not infer facts from prose and does not write provider-native files. Supports
   `--output json`.
-- **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source> |
-  defaults`** — the
+- **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>
+  [--force] | defaults`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
   firewall). **`defaults`** seeds the registry with the out-of-the-box trust profile for a
   shared repository — `source:human` → `high`, `source:ci` → `medium`, `source:agent` →
@@ -412,7 +417,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   against, so the chain grounds out there. `authority add` refuses a self-escalating grant up
   front (above its registered issuer's ceiling, broader than its scope, self-issued, or with a
   malformed scope), and the write gate re-checks the chain on every write so a hand-edited
-  registry cannot smuggle an escalation past it. Remaining caveat: the ceiling is an
+  registry cannot smuggle an escalation past it. The add-time cycle refusal is
+  **order-independent**: a grant that would complete an issuer cycle through existing
+  grants is refused whichever side was added first. `authority remove` is fail-closed too:
+  removing a grant that other grants chain their authority through is **refused** — the
+  deleted issuer would become an unregistered name, which the write gate treats as an
+  operator-level root, so revoking an issuer would silently *loosen* its delegates —
+  and `--force` cascades the revocation down the delegation chain, so orphaned delegates
+  authorize nothing (deny-by-default) until an operator re-parents them with
+  `authority add`. Remaining caveat: the ceiling is an
   `op_*`-layer check, so a process calling the Postgres adapter *directly* (bypassing the
   CLI/MCP) is outside this trust boundary. The ceiling caps *the authority a source may
   assert*; use signed source identity below to

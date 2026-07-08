@@ -534,6 +534,24 @@ impl IdentityContext {
     }
 }
 
+/// Best-effort read of the literal subject scope the signed grant at `path` binds `source`
+/// to, if any. Used by the doctor write-check to pick a probe subject the signed identity
+/// layer will accept; an unreadable, mismatched, or unscoped grant returns `None` (the
+/// probe then targets the default diagnostic subject and [`enforce_write`] reports the real
+/// failure, if any).
+pub(crate) fn grant_scope_for_source(path: &str, source: &str) -> Option<String> {
+    let grant = load_grant(path).ok()?.grant;
+    if grant.source != source {
+        return None;
+    }
+    grant.scope.filter(|scope| scope != "*")
+}
+
+/// [`grant_scope_for_source`] against the process-env grant (`DENT8_GRANT`), if set.
+pub(crate) fn env_grant_scope(source: &str) -> Option<String> {
+    grant_scope_for_source(&nonempty_env("DENT8_GRANT")?, source)
+}
+
 pub(crate) fn enforce_write(
     ctx: &IdentityContext,
     auth: &WriteAuth<'_>,
