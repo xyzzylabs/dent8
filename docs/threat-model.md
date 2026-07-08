@@ -53,6 +53,7 @@ the badness **visible and attributable** so policy and the debugger can catch it
 | T7 | Unprovenanced assertion accepted | **Mandatory provenance + ≥1 evidence on `fact.asserted`** | **Implemented** — `FactEvent::validate` + schema `CHECK`s |
 | T8 | Fact laundering: re-assert a retracted fact to resurrect its dependents | **Recovery deliberately not satisfied** — re-assertion carries fresh provenance, does not restore old edges | Semantics decided ([ADR 0005](decisions/0005-belief-base-revision-semantics.md)). The *fresh-provenance* half is **Runnable**: `dent8 supersede`'s replacement is a brand-new fact id that does not inherit the incumbent's edges. **`dent8 retract` and explicit `dent8 expire` are authority-gated** ([ADR 0008](decisions/0008-retraction-authority.md), [ADR 0011](decisions/0011-authority-gated-expiration.md)) — a low-authority actor cannot terminally remove or close a high-authority fact. The *dependent-resurrection* cascade is the remaining half |
 | T9 | Agent bypasses dent8 by writing native memory/rules or raw storage directly | **Deployment boundary + hook guard + verification** | **Partially mitigated.** dent8's firewall is complete only for writes that enter the CLI/MCP/daemon/`EventStore::append` path. The built-in `dent8 hook native-memory-guard` can block common direct writes to provider-native files (`AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`, `.windsurf/rules`) when the agent's hook system is installed and enforced. `dent8 native scan` inventories those files, and `dent8 native reconcile` verifies explicit `dent8://<kind>/<key>/<predicate>` references against current receipts so stale, contested, no-longer-believed, missing, or malformed native projections are visible. `dent8 verify`, write attestations, the hash chain, and witness heads detect many raw-log edits after the fact. They do not sandbox a same-user process, prevent every shell/interpreter write, infer facts from unreceipted prose, or stop an agent that has raw DB credentials from bypassing the CLI/MCP policy layer. Production deployment should make the dent8 service/daemon the only writer, keep provider-native memory read-only or hook-guarded, and deny agents raw `INSERT`/`UPDATE`/`DELETE` access to the event tables. |
+| T10| Content-embedded payloads stored as inert fact values: injected imperatives, exfil instructions, obfuscated/conditional triggers (eval classes A/F/G/H — [evals.md](evals.md)) | **Pluggable content-check hook** at the write boundary ([content-check.md](content-check.md)): `DENT8_CONTENT_CHECK` names an external scanner run per candidate fact (JSON on stdin, `allow`/`reject`/`taint` verdict on stdout) after the authority gate and before arbitration/attestation/persistence, covering every write entry point (CLI, capture, MCP, daemon). Scanner failures are **fail-closed by default**; `taint` admits-but-flags (detect-only, surfaced by `verify` like retraction taint). | **Enforced (the seam).** dent8 deliberately ships **no content classifier** — arbitration never reads `value` text, and a bundled regex/model would be a false promise. The hook makes an *external* scanner (LLM Guard, Rebuff, Lakera/Azure Prompt Shields bridges) un-bypassable on dent8's write path; unconfigured deployments keep today's admit-as-inert-data behavior, honestly reported in the eval corpus. Detection quality is the attached scanner's, not dent8's. |
 
 ## The firewall write path (target)
 
@@ -155,9 +156,14 @@ Recommended hardening order:
   hardware/secret-store-backed keys, external signers, and key rotation. Authority arbitration
   plus the ceiling/identity chiefly defends against *low*-privilege injection (the MINJA
   case); a compromised high-authority actor remains out of scope.
-- **The firewall cannot judge truth.** It governs provenance, freshness, authority,
-  and contradiction *visibility* — not whether a well-formed, well-sourced fact is
-  factually correct. That is the correct scope for an integrity layer.
+- **The firewall cannot judge truth — and does not judge content itself.** It governs
+  provenance, freshness, authority, and contradiction *visibility* — not whether a
+  well-formed, well-sourced fact is factually correct. That is the correct scope for an
+  integrity layer: dent8 is an **authority layer plus a composable content hook**
+  ([content-check.md](content-check.md)), where the content judgment belongs to the
+  scanner a deployment attaches (T10). An unconfigured hook means content-embedded
+  payloads are admitted as inert data (the honest eval non-blocks); a configured scanner's
+  false negatives remain the scanner's residual, not arbitration's.
 - **Deserialization trusts field-level validity (but is panic-safe).** `Deserialize` is
   derived for the scalar newtypes, so loading an event does *not* re-run the constructors'
   validation — a hand-edited log line, JSONB row, or MCP argument can carry an out-of-range

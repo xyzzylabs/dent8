@@ -16,10 +16,15 @@
 //! authority-lattice tests in `dent8-core`.
 
 pub mod adversarial;
+pub mod content_hook;
 
 pub use adversarial::{
     AdversarialCase, AttackClass, ClassReport, Disposition, Layer, adversarial_summary_table,
     class_reports, run_adversarial_corpus,
+};
+pub use content_hook::{
+    HookedCase, HookedClassReport, HookedDisposition, hooked_class_reports, hooked_summary_table,
+    run_adversarial_corpus_with_hook,
 };
 
 use dent8_core::{

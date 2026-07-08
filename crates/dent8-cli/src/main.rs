@@ -15,7 +15,7 @@ use dent8_core::{
 };
 use dent8_core::{
     AuthorityLevel, FactEvent, FactId, FactLifecycle, FactValue, Predicate, SourceId, Subject,
-    TimestampMillis,
+    TimestampMillis, content_check,
 };
 #[cfg(test)]
 use dent8_store::StoreError;
@@ -2107,6 +2107,96 @@ fn registry_grant_check(
     }
 }
 
+// ---- Content-check hook (pluggable external scanner; docs/content-check.md) ----------
+//
+// The write boundary's *content* gate, mirroring the authority gate above: arbitration
+// never reads a fact's `value` text, so a deployment that must catch content-embedded
+// attacks (injected imperatives, exfil instructions — eval classes A/F/G/H) composes an
+// external scanner in here. dent8 ships no classifier of its own; the configured command
+// (LLM Guard, Rebuff, a Lakera/Azure Prompt Shields bridge, …) owns the judgment. See
+// `dent8_core::content_check` for the verdict protocol and `docs/content-check.md`.
+
+/// Build the content-check config from the environment, or `None` when no scanner is
+/// configured (exact pass-through). Malformed configuration is a loud error, not a silent
+/// disable — the operator tried to set a security control.
+fn content_check_config() -> Result<Option<content_check::ContentCheckConfig>, String> {
+    let raw = match std::env::var("DENT8_CONTENT_CHECK") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("DENT8_CONTENT_CHECK must be valid UTF-8".to_string());
+        }
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    // Whitespace-split program + args; anything needing quoting belongs in a wrapper script.
+    let command: Vec<String> = raw.split_whitespace().map(ToString::to_string).collect();
+    let mut config = content_check::ContentCheckConfig::new(command)?;
+    if let Ok(millis) = std::env::var("DENT8_CONTENT_CHECK_TIMEOUT_MS") {
+        let millis: u64 = millis.trim().parse().map_err(|_| {
+            format!("DENT8_CONTENT_CHECK_TIMEOUT_MS must be a millisecond count, got {millis:?}")
+        })?;
+        config.timeout = Duration::from_millis(millis);
+    }
+    // DEFAULT fail-closed: a configured scanner going dark must not silently readmit
+    // unchecked content. Fail-open is an explicit opt-in (and still flags the admit).
+    if env_flag("DENT8_CONTENT_CHECK_FAIL_OPEN")? {
+        config.failure_policy = content_check::FailurePolicy::FailOpen;
+    }
+    Ok(Some(config))
+}
+
+/// The write-boundary content gate, run on every batch of candidate events **after**
+/// authority enforcement and **before** they are arbitrated, attested, or persisted —
+/// the same placement discipline as [`enforce_write_authority`]: every `op_*` write path
+/// (CLI commands, `dent8 capture`, the MCP tools, daemon connections) passes its built
+/// events through here, so there is no write entry point that skips the scanner. A no-op
+/// when no scanner is configured.
+fn enforce_content_check(events: &mut [FactEvent]) -> Result<(), ops::OpError> {
+    let Some(config) = content_check_config().map_err(ops::OpError::Invalid)? else {
+        return Ok(());
+    };
+    content_check::enforce(&config, events)
+        .map_err(|refusal| ops::OpError::Rejected(format!("REJECTED: {refusal}")))
+}
+
+/// Content flags on still-believed facts, for `verify` — the same detect-only surfacing as
+/// retraction taint: a `taint` verdict (or a fail-open admit) marked the event at write
+/// time ([`content_check::content_flag`]); here every non-terminal fact carrying such a
+/// mark is listed so the flag is never silently absorbed.
+fn content_flag_findings(events: &[FactEvent]) -> Vec<String> {
+    let mut streams: std::collections::BTreeMap<FactId, Vec<FactEvent>> =
+        std::collections::BTreeMap::new();
+    for event in events {
+        streams
+            .entry(event.fact_id.clone())
+            .or_default()
+            .push(event.clone());
+    }
+    let mut findings = Vec::new();
+    for (fact, stream) in &streams {
+        let Ok(Some(state)) = dent8_store::replay_fact(stream) else {
+            continue;
+        };
+        // Terminal facts are no longer believed; their old flags are history, not findings.
+        if state.lifecycle.is_terminal() {
+            continue;
+        }
+        for event in stream {
+            if let Some(flag) = content_check::content_flag(event) {
+                findings.push(format!(
+                    "CONTENT-FLAGGED: {} — {} (scanner: {})",
+                    fact.as_str(),
+                    flag.reason,
+                    flag.scanner
+                ));
+            }
+        }
+    }
+    findings
+}
+
 struct AuthorityListOutcome {
     path: String,
     required: bool,
@@ -2946,6 +3036,9 @@ fn verify_log(path: &str) -> Result<String, String> {
             taint.root_lifecycle
         ));
     }
+    // Content-check flags: a still-believed fact the configured scanner admitted-but-marked
+    // (`taint` verdict, or a fail-open admit) is surfaced like retraction taint.
+    issues.extend(content_flag_findings(&all_events));
     // Signed write attestations (ADR 0013): re-verify each persisted signature. On the file
     // dev store this is the one *content-tamper* check available without a witness — an edit
     // to an attested event breaks its signature even though there is no stored hash.
@@ -2960,7 +3053,8 @@ fn verify_log(path: &str) -> Result<String, String> {
     }
     let report = format!(
         "OK: {} event(s) across {} subject(s) — STRUCTURAL integrity holds (uniqueness + \
-         lineage intact, no retraction taint, all events canonicalize){}. This does NOT \
+         lineage intact, no retraction taint or content-check flags, all events \
+         canonicalize){}. This does NOT \
          detect a content edit to *unattested* events: the file dev store keeps no stored \
          hash to compare against — use `dent8 witness verify` (or the Postgres backend) for \
          tamper-detection.",
@@ -3011,6 +3105,8 @@ fn backend_verify(url: &str) -> Result<String, String> {
                 )
             })
             .collect();
+        // Content-check flags: surfaced like retraction taint (see `content_flag_findings`).
+        lines.extend(content_flag_findings(&events));
         // Signed write attestations (ADR 0013): re-verify each persisted signature.
         let attestations = check_attestations(&events);
         lines.extend(attestations.issues.iter().cloned());
@@ -3022,7 +3118,8 @@ fn backend_verify(url: &str) -> Result<String, String> {
             ));
         }
         let report = format!(
-            "OK: {} event(s) — the stored global hash chain re-verifies, no retraction taint{}. \
+            "OK: {} event(s) — the stored global hash chain re-verifies, no retraction taint \
+             or content-check flags{}. \
              (Tamper-resistance needs an external operated witness.)",
             events.len(),
             attestations.ok_clause()

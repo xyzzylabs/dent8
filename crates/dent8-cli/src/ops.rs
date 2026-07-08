@@ -22,10 +22,10 @@ use std::str::FromStr;
 use crate::{
     CliAuthority, CliOutput, CliStream, CliSubject, DeriveWriteArgs, FactWriteArgs, FactsListArgs,
     ReadFactArgs, ValueWriteArgs, WriteAuth, WriteError, WriteIdentity, append_events,
-    attest_events, display_value, enforce_write_authority, fact_value_json, format_receipt,
-    load_store, log_path, now_millis, paint_status, parse_predicate, print_json_stdout,
-    print_json_stdout_with_code, read_annotation, receipt_fields_json, receipt_json,
-    reserve_event_seq, short, status::Status,
+    attest_events, display_value, enforce_content_check, enforce_write_authority, fact_value_json,
+    format_receipt, load_store, log_path, now_millis, paint_status, parse_predicate,
+    print_json_stdout, print_json_stdout_with_code, read_annotation, receipt_fields_json,
+    receipt_json, reserve_event_seq, short, status::Status,
 };
 
 /// Build a validated `FactEvent` from CLI strings, returning a friendly error rather than
@@ -483,6 +483,10 @@ pub(crate) fn op_assert(
     )
     .map_err(|error| OpError::Invalid(format!("invalid assertion: {error}")))?;
     validity.stamp(&mut event);
+    // The content gate (after authority, before arbitration/attestation/persistence): a
+    // configured scanner may reject the candidate or taint-mark it in place, and the mark
+    // must land before the event is attested and hashed.
+    enforce_content_check(std::slice::from_mut(&mut event))?;
     let registry = PredicateRegistry::coding_agent();
     // Apply the predicate's default TTL up front so the event we *persist* is byte-identical
     // to the one `admit` arbitrates and hashes (otherwise the durable event would carry
@@ -600,6 +604,8 @@ pub(crate) fn op_derive(
             summary: None,
         });
     }
+    // The content gate (after authority, before arbitration/attestation/persistence).
+    enforce_content_check(std::slice::from_mut(&mut event))?;
     let registry = PredicateRegistry::coding_agent();
     apply_policy_defaults(&registry, &mut event);
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
@@ -1115,6 +1121,9 @@ pub(crate) fn op_supersede(
     // default freshness as `assert` (e.g. a revised `branch.status` still goes stale).
     validity.stamp(&mut events[0]);
     apply_policy_defaults(&registry, &mut events[0]);
+    // The content gate (after authority, before arbitration/attestation/persistence): the
+    // replacement carries the new content; the supersession markers are value-less.
+    enforce_content_check(&mut events)?;
 
     // ADR 0015 (opt-in): the earned-supersession gate. At *equal* authority, a replacement
     // may not displace an incumbent with strictly stronger authority-weighted corroboration
@@ -1752,6 +1761,9 @@ pub(crate) fn op_contradict(
     validity.stamp(&mut events[0]);
     let registry = PredicateRegistry::coding_agent();
     apply_policy_defaults(&registry, &mut events[0]);
+    // The content gate (after authority, before arbitration/attestation/persistence): the
+    // opposing fact carries the new content; the contradiction marker is value-less.
+    enforce_content_check(&mut events)?;
 
     // Apply both in memory first; persist only if both admit (a Canonical incumbent makes
     // the contradiction hard-alarm, rejecting the whole operation with nothing persisted).
