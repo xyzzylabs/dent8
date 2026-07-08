@@ -257,9 +257,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `DENT8_ENTRENCHMENT_GATE` to reject at write time), so `verify` stays `OK`. Supports
   `--output json` (with a structured `advisories` array); integrity findings still return a
   nonzero exit code, with the structured report on stdout.
-- **`dent8 eval`** — runs the adversarial corpus and prints the firewall-vs-recency-baseline
+- **`dent8 eval`** — runs the demonstrative corpus and prints the firewall-vs-recency-baseline
   contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
-  the self-demonstrating "why dent8" benchmark. Supports `--output json`.
+  the self-demonstrating "why dent8" benchmark. Supports `--output json`. The larger,
+  externally-grounded 47-case adversarial corpus (with its honest per-class block rates and
+  out-of-scope analysis) is a library + test surface in `dent8-evals::adversarial`, not this
+  CLI subcommand; see [evals.md](evals.md).
 - **`dent8 conflicts`** — lists every contested fact (in dispute) across all subjects, showing
   **both** rival facts (value + authority + lifecycle). Supports `--output json`.
 - **`dent8 export [out.parquet]`** — the **analytical/export lane** (behind `--features
@@ -662,11 +665,22 @@ subject+predicate.
   catalog), and `connect()` bounds its acquire timeout so an unreachable DB fails fast.
 
 **`dent8-evals`:**
-- Adversarial corpus: MINJA injection, authority laundering, canonical contradiction, Sybil
-  corroboration, and **poisoned-source retraction** run against the **real firewall** vs a
-  **recency-only baseline**. `dent8 eval` (or `cargo test -p dent8-evals`) asserts the firewall
-  blocks all five while the baseline is compromised by all five (plus a positive control
-  admitting legitimate revision). See [evals.md](evals.md).
+- **Demonstrative corpus** (`run_corpus`, behind `dent8 eval`): MINJA injection, authority
+  laundering, canonical contradiction, Sybil corroboration, and **poisoned-source retraction**
+  run against the **real firewall** vs a **recency-only baseline**. `dent8 eval` (or
+  `cargo test -p dent8-evals`) asserts the firewall blocks all five while the baseline is
+  compromised by all five (plus a positive control admitting legitimate revision).
+- **Externally-grounded adversarial corpus** (`adversarial::run_adversarial_corpus`): **47
+  cases across 10 attack classes**, patterns adapted (not copied) from public prompt-injection
+  / memory-poisoning corpora (AgentDojo, InjecAgent, BIPIA, MINJA, AgentPoison, PoisonedRAG,
+  HackAPrompt, garak, Lakera Gandalf, OWASP LLM/Agentic Top 10, Rehberger PoCs), each
+  provenance-tagged. Verdicts are **computed** from each attacker's goal predicate, never
+  hardcoded, and reported **honestly**: **blocked 16/47** by arbitration, **detect-only 4/47**
+  (freshness/taint flag but do not remove), **out-of-model 27/47** (admitted by design — dent8
+  is an authority firewall, not a content scanner; a downstream content/registry/TTL layer
+  owns them). The recency-only baseline falls to 46/47. The per-class tally is frozen as a
+  regression guard. See [evals.md](evals.md) for the full table, provenance/licensing, and the
+  known-gaps / out-of-scope analysis.
 
 ## Remaining Gaps
 

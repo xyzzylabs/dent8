@@ -1,0 +1,20 @@
+{
+  "chain_head": "9066d5edacb444c97eae637f8b94637fd5b9545ed8c2964b8ea5b46e946e7a50",
+  "facts": [
+    {
+      "fact_id": "fact:support",
+      "lifecycle": "Active",
+      "value": "text:+1-555-0100",
+      "authority": "High",
+      "believed": true,
+      "fresh": true
+    }
+  ],
+  "rejected": [
+    {
+      "event_id": "event:1",
+      "reason": "UnbackedSupersession"
+    }
+  ],
+  "tainted": []
+}

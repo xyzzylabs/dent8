@@ -1,0 +1,20 @@
+{
+  "chain_head": "6ed897db2833c28b4f79fa1be57cef1094ce238144285d0327e37e6785173257",
+  "facts": [
+    {
+      "fact_id": "fact:db",
+      "lifecycle": "Active",
+      "value": "text:postgres",
+      "authority": "High",
+      "believed": true,
+      "fresh": true
+    }
+  ],
+  "rejected": [
+    {
+      "event_id": "event:1",
+      "reason": "Rejected::DuplicateAssertion"
+    }
+  ],
+  "tainted": []
+}

@@ -3085,8 +3085,8 @@ fn cmd_eval(output: CliOutput) -> i32 {
         CliOutput::Text => {
             println!(
                 "dent8 adversarial corpus — {demonstrated}/{} scenarios demonstrate the firewall's \
-                 defense:\nthe firewall blocks every attack a recency-only baseline (newest-write-wins, \
-                 no authority/dependency) falls to.\n",
+                 defense:\nthe firewall blocks every attack in this demonstrative corpus that a \
+                 recency-only baseline (newest-write-wins, no authority/dependency) falls to.\n",
                 results.len()
             );
             print!("{}", dent8_evals::summary_table());
