@@ -69,7 +69,25 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   and `docker/build-push-action@v7`) to remove the GitHub Actions Node 20 deprecation
   annotation.
 
+### Fixed
+- `dent8 doctor --write-check` no longer fails for a healthy **subject-scoped** source: the
+  write probe is scope-aware and targets the scoped subject under a per-run
+  `dent8.write_check.<run-id>` predicate instead of an out-of-scope `diagnostic:` subject —
+  a legitimately-authorized write through the unchanged write gate, never an out-of-scope
+  one. Scoped probe streams are hidden from fact browsing like the `diagnostic:` ones, and
+  an unauthorized source still fails the check.
+- `dent8 authority add` now refuses a grant that would complete an issuer cycle regardless
+  of insertion order (`add a <max> b` then `add b <max> a` is refused like the reverse
+  order); previously one insertion order slipped past the add-time check and was only
+  caught later by the write gate.
+
 ### Security
+- `dent8 authority remove` no longer silently loosens delegates: removing a grant that
+  other grants chain their authority through is refused (the deleted issuer would become an
+  unregistered name — an operator-level root — so revoking an issuer would have *widened*
+  what its delegates may write). `--force` cascades the revocation down the delegation
+  chain, so orphaned delegates authorize nothing (deny-by-default) until an operator
+  re-parents them with `dent8 authority add`.
 - The authority registry now **enforces** a grant's `issuer` and `scope` (previously
   recorded but not enforced): a write about a subject outside the grant's scope (`"*"` or
   an exact `<kind>:<key>`; a malformed scope covers nothing) is rejected, and a grant

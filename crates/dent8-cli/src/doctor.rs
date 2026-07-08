@@ -7,6 +7,7 @@
 use std::{
     io::{self, Read, Write},
     process::{Child, Command, ExitStatus, Stdio},
+    str::FromStr,
     time::{Duration, Instant},
 };
 
@@ -1667,11 +1668,23 @@ pub(crate) fn mcp_write_check_with_server(
     server: &mcp_config::InstalledServer,
     source: &str,
 ) -> Result<String, String> {
-    let subject_key = format!(
+    let run_id = format!(
         "doctor-mcp-{}-{}",
         std::process::id(),
         now_millis().as_unix_millis()
     );
+    // Resolve the probe target against the *installed server's* env — its authority
+    // registry and signed grant, not the doctor process's — since the write runs there.
+    let registry_path = server
+        .env
+        .get("DENT8_AUTHORITY")
+        .cloned()
+        .unwrap_or_else(authority_registry_path);
+    let identity_scope = server
+        .env
+        .get("DENT8_GRANT")
+        .and_then(|path| identity::grant_scope_for_source(path, source));
+    let probe = WriteCheckProbe::for_source(source, &run_id, &registry_path, identity_scope);
     let responses = mcp_exchange_with_server(
         server,
         &[
@@ -1680,14 +1693,14 @@ pub(crate) fn mcp_write_check_with_server(
             mcp_tool_call(
                 2,
                 "assert",
-                &mcp_value_fact_args(&subject_key, "ok", "high", source),
+                &mcp_value_fact_args(&probe, "ok", "high", source),
             ),
             mcp_tool_call(
                 3,
                 "supersede",
-                &mcp_value_fact_args(&subject_key, "tampered", "low", source),
+                &mcp_value_fact_args(&probe, "tampered", "low", source),
             ),
-            mcp_tool_call(4, "explain", &mcp_read_fact_args(&subject_key)),
+            mcp_tool_call(4, "explain", &mcp_read_fact_args(&probe)),
             mcp_tool_call(5, "verify", &serde_json::json!({})),
         ],
         "mcp write-check",
@@ -1737,7 +1750,9 @@ pub(crate) fn mcp_write_check_with_server(
     }
 
     Ok(format!(
-        "mcp write-check: accepted trusted diagnostic:{subject_key} dent8.write_check=ok, rejected low-authority tampered value, explain+verify OK"
+        "mcp write-check: accepted trusted {} {}=ok, rejected low-authority tampered value, explain+verify OK",
+        probe.subject(),
+        probe.predicate
     ))
 }
 
@@ -1845,12 +1860,12 @@ pub(crate) fn mcp_tool_call(
 }
 
 pub(crate) fn mcp_value_fact_args(
-    subject_key: &str,
+    probe: &WriteCheckProbe,
     value: &str,
     authority: &str,
     source: &str,
 ) -> serde_json::Value {
-    let mut args = mcp_read_fact_args(subject_key);
+    let mut args = mcp_read_fact_args(probe);
     let object = args
         .as_object_mut()
         .expect("mcp_read_fact_args returns object");
@@ -1860,10 +1875,10 @@ pub(crate) fn mcp_value_fact_args(
     args
 }
 
-pub(crate) fn mcp_read_fact_args(subject_key: &str) -> serde_json::Value {
+pub(crate) fn mcp_read_fact_args(probe: &WriteCheckProbe) -> serde_json::Value {
     serde_json::json!({
-        "subject": format!("diagnostic:{subject_key}"),
-        "predicate": "dent8.write_check",
+        "subject": probe.subject(),
+        "predicate": probe.predicate,
     })
 }
 
@@ -2076,17 +2091,70 @@ pub(crate) fn doctor_witness(output: &mut String) -> bool {
     ok
 }
 
+/// Where a write-check probe writes. By default a throwaway `diagnostic:` subject; when the
+/// probed source is **subject-scoped** (by its authority-registry grant chain or its signed
+/// identity grant), the scoped subject itself with a per-run unique probe predicate — the
+/// probe must stay a legitimately-authorized write, so it targets the one subject the
+/// source may write about instead of bypassing or weakening the scope gate (a scoped source
+/// must never be able to persist an out-of-scope write, not even a diagnostic one). Scope
+/// resolution is best-effort: an unreadable registry/grant or a malformed scope falls back
+/// to the default subject and lets the write gate report the real rejection. The probe
+/// always asserts at `high` authority, so a source whose authority ceiling is below `high`
+/// fails write-check even when otherwise healthy — a known limitation.
+pub(crate) struct WriteCheckProbe {
+    subject_kind: String,
+    subject_key: String,
+    predicate: String,
+}
+
+impl WriteCheckProbe {
+    fn for_source(
+        source: &str,
+        run_id: &str,
+        registry_path: &str,
+        identity_scope: Option<String>,
+    ) -> Self {
+        let scoped = load_authority_registry_at(registry_path, false)
+            .ok()
+            .flatten()
+            .and_then(|registry| crate::scoped_probe_subject(&registry, source).map(str::to_string))
+            .or(identity_scope);
+        match scoped.and_then(|subject| crate::CliSubject::from_str(&subject).ok()) {
+            Some(subject) => Self {
+                subject_kind: subject.kind,
+                subject_key: subject.key,
+                predicate: format!("dent8.write_check.{run_id}"),
+            },
+            None => Self {
+                subject_kind: "diagnostic".to_string(),
+                subject_key: run_id.to_string(),
+                predicate: "dent8.write_check".to_string(),
+            },
+        }
+    }
+
+    fn subject(&self) -> String {
+        format!("{}:{}", self.subject_kind, self.subject_key)
+    }
+}
+
 pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
-    let subject_key = format!(
+    let run_id = format!(
         "doctor-{}-{}",
         std::process::id(),
         now_millis().as_unix_millis()
     );
+    let probe = WriteCheckProbe::for_source(
+        source,
+        &run_id,
+        &authority_registry_path(),
+        identity::env_grant_scope(source),
+    );
     ops::op_assert(
         &log_path(),
-        "diagnostic",
-        &subject_key,
-        "dent8.write_check",
+        &probe.subject_kind,
+        &probe.subject_key,
+        &probe.predicate,
         "ok",
         AuthorityLevel::High,
         source,
@@ -2097,9 +2165,9 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
 
     match ops::op_supersede(
         &log_path(),
-        "diagnostic",
-        &subject_key,
-        "dent8.write_check",
+        &probe.subject_kind,
+        &probe.subject_key,
+        &probe.predicate,
         "tampered",
         AuthorityLevel::Low,
         source,
@@ -2117,9 +2185,9 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
 
     let explained = ops::op_explain(
         &log_path(),
-        "diagnostic",
-        &subject_key,
-        "dent8.write_check",
+        &probe.subject_kind,
+        &probe.subject_key,
+        &probe.predicate,
         ops::ReadClock::default(),
     )
     .map_err(|error| error.message().to_string())?;
@@ -2130,7 +2198,9 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
     }
     verify_log(&log_path())?;
     Ok(format!(
-        "write-check: accepted trusted diagnostic:{subject_key} dent8.write_check=ok, rejected low-authority tampered value, verify OK"
+        "write-check: accepted trusted {} {}=ok, rejected low-authority tampered value, verify OK",
+        probe.subject(),
+        probe.predicate
     ))
 }
 

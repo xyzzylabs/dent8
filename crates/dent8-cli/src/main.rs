@@ -147,7 +147,9 @@ fn run_cli(cli: Cli) -> i32 {
                 args.scope.as_deref(),
                 cli.output,
             ),
-            AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source, cli.output),
+            AuthorityCommand::Remove(args) => {
+                cmd_authority_remove(&args.source, args.force, cli.output)
+            }
             AuthorityCommand::Defaults => cmd_authority_defaults(cli.output),
         },
         Some(CliCommand::Identity(args)) => run_identity(&args.command, cli.output),
@@ -907,6 +909,10 @@ struct AuthorityAddArgs {
 struct AuthorityRemoveArgs {
     #[arg(value_parser = parse_source)]
     source: String,
+    /// Also revoke every grant whose issuer chain passes through this source. Without it,
+    /// removing a grant that other grants chain their authority through is refused.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -1982,6 +1988,28 @@ fn scope_covers(scope: Option<&str>, subject: &str) -> bool {
     }
 }
 
+/// The literal subject `source`'s registry grant chain is scoped to, if any: the first
+/// non-`"*"` scope found walking the source's grant and its registered issuer chain.
+/// `None` means the chain leaves the subject unconstrained (or the source is unregistered).
+/// Used by the doctor write-check to pick a probe subject a correctly-scoped source is
+/// actually allowed to write about; a hand-edited chain with conflicting literal scopes
+/// authorizes nothing anywhere, and returning the first scope simply lets the write gate
+/// report that rejection.
+fn scoped_probe_subject<'a>(registry: &'a SourceRegistry, source: &str) -> Option<&'a str> {
+    let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut link = source;
+    while visited.insert(link) {
+        let grant = registry.sources.get(link)?;
+        if let Some(scope) = grant.scope.as_deref()
+            && scope != "*"
+        {
+            return Some(scope);
+        }
+        link = grant.issuer.as_deref()?;
+    }
+    None
+}
+
 /// The pure decision: reject a write above the source's ceiling, outside its grant's scope,
 /// or beyond what the grant's **issuer chain** can delegate. `None` registry is permissive
 /// (dev mode); production can disable that path with `DENT8_REQUIRE_AUTHORITY`. Rejection —
@@ -2232,13 +2260,21 @@ fn validate_authority_grant(
     // audit; the registry has nothing to rank it against.
     let mut link = issuer;
     let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-    while let Some(grant) = registry.sources.get(link) {
+    loop {
+        // The cycle check runs before the registry lookup so the refusal is
+        // order-independent: a chain that reaches the grant being added completes a cycle
+        // whether or not that grant is already registered — `add a <max> b` then
+        // `add b <max> a` must be refused like the reverse order. (The write gate rejects
+        // the cycle either way; add-time is where the operator can still fix it.)
         if link == source || !visited.insert(link) {
             return Err(format!(
                 "issuer {issuer:?} would create an issuer cycle through {link:?} — a grant \
                  cannot ground its own authority (no self-escalation)"
             ));
         }
+        let Some(grant) = registry.sources.get(link) else {
+            break;
+        };
         if max_authority > grant.max_authority {
             return Err(format!(
                 "issuer {link:?} may grant at most {}, but the new grant requests \
@@ -2338,50 +2374,102 @@ fn cmd_authority_add(
     }
 }
 
-fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
+/// The registered sources whose issuer chain passes through `source` — the grants a
+/// removal of `source` would orphan. Each grant's chain is walked through registered
+/// links only, with a visited set, so a hand-edited cyclic registry cannot loop the check.
+fn dependent_grants(registry: &SourceRegistry, source: &str) -> Vec<String> {
+    registry
+        .sources
+        .iter()
+        .filter(|(name, grant)| {
+            name.as_str() != source && issuer_chain_reaches(registry, grant, source)
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// Whether `grant`'s issuer chain reaches `target` through registered links.
+fn issuer_chain_reaches(registry: &SourceRegistry, grant: &SourceGrant, target: &str) -> bool {
+    let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut link = grant.issuer.as_deref();
+    while let Some(name) = link {
+        if name == target {
+            return true;
+        }
+        if !visited.insert(name) {
+            return false;
+        }
+        link = registry
+            .sources
+            .get(name)
+            .and_then(|grant| grant.issuer.as_deref());
+    }
+    false
+}
+
+/// Emit an authority-command failure on the selected output surface and return `code`.
+fn authority_failure(tool: &str, message: &str, code: i32, output: CliOutput) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("{message}");
+            code
+        }
+        CliOutput::Json => print_json_stdout_with_code(&authority_error_json(tool, message), code),
+    }
+}
+
+/// Revoke a grant. Removing a grant that other grants chain their authority through is
+/// **refused** without `--force`: the deleted issuer would become an *unregistered* name,
+/// which the write gate treats as an operator-level root — so revoking an issuer would
+/// silently *loosen* its delegates. With `--force`, revocation cascades down the delegation
+/// chain: the dependent grants are removed too, so orphaned delegates authorize nothing
+/// (an unlisted source is deny-by-default) until an operator re-parents them with
+/// `dent8 authority add`.
+fn cmd_authority_remove(source: &str, force: bool, output: CliOutput) -> i32 {
     let mut registry = match load_authority_registry_for_edit() {
         Ok(Some(registry)) => registry,
         Ok(None) => {
-            let message = "no authority registry to remove from";
-            return match output {
-                CliOutput::Text => {
-                    eprintln!("{message}");
-                    1
-                }
-                CliOutput::Json => print_json_stdout_with_code(
-                    &authority_error_json("authority remove", message),
-                    1,
-                ),
-            };
+            return authority_failure(
+                "authority remove",
+                "no authority registry to remove from",
+                1,
+                output,
+            );
         }
-        Err(error) => {
-            return match output {
-                CliOutput::Text => {
-                    eprintln!("{error}");
-                    2
-                }
-                CliOutput::Json => print_json_stdout_with_code(
-                    &authority_error_json("authority remove", &error),
-                    2,
-                ),
-            };
-        }
+        Err(error) => return authority_failure("authority remove", &error, 2, output),
     };
-    if registry.sources.remove(source).is_none() {
+    if !registry.sources.contains_key(source) {
         let message = format!("{source} is not in the authority registry");
-        return match output {
-            CliOutput::Text => {
-                eprintln!("{message}");
-                1
-            }
-            CliOutput::Json => {
-                print_json_stdout_with_code(&authority_error_json("authority remove", &message), 1)
-            }
-        };
+        return authority_failure("authority remove", &message, 1, output);
+    }
+    let dependents = dependent_grants(&registry, source);
+    if !dependents.is_empty() && !force {
+        let message = format!(
+            "cannot remove {source}: {} dependent grant(s) chain their authority through it \
+             ({}) — deleting the issuer would loosen them to an operator-level root; pass \
+             --force to revoke the dependent grant(s) too, then re-parent them with \
+             `dent8 authority add <source> <max> [issuer]`",
+            dependents.len(),
+            dependents.join(", "),
+        );
+        return authority_failure("authority remove", &message, 2, output);
+    }
+    registry.sources.remove(source);
+    for dependent in &dependents {
+        registry.sources.remove(dependent);
     }
     match save_authority_registry(&registry) {
         Ok(()) => {
-            let message = format!("revoked {source}");
+            let message = if dependents.is_empty() {
+                format!("revoked {source}")
+            } else {
+                format!(
+                    "revoked {source} and {} dependent grant(s): {} — re-parent them with \
+                     `dent8 authority add`",
+                    dependents.len(),
+                    dependents.join(", "),
+                )
+            };
             match output {
                 CliOutput::Text => {
                     println!("{message}");
@@ -2392,19 +2480,12 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
                     "tool": "authority remove",
                     "path": authority_registry_path(),
                     "source": source,
+                    "also_revoked": dependents,
                     "message": message,
                 })),
             }
         }
-        Err(error) => match output {
-            CliOutput::Text => {
-                eprintln!("{error}");
-                1
-            }
-            CliOutput::Json => {
-                print_json_stdout_with_code(&authority_error_json("authority remove", &error), 1)
-            }
-        },
+        Err(error) => authority_failure("authority remove", &error, 1, output),
     }
 }
 
@@ -3824,6 +3905,114 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn authority_add_refuses_an_issuer_cycle_in_both_insertion_orders() {
+        // a already names b as issuer; adding b issued by a completes the cycle...
+        let registry = registry_of(&[(
+            "source:a",
+            grant(AuthorityLevel::High, Some("source:b"), None),
+        )]);
+        let error = validate_authority_grant(
+            &registry,
+            "source:b",
+            AuthorityLevel::High,
+            Some("source:a"),
+            None,
+        )
+        .expect_err("completing an a<->b cycle must be refused");
+        assert!(error.contains("issuer cycle"), "{error}");
+
+        // ...and the reverse insertion order is refused the same way.
+        let registry = registry_of(&[(
+            "source:b",
+            grant(AuthorityLevel::High, Some("source:a"), None),
+        )]);
+        let error = validate_authority_grant(
+            &registry,
+            "source:a",
+            AuthorityLevel::High,
+            Some("source:b"),
+            None,
+        )
+        .expect_err("completing a b<->a cycle must be refused");
+        assert!(error.contains("issuer cycle"), "{error}");
+    }
+
+    #[test]
+    fn dependent_grants_walks_issuer_chains_transitively() {
+        let registry = registry_of(&[
+            ("source:lead", grant(AuthorityLevel::High, None, None)),
+            (
+                "source:bot",
+                grant(AuthorityLevel::Medium, Some("source:lead"), None),
+            ),
+            (
+                "source:sub",
+                grant(AuthorityLevel::Low, Some("source:bot"), None),
+            ),
+            ("source:other", grant(AuthorityLevel::High, None, None)),
+        ]);
+        // Direct and transitive delegates both depend on the lead...
+        assert_eq!(
+            dependent_grants(&registry, "source:lead"),
+            vec!["source:bot".to_string(), "source:sub".to_string()]
+        );
+        // ...an unrelated grant depends on nothing, and a leaf has no dependents.
+        assert!(dependent_grants(&registry, "source:other").is_empty());
+        assert!(dependent_grants(&registry, "source:sub").is_empty());
+        // A hand-edited cyclic chain must not loop the check.
+        let cyclic = registry_of(&[
+            (
+                "source:a",
+                grant(AuthorityLevel::High, Some("source:b"), None),
+            ),
+            (
+                "source:b",
+                grant(AuthorityLevel::High, Some("source:a"), None),
+            ),
+        ]);
+        assert!(dependent_grants(&cyclic, "source:other").is_empty());
+        assert_eq!(
+            dependent_grants(&cyclic, "source:a"),
+            vec!["source:b".to_string()]
+        );
+    }
+
+    #[test]
+    fn scoped_probe_subject_finds_the_grant_chains_literal_scope() {
+        let registry = registry_of(&[
+            (
+                "source:lead",
+                grant(AuthorityLevel::High, None, Some("repo:app")),
+            ),
+            (
+                "source:bot",
+                grant(AuthorityLevel::Medium, Some("source:lead"), None),
+            ),
+            ("source:star", grant(AuthorityLevel::High, None, Some("*"))),
+            ("source:open", grant(AuthorityLevel::High, None, None)),
+            (
+                "source:cyclic",
+                grant(AuthorityLevel::High, Some("source:cyclic"), Some("*")),
+            ),
+        ]);
+        // A directly scoped grant pins the probe subject...
+        assert_eq!(
+            scoped_probe_subject(&registry, "source:lead"),
+            Some("repo:app")
+        );
+        // ...and so does a scope inherited through the issuer chain.
+        assert_eq!(
+            scoped_probe_subject(&registry, "source:bot"),
+            Some("repo:app")
+        );
+        // Wildcard, absent scope, unregistered sources, and cycles leave it unconstrained.
+        assert_eq!(scoped_probe_subject(&registry, "source:star"), None);
+        assert_eq!(scoped_probe_subject(&registry, "source:open"), None);
+        assert_eq!(scoped_probe_subject(&registry, "source:unknown"), None);
+        assert_eq!(scoped_probe_subject(&registry, "source:cyclic"), None);
     }
 
     #[test]
