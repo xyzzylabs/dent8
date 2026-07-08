@@ -725,9 +725,11 @@ fn doctor_write_check_probes_within_a_subject_scoped_grant() {
         "{report}"
     );
     assert!(
-        report.contains("rejected low-authority tampered value"),
+        report.contains("rejected below-ceiling tampered value"),
         "{report}"
     );
+    // The probe retracts its own fact so nothing is left believed.
+    assert!(report.contains("probe retracted"), "{report}");
     // The probe never persisted an out-of-scope write.
     let log_contents = fs::read_to_string(&log).expect("write-check log");
     assert!(
@@ -774,6 +776,58 @@ fn doctor_write_check_probes_within_a_subject_scoped_grant() {
         "{unauthorized}"
     );
     assert!(unauthorized.contains("authority ceiling"), "{unauthorized}");
+}
+
+#[test]
+fn doctor_write_check_asserts_at_the_source_ceiling_and_retracts() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", registry.as_str()),
+        ("DENT8_REQUIRE_AUTHORITY", "1"),
+    ];
+
+    // A source whose granted ceiling is *below* `high`.
+    assert_success(
+        &run_dent8(
+            &["authority", "add", "source:mid", "medium", "operator"],
+            &envs,
+        ),
+        "add a medium-ceiling grant",
+    );
+
+    // It passes write-check: the probe asserts at the source's own ceiling (medium), not the
+    // old hardcoded high, and the reject sub-check runs one level below (low).
+    let doctor = run_dent8(
+        &["doctor", "--source", "source:mid", "--write-check"],
+        &envs,
+    );
+    assert_success(&doctor, "doctor --write-check for a medium-ceiling source");
+    let report = stdout(&doctor);
+    assert!(
+        report.contains("dent8.write_check=ok at medium"),
+        "{report}"
+    );
+    assert!(
+        report.contains("rejected below-ceiling tampered value"),
+        "{report}"
+    );
+    assert!(report.contains("probe retracted"), "{report}");
+
+    // After the run the probe fact is retracted, not left believed: the diagnostic stream is
+    // surfaced (with --include-diagnostics) as no-longer-believed rather than fresh.
+    let listed = run_dent8(&["facts", "list", "--include-diagnostics"], &envs);
+    assert_success(
+        &listed,
+        "facts list --include-diagnostics after write-check",
+    );
+    let listed_stdout = stdout(&listed);
+    assert!(
+        listed_stdout.contains("dent8.write_check") && listed_stdout.contains("no longer believed"),
+        "{listed_stdout}"
+    );
 }
 
 #[test]
@@ -2664,8 +2718,9 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
     let stdout = stdout(&doctor);
     assert!(stdout.contains("write-check: accepted trusted diagnostic:doctor-"));
     assert!(stdout.contains("dent8.write_check=ok"));
-    assert!(stdout.contains("rejected low-authority tampered value"));
+    assert!(stdout.contains("rejected below-ceiling tampered value"));
     assert!(stdout.contains("verify OK"));
+    assert!(stdout.contains("probe retracted"));
     let log_contents = fs::read_to_string(&log_path).expect("doctor write-check log");
     assert!(log_contents.contains("\"kind\":\"diagnostic\""));
     assert!(log_contents.contains("dent8.write_check"));

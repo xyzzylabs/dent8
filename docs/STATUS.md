@@ -92,18 +92,23 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `dent8 native scan --agent <profile>` and reports how many native memory/rules files exist
   and how many contain dent8 receipt markers. With
   `--write-check`, it runs an explicit acceptance probe through the installed MCP server
-  against the configured store: a high-authority internal diagnostic fact
-  (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a low-authority supersession to
+  against the configured store: an internal diagnostic fact
+  (`diagnostic:<run-id> dent8.write_check=ok`) is accepted, a below-ceiling supersession to
   a tampered value from the same configured source is rejected, `explain` still returns `ok`,
   and `verify` passes. The probe is **scope-aware**: for a subject-scoped source (by its
   authority-registry grant chain or its signed identity grant) it targets the scoped subject
   itself under a per-run `dent8.write_check.<run-id>` predicate — a legitimately-authorized
   write through the unchanged write gate, never an out-of-scope one — so a correctly-scoped
-  source passes doctor while an unauthorized source still fails. The probe always asserts at
-  `high` authority, so a source whose authority ceiling is below `high` fails `--write-check`
-  even when otherwise healthy — a known limitation. Diagnostic streams
-  (including scoped write-check probes) are hidden from normal MCP fact/resource browsing by
-  default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
+  source passes doctor while an unauthorized source still fails. The probe asserts at the
+  **source's own granted ceiling** (its authority-registry grant if listed, else the signed
+  identity's max authority, else `high`), so a healthy source whose ceiling is below `high`
+  now passes `--write-check`; the reject sub-check supersedes one level below that ceiling so
+  it stays a genuine rejection (skipped, and noted, when the ceiling is already the minimum
+  level). The log is append-only, so the probe **retracts its own `ok` fact** once the checks
+  complete: the fact falls to a terminal, no-longer-believed state instead of lingering as
+  live current state, so repeated runs leave no accumulating believed residue. Diagnostic
+  streams (including scoped write-check probes) are hidden from normal MCP fact/resource
+  browsing by default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections,
   and `doctor --agent --output json` also includes a structured `mcp_runtime` object with the
   MCP smoke result plus the live `runtime_status` payload when the server answers.
