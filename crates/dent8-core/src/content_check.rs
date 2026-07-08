@@ -282,7 +282,7 @@ fn parse_verdict(stdout: &str) -> Result<Verdict, ScanError> {
     let wire: WireVerdict = serde_json::from_str(trimmed).map_err(|error| {
         ScanError::MalformedVerdict(format!(
             "{error} (stdout: {})",
-            &trimmed[..trimmed.len().min(120)]
+            truncate_chars(trimmed, 120)
         ))
     })?;
     let reason = wire
@@ -540,6 +540,15 @@ mod tests {
             parse_verdict("yes"),
             Err(ScanError::MalformedVerdict(_))
         ));
+    }
+
+    #[test]
+    fn a_multibyte_malformed_verdict_is_reported_without_panicking() {
+        // 1 + 3*50 = 151 bytes but only 51 chars: byte 120 falls inside a '€',
+        // so a byte slice at 120 would panic before the failure policy applied.
+        let garbage = format!("a{}", "€".repeat(50));
+        let error = parse_verdict(&garbage).expect_err("non-JSON must be malformed");
+        assert!(matches!(error, ScanError::MalformedVerdict(_)));
     }
 
     #[test]
