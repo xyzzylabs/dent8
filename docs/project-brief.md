@@ -32,7 +32,7 @@ Stated precisely (and honestly): no single one of those primitives is novel — 
 
 ## MVP User
 
-The first user is a coding agent or long-running developer assistant that needs to remember project facts without silently retaining stale or contradicted context.
+The first user is **multiple coding agents (and a human) sharing one verified fact base about one repository** — the stale-`CLAUDE.md` problem. Today that shared knowledge lives in flat instruction files that go stale silently: nothing records who asserted a convention, whether CI later contradicted it, or which agent is still acting on a superseded fact. This wedge is where dent8's model earns its keep naturally: authority differentiation falls out of the setting (human > CI > agent), staleness is a *felt* pain rather than a hypothetical one, and repository facts are naturally structured subject–predicate–value triples. A single agent remembering things is a feature; several writers with different trust levels converging on one fact base is where integrity — not persistence — becomes the product.
 
 Example facts:
 

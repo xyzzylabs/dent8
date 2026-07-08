@@ -2,9 +2,14 @@
 
 dent8 makes strong correctness facts — deterministic replay, `projection ==
 fold(events)`, terminal-state immutability, tamper-evident hash chains,
-serializable concurrent contradiction writes — but today has only example-based
-unit tests in `dent8-core` and no implementation behind `dent8-store`'s
-`replay_fact`/`EventStore` ([`crates/dent8-store/src/lib.rs`](../crates/dent8-store/src/lib.rs)).
+serializable concurrent contradiction writes — and today backs them with a
+working verification stack: `dent8-store` is fully implemented with its own test
+suites, and the layers in place include proptest suites (invariants, fold,
+robustness), golden replay fixtures, exhaustive lattice tests, and three
+`#[kani::proof]` harnesses in `dent8-core/src/state.rs`. The Kani harnesses
+exist and run locally but are **not yet executed in CI** — the Kani CI job was
+attempted and reverted for toolchain incompatibility (see the comment near line
+198 of [`ci.yml`](../.github/workflows/ci.yml)).
 This document surveys the 2025–2026 Rust verification ecosystem with honest scope,
 then recommends a concrete *layered* stack, mapping specific dent8 invariants to
 specific tools in a phased order tied to the current code.
