@@ -10,6 +10,26 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- Added `dent8 context`: emit the currently-believed facts as an agent context pack —
+  markdown ready for CLAUDE.md/AGENTS.md-style inclusion or `SessionStart`-hook injection,
+  or `--output json`. Belief-state aware: terminal facts never appear, stale/not-yet-valid
+  facts are omitted by default (or annotated with `--include-stale`), contested facts are
+  flagged inline, and every fact carries authority, asserting source, and its `dent8://`
+  receipt reference.
+- Added `dent8 capture [FILE] [--consume]`: batch structured fact proposals (JSON lines
+  from stdin or a file) through the same `op_*` firewall path as the interactive writes,
+  with per-line authority/source resolution falling back to the agent tier
+  (`source:agent` at `low`). Built for session-end hooks: every line is attempted and
+  reported, a firewall rejection exits `1` as a visible safety signal, and `--consume`
+  truncates the queue file so the next hook firing does not replay it.
+- Added `dent8 authority defaults`: seed the source→authority registry with the
+  out-of-the-box trust profile for a shared repository — `source:human` → `high`,
+  `source:ci` → `medium`, `source:agent` → `low` (human > CI > agent) — merge-only, so an
+  operator's existing grants are never downgraded.
+- Documented the capture/inject loop and its Claude Code hook wiring in
+  `docs/context-capture.md`, and extended
+  `examples/agent-hooks/claude-code/settings.sample.json` with the `SessionStart` context
+  injection and `SessionEnd` proposals flush.
 - Added `dent8 snapshot` and the MCP `snapshot` read/audit tool: one stable
   debugger/control-plane payload combining runtime status, fact streams, integrity verify,
   conflicts, and summary counts, with `--include-diagnostics` parity with `facts list`.

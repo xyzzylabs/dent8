@@ -116,6 +116,13 @@ See [examples/mcp/](examples/mcp/) and the per-agent example directories, or wir
 over MCP from [LangChain](examples/langchain/) / the
 [Vercel AI SDK](examples/vercel-ai-sdk/).
 
+To close the loop without MCP, wire the session bookends into provider hooks: a
+`SessionStart` hook injects `dent8 context` (the believed facts, with authority and
+provenance) and a `SessionEnd` hook flushes agent-queued proposals with
+`dent8 capture .dent8/proposals.jsonl --consume` — see
+[docs/context-capture.md](docs/context-capture.md) and
+[examples/agent-hooks/claude-code/](examples/agent-hooks/claude-code/).
+
 ### Share one belief base over a daemon
 
 Instead of one dent8 process per agent, run a **per-user daemon** and point writes at it:
@@ -179,6 +186,11 @@ library-only vs. design-only. In brief, runnable today:
 - The full belief lifecycle — `assert` / `supersede` / `retract` / `contradict` / `reinforce`
   / `expire` / `derive` / `explain` / `replay` — plus the operator surfaces `facts list`,
   `snapshot`, `verify`, `conflicts`, `eval`, and `export`.
+- The session capture/inject loop: `dent8 context` emits the currently-believed facts as a
+  markdown (or JSON) context pack for session-start injection, `dent8 capture` flushes
+  structured fact proposals from a session back through the firewall, and
+  `dent8 authority defaults` seeds the out-of-the-box **human > CI > agent** trust profile
+  ([docs/context-capture.md](docs/context-capture.md)).
 - Three backends behind one contract: a local **file** dev log (default), embedded **SQLite**,
   and a DB-verified transactional **Postgres** adapter (`--features postgres`) — selected by
   `DENT8_STORE_URL`.
@@ -208,6 +220,8 @@ keeping similar memories distinct.)*
 - [Implementation Status](docs/STATUS.md) — single source of truth for what is built
 - [Configuration](docs/configuration.md) — every env var and Cargo feature
 - [Dogfood Workflow](docs/dogfood.md) — how this repo uses dent8 as its own project memory
+- [Context & Capture](docs/context-capture.md) — the session inject/capture loop and the
+  default authority profile
 - [Changelog](CHANGELOG.md)
 
 **Design**

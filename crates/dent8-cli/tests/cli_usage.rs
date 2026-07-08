@@ -143,6 +143,329 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
 }
 
 #[test]
+fn context_emits_only_believed_facts_as_annotated_markdown() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    for args in [
+        [
+            "assert",
+            "repo:app",
+            "uses_database",
+            "postgres",
+            "--authority",
+            "medium",
+            "--source",
+            "source:ci",
+        ],
+        [
+            "assert",
+            "repo:app",
+            "deploy_target",
+            "staging",
+            "--authority",
+            "high",
+            "--source",
+            "source:human",
+        ],
+    ] {
+        assert_success(&run_dent8(&args, &envs), "seed context fact");
+    }
+    // Revise one fact and terminally remove the other's sibling stream, so the pack must
+    // show only the current beliefs.
+    assert_success(
+        &run_dent8(
+            &[
+                "supersede",
+                "repo:app",
+                "uses_database",
+                "sqlite",
+                "--authority",
+                "high",
+                "--source",
+                "source:human",
+            ],
+            &envs,
+        ),
+        "supersede context fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "retract",
+                "repo:app",
+                "deploy_target",
+                "--authority",
+                "high",
+                "--source",
+                "source:human",
+            ],
+            &envs,
+        ),
+        "retract context fact",
+    );
+
+    let context = run_dent8(&["context"], &envs);
+    assert_success(&context, "context");
+    let markdown = stdout(&context);
+    assert!(markdown.contains("## Project facts (dent8)"), "{markdown}");
+    assert!(markdown.contains("### repo:app"), "{markdown}");
+    assert!(
+        markdown.contains("- `uses_database` = \"sqlite\""),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("authority: high, source: source:human"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("ref: dent8://repo/app/uses_database"),
+        "{markdown}"
+    );
+    // The superseded value and the retracted stream are history, not context.
+    assert!(!markdown.contains("\"postgres\""), "{markdown}");
+    assert!(!markdown.contains("deploy_target"), "{markdown}");
+
+    let json = run_dent8(&["--output", "json", "context"], &envs);
+    assert_success(&json, "context --output json");
+    let json = stdout_json(&json);
+    assert_eq!(json["status"], "ok");
+    assert_eq!(json["tool"], "context");
+    assert_eq!(json["count"], 1);
+    assert_eq!(json["facts"][0]["predicate"], "uses_database");
+    assert_eq!(json["facts"][0]["value"]["text"], "sqlite");
+    assert_eq!(json["facts"][0]["authority"], "high");
+    assert_eq!(json["facts"][0]["source"], "source:human");
+    assert_eq!(json["facts"][0]["freshness"], "fresh");
+    assert_eq!(json["omitted"]["stale"], 0);
+}
+
+#[test]
+fn context_omits_stale_facts_by_default_and_flags_contested_ones() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // A believed fact whose asserted validity already lapsed (ADR 0016) reads stale.
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "release_branch",
+                "release-1.0",
+                "--authority",
+                "high",
+                "--source",
+                "source:human",
+                "--valid-to",
+                "1000",
+            ],
+            &envs,
+        ),
+        "assert stale fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "uses_database",
+                "postgres",
+                "--authority",
+                "medium",
+                "--source",
+                "source:ci",
+            ],
+            &envs,
+        ),
+        "assert fresh fact",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "contradict",
+                "repo:app",
+                "uses_database",
+                "sqlite",
+                "--authority",
+                "medium",
+                "--source",
+                "source:codex",
+            ],
+            &envs,
+        ),
+        "contradict fresh fact",
+    );
+
+    let context = run_dent8(&["context"], &envs);
+    assert_success(&context, "context with stale + contested facts");
+    let markdown = stdout(&context);
+    assert!(!markdown.contains("release_branch"), "{markdown}");
+    assert!(
+        markdown.contains("1 believed fact(s) omitted (1 stale, 0 not yet valid)"),
+        "{markdown}"
+    );
+    assert!(markdown.contains("[contested — "), "{markdown}");
+
+    let included = run_dent8(&["context", "--include-stale"], &envs);
+    assert_success(&included, "context --include-stale");
+    let included = stdout(&included);
+    assert!(included.contains("release_branch"), "{included}");
+    assert!(included.contains("[stale — "), "{included}");
+
+    // A pack carrying a live dispute reads `contested`, not `ok`.
+    let json = stdout_json(&run_dent8(&["--output", "json", "context"], &envs));
+    assert_eq!(json["status"], "contested");
+}
+
+#[test]
+fn capture_flushes_a_proposals_file_through_the_firewall() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let proposals = temp.file("proposals.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    fs::write(
+        &proposals,
+        concat!(
+            r#"{"subject": "repo:app", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
+            "\n",
+            r#"{"op": "supersede", "subject": "repo:app", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            "\n",
+            r#"{"subject": "repo:app", "predicate": "build_tool", "value": "cargo"}"#,
+            "\n",
+        ),
+    )
+    .expect("write proposals");
+
+    let captured = run_dent8(&["capture", &proposals, "--consume"], &envs);
+    // The low-authority supersession is refused, and the batch says so with exit 1.
+    assert_eq!(captured.status.code(), Some(1), "{}", stderr(&captured));
+    let report = stderr(&captured);
+    assert!(
+        report.contains("captured 3 proposal(s): 2 accepted, 0 contested, 1 rejected, 0 invalid"),
+        "{report}"
+    );
+    assert!(report.contains("insufficient authority"), "{report}");
+    // --consume truncated the queue so the next hook firing does not replay it.
+    assert_eq!(line_count(&proposals), 0);
+
+    // The accepted writes persisted through the same firewall path as `dent8 assert`.
+    let explained = run_dent8(&["explain", "repo:app", "uses_database"], &envs);
+    assert_success(&explained, "explain after capture");
+    assert!(stdout(&explained).contains("value         : \"postgres\""));
+    // The unattributed proposal fell back to the agent tier of the default profile.
+    let fallback = run_dent8(&["replay", "repo:app", "build_tool"], &envs);
+    assert_success(&fallback, "replay captured fallback fact");
+    assert!(
+        stdout(&fallback).contains("source:agent"),
+        "{}",
+        stdout(&fallback)
+    );
+}
+
+#[test]
+fn capture_reads_stdin_and_reports_json() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let input = concat!(
+        r#"{"subject": "repo:app", "predicate": "build_tool", "value": "cargo"}"#,
+        "\n",
+        "not json\n",
+    );
+    let captured = run_dent8_stdin(&["--output", "json", "capture"], input, &envs);
+    // A malformed line dominates the batch status (exit 2), but the good line still landed.
+    assert_eq!(captured.status.code(), Some(2), "{}", stdout(&captured));
+    let json = stdout_json(&captured);
+    assert_eq!(json["status"], "invalid");
+    assert_eq!(json["tool"], "capture");
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["accepted"], 1);
+    assert_eq!(json["invalid"], 1);
+    assert_eq!(json["results"][0]["status"], "accepted");
+    assert_eq!(json["results"][1]["status"], "invalid");
+
+    let explained = run_dent8(&["explain", "repo:app", "build_tool"], &envs);
+    assert_success(&explained, "explain after stdin capture");
+    assert!(stdout(&explained).contains("value         : \"cargo\""));
+}
+
+#[test]
+fn authority_defaults_seeds_the_human_ci_agent_profile() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", registry.as_str()),
+    ];
+
+    // An operator's pre-existing grant must survive the seeding (merge, not overwrite).
+    assert_success(
+        &run_dent8(&["authority", "add", "source:human", "canonical"], &envs),
+        "pre-existing human grant",
+    );
+    let seeded = run_dent8(&["--output", "json", "authority", "defaults"], &envs);
+    assert_success(&seeded, "authority defaults");
+    let seeded = stdout_json(&seeded);
+    assert_eq!(seeded["status"], "ok");
+    assert_eq!(seeded["tool"], "authority defaults");
+    let profile = seeded["profile"].as_array().expect("profile array");
+    let entry = |source: &str| {
+        profile
+            .iter()
+            .find(|entry| entry["source"] == source)
+            .unwrap_or_else(|| panic!("{source} missing from profile"))
+    };
+    assert_eq!(entry("source:human")["action"], "kept");
+    assert_eq!(entry("source:human")["max_authority"], "canonical");
+    assert_eq!(entry("source:ci")["action"], "added");
+    assert_eq!(entry("source:ci")["max_authority"], "medium");
+    assert_eq!(entry("source:agent")["action"], "added");
+    assert_eq!(entry("source:agent")["max_authority"], "low");
+
+    // The profile is enforced: an agent-tier source cannot mint high authority...
+    let laundered = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "uses_database",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:agent",
+        ],
+        &envs,
+    );
+    assert_eq!(laundered.status.code(), Some(1), "{}", stderr(&laundered));
+    assert!(
+        stderr(&laundered).contains("authority ceiling"),
+        "{}",
+        stderr(&laundered)
+    );
+    // ...while unattributed capture enters exactly at the agent tier and is admitted.
+    let captured = run_dent8_stdin(
+        &["capture"],
+        concat!(
+            r#"{"subject": "repo:app", "predicate": "uses_database", "value": "postgres"}"#,
+            "\n"
+        ),
+        &envs,
+    );
+    assert_success(&captured, "capture under the default profile");
+    assert!(
+        stdout(&captured).contains("1 accepted"),
+        "{}",
+        stdout(&captured)
+    );
+}
+
+#[test]
 fn native_scan_reports_agent_memory_files_and_receipt_markers() {
     let temp = TempDir::new();
     fs::create_dir_all(temp.file(".cursor/rules")).expect("create cursor rules dir");
@@ -7819,6 +8142,39 @@ fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
 
 fn run_dent8_in(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(Some(cwd), args, envs)
+}
+
+/// Run dent8 with `input` piped to stdin (for `capture` and other stdin-fed commands).
+fn run_dent8_stdin(args: &[&str], input: &str, envs: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(dent8_bin());
+    command
+        .args(args)
+        .env_remove("DENT8_STORE_URL")
+        .env_remove("DENT8_LOG")
+        .env_remove("DENT8_AUTHORITY")
+        .env_remove("DENT8_REQUIRE_AUTHORITY")
+        .env_remove("DENT8_TRUST")
+        .env_remove("DENT8_ACTIVE_GRANTS")
+        .env_remove("DENT8_GRANT")
+        .env_remove("DENT8_IDENTITY_KEY")
+        .env_remove("DENT8_ISSUER_KEY")
+        .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_DAEMON_SOCKET")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let mut child = command.spawn().expect("spawn dent8");
+    child
+        .stdin
+        .as_mut()
+        .expect("dent8 stdin")
+        .write_all(input.as_bytes())
+        .expect("write dent8 stdin");
+    drop(child.stdin.take());
+    child.wait_with_output().expect("run dent8")
 }
 
 fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> Output {

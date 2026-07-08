@@ -8,6 +8,11 @@
             "type": "command",
             "command": "DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "dent8 context",
+            "timeout": 30
           }
         ]
       }
@@ -43,6 +48,17 @@
             "type": "command",
             "command": "DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "dent8 capture .dent8/proposals.jsonl --consume",
+            "timeout": 60
           }
         ]
       }

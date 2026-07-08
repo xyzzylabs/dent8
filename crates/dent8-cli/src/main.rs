@@ -25,6 +25,8 @@ use dent8_store::{
 };
 use dent8_store_postgres::{EVENT_LOG_SCHEMA_SQL, MATERIALIZATION_SCHEMA_SQL};
 
+mod capture;
+mod context;
 mod daemon;
 mod doctor;
 mod hook;
@@ -131,6 +133,8 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Contradict(args)) => ops::cmd_contradict(&args, cli.output),
         Some(CliCommand::Explain(args)) => ops::cmd_explain(&args, cli.output),
         Some(CliCommand::Replay(args)) => ops::cmd_replay(&args, cli.output),
+        Some(CliCommand::Context(args)) => context::cmd_context(&args, cli.output),
+        Some(CliCommand::Capture(args)) => capture::cmd_capture(&args, cli.output),
         Some(CliCommand::Facts(args)) => match args.command {
             FactsCommand::List(args) => ops::cmd_facts_list(&args, cli.output),
         },
@@ -144,6 +148,7 @@ fn run_cli(cli: Cli) -> i32 {
                 cli.output,
             ),
             AuthorityCommand::Remove(args) => cmd_authority_remove(&args.source, cli.output),
+            AuthorityCommand::Defaults => cmd_authority_defaults(cli.output),
         },
         Some(CliCommand::Identity(args)) => run_identity(&args.command, cli.output),
         Some(CliCommand::Hook(args)) => match args.command {
@@ -252,6 +257,13 @@ enum CliCommand {
     Explain(ReadFactArgs),
     /// Replay the full event history for a fact.
     Replay(ReadFactArgs),
+    /// Emit the currently-believed facts as an agent context pack (markdown by default).
+    Context(ContextArgs),
+    /// Capture structured fact proposals (JSON lines) through the firewall.
+    #[command(
+        override_usage = "dent8 capture [FILE] [--consume] [--authority <AUTHORITY>] [--source <SOURCE>]"
+    )]
+    Capture(CaptureArgs),
     /// Browse fact streams known to dent8.
     Facts(FactsArgs),
     /// Check log integrity.
@@ -320,6 +332,8 @@ impl CliCommand {
             Self::Expire(_) => "expire",
             Self::Explain(_) => "explain",
             Self::Replay(_) => "replay",
+            Self::Context(_) => "context",
+            Self::Capture(_) => "capture",
             Self::Facts(_) => "facts",
             Self::Verify => "verify",
             Self::Snapshot(_) => "snapshot",
@@ -450,6 +464,42 @@ struct FactsListArgs {
     /// Include dent8 internal diagnostic streams, such as doctor write-check facts.
     #[arg(long)]
     include_diagnostics: bool,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct ContextArgs {
+    /// Only include facts with this subject kind.
+    #[arg(long, value_name = "KIND", value_parser = parse_non_empty_filter)]
+    kind: Option<String>,
+    /// Only include facts with this subject key.
+    #[arg(long, value_name = "KEY", value_parser = parse_non_empty_filter)]
+    key: Option<String>,
+    /// Only include facts with this predicate.
+    #[arg(long, value_name = "PREDICATE", value_parser = parse_predicate)]
+    predicate: Option<String>,
+    /// Include believed-but-stale (and not-yet-valid) facts, annotated as such.
+    #[arg(long)]
+    include_stale: bool,
+    /// Include dent8 internal diagnostic streams, such as doctor write-check facts.
+    #[arg(long)]
+    include_diagnostics: bool,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct CaptureArgs {
+    /// Proposals file (JSON lines). Reads stdin when omitted.
+    #[arg(value_name = "FILE")]
+    file: Option<String>,
+    /// Truncate the proposals file after processing, so a session-end hook can flush a
+    /// queue without replaying it on the next firing.
+    #[arg(long, requires = "file")]
+    consume: bool,
+    /// Default authority for proposals that do not state one.
+    #[arg(long, short = 'a', value_enum)]
+    authority: Option<CliAuthority>,
+    /// Default provenance source for proposals that do not state one.
+    #[arg(long, short = 's', value_parser = parse_source)]
+    source: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -814,6 +864,8 @@ enum AuthorityCommand {
     Add(AuthorityAddArgs),
     /// Remove a source authority grant.
     Remove(AuthorityRemoveArgs),
+    /// Seed the default trust profile: human > CI > agent.
+    Defaults,
 }
 
 #[derive(Args, Debug)]
@@ -2171,6 +2223,101 @@ fn cmd_authority_remove(source: &str, output: CliOutput) -> i32 {
             }
             CliOutput::Json => {
                 print_json_stdout_with_code(&authority_error_json("authority remove", &error), 1)
+            }
+        },
+    }
+}
+
+/// The default authority profile shipped out of the box: the natural trust ordering for a
+/// repository shared by a human, CI, and coding agents — **human > CI > agent** — so
+/// arbitration works without inventing a trust taxonomy first. `canonical` stays reserved
+/// for explicit policy (`dent8 authority add`), because contradicting a canonical fact
+/// hard-alarms. `dent8 capture` uses the agent tier as its unattributed fallback.
+const DEFAULT_AUTHORITY_PROFILE: [(&str, AuthorityLevel); 3] = [
+    ("source:human", AuthorityLevel::High),
+    ("source:ci", AuthorityLevel::Medium),
+    ("source:agent", AuthorityLevel::Low),
+];
+
+/// Seed the registry with [`DEFAULT_AUTHORITY_PROFILE`]. Merge-only: an existing grant for
+/// one of the profile sources is **kept**, never downgraded or overwritten — an operator's
+/// explicit taxonomy out-ranks the shipped default (`dent8 authority add` still replaces).
+fn cmd_authority_defaults(output: CliOutput) -> i32 {
+    let mut registry = match load_authority_registry_for_edit() {
+        Ok(registry) => registry.unwrap_or_default(),
+        Err(error) => {
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{error}");
+                    2
+                }
+                CliOutput::Json => print_json_stdout_with_code(
+                    &authority_error_json("authority defaults", &error),
+                    2,
+                ),
+            };
+        }
+    };
+    let mut entries = Vec::new();
+    for (source, max_authority) in DEFAULT_AUTHORITY_PROFILE {
+        let action = match registry.sources.entry(source.to_string()) {
+            std::collections::btree_map::Entry::Occupied(existing) => {
+                ("kept", existing.get().max_authority)
+            }
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(SourceGrant {
+                    max_authority,
+                    issuer: None,
+                    scope: None,
+                });
+                ("added", max_authority)
+            }
+        };
+        entries.push((source, action.0, action.1));
+    }
+    match save_authority_registry(&registry) {
+        Ok(()) => {
+            let lines = entries
+                .iter()
+                .map(|(source, action, max)| format!("  {action} {source}  max={max}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let message = format!(
+                "seeded the default authority profile (human > CI > agent) in {}:\n{lines}\n\
+                 the registry is now deny-by-default: unlisted sources are blocked until \
+                 granted with `dent8 authority add`.",
+                authority_registry_path()
+            );
+            match output {
+                CliOutput::Text => {
+                    println!("{message}");
+                    0
+                }
+                CliOutput::Json => print_json_stdout(&serde_json::json!({
+                    "status": "ok",
+                    "tool": "authority defaults",
+                    "path": authority_registry_path(),
+                    "profile": entries
+                        .iter()
+                        .map(|(source, action, max)| {
+                            serde_json::json!({
+                                "source": source,
+                                "max_authority": max.name(),
+                                "action": action,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    "message": message,
+                })),
+            }
+        }
+        Err(error) => match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                1
+            }
+            CliOutput::Json => {
+                print_json_stdout_with_code(&authority_error_json("authority defaults", &error), 1)
             }
         },
     }
