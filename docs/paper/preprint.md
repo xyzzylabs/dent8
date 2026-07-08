@@ -250,11 +250,13 @@ future work [8].
 ## 8. Implementation
 
 dent8 is a Rust workspace (edition 2024, `rustc` 1.94, `unsafe_code = "forbid"`, clippy
-pedantic) of five crates: `dent8-core` (model, fold, hashing, anchor), `dent8-store`
+pedantic) of seven crates: `dent8-core` (model, fold, hashing, anchor), `dent8-store`
 (the `EventStore` trait, the firewall `arbitrate`, an in-memory backend, the coding-agent
 registry, policy-counterfactual and subject replay), `dent8-evals` (the adversarial
-corpus), `dent8` (the runnable surface), and `dent8-store-postgres` (the operational
-schema, adapter pending). The base firewall *is* `EventStore::append`: every write passes
+corpus), `dent8` (the runnable surface), `dent8-export` (Parquet export of the event log
+for replay analysis and audit queries), `dent8-store-sqlite` (an embedded SQLite
+`AsyncEventStore` adapter), and `dent8-store-postgres` (the operational schema and its
+`AsyncEventStore` adapter, tested against live Postgres in CI). The base firewall *is* `EventStore::append`: every write passes
 base arbitration (override-gate, anti-laundering, canonical hard-alarm), with no
 un-arbitrated write path *for those invariants*; the per-predicate authority floor and
 uniqueness are an application policy the CLI applies before `append` (§6). A documented
