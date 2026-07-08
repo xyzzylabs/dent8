@@ -18,7 +18,7 @@ edition = "2024"
 readme = "README.md"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/xyzzylabs/dent8"
-rust-version = "1.95"
+rust-version = "1.94"
 version = "0.3.2"
 
 [workspace.lints.rust]

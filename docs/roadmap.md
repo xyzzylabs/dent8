@@ -9,6 +9,30 @@ This roadmap is dependency-ordered: each item unlocks the next, and each is
 annotated with the integrity invariant it makes real. It supersedes the older
 MVP checklist.
 
+## Near-term focus (v0.4)
+
+The wedge is **multiple coding agents (and a human) sharing one verified fact base about
+one repository** ([project-brief.md](project-brief.md) §MVP User). Five items, in priority
+order:
+
+1. **Close the capture+inject loop.** A `dent8 context` context-pack export plus a session
+   capture hook, and emit `Retrieved`/`UsedInDecision` on reads — today those audit events
+   exist in the model and are rendered by replay only; no CLI/MCP command emits them.
+   *(Invariant: unexplained context retrieval becomes explainable.)*
+2. **Default authority profile for the repo wedge.** Ship human > CI > agent as the default
+   profile, and enforce grant issuer/scope at the write boundary. *(Invariant: authority is
+   typed and policy-visible, not configured from scratch per repo.)*
+3. **On-ramp.** MSRV at or below current stable, init-to-first-fact under 2 minutes, and a
+   value-first README lead. *(No invariant — adoption friction is its own failure mode.)*
+4. **External evaluation.** Run the firewall against corpora dent8 did not author: MINJA
+   scenarios, real agent traces, and a mem0/Zep comparison on the integrity axes.
+   *(Invariant: the 0/5-vs-5/5 result generalizes beyond self-authored fixtures.)*
+5. **Python/TS reachability.** An HTTP API or thin SDKs so non-Rust agents can reach the
+   store. *(No new invariant; widens who the firewall protects.)*
+
+Explicitly **frozen until the wedge has users**: operated-witness hosting, the desktop
+debugger/control plane, and any training-substrate direction.
+
 ## Where the code actually is
 
 See **[STATUS.md](STATUS.md)** for the authoritative tier list. In summary, the MVP loop

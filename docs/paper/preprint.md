@@ -28,7 +28,8 @@ is a **write-path firewall**: it rejects a lower-authority fact that attempts to
 a higher-authority one (and the *laundered* variant of that attack), hard-alarms a
 contradiction against a canonical fact, admits low-authority *dissent* without letting it
 override, and authority-gates *removal*. We give a layered correctness argument —
-exhaustive bounded (lattice-enumerated) tests plus Kani model checking for the core
+exhaustive bounded (lattice-enumerated) tests plus Kani model-checking harnesses
+(written, not yet executed in CI) for the core
 arbitration invariants — and a tamper-evident hash chain extended with an external HMAC anchor that
 detects a history rewrite an internal re-verification cannot. We evaluate with a
 reproducible adversarial corpus: across MINJA-style injection, authority laundering,
@@ -38,8 +39,8 @@ baseline**. We are explicit that several
 integrity primitives are not individually novel — Zep/Graphiti already ships bitemporal
 validity, contradiction-driven edge invalidation, and provenance [7] — and locate dent8's
 contribution in the *combination*: an event-sourced source of truth with deterministic
-replay, typed authority-versus-confidence arbitration, machine-checked non-resurrection,
-and policy-counterfactual replay.
+replay, typed authority-versus-confidence arbitration, exhaustively-tested
+non-resurrection, and policy-counterfactual replay.
 
 ## 1. Introduction
 
@@ -233,7 +234,11 @@ authority lattice:
   covers retraction.
 - **Bounded model checking (Kani).** The same property is checked symbolically over all
   five authority levels (a symbolic `u8` constrained to the lattice and mapped to a level)
-  for both supersession and retraction [5].
+  for both supersession and retraction [5]. The Kani harnesses are written and run under
+  a local `cargo kani`, but are **not yet executed in CI** (a Kani CI job was attempted
+  and reverted over a toolchain incompatibility); until they run continuously, the
+  standing verified claim rests on the exhaustive lattice-enumeration tests and the
+  property-based suite.
 
 Additional invariants are unit/lattice-tested in the core fold: a stream must begin with
 `Asserted`; `Reinforced` cannot change a value; terminal states reject mutation; canonical
@@ -244,7 +249,7 @@ future work [8].
 
 ## 8. Implementation
 
-dent8 is a Rust workspace (edition 2024, `rustc` 1.95, `unsafe_code = "forbid"`, clippy
+dent8 is a Rust workspace (edition 2024, `rustc` 1.94, `unsafe_code = "forbid"`, clippy
 pedantic) of five crates: `dent8-core` (model, fold, hashing, anchor), `dent8-store`
 (the `EventStore` trait, the firewall `arbitrate`, an in-memory backend, the coding-agent
 registry, policy-counterfactual and subject replay), `dent8-evals` (the adversarial
@@ -333,7 +338,8 @@ An adversarial novelty pass refuted every *single-primitive* fact against 2026 p
 dent8's defensible novelty is **compositional**, led by two medium-novelty facts pitched
 as "first to unify/transplant," never "first to invent":
 
-1. **Verified non-resurrection** — a machine-checked invariant that, once a fact is
+1. **Verified non-resurrection** — an exhaustively-tested invariant (Kani harnesses
+   written, pending CI execution; see §7) that, once a fact is
    superseded/retracted by authority *A*, no sub-*A* sequence returns it to the believed
    set. This turns a MINJA/PoisonedRAG-class attack from an empirical success rate into a
    *refuted reachability fact*.
@@ -366,6 +372,11 @@ A short workshop paper on the model and belief-revision semantics is factable no
 full systems/security paper should follow the operational backend.
 
 ## References
+
+> **Citation status.** Some citations surfaced during the novelty pass are flagged as
+> **not yet verified** in [research/novelty.md](../research/novelty.md) (SSGM, MemAudit,
+> CCT, ShadowMerge, the agent-governance-toolkit / IETF receipt drafts, MeshQu Decision
+> Receipts); every reference must be independently verified before submission.
 
 - [1] *Logic of Belief Revision* — Stanford Encyclopedia of Philosophy. https://plato.stanford.edu/entries/logic-belief-revision/
 - [2] S. O. Hansson, *Revision of Belief Sets and Belief Bases*. https://link.springer.com/content/pdf/10.1007/978-94-011-5054-5_2.pdf

@@ -90,7 +90,7 @@ contested -> expired
 contested -> retracted
 ```
 
-Retrieval and decision-use events are audit events. They do not change lifecycle state but they matter for debugging stale or unsafe context use.
+Retrieval and decision-use events are audit events. They do not change lifecycle state but they matter for debugging stale or unsafe context use. Honest caveat: no CLI/MCP command currently emits `Retrieved`/`UsedInDecision` — they exist in the model and are rendered by replay only.
 
 ## Write Path
 

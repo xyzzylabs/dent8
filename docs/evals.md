@@ -122,14 +122,16 @@ Properties should assert:
 
 ## Fuzzing
 
-Use `cargo-fuzz` after the parser/adapter layer exists.
+Use `cargo-fuzz`. Two targets are implemented in `fuzz/fuzz_targets/` and run in CI:
 
-Fuzz targets:
+- JSON event ingestion and replay of arbitrary event sequences
+  (`deserialize_apply_canonicalize`: deserialize → apply → canonicalize).
+- Canonicalization idempotency (`canonical_json`).
 
-- JSON event ingestion.
+Planned, not yet implemented:
+
 - MCP write payload ingestion.
 - Postgres row decoding.
-- Replay of arbitrary event sequences.
 - Explain-query graph traversal.
 
 The fuzz oracle should be invariant preservation: malformed input may be rejected, but it must not panic, corrupt projection state, or produce impossible lifecycle transitions.

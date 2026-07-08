@@ -95,7 +95,8 @@ pass are folded into the topical docs and noted below.
   evaluator, and in v0.2.0 `valid_to` intervals plus `--as-of`/`--valid-at` time-travel reads
   per ADR 0016, have since shipped); TTL/authority
   arbitration flagged as design-only everywhere they are stated; "AWS originated the
-  P language" reworded (P: Microsoft/UC Berkeley); LOC corrected to ~470 non-test.
+  P language" reworded (P: Microsoft/UC Berkeley); LOC corrected to ~470 non-test
+  (a figure from that early snapshot — historical; the codebase is now ~33k src LOC).
 
 ## Novelty risks (kept deliberately visible)
 

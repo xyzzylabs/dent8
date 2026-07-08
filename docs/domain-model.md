@@ -33,8 +33,10 @@ user:project_owner + prefers_eval_style + formal fixtures and invariants
 - `fact.expired`: terminally closes a fact by explicit policy action; TTL staleness is a
   separate read-time predicate and does not mutate lifecycle.
 - `fact.retracted`: removes trust in a fact because the source, policy, or evidence failed.
-- `fact.retrieved`: audits that a fact was returned as context.
-- `fact.used_in_decision`: audits that a fact influenced an agent decision.
+- `fact.retrieved`: audits that a fact was returned as context. (No CLI/MCP command
+  currently emits this event; it exists in the model and is rendered by replay only.)
+- `fact.used_in_decision`: audits that a fact influenced an agent decision. (Same
+  caveat: modeled and replayable, but no write surface emits it yet.)
 - `fact.challenge_rejected`: records that the firewall rejected a challenge against this
   fact on strength (ADR 0015) — written with the *challenger's* provenance and effective
   authority, so surviving an attack is replayable, attributed entrenchment evidence.

@@ -648,6 +648,10 @@ subject+predicate.
   (`dent8 identity`, above), and the witness *primitive* is runnable (`dent8 witness`, above).
   The remaining product gap is operating those controls: source-key provisioning/rotation,
   hardware/secret-store-backed keys, and the *operated* witness service.
+- **`Retrieved` / `UsedInDecision` have no write surface.** Both audit event kinds are
+  modeled in `dent8-core`, fold deterministically, and are rendered by replay/explain and
+  the MCP output schemas — but no CLI/MCP command currently emits them. The capture side
+  of the read-audit loop is roadmap work.
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
   surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
