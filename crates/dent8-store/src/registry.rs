@@ -33,6 +33,18 @@ use dent8_core::{
 
 use crate::{EventFilter, EventStore, StoreError, replay_subject};
 
+/// The default retention ceiling: **90 days** in milliseconds.
+///
+/// A coding-agent fact is a working belief about a codebase — a database choice, a test
+/// command, a dependency pin. Such facts drift; a freshness window measured in months, not
+/// years, keeps the store honest without churning the common case (every predicate default
+/// TTL is far below this). The ceiling bounds how far a *caller-supplied finite* TTL may
+/// reach: an assertion whose bounded TTL exceeds the effective ceiling is **rejected, not
+/// clamped** (see [`enforce_policy`]). It is a policy default, not a security invariant, so
+/// it is overridable — globally via [`PredicateRegistry::with_max_ttl`] /
+/// [`PredicateRegistry::set_max_ttl`], or per predicate via [`PredicatePolicy::max_ttl`].
+pub const DEFAULT_MAX_TTL_MS: u64 = 90 * 24 * 60 * 60 * 1000;
+
 /// How often a fact is expected to change — advisory metadata that motivates the
 /// default TTL.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,15 +66,34 @@ pub struct PredicatePolicy {
     /// Whether at most one *fresh* fact about a given subject+predicate may be believed.
     pub unique: bool,
     pub volatility: Volatility,
+    /// A per-predicate retention ceiling overriding the registry-wide default. `None` (the
+    /// common case) falls back to [`PredicateRegistry`]'s global `max_ttl`. Set it to raise or
+    /// tighten how far a caller-supplied finite TTL may reach for *this* predicate specifically
+    /// — e.g. a volatile predicate might cap freshness at hours, a stable one relax it.
+    pub max_ttl: Option<Ttl>,
 }
 
 /// A registry of [`PredicatePolicy`] keyed by the structured `(subject kind, predicate)`
 /// pair — e.g. `("repo", "database")`. Keying on the pair (rather than a flattened
 /// `"repo.database"` string) avoids any delimiter ambiguity when a kind or predicate
 /// itself contains a dot.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PredicateRegistry {
     policies: BTreeMap<(String, String), PredicatePolicy>,
+    /// The registry-wide retention ceiling applied to predicates without their own
+    /// [`PredicatePolicy::max_ttl`]. Defaults to `DurationMillis(DEFAULT_MAX_TTL_MS)`;
+    /// overridable so an operator can widen or tighten the bounded-freshness window in one
+    /// place. A `Ttl::Never` ceiling disables the finite-TTL cap entirely.
+    max_ttl: Ttl,
+}
+
+impl Default for PredicateRegistry {
+    fn default() -> Self {
+        Self {
+            policies: BTreeMap::new(),
+            max_ttl: Ttl::DurationMillis(DEFAULT_MAX_TTL_MS),
+        }
+    }
 }
 
 impl PredicateRegistry {
@@ -107,6 +138,7 @@ impl PredicateRegistry {
                 default_ttl,
                 unique,
                 volatility,
+                max_ttl: None,
             },
         );
     }
@@ -117,10 +149,77 @@ impl PredicateRegistry {
         self.policies
             .get(&(subject.kind().to_string(), predicate.as_str().to_string()))
     }
+
+    /// The registry-wide retention ceiling. Consult [`PredicatePolicy::max_ttl`] first for a
+    /// per-predicate override.
+    #[must_use]
+    pub fn max_ttl(&self) -> &Ttl {
+        &self.max_ttl
+    }
+
+    /// Override the registry-wide retention ceiling (builder form). Pass `Ttl::Never` to
+    /// disable the finite-TTL cap.
+    #[must_use]
+    pub fn with_max_ttl(mut self, max_ttl: Ttl) -> Self {
+        self.max_ttl = max_ttl;
+        self
+    }
+
+    /// Override the registry-wide retention ceiling in place.
+    pub fn set_max_ttl(&mut self, max_ttl: Ttl) {
+        self.max_ttl = max_ttl;
+    }
+
+    /// Set a per-predicate retention ceiling ([`PredicatePolicy::max_ttl`]) for an
+    /// already-registered `(subject_kind, predicate)`. A no-op for an unregistered pair.
+    pub fn set_predicate_max_ttl(
+        &mut self,
+        subject_kind: &str,
+        predicate: &str,
+        max_ttl: Option<Ttl>,
+    ) {
+        if let Some(policy) = self
+            .policies
+            .get_mut(&(subject_kind.to_string(), predicate.to_string()))
+        {
+            policy.max_ttl = max_ttl;
+        }
+    }
 }
 
 fn display_key(subject: &Subject, predicate: &Predicate) -> String {
     format!("{}.{}", subject.kind(), predicate.as_str())
+}
+
+/// The bounded (finite) freshness duration an assertion claims, in milliseconds, or `None`
+/// when the TTL makes *no finite-freshness claim* (`Ttl::Never`) and is therefore out of
+/// scope for the retention ceiling — the append-only event log keeps the fact regardless, so
+/// a non-expiring belief is a separate concern from a far-reaching *finite* TTL. `ExpiresAt`
+/// is anchored at the event's validity start (`valid_from`, else its recorded-at timestamp);
+/// an instant at or before the anchor yields 0.
+fn bounded_ttl_ms(candidate: &FactEvent) -> Option<u64> {
+    match &candidate.ttl {
+        Ttl::Never => None,
+        Ttl::DurationMillis(duration) => Some(*duration),
+        Ttl::ExpiresAt(at) => {
+            let anchor = candidate
+                .valid_from
+                .unwrap_or(candidate.provenance.recorded_at);
+            let delta = at.as_unix_millis().saturating_sub(anchor.as_unix_millis());
+            Some(u64::try_from(delta).unwrap_or(0))
+        }
+    }
+}
+
+/// The finite cap a retention ceiling imposes, in milliseconds, or `None` for "no cap". A
+/// ceiling is expressed as a duration (`DurationMillis`); `Ttl::Never` disables the cap, and
+/// an absolute-instant ceiling (`ExpiresAt`) is not a meaningful reach bound and is treated
+/// as no cap.
+fn ceiling_ms(ceiling: &Ttl) -> Option<u64> {
+    match ceiling {
+        Ttl::DurationMillis(duration) => Some(*duration),
+        Ttl::Never | Ttl::ExpiresAt(_) => None,
+    }
 }
 
 /// Apply the registry's default freshness to an asserting event that left its TTL unset
@@ -140,6 +239,9 @@ pub fn apply_policy_defaults(registry: &PredicateRegistry, candidate: &mut FactE
 ///
 /// - **Authority floor** — an *assertion* below the predicate's floor is rejected.
 ///   Contradiction and reinforcement are *not* gated (dissent must always be possible).
+/// - **Retention ceiling** — an *assertion* whose caller-supplied *bounded* (finite) TTL
+///   reaches further than the effective ceiling (per-predicate [`PredicatePolicy::max_ttl`]
+///   else the registry global) is **rejected, not clamped**. `Ttl::Never` is out of scope.
 /// - **Uniqueness** — a new assertion may not create a second *fresh* believed fact for
 ///   the same subject+predicate; stale (TTL-expired at `now`) facts do not block it.
 ///
@@ -166,6 +268,24 @@ where
             floor: policy.authority_floor,
             actual: candidate.authority.level,
         });
+    }
+
+    // Retention ceiling: reject (never clamp) an assertion whose *bounded* TTL reaches
+    // further than the effective ceiling (the per-predicate override, else the registry
+    // global). Runs on assertions only; predicate-default TTLs are all below the ceiling, so
+    // only a caller-supplied finite TTL can trip this. `Ttl::Never` is out of scope (see
+    // `bounded_ttl_ms`), and a `Never` ceiling disables the cap.
+    if matches!(candidate.kind, FactEventKind::Asserted) {
+        let ceiling = policy.max_ttl.as_ref().unwrap_or(&registry.max_ttl);
+        if let (Some(ceiling_ms), Some(ttl_ms)) = (ceiling_ms(ceiling), bounded_ttl_ms(candidate))
+            && ttl_ms > ceiling_ms
+        {
+            return Err(StoreError::TtlCeilingExceeded {
+                predicate: display_key(&candidate.subject, &candidate.predicate),
+                ttl_ms,
+                ceiling_ms,
+            });
+        }
     }
 
     if policy.unique && matches!(candidate.kind, FactEventKind::Asserted) {
@@ -652,6 +772,178 @@ mod tests {
             NOW,
         )
         .expect("unregistered predicate admitted");
+        assert_eq!(store.len(), 1);
+    }
+
+    fn timed_assertion(
+        event_id: &str,
+        fact_id: &str,
+        ttl: Ttl,
+        recorded_at: TimestampMillis,
+    ) -> FactEvent {
+        let mut event = assertion(
+            event_id,
+            fact_id,
+            "repo",
+            "myproj",
+            "database",
+            "postgres",
+            AuthorityLevel::High,
+        );
+        event.ttl = ttl;
+        event.provenance.recorded_at = recorded_at;
+        event
+    }
+
+    #[test]
+    fn a_bounded_ttl_over_the_ceiling_is_rejected() {
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        // One millisecond past the 90-day ceiling.
+        let over = super::DEFAULT_MAX_TTL_MS + 1;
+        let result = admit(
+            &mut store,
+            &registry,
+            timed_assertion("e1", "fact:A", Ttl::DurationMillis(over), NOW),
+            NOW,
+        );
+        assert!(
+            matches!(result, Err(StoreError::TtlCeilingExceeded { .. })),
+            "a duration past the ceiling must be rejected, got {result:?}"
+        );
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn an_expires_at_over_the_ceiling_is_rejected() {
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        let anchor = TimestampMillis::from_unix_millis(1_000);
+        // ExpiresAt reach = at - recorded_at; make it exceed the ceiling.
+        let at = TimestampMillis::from_unix_millis(
+            1_000 + i64::try_from(super::DEFAULT_MAX_TTL_MS).unwrap() + 1,
+        );
+        let result = admit(
+            &mut store,
+            &registry,
+            timed_assertion("e1", "fact:A", Ttl::ExpiresAt(at), anchor),
+            anchor,
+        );
+        assert!(
+            matches!(result, Err(StoreError::TtlCeilingExceeded { .. })),
+            "an ExpiresAt reaching past the ceiling must be rejected, got {result:?}"
+        );
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn a_bounded_ttl_at_the_ceiling_is_admitted() {
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            timed_assertion(
+                "e1",
+                "fact:A",
+                Ttl::DurationMillis(super::DEFAULT_MAX_TTL_MS),
+                NOW,
+            ),
+            NOW,
+        )
+        .expect("a TTL exactly at the ceiling is admitted");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_never_ttl_is_never_capped() {
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            timed_assertion("e1", "fact:A", Ttl::Never, NOW),
+            NOW,
+        )
+        .expect("Never makes no finite-freshness claim and is out of scope for the ceiling");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_predicate_default_ttl_passes_the_ceiling() {
+        // branch.status carries a 1h default TTL applied by `apply_policy_defaults`, well
+        // under the ceiling — the default path must never trip the cap.
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            assertion(
+                "e1",
+                "fact:A",
+                "branch",
+                "main",
+                "status",
+                "ci-green",
+                AuthorityLevel::Low,
+            ),
+            NOW,
+        )
+        .expect("predicate-default TTL is under the ceiling");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_per_predicate_override_tightens_the_ceiling() {
+        let mut registry = PredicateRegistry::coding_agent();
+        // Tighten repo.database to a one-hour ceiling; a two-hour TTL must now be rejected
+        // even though it is far below the 90-day global.
+        registry.set_predicate_max_ttl("repo", "database", Some(Ttl::DurationMillis(3_600_000)));
+        let mut store = InMemoryEventStore::new();
+        let result = admit(
+            &mut store,
+            &registry,
+            timed_assertion("e1", "fact:A", Ttl::DurationMillis(7_200_000), NOW),
+            NOW,
+        );
+        assert!(
+            matches!(result, Err(StoreError::TtlCeilingExceeded { .. })),
+            "a per-predicate override must reject a TTL above it, got {result:?}"
+        );
+
+        // The same two-hour TTL is admitted for a predicate still on the 90-day global.
+        let mut store = InMemoryEventStore::new();
+        let mut event = assertion(
+            "e2",
+            "fact:B",
+            "user",
+            "me",
+            "preference",
+            "dark",
+            AuthorityLevel::Medium,
+        );
+        event.ttl = Ttl::DurationMillis(7_200_000);
+        admit(&mut store, &registry, event, NOW)
+            .expect("a predicate on the global ceiling still admits the two-hour TTL");
+    }
+
+    #[test]
+    fn a_global_override_can_relax_or_disable_the_ceiling() {
+        // A `Never` global ceiling disables the finite-TTL cap.
+        let registry = PredicateRegistry::coding_agent().with_max_ttl(Ttl::Never);
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            timed_assertion(
+                "e1",
+                "fact:A",
+                Ttl::DurationMillis(super::DEFAULT_MAX_TTL_MS * 100),
+                NOW,
+            ),
+            NOW,
+        )
+        .expect("a Never ceiling disables the cap");
         assert_eq!(store.len(), 1);
     }
 

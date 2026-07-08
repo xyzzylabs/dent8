@@ -552,6 +552,19 @@ pub(crate) fn env_grant_scope(source: &str) -> Option<String> {
     grant_scope_for_source(&nonempty_env("DENT8_GRANT")?, source)
 }
 
+/// Best-effort read of the maximum authority the signed grant at `path` binds `source` to, if
+/// any. Used by the doctor write-check to assert its probe at the source's own granted ceiling
+/// instead of a hardcoded level; an unreadable or mismatched grant returns `None`.
+pub(crate) fn grant_authority_for_source(path: &str, source: &str) -> Option<AuthorityLevel> {
+    let grant = load_grant(path).ok()?.grant;
+    (grant.source == source).then_some(grant.max_authority)
+}
+
+/// [`grant_authority_for_source`] against the process-env grant (`DENT8_GRANT`), if set.
+pub(crate) fn env_grant_authority(source: &str) -> Option<AuthorityLevel> {
+    grant_authority_for_source(&nonempty_env("DENT8_GRANT")?, source)
+}
+
 pub(crate) fn enforce_write(
     ctx: &IdentityContext,
     auth: &WriteAuth<'_>,

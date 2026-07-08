@@ -2220,8 +2220,11 @@ pub(crate) fn is_diagnostic_fact_stream(kind: &str, key: &str, predicate: &str) 
     (kind == "diagnostic" && predicate.starts_with("dent8."))
         // A subject-scoped source's write-check probes its scoped subject (the one subject
         // it may write about) under a `dent8.write_check.<run-id>` predicate; hide those
-        // probe streams from browse surfaces like the `diagnostic:` ones.
-        || predicate.starts_with("dent8.write_check")
+        // probe streams from browse surfaces like the `diagnostic:` ones. Match the exact
+        // segment (`dent8.write_check` and `dent8.write_check.<run-id>`) — a raw `starts_with`
+        // would also swallow an unrelated real predicate like `dent8.write_checkout`.
+        || predicate == "dent8.write_check"
+        || predicate.starts_with("dent8.write_check.")
         || (kind == "person" && key.starts_with("alice-doctor-") && predicate == "favorite_drink")
 }
 
@@ -2532,5 +2535,31 @@ pub(crate) fn cmd_conflicts(output: CliOutput) -> i32 {
             };
             print_json_stdout_with_code(&op_error_json(&error), code)
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_stream_tests {
+    use super::is_diagnostic_fact_stream;
+
+    #[test]
+    fn write_check_streams_are_hidden_but_look_alikes_are_not() {
+        // The bare probe predicate and any per-run scoped variant are hidden.
+        assert!(is_diagnostic_fact_stream(
+            "diagnostic",
+            "doctor-1",
+            "dent8.write_check"
+        ));
+        assert!(is_diagnostic_fact_stream(
+            "repo",
+            "myproj",
+            "dent8.write_check.doctor-123"
+        ));
+        // A real predicate that merely shares the `dent8.write_check` prefix must stay visible.
+        assert!(!is_diagnostic_fact_stream(
+            "repo",
+            "myproj",
+            "dent8.write_checkout"
+        ));
     }
 }

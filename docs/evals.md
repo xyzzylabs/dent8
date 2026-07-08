@@ -148,8 +148,24 @@ it deliberately does not:
 4. **Enforce predicate uniqueness** at `append` (class E parallel-belief plant). A competing
    fact on the same subject/predicate coexists as a distinct fact id; the `PredicateRegistry`
    uniqueness layer (also not run by `append`) owns this.
-5. **Cap TTL reach** (class D far-future TTL). Arbitration does not police a "reasonable"
-   TTL; a retention-policy layer would.
+
+**Narrowed at the registry layer (above `append`):**
+
+5. **Cap TTL reach** (class D far-future TTL). Arbitration still does not police TTL, but the
+   `PredicateRegistry` now enforces a **retention ceiling**: an assertion whose caller-supplied
+   *bounded* (finite) TTL reaches past the effective ceiling (a per-predicate override else a
+   90-day global default, both overridable) is **rejected, not clamped** — silently rewriting
+   an asserted freshness window would falsify the audit record. Three honest scopings: the
+   ceiling gates **registered predicates only** (`enforce_policy` passes unregistered ones,
+   and the flagged case's `mfa_state` is not among the five registered predicates — so that
+   exact event would still be admitted even at the registry layer); `Ttl::Never` stays
+   **uncapped**, and it is the default for unregistered predicates and the default TTL of
+   four of the five registered ones, so permanence remains achievable by default and the
+   class-D attack itself remains open; and no shipped CLI/MCP/capture surface accepts a
+   caller-supplied TTL (`op_assert`/`op_derive` — the only ops that run `enforce_policy` —
+   hardcode `Ttl::Never`), so today the ceiling guards **library embedders only**. The
+   class-D adversarial case — which exercises `append`-arbitration only — remains a
+   documented out-of-model admit.
 
 **Detect-only (4/47):** retraction taint (a derivative of a retracted source stays believed
 but is flagged tainted — ADR 0010) and read-time freshness (an elapsed `valid_to` reads

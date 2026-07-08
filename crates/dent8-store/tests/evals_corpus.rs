@@ -587,6 +587,7 @@ fn rejection_category(error: &StoreError) -> String {
         StoreError::UnbackedSupersession(_) => "UnbackedSupersession".to_string(),
         StoreError::BelowAuthorityFloor { .. } => "BelowAuthorityFloor".to_string(),
         StoreError::UniquenessViolation { .. } => "UniquenessViolation".to_string(),
+        StoreError::TtlCeilingExceeded { .. } => "TtlCeilingExceeded".to_string(),
         StoreError::Replay(_) => "Replay".to_string(),
     }
 }

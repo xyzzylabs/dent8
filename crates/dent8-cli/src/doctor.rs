@@ -1664,6 +1664,50 @@ pub(crate) fn redact_runtime_url(url: &str) -> String {
     }
 }
 
+/// The JSON-RPC request sequence for an MCP write-check: initialize, the `ok` assert at the
+/// source ceiling, an optional below-ceiling supersede (present iff `reject` is `Some`),
+/// explain, verify, and the self-cleanup retract. The `initialized` notification draws no
+/// response, so the caller expects `requests.len() - 1` responses.
+fn mcp_write_check_requests(
+    probe: &WriteCheckProbe,
+    source: &str,
+    reject: Option<AuthorityLevel>,
+) -> Vec<serde_json::Value> {
+    let ceiling_name = probe.ceiling.name();
+    let mut requests = vec![
+        mcp_initialize_request(1),
+        mcp_initialized_notification(),
+        mcp_tool_call(
+            2,
+            "assert",
+            &mcp_value_fact_args(probe, "ok", ceiling_name, source),
+        ),
+    ];
+    let mut next_id = 3;
+    if let Some(reject_authority) = reject {
+        requests.push(mcp_tool_call(
+            next_id,
+            "supersede",
+            &mcp_value_fact_args(probe, "tampered", reject_authority.name(), source),
+        ));
+        next_id += 1;
+    }
+    requests.push(mcp_tool_call(
+        next_id,
+        "explain",
+        &mcp_read_fact_args(probe),
+    ));
+    next_id += 1;
+    requests.push(mcp_tool_call(next_id, "verify", &serde_json::json!({})));
+    next_id += 1;
+    requests.push(mcp_tool_call(
+        next_id,
+        "retract",
+        &mcp_retract_args(probe, ceiling_name, source),
+    ));
+    requests
+}
+
 pub(crate) fn mcp_write_check_with_server(
     server: &mcp_config::InstalledServer,
     source: &str,
@@ -1684,30 +1728,31 @@ pub(crate) fn mcp_write_check_with_server(
         .env
         .get("DENT8_GRANT")
         .and_then(|path| identity::grant_scope_for_source(path, source));
-    let probe = WriteCheckProbe::for_source(source, &run_id, &registry_path, identity_scope);
-    let responses = mcp_exchange_with_server(
-        server,
-        &[
-            mcp_initialize_request(1),
-            mcp_initialized_notification(),
-            mcp_tool_call(
-                2,
-                "assert",
-                &mcp_value_fact_args(&probe, "ok", "high", source),
-            ),
-            mcp_tool_call(
-                3,
-                "supersede",
-                &mcp_value_fact_args(&probe, "tampered", "low", source),
-            ),
-            mcp_tool_call(4, "explain", &mcp_read_fact_args(&probe)),
-            mcp_tool_call(5, "verify", &serde_json::json!({})),
-        ],
-        "mcp write-check",
-    )?;
-    if responses.len() != 5 {
+    let identity_ceiling = server
+        .env
+        .get("DENT8_GRANT")
+        .and_then(|path| identity::grant_authority_for_source(path, source));
+    let probe = WriteCheckProbe::for_source(
+        source,
+        &run_id,
+        &registry_path,
+        identity_scope,
+        identity_ceiling,
+    );
+    let ceiling_name = probe.ceiling.name();
+
+    // Assert at the source's own ceiling; supersede one level below it (a genuine rejection)
+    // when there is a level below; retract the probe fact so nothing is left believed. The
+    // reject sub-check is skipped when the ceiling is already the minimum level.
+    let reject = authority_below(probe.ceiling);
+    let requests = mcp_write_check_requests(&probe, source, reject);
+
+    let responses = mcp_exchange_with_server(server, &requests, "mcp write-check")?;
+    // The `initialized` notification draws no response, so the count is requests minus one.
+    let expected = requests.len() - 1;
+    if responses.len() != expected {
         return Err(format!(
-            "expected 5 JSON-RPC responses, got {}",
+            "expected {expected} JSON-RPC responses, got {}",
             responses.len()
         ));
     }
@@ -1722,16 +1767,26 @@ pub(crate) fn mcp_write_check_with_server(
         return Err(format!("trusted assert was not accepted: {asserted}"));
     }
 
-    let superseded = mcp_tool_result(&responses[2], "supersede")?;
-    if superseded["isError"].as_bool() != Some(true)
-        || superseded["structuredContent"]["status"] != "rejected"
-    {
-        return Err(format!(
-            "low-authority supersede was not rejected: {superseded}"
-        ));
-    }
+    // Response order tracks the id-bearing requests: assert is index 1; the optional supersede,
+    // then explain, verify, and retract follow in sequence.
+    let mut idx = 2;
+    let reject_note = if reject.is_some() {
+        let superseded = mcp_tool_result(&responses[idx], "supersede")?;
+        idx += 1;
+        if superseded["isError"].as_bool() != Some(true)
+            || superseded["structuredContent"]["status"] != "rejected"
+        {
+            return Err(format!(
+                "below-ceiling supersede was not rejected: {superseded}"
+            ));
+        }
+        "rejected below-ceiling tampered value"
+    } else {
+        "reject sub-check skipped (source ceiling is the minimum level)"
+    };
 
-    let explained = mcp_tool_result(&responses[3], "explain")?;
+    let explained = mcp_tool_result(&responses[idx], "explain")?;
+    idx += 1;
     if explained["isError"].as_bool() != Some(false) {
         return Err(format!("explain failed: {explained}"));
     }
@@ -1742,15 +1797,25 @@ pub(crate) fn mcp_write_check_with_server(
         ));
     }
 
-    let verified = mcp_tool_result(&responses[4], "verify")?;
+    let verified = mcp_tool_result(&responses[idx], "verify")?;
+    idx += 1;
     if verified["isError"].as_bool() != Some(false)
         || verified["structuredContent"]["integrity_verified"] != true
     {
         return Err(format!("verify failed or reported findings: {verified}"));
     }
 
+    let retracted = mcp_tool_result(&responses[idx], "retract")?;
+    if retracted["isError"].as_bool() != Some(false)
+        || retracted["structuredContent"]["status"] != "accepted"
+    {
+        return Err(format!(
+            "write-check probe cleanup (retract) was not accepted: {retracted}"
+        ));
+    }
+
     Ok(format!(
-        "mcp write-check: accepted trusted {} {}=ok, rejected low-authority tampered value, explain+verify OK",
+        "mcp write-check: accepted trusted {} {}=ok at {ceiling_name}, {reject_note}, explain+verify OK, probe retracted",
         probe.subject(),
         probe.predicate
     ))
@@ -1880,6 +1945,20 @@ pub(crate) fn mcp_read_fact_args(probe: &WriteCheckProbe) -> serde_json::Value {
         "subject": probe.subject(),
         "predicate": probe.predicate,
     })
+}
+
+pub(crate) fn mcp_retract_args(
+    probe: &WriteCheckProbe,
+    authority: &str,
+    source: &str,
+) -> serde_json::Value {
+    let mut args = mcp_read_fact_args(probe);
+    let object = args
+        .as_object_mut()
+        .expect("mcp_read_fact_args returns object");
+    object.insert("authority".to_string(), serde_json::json!(authority));
+    object.insert("source".to_string(), serde_json::json!(source));
+    args
 }
 
 pub(crate) fn mcp_tool_result<'a>(
@@ -2091,20 +2170,47 @@ pub(crate) fn doctor_witness(output: &mut String) -> bool {
     ok
 }
 
-/// Where a write-check probe writes. By default a throwaway `diagnostic:` subject; when the
-/// probed source is **subject-scoped** (by its authority-registry grant chain or its signed
-/// identity grant), the scoped subject itself with a per-run unique probe predicate — the
-/// probe must stay a legitimately-authorized write, so it targets the one subject the
-/// source may write about instead of bypassing or weakening the scope gate (a scoped source
-/// must never be able to persist an out-of-scope write, not even a diagnostic one). Scope
-/// resolution is best-effort: an unreadable registry/grant or a malformed scope falls back
-/// to the default subject and lets the write gate report the real rejection. The probe
-/// always asserts at `high` authority, so a source whose authority ceiling is below `high`
-/// fails write-check even when otherwise healthy — a known limitation.
+/// The level immediately below `level` in the authority lattice, or `None` when `level` is
+/// already the minimum (`Unknown`). The write-check reject sub-check supersedes at this level
+/// so it is genuinely *below* the assert and still exercises the anti-laundering rejection.
+fn authority_below(level: AuthorityLevel) -> Option<AuthorityLevel> {
+    use AuthorityLevel::{Canonical, High, Low, Medium, Unknown};
+    match level {
+        Unknown => None,
+        Low => Some(Unknown),
+        Medium => Some(Low),
+        High => Some(Medium),
+        Canonical => Some(High),
+    }
+}
+
+/// Where a write-check probe writes, and at what authority. By default a throwaway
+/// `diagnostic:` subject; when the probed source is **subject-scoped** (by its
+/// authority-registry grant chain or its signed identity grant), the scoped subject itself
+/// with a per-run unique probe predicate — the probe must stay a legitimately-authorized
+/// write, so it targets the one subject the source may write about instead of bypassing or
+/// weakening the scope gate (a scoped source must never be able to persist an out-of-scope
+/// write, not even a diagnostic one). Scope resolution is best-effort: an unreadable
+/// registry/grant or a malformed scope falls back to the default subject and lets the write
+/// gate report the real rejection.
+///
+/// The probe asserts at the **source's own granted ceiling** (the authority-registry grant if
+/// the source is listed, else the signed identity's max authority, else `High` as a last
+/// resort) rather than a hardcoded `high`, so a healthy source whose ceiling is below `high`
+/// still passes write-check. The reject sub-check supersedes one level *below* that ceiling so
+/// it stays a genuine rejection; when the ceiling is already the minimum level there is nothing
+/// below it, so that sub-check is skipped (noted in the result).
+///
+/// **Residue:** the event log is append-only — an admitted probe fact cannot be truly deleted.
+/// So the probe **retracts its own `ok` fact** once the checks complete: the fact falls to a
+/// terminal (no-longer-believed) state instead of lingering as live "current" state, and browse
+/// surfaces (which already hide `dent8.write_check*` streams) stay clean. Each run still appends
+/// to a fresh per-run stream, but per-run retraction bounds the *believed* residue to nothing.
 pub(crate) struct WriteCheckProbe {
     subject_kind: String,
     subject_key: String,
     predicate: String,
+    ceiling: AuthorityLevel,
 }
 
 impl WriteCheckProbe {
@@ -2113,22 +2219,34 @@ impl WriteCheckProbe {
         run_id: &str,
         registry_path: &str,
         identity_scope: Option<String>,
+        identity_ceiling: Option<AuthorityLevel>,
     ) -> Self {
-        let scoped = load_authority_registry_at(registry_path, false)
+        let registry = load_authority_registry_at(registry_path, false)
             .ok()
-            .flatten()
-            .and_then(|registry| crate::scoped_probe_subject(&registry, source).map(str::to_string))
+            .flatten();
+        // Effective ceiling: the registry grant if the source is listed, else the signed
+        // identity's max authority, else High (the historical default) as a last resort.
+        let ceiling = registry
+            .as_ref()
+            .and_then(|registry| crate::source_registry_ceiling(registry, source))
+            .or(identity_ceiling)
+            .unwrap_or(AuthorityLevel::High);
+        let scoped = registry
+            .as_ref()
+            .and_then(|registry| crate::scoped_probe_subject(registry, source).map(str::to_string))
             .or(identity_scope);
         match scoped.and_then(|subject| crate::CliSubject::from_str(&subject).ok()) {
             Some(subject) => Self {
                 subject_kind: subject.kind,
                 subject_key: subject.key,
                 predicate: format!("dent8.write_check.{run_id}"),
+                ceiling,
             },
             None => Self {
                 subject_kind: "diagnostic".to_string(),
                 subject_key: run_id.to_string(),
                 predicate: "dent8.write_check".to_string(),
+                ceiling,
             },
         }
     }
@@ -2149,6 +2267,7 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         &run_id,
         &authority_registry_path(),
         identity::env_grant_scope(source),
+        identity::env_grant_authority(source),
     );
     ops::op_assert(
         &log_path(),
@@ -2156,32 +2275,40 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         &probe.subject_key,
         &probe.predicate,
         "ok",
-        AuthorityLevel::High,
+        probe.ceiling,
         source,
         ops::Validity::default(),
         &crate::WriteIdentity::Env,
     )
     .map_err(|error| error.message().to_string())?;
 
-    match ops::op_supersede(
-        &log_path(),
-        &probe.subject_kind,
-        &probe.subject_key,
-        &probe.predicate,
-        "tampered",
-        AuthorityLevel::Low,
-        source,
-        ops::Validity::default(),
-        &crate::WriteIdentity::Env,
-    ) {
-        Ok(message) => {
-            return Err(format!(
-                "low-authority override was accepted unexpectedly: {message}"
-            ));
+    // Supersede one level below the assert so the attempt is a genuine anti-laundering
+    // rejection. When the ceiling is already the minimum level there is nothing below it, so
+    // the sub-check is skipped.
+    let reject_note = match authority_below(probe.ceiling) {
+        Some(reject_authority) => {
+            match ops::op_supersede(
+                &log_path(),
+                &probe.subject_kind,
+                &probe.subject_key,
+                &probe.predicate,
+                "tampered",
+                reject_authority,
+                source,
+                ops::Validity::default(),
+                &crate::WriteIdentity::Env,
+            ) {
+                Ok(message) => {
+                    return Err(format!(
+                        "below-ceiling override was accepted unexpectedly: {message}"
+                    ));
+                }
+                Err(ops::OpError::Rejected(_)) => "rejected below-ceiling tampered value",
+                Err(error) => return Err(error.message().to_string()),
+            }
         }
-        Err(ops::OpError::Rejected(_)) => {}
-        Err(error) => return Err(error.message().to_string()),
-    }
+        None => "reject sub-check skipped (source ceiling is the minimum level)",
+    };
 
     let explained = ops::op_explain(
         &log_path(),
@@ -2197,10 +2324,31 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
         ));
     }
     verify_log(&log_path())?;
+
+    // Clean up after ourselves: the log is append-only, so retract the probe fact at the same
+    // ceiling authority that asserted it. The fact falls to a terminal state instead of
+    // lingering as live current state, keeping browse surfaces clean across repeated runs.
+    ops::op_retract(
+        &log_path(),
+        &probe.subject_kind,
+        &probe.subject_key,
+        &probe.predicate,
+        probe.ceiling,
+        source,
+        &crate::WriteIdentity::Env,
+    )
+    .map_err(|error| {
+        format!(
+            "write-check probe cleanup (retract) failed: {}",
+            error.message()
+        )
+    })?;
+
     Ok(format!(
-        "write-check: accepted trusted {} {}=ok, rejected low-authority tampered value, verify OK",
+        "write-check: accepted trusted {} {}=ok at {}, {reject_note}, verify OK, probe retracted",
         probe.subject(),
-        probe.predicate
+        probe.predicate,
+        probe.ceiling,
     ))
 }
 

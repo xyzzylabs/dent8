@@ -2010,6 +2010,17 @@ fn scoped_probe_subject<'a>(registry: &'a SourceRegistry, source: &str) -> Optio
     None
 }
 
+/// The ceiling a **listed** source is granted, or `None` when the source is not in the
+/// registry. Unlike [`SourceRegistry::ceiling`] (which returns `Unknown` for both an unlisted
+/// source and a source explicitly granted `Unknown`), this distinguishes "not listed" so the
+/// write-check can fall back to a signed identity's ceiling before defaulting to `High`.
+fn source_registry_ceiling(registry: &SourceRegistry, source: &str) -> Option<AuthorityLevel> {
+    registry
+        .sources
+        .get(source)
+        .map(|grant| grant.max_authority)
+}
+
 /// The pure decision: reject a write above the source's ceiling, outside its grant's scope,
 /// or beyond what the grant's **issuer chain** can delegate. `None` registry is permissive
 /// (dev mode); production can disable that path with `DENT8_REQUIRE_AUTHORITY`. Rejection —
