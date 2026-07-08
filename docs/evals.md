@@ -106,7 +106,9 @@ in the module's tests (`per_class_block_rates_match_the_frozen_honest_tally`):
 Overall: **16/47 blocked** by arbitration, **4/47 detect-only** (flagged, not removed),
 **27/47 out-of-model** (admitted by design; a downstream layer owns them). The recency-only
 baseline is compromised by **46/47** (the exception is a purely structural unbacked
-supersession that poisons *no* store).
+supersession that poisons *no* store). "Blocked" means the attacker failed to **displace
+the incumbent belief** — the attacker's low-authority fact can still persist as a parallel
+belief on its own fact id (disclosed by the `parallel_belief_plant` case).
 
 ### What arbitration blocks (16/47)
 
