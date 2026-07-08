@@ -139,9 +139,13 @@ as "first to unify/transplant," never "first to invent"):
    Postgres schemas 002/003 plus SQLite as a second async backend; the Parquet export
    lane; signed identity and witness primitives; honest status of remaining product
    hardening.
-6. **Evaluation** — the built `dent8-evals` adversarial corpus (MINJA, laundering,
-   canonical contradiction, Sybil, poisoned-source retraction) showing **0/5 attack success
-   against the firewall vs 5/5 against a recency-only baseline** [3], plus exhaustive
+6. **Evaluation** — the built `dent8-evals` corpus in two tiers: five hand-authored
+   scenarios (MINJA, laundering, canonical contradiction, Sybil, poisoned-source
+   retraction) as an **illustrative** firewall-vs-recency-baseline demonstration
+   (0/5 vs 5/5 attack success) [3], and the **externally-grounded 47-case corpus as
+   the substantive result** — **16/47 blocked** by arbitration, **4/47 detect-only**,
+   **27/47 out-of-model** (the content-inspection boundary), vs **46/47 compromising
+   a recency-only baseline**; plus exhaustive
    authority-lattice tests, Kani harnesses, golden replay fixtures, `proptest` /
    stateful fold suites, TTL-expiry evaluation, and anchor rewrite tests; comparison
    axes. Still to add: `cargo-fuzz`, append/projection model checking, and an operated

@@ -74,12 +74,19 @@ fn run_hook(input: &str, envs: &[(&str, &str)]) -> std::process::Output {
     let mut child = command.spawn().expect("spawn built-in native memory guard");
     {
         use std::io::Write as _;
-        child
-            .stdin
-            .as_mut()
-            .expect("guard stdin")
-            .write_all(input.as_bytes())
-            .expect("write guard input");
+        // A guard mode that returns before consuming stdin (an unknown DENT8_HOOK_MODE, or
+        // session-start, both exit before `read_hook_payload`) closes its read end first. The
+        // resulting BrokenPipe on our write is a benign, timing-dependent race — pronounced
+        // under full-workspace parallelism — not a guard fault, so tolerate it and let the
+        // exit-code/stderr assertions below judge the run. Any *other* write error is real.
+        let stdin = child.stdin.as_mut().expect("guard stdin");
+        if let Err(error) = stdin.write_all(input.as_bytes()) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "write guard input: {error}"
+            );
+        }
     }
     child.wait_with_output().expect("wait for guard")
 }
