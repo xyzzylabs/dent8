@@ -1,0 +1,15 @@
+{"subject":"repo:dent8","predicate":"cli.binary","value":"CLI binary is `dent8` (crates/dent8-cli); tagline: a memory firewall for coding agents"}
+{"subject":"repo:dent8","predicate":"msrv","value":"Rust 1.94 — Cargo.toml [workspace.package] rust-version = \"1.94\"; edition 2024; no rust-toolchain.toml (CI builds on stable)"}
+{"subject":"repo:dent8","predicate":"gate.test","value":"cargo test --workspace (CI job: fmt + clippy + test in .github/workflows/ci.yml)"}
+{"subject":"repo:dent8","predicate":"gate.fmt","value":"cargo fmt --all -- --check"}
+{"subject":"repo:dent8","predicate":"gate.clippy","value":"cargo clippy --workspace --all-targets -- -D warnings (warnings are errors)"}
+{"subject":"repo:dent8","predicate":"commit.author","value":"single author: chicoxyzzy <chi187@gmail.com>"}
+{"subject":"repo:dent8","predicate":"commit.style","value":"Conventional Commits: feat/fix/docs/test/ci, optional scope, trailing (#PR)"}
+{"subject":"repo:dent8","predicate":"commit.attribution","value":"no Co-Authored-By trailers and no AI attribution in commits or PRs"}
+{"subject":"repo:dent8","predicate":"store.default","value":"default store is a file dev log at .dent8/memory.jsonl; the .dent8/ store is gitignored (machine-local) — rebuild with scripts/dogfood-seed.sh"}
+{"subject":"policy:authority","predicate":"default.profile","value":"human > CI > agent: source:human max=high, source:ci max=medium, source:agent max=low; seeded by `dent8 authority defaults`; deny-by-default for unlisted sources"}
+{"subject":"eval:corpus","predicate":"core.tally","value":"47 adversarial cases / 10 attack classes: 16 blocked by arbitration, 4 detect-only, 27 out-of-model (by design). Frozen: per_class_block_rates_match_the_frozen_honest_tally"}
+{"subject":"eval:corpus","predicate":"hook.tally","value":"content-check lane: 16 arbitration + 9 hook = 25 blocked, 9 detect-only, 13 admitted unflagged. Frozen: per_class_rates_with_the_demo_scanner_match_the_frozen_honest_tally"}
+{"subject":"hook:content-check","predicate":"contract","value":"protocol dent8.content-check/1: DENT8_CONTENT_CHECK spawns a scanner; stdin=JSON payload, stdout=JSON verdict {allow|reject|taint}; exit 0 for any verdict (non-zero = scanner failed), fail-closed by default; runs in the op_* write layer after authority, before arbitration/persist"}
+{"subject":"roadmap:dent8","predicate":"v0.4.focus","value":"v0.4 wedge: multiple coding agents and a human sharing one verified fact base per repo. Priorities: (1) capture+inject loop, (2) default authority profile, (3) on-ramp <2min to first fact, (4) external eval (MINJA/mem0/Zep), (5) Python/TS reachability"}
+{"subject":"roadmap:dent8","predicate":"frozen","value":"frozen until the wedge has users: operated-witness hosting, the desktop debugger/control plane, and any training-substrate direction"}

@@ -38,24 +38,23 @@ Five for five. The last one is the tell: retract a poisoned source and dent8 fla
 ## Try it
 
 ```sh
-dent8 init --identity --source source:alice # local setup: env + authority + signed identity
-set -a; . .dent8/env; set +a
-. .dent8/identity-alice.env
-dent8 authority add web:scrape low       # let this source write at Low, so the next rejection
-                                         # is about arbitration, not a missing grant
+dent8 init --source source:owner          # local setup: env + authority registry (file log, no services)
+set -a; . .dent8/env; set +a              # export the generated env INSIDE set -a (DENT8_REQUIRE_AUTHORITY=1, …)
+dent8 authority add web:scrape low        # let this source write at Low, so the next rejection
+                                          # is about arbitration, not a missing grant
 
-# A trusted fact goes in.
-dent8 assert repo:myproj deploy_target production
+# A trusted fact goes in — High authority, from the repo owner.
+dent8 assert repo:myproj deploy_target production --authority high --source source:owner
 
 # A low-authority source tries to overwrite it — the firewall rejects it: Low can't override High.
 dent8 supersede repo:myproj deploy_target staging --authority low --source web:scrape
 
-# It is still production, and here is the receipt that proves why.
+# It is still production, and here is the receipt that proves why (survived: 1 challenge).
 dent8 explain repo:myproj deploy_target
 
-# Derive a fact from it, then retract the source — the derivative is flagged tainted.
-dent8 derive service:api target production --basis repo:myproj deploy_target
-dent8 retract repo:myproj deploy_target
+# Derive a fact from it, then retract the basis — verify flags the derivative tainted.
+dent8 derive service:api target production --basis repo:myproj deploy_target --authority high --source source:owner
+dent8 retract repo:myproj deploy_target --authority high --source source:owner
 dent8 verify
 ```
 
@@ -63,6 +62,51 @@ No services required — dent8 uses a local file log by default. For binaries, p
 and feature builds, see [Installation](docs/installation.md). From a clone, watch the whole
 firewall path run through the real CLI:
 **`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`**.
+
+## The fact base, on this repo
+
+dent8 dogfoods itself. The facts every agent (and human) working on dent8 should share —
+MSRV, the CI gates, commit conventions, the authority profile, the eval tallies, the
+roadmap — live in the firewall, not in a hand-maintained `CLAUDE.md` that silently drifts.
+Rebuild the store from the committed seed, then ask for the context pack:
+
+```sh
+scripts/dogfood-seed.sh    # rebuilds .dent8/ from scripts/dogfood-facts.jsonl (15 facts, source:human @ High)
+dent8 context              # the believed facts, with authority and provenance
+```
+
+`dent8 context` emits a markdown pack ready to inject at session start. This is real output
+from this repo (abridged; the full pack has 15 facts across `repo:dent8`, `policy:authority`,
+`eval:corpus`, `hook:content-check`, and `roadmap:dent8`):
+
+````markdown
+## Project facts (dent8)
+
+Currently-believed facts from the dent8 memory firewall. Each carries its authority and
+source; verify one with `dent8 explain <subject> <predicate>`.
+
+### repo:dent8
+
+- `gate.test` = "cargo test --workspace (CI job: fmt + clippy + test in .github/workflows/ci.yml)"  (authority: high, source: source:human)
+- `gate.fmt` = "cargo fmt --all -- --check"  (authority: high, source: source:human)
+- `gate.clippy` = "cargo clippy --workspace --all-targets -- -D warnings (warnings are errors)"  (authority: high, source: source:human)
+- `commit.attribution` = "no Co-Authored-By trailers and no AI attribution in commits or PRs"  (authority: high, source: source:human)
+
+### policy:authority
+
+- `default.profile` = "human > CI > agent: source:human max=high, source:ci max=medium, source:agent max=low; …"  (authority: high, source: source:human)
+
+### eval:corpus
+
+- `core.tally` = "47 adversarial cases / 10 attack classes: 16 blocked by arbitration, 4 detect-only, 27 out-of-model …"  (authority: high, source: source:human)
+````
+
+Every line is provenance-stamped and replayable — `dent8 explain repo:dent8 gate.clippy`
+shows who asserted the lint gate and exactly why it is believed. When a fact changes, an
+agent queues a proposal to `.dent8/proposals.jsonl` and the `SessionEnd` hook flushes it
+through the firewall, so the shared fact base updates without anyone hand-editing a rules
+file. The hook wiring lives in [`.claude/settings.json`](.claude/settings.json); the setup
+story and its rough edges are in [docs/dogfooding-notes.md](docs/dogfooding-notes.md).
 
 ## How it works
 

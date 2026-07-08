@@ -4,6 +4,23 @@
 
 dent8 is a memory integrity platform for agentic systems. Treat it as infrastructure for correctness, provenance, replay, and explainability, not as a generic memory provider.
 
+## Fact base (authoritative)
+
+This repo dogfoods dent8: the shared, verified facts about it (MSRV, CI gates, commit
+conventions, the authority profile, eval tallies, roadmap) live in the dent8 store, not in a
+hand-edited rules file. **The dent8 fact base is authoritative** — when it and prose
+disagree, correct it through the firewall rather than editing around it.
+
+- Rebuild the local store: `scripts/dogfood-seed.sh` (reads `scripts/dogfood-facts.jsonl`).
+- Read the believed facts: `dent8 context` (markdown) or `dent8 context -o json`.
+- Add or correct a fact: append a proposal to `.dent8/proposals.jsonl`; the `SessionEnd`
+  hook flushes it via `dent8 capture … --consume --keep-failed`. Human corrections enter as
+  `source:human` at High; agent inferences enter as `source:agent` at Low.
+- Hooks are wired in `.claude/settings.json` (`SessionStart` → `dent8 context`,
+  `SessionEnd` → `dent8 capture`).
+
+See [docs/dogfooding-notes.md](docs/dogfooding-notes.md) for the setup walkthrough and known rough edges.
+
 ## Architecture Rules
 
 - The core primitive is `FactEvent`.
