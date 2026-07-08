@@ -128,9 +128,10 @@ None of the 31 non-blocks are arbitration *bugs*; each is an explicit architectu
 boundary. dent8's `append` firewall arbitrates **authority, provenance, and lifecycle** —
 it deliberately does not:
 
-1. **Read `value` text** (classes A, F, H, most of G, and the content variants of E/J —
-   ~20 cases). Content-embedded imperatives, exfil strings, obfuscated payloads, and
-   conditional-trigger prose are stored as inert data. **A downstream content scanner is
+1. **Read `value` text** (classes A, F, H, most of G, the content variants of E/J, and a
+   class-B "developer mode" persona — 20 cases). Content-embedded imperatives, exfil strings,
+   obfuscated payloads, persona/DAN framing, and conditional-trigger prose are stored as
+   inert data. **A downstream content scanner is
    required**; obfuscation (zero-width, base64, rot13, translation, instruction-as-data) is
    included precisely to show a naive string filter is insufficient — but arbitration reads
    *no* text at all, so all are admitted.
@@ -139,8 +140,8 @@ it deliberately does not:
    owns this. (A false fact that tries to *override* a trusted one, or contradict a
    canonical one, **is** blocked — that is authority, not truth.)
 3. **Independently verify a claimed authority level** at `append` (classes B and C "self-
-   stamped authority" — 4 cases: 2 self-stamped Canonical, 1 an equal-authority peer High,
-   and 1 an inert Low persona). `append` trusts the stated `authority.level`; the
+   stamped authority" — 3 cases: 2 self-stamped Canonical and 1 an equal-authority peer
+   High). `append` trusts the stated `authority.level`; the
    **authority-ceiling registry + signed identity** layer (the `op_*` CLI/MCP path, above
    `append`, and *not* exercised by these harnesses) is the intended control that binds a
    source to a maximum authority. This is a documented layer split, not a firewall hole.

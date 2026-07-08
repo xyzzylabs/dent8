@@ -32,10 +32,17 @@ exhaustive bounded (lattice-enumerated) tests plus Kani model-checking harnesses
 (written, not yet executed in CI) for the core
 arbitration invariants — and a tamper-evident hash chain extended with an external HMAC anchor that
 detects a history rewrite an internal re-verification cannot. We evaluate with a
-reproducible adversarial corpus: across MINJA-style injection, authority laundering,
-canonical contradiction, Sybil corroboration, and poisoned-source retraction (evidence
-taint), **0/5 attacks succeed against the firewall while 5/5 compromise a recency-only
-baseline**. We are explicit that several
+reproducible adversarial corpus. Five hand-authored scenarios — MINJA-style injection,
+authority laundering, canonical contradiction, Sybil corroboration, and poisoned-source
+retraction (evidence taint) — *illustrate* the firewall against a recency-only baseline
+(0/5 vs 5/5), and the substantive evidence is a larger externally-grounded corpus of **47
+cases** whose attack patterns are adapted from the public prompt-injection / memory-
+poisoning literature and scored by a computed per-attack goal predicate. Reported honestly,
+arbitration **blocks 16/47** (a further 4 are detect-only) while **46/47 compromise a
+recency-only baseline**; the remaining 27 are **out-of-model by design** — dent8 arbitrates
+authority and provenance, not fact *content*, so content-embedded imperatives, exfiltration
+strings, obfuscation, and standalone false facts are delegated to a downstream content
+scanner and external truth validation. We are explicit that several
 integrity primitives are not individually novel — Zep/Graphiti already ships bitemporal
 validity, contradiction-driven edge invalidation, and provenance [7] — and locate dent8's
 contribution in the *combination*: an event-sourced source of truth with deterministic
@@ -79,8 +86,11 @@ epistemic ordering (authority), rather than an implicit recency heuristic, and l
 4. **A layered correctness argument** (§7): exhaustive bounded authority-lattice tests and
    Kani model checking of *non-resurrection*, plus a tamper-evident hash chain and an
    external anchor for tamper-resistance.
-5. **A reproducible poisoning-robustness evaluation** (§9): the firewall blocks four
-   attack families that compromise a recency-only baseline.
+5. **A reproducible poisoning-robustness evaluation** (§9): five hand-authored scenarios
+   that illustrate the firewall against a recency-only baseline, plus an externally-grounded
+   47-case corpus scored honestly by a computed per-attack goal predicate (16/47 blocked by
+   arbitration, 46/47 compromising the baseline; the rest are out-of-model boundaries a
+   downstream content scanner / truth-validation layer owns).
 
 ## 2. Threat model
 
@@ -284,6 +294,13 @@ poisoning adversary might submit — run two ways: through the **real firewall**
 attack *demonstrates* a defense only if the firewall blocks it *and* the baseline is
 compromised.
 
+### 9.1 Demonstrative firewall-vs-baseline scenarios
+
+We first present **five hand-authored scenarios**. These are *illustrative* — chosen to
+exhibit the firewall-versus-recency contrast on the mechanisms dent8 targets — not a
+sampled measure of robustness; the externally-grounded corpus in §9.2 is the substantive
+evidence.
+
 | Attack family | Firewall | Recency-only baseline |
 |---|---|---|
 | MINJA low-authority injection | blocked | **compromised** |
@@ -292,8 +309,9 @@ compromised.
 | Sybil corroboration | blocked | **compromised** |
 | Poisoned-source retraction (evidence taint) | blocked | **compromised** |
 
-**Attack-success rate: 0/5 against the firewall, 5/5 against the baseline.** Two
-safeguards keep this honest. A *positive control* asserts that a legitimate
+On these five, the **attack-success rate is 0/5 against the firewall and 5/5 against the
+baseline** — again, a demonstration of the mechanisms, not the headline robustness claim.
+Two safeguards keep it honest. A *positive control* asserts that a legitimate
 equal-or-higher-authority supersession **is** admitted — the firewall is not a blanket
 "reject all change" gate. A *mechanism* test asserts the first three families are rejected by their *intended*
 typed control (`InsufficientAuthority`, `LaunderedAuthority`, `CanonicalContradiction`)
@@ -306,11 +324,71 @@ property suite, and a TTL-expiry (T4) family are now built; remaining hardening 
 fuzzing the deserialize→apply→canonicalize path and modeling append/projection
 concurrency.
 
+### 9.2 Externally-grounded corpus (the substantive result)
+
+To measure the firewall beyond hand-picked demonstrations we run a larger corpus of **47
+cases across 10 attack classes** whose attack *patterns* are **adapted (not copied)** from
+the public prompt-injection / memory-poisoning literature — AgentDojo, InjecAgent, BIPIA,
+MINJA, AgentPoison, PoisonedRAG, HackAPrompt, garak, Lakera Gandalf, the OWASP LLM /
+Agentic Top 10, and the Rehberger memory-persistence PoCs — each case carrying a
+provenance string naming the work it adapts. Crucially, the verdict is **computed, not
+asserted**: for each case the attacker's goal is an explicit predicate over the
+firewall-projected belief state, and the case counts as blocked iff the firewall actually
+prevented that goal (`firewall_blocked = !attacker_goal(firewall_state)`). Non-blocks are
+reported truthfully and classified — *detect-only* (admitted but flagged by read-time
+freshness or retraction taint) or *out-of-model* (admitted by `append`-arbitration **by
+design**, with a named downstream layer as the intended control).
+
+The honest tally is **16/47 blocked** by arbitration, **4/47 detect-only**, and **27/47
+out-of-model**; a recency-only baseline is compromised by **46/47** (the lone exception is
+a structurally unbacked supersession that poisons *no* store). Per class:
+
+| class | cases | blocked |
+|---|---|---|
+| A — injection-in-content | 5 | 0 |
+| B — authority/identity spoofing | 5 | 2 |
+| C — supersede/override abuse | 6 | 5 |
+| D — staleness/temporal exploitation | 5 | 2 |
+| E — cross-agent contamination | 5 | 2 |
+| F — data-exfiltration trigger | 4 | 0 |
+| G — conditional/delayed time-bomb | 4 | 0 |
+| H — obfuscated/evasive payload | 5 | 0 |
+| I — false-fact / knowledge corruption | 4 | 2 |
+| J — anti-firewall / self-bypass | 4 | 3 |
+| **total** | **47** | **16** |
+
+Two honesty caveats frame this number. First, **"blocked" means displacement prevented**:
+a block is the firewall stopping a malicious fact from superseding, overriding, retracting,
+or contesting a trusted incumbent — it is *not* a claim that the malicious string never
+entered storage (a low-authority fact can still persist as a parallel belief on its own
+fact id). Second, the 27 out-of-model non-blocks are **not arbitration bugs** but the
+architectural boundary of an authority firewall: dent8 arbitrates authority, provenance,
+and lifecycle and deliberately does not read a fact's `value` text or judge its truth, so
+content-embedded imperatives, exfiltration strings, obfuscated payloads, and standalone
+false facts are admitted and delegated to a downstream content scanner and external
+ground-truth validation (§10). The per-class tally is frozen as a regression guard in the
+`dent8-evals` tests, and the full provenance/licensing table and out-of-scope analysis are
+in [evals.md](../evals.md).
+
 ## 10. Limitations and threats to validity
 
 - **Model-vs-implementation gap and bounded proofs.** Verification covers the core fold
   over the finite authority lattice; it is not a whole-system proof, and Kani results are
   bounded [5].
+- **Content-inspection boundary.** dent8 arbitrates *authority, provenance, and lifecycle* —
+  it does not read a fact's `value` text or judge its truth. Content-embedded imperatives,
+  data-exfiltration strings, obfuscated payloads (zero-width, base64, rot13, translation,
+  instruction-as-data), and standalone false-fact injection are therefore **out of the
+  arbitration model** and admitted as inert data; catching them requires a **downstream
+  content scanner plus external truth validation**. This accounts for the 27/47 out-of-model
+  non-blocks in §9.2 and is a deliberate layer split, not a firewall hole.
+- **"Blocked" means displacement prevented, not admission denied.** Throughout the
+  evaluation a *block* is the firewall preventing a malicious fact from **superseding,
+  overriding, retracting, or contesting a trusted incumbent** — it is *not* a claim that the
+  malicious string never enters storage. A rejected low-authority fact can still persist as a
+  parallel belief on its own fact id (disclosed by the `parallel_belief_plant` case);
+  read-time uniqueness/floor policy and a content scanner, not `append`-arbitration, own that
+  surface.
 - **Canonicalization is not frozen to JCS.** The canonical form is a sorted-key
   `serde_json` encoding, not RFC 8785/JCS; it may coincide only for narrow inputs
   without UTF-16 key-order or number-format differences. Embedded `FactValue::Json`
