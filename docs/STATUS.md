@@ -193,6 +193,27 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   doctor/write-check diagnostic streams by default, matching MCP `list_facts` /
   `resources/list` (which carry the same `freshness`); pass `--include-diagnostics` when
   auditing setup noise. Supports `--output json` (each fact gains a `freshness` field).
+- **`dent8 context [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-stale]
+  [--include-diagnostics]`** — emits the **currently-believed facts as an agent context
+  pack**: markdown ready for CLAUDE.md/AGENTS.md-style inclusion or `SessionStart`-hook
+  injection, or `--output json` for machines. Belief-state aware: terminal facts never
+  appear, believed-but-stale / not-yet-valid facts are omitted by default (counted in a
+  trailer; `--include-stale` shows them annotated), and a contested fact is flagged inline —
+  with JSON `status: "contested"` — rather than silently picked. Each fact carries its
+  authority, asserting source, and `dent8://` receipt reference, so a generated block stays
+  verifiable with `dent8 native reconcile`. See [context-capture.md](context-capture.md).
+- **`dent8 capture [FILE] [--consume] [--authority <level>] [--source <source>]`** — batches
+  structured **fact proposals** (JSON lines from stdin or a file) through the *same* `op_*`
+  firewall path as the interactive writes: `op` is `assert` (default) / `supersede` /
+  `reinforce` / `contradict` / `retract` / `expire`, and a below-ceiling, laundered, or
+  below-floor proposal is rejected exactly as it would be on `dent8 assert`. Authority and
+  source resolve per line (line fields, then flags, then `DENT8_GRANT` defaults, then the
+  **agent tier of the default profile** — `source:agent` at `low`). Every line is attempted
+  and reported; exit `2` on any malformed line, `1` on any firewall rejection (a safety
+  signal for hook logs), else `0`. `--consume` truncates the proposals file after
+  processing, so a session-end hook can flush an agent-written queue idempotently (a missing
+  file is an empty session). Supports `--output json` with per-line results. See
+  [context-capture.md](context-capture.md) for Claude Code hook wiring.
 - **`dent8 snapshot [--include-diagnostics]`** — emits one debugger/control-plane read/audit
   payload over the same durable store: live runtime status, fact-stream browsing, `verify`,
   `conflicts`, and summary counts. In text mode it is a compact operator status; in
@@ -346,9 +367,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   failures. Native files with no receipt references are reported but do not fail by default.
   This still does not infer facts from prose and does not write provider-native files. Supports
   `--output json`.
-- **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source>`** — the
+- **`dent8 authority list | add <source> <max> [issuer] [scope] | remove <source> |
+  defaults`** — the
   **authority layer (authz)**, enforced at the CLI/MCP `op_*` write layer (before the
-  firewall). A source→authority *ceiling* registry: every write checks the requested/defaulted
+  firewall). **`defaults`** seeds the registry with the out-of-the-box trust profile for a
+  shared repository — `source:human` → `high`, `source:ci` → `medium`, `source:agent` →
+  `low` (**human > CI > agent**) — merge-only (an existing grant for those sources is kept,
+  never downgraded), so arbitration works without inventing a trust taxonomy first;
+  `canonical` stays reserved for explicit `add`. A source→authority *ceiling* registry: every write checks the requested/defaulted
   `authority` against its `source`'s registered ceiling and **rejects** (does not silently
   cap) a write above it — so a low-trust source cannot mint `canonical`, and the rejection
   names the source, ceiling, and request for debuggability. **Opt-in by default**: enforcement
@@ -454,7 +480,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - `dent8 --version`, `dent8 --help`, and the global presentation flag
   `--color auto|always|never` (colored help/errors plus human-facing verdict words; adapter
   data stays plain). The global `--output text|json` flag currently supports the write
-  commands, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
+  commands, `capture`, `context`, `explain`, `replay`, `facts list`, `verify`, `conflicts`, `eval`, `init`,
   `agent add`, `authority`, `identity <subcommand>`, `doctor`, `completions`, `export`,
   `witness <subcommand>`, `schema postgres`, and `mcp install`; unsupported commands fail
   closed with a targeted usage error rather than falling back to prose.
