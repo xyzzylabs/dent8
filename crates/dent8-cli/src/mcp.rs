@@ -5,7 +5,7 @@
 //! It speaks just enough MCP to be useful:
 //! - `initialize`, `tools/list`, and `tools/call` for the full belief surface — `assert` /
 //!   `supersede` / `retract` / `contradict` / `explain` / `replay` — plus read/audit tools
-//!   (`runtime_status`, `list_facts`, `verify`, `conflicts`, `native_scan`,
+//!   (`runtime_status`, `snapshot`, `list_facts`, `verify`, `conflicts`, `native_scan`,
 //!   `native_reconcile`) which dispatch to the same shared `op_*`
 //!   functions the CLI uses, so the firewall decision is identical on both surfaces;
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
@@ -40,7 +40,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, "2025-06
 /// Server-wide guidance consumed by MCP clients that support `instructions` (including Codex).
 const SERVER_INSTRUCTIONS: &str = "\
 dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, \
-call runtime_status, then list_facts or explain. Record stable facts with assert using truthful source and authority. \
+call snapshot (or runtime_status/list_facts for narrower checks), then explain as needed. Record stable facts with assert using truthful source and authority. \
 When the connection has a signed source grant, write tools may omit source and authority. \
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
 Use native_scan/native_reconcile to audit provider-native memory/rules files when available. \
@@ -977,6 +977,12 @@ fn dispatch_tool(
     let predicate = || arg(arguments, "predicate");
     match name {
         "runtime_status" => Ok(runtime_status(path)),
+        "snapshot" => {
+            let include_diagnostics = optional_bool(arguments, "include_diagnostics")?;
+            let (text, structured) =
+                crate::snapshot::snapshot_text_and_json(path, include_diagnostics, "snapshot");
+            Ok(ToolOutput::new(text, structured))
+        }
         "list_facts" => list_facts(path, arguments),
         // `verify_log` returns Err for integrity *findings* (taint, lineage, a corrupt log) as
         // well as for a genuine couldn't-run — but for an MCP agent those findings are the
@@ -1270,6 +1276,11 @@ fn dispatch_tool(
 }
 
 fn runtime_status(path: &str) -> ToolOutput {
+    let (text, structured) = runtime_status_parts(path);
+    ToolOutput::new(text, structured)
+}
+
+pub(crate) fn runtime_status_parts(path: &str) -> (String, Value) {
     let store = runtime_store_status(path);
     let identity = runtime_identity_status();
     let authority = runtime_authority_status();
@@ -1279,12 +1290,12 @@ fn runtime_status(path: &str) -> ToolOutput {
         || identity.load_status == "failed"
         || witness.load_status == "failed"
     {
-        "degraded"
+        Status::Degraded.as_str()
     } else {
         Status::Ok.as_str()
     };
     let text = runtime_status_text(&store, &identity, &authority, &witness);
-    ToolOutput::new(
+    (
         text,
         json!({
             "status": top_status,
@@ -2319,6 +2330,12 @@ fn tool_list() -> Vec<Value> {
             &[],
         ),
         tool(
+            "snapshot",
+            "Return one stable read/audit payload for debugger and control-plane clients: runtime status, facts, integrity verify, and conflicts.",
+            &list_facts,
+            &[],
+        ),
+        tool(
             "list_facts",
             "List known dent8 fact streams and their dent8:// resource URIs. Use before relying on project memory.",
             &list_facts,
@@ -2422,6 +2439,7 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
 fn output_schema_for(name: &str) -> Value {
     match name {
         "runtime_status" => with_tool_error_schema(name, runtime_status_output_schema()),
+        "snapshot" => with_tool_error_schema(name, snapshot_output_schema()),
         "list_facts" => with_tool_error_schema(name, list_facts_output_schema()),
         "verify" => with_tool_error_schema(name, verify_output_schema()),
         "conflicts" => with_tool_error_schema(name, conflicts_output_schema()),
@@ -2497,6 +2515,55 @@ fn runtime_status_output_schema() -> Value {
             "identity",
             "witness",
             "env",
+        ],
+    )
+}
+
+fn snapshot_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "degraded", "integrity_issues", "contested"] },
+            "tool": { "const": "snapshot" },
+            "runtime_status": runtime_status_output_schema(),
+            "facts": {
+                "type": "object",
+                "additionalProperties": true,
+            },
+            "verify": {
+                "type": "object",
+                "additionalProperties": true,
+            },
+            "conflicts": {
+                "type": "object",
+                "additionalProperties": true,
+            },
+            "summary": object_schema(
+                json!({
+                    "runtime_status": { "enum": ["ok", "degraded"] },
+                    "facts": { "type": "integer", "minimum": 0 },
+                    "hidden_diagnostics_count": { "type": "integer", "minimum": 0 },
+                    "integrity_verified": { "type": "boolean" },
+                    "conflicts": { "type": "integer", "minimum": 0 },
+                    "include_diagnostics": { "type": "boolean" },
+                }),
+                &[
+                    "runtime_status",
+                    "facts",
+                    "hidden_diagnostics_count",
+                    "integrity_verified",
+                    "conflicts",
+                    "include_diagnostics",
+                ],
+            ),
+        }),
+        &[
+            "status",
+            "tool",
+            "runtime_status",
+            "facts",
+            "verify",
+            "conflicts",
+            "summary",
         ],
     )
 }
@@ -3385,6 +3452,7 @@ mod tests {
             .as_str()
             .expect("server instructions");
         assert!(instructions.contains("memory integrity firewall"));
+        assert!(instructions.contains("snapshot"));
         assert!(instructions.contains("list_facts"));
     }
 
@@ -4211,6 +4279,7 @@ mod tests {
             names,
             [
                 "runtime_status",
+                "snapshot",
                 "list_facts",
                 "verify",
                 "conflicts",
@@ -4277,6 +4346,14 @@ mod tests {
             runtime_tool["outputSchema"]["oneOf"][0]["properties"]["store"]["properties"]["event_count"],
             super::nullable_integer_schema(),
         );
+        let snapshot_tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "snapshot")
+            .unwrap();
+        assert_eq!(
+            snapshot_tool["outputSchema"]["oneOf"][0]["properties"]["status"]["enum"],
+            json!(["ok", "degraded", "integrity_issues", "contested"])
+        );
     }
 
     #[test]
@@ -4284,6 +4361,7 @@ mod tests {
     fn structured_content_matches_advertised_output_schemas() {
         let (_guard, path) = temp_log();
         assert_tool_output_matches_schema(&path, "runtime_status", json!({}));
+        assert_tool_output_matches_schema(&path, "snapshot", json!({}));
         assert_tool_output_matches_schema(&path, "list_facts", json!({}));
         assert_tool_output_matches_schema(&path, "verify", json!({}));
         assert_tool_output_matches_schema(&path, "conflicts", json!({}));
@@ -4434,6 +4512,10 @@ mod tests {
         assert!(!err, "{text}");
         assert!(text.contains("dent8 runtime status"), "{text}");
 
+        let (err, text) = call_tool_text(&path, "snapshot", json!({}));
+        assert!(!err, "{text}");
+        assert!(text.contains("dent8 snapshot"), "{text}");
+
         let (err, text) = call_tool_text(&path, "list_facts", json!({}));
         assert!(!err, "{text}");
         assert!(text.contains("no dent8 facts"), "{text}");
@@ -4452,6 +4534,14 @@ mod tests {
         let (err, text) = call_tool(&path, "conflicts", json!({}));
         assert!(!err, "{text}");
         assert!(text.contains("no contested facts"), "{text}");
+
+        let snapshot = call_tool_result(&path, "snapshot", json!({}));
+        assert_eq!(snapshot["structuredContent"]["status"], "ok");
+        assert_eq!(snapshot["structuredContent"]["summary"]["facts"], 1);
+        assert_eq!(
+            snapshot["structuredContent"]["facts"]["facts"][0]["uri"],
+            "dent8://repo/p/database"
+        );
     }
 
     #[test]
@@ -4664,7 +4754,7 @@ mod tests {
         // A read passes the gate and returns a normal result.
         let list = json!({
             "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-            "params": { "name": "list_facts", "arguments": {} },
+            "params": { "name": "snapshot", "arguments": {} },
         });
         let read = raw_dispatch(&list, &path, &WriteIdentity::Unauthenticated).expect("read reply");
         assert!(read.get("error").is_none(), "read must not error: {read}");

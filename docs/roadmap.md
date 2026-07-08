@@ -24,8 +24,8 @@ now runs end to end through the CLI and MCP surfaces:
   authority floor, default TTL, and uniqueness.
 - The full lifecycle is runnable and persistent:
   `assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/
-  `replay`/`facts list`/`verify`/`conflicts`/`eval`/`export`, plus MCP tools for the same belief
-  surface.
+  `replay`/`facts list`/`snapshot`/`verify`/`conflicts`/`eval`/`export`, plus MCP tools for the
+  same belief surface.
 - Persistence runs over the local file dev store by default, or over the transactional
   async backends selected by `DENT8_STORE_URL`: embedded SQLite (stock build) and Postgres
   (`--features postgres`).
@@ -243,8 +243,8 @@ shipped after replay/explain proved the loop. A **v0 is built**: `dent8 mcp serv
 synchronous, newline-delimited JSON-RPC 2.0 server over stdio (no async runtime, no new
 heavy deps), handling `initialize` / `tools/list` / `tools/call` for the full belief
 surface (`assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
-`derive` / `explain` / `replay`), read/audit tools (`runtime_status` / `list_facts` /
-`verify` / `conflicts` / `native_scan` / `native_reconcile`),
+`derive` / `explain` / `replay`), read/audit tools (`runtime_status` / `snapshot` /
+`list_facts` / `verify` / `conflicts` / `native_scan` / `native_reconcile`),
 plus `resources/list` / `resources/read` (each fact stream as a `dent8://` resource),
 server instructions for MCP-aware agents, and JSON-RPC batch requests. The tools dispatch to
 the shared `op_*` firewall path, so the same
@@ -254,7 +254,7 @@ tool error).
 **Role.** *Enforce* the firewall at write time: it already rejects missing-provenance /
 sub-floor / non-unique writes (T1) via `op_*`, across the full belief surface
 (`assert`/`supersede`/`retract`/`contradict`/`reinforce`/`expire`/`derive`/`explain`/`replay`),
-read/audit tools (`runtime_status`/`list_facts`/`verify`/`conflicts`/`native_scan`/
+read/audit tools (`runtime_status`/`snapshot`/`list_facts`/`verify`/`conflicts`/`native_scan`/
 `native_reconcile`),
 plus `resources/list` / `resources/read`, server instructions, and JSON-RPC batch requests.
 The freshness filter on reads (T4) is applied — `explain` headline-flags a stale fact and
@@ -280,7 +280,8 @@ ONGOING: evals/formal hardening, mainly fuzzing + append/projection model checki
 
 The dependency chain that originally blocked the MVP is now complete. The next dependency
 chain is product hardening: identity operations -> operated witness -> stable daemon/API
-contracts -> desktop debugger/control plane -> SDKs and production deployment packaging.
+contracts (started with `snapshot`) -> desktop debugger/control plane -> SDKs and production
+deployment packaging.
 
 ## Later
 

@@ -25,6 +25,8 @@ pub(crate) enum Status {
     Contested,
     /// `verify` found a hash-chain or attestation integrity problem.
     IntegrityIssues,
+    /// A read/audit command ran, but some runtime dependency could not be inspected.
+    Degraded,
     /// An operational failure (I/O, backend) unrelated to any firewall decision.
     Failed,
 }
@@ -39,6 +41,7 @@ impl Status {
             Self::Invalid => "invalid",
             Self::Contested => "contested",
             Self::IntegrityIssues => "integrity_issues",
+            Self::Degraded => "degraded",
             Self::Failed => "failed",
         }
     }
@@ -76,6 +79,7 @@ mod tests {
             Status::Invalid,
             Status::Contested,
             Status::IntegrityIssues,
+            Status::Degraded,
             Status::Failed,
         ] {
             let via_str = status.as_str();
@@ -95,6 +99,7 @@ mod tests {
         assert_eq!(Status::Invalid.as_str(), "invalid");
         assert_eq!(Status::Contested.as_str(), "contested");
         assert_eq!(Status::IntegrityIssues.as_str(), "integrity_issues");
+        assert_eq!(Status::Degraded.as_str(), "degraded");
         assert_eq!(Status::Failed.as_str(), "failed");
     }
 }

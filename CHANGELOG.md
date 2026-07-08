@@ -10,6 +10,9 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- Added `dent8 snapshot` and the MCP `snapshot` read/audit tool: one stable
+  debugger/control-plane payload combining runtime status, fact streams, integrity verify,
+  conflicts, and summary counts, with `--include-diagnostics` parity with `facts list`.
 - Added a local dogfood workflow (`docs/dogfood.md` and `examples/dogfood/demo.sh`) that
   validates this repo's real `.dent8` setup: durable facts, signed identity, low-authority
   rejection, witness coverage, and installed-agent doctor checks.

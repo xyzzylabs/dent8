@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 const MCP_TOOLS: &[&str] = &[
     "runtime_status",
+    "snapshot",
     "list_facts",
     "verify",
     "conflicts",
@@ -191,6 +192,7 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
         .expect("server instructions");
     assert!(instructions.contains("memory integrity firewall"));
     assert!(instructions.contains("runtime_status"));
+    assert!(instructions.contains("snapshot"));
     assert!(instructions.contains("list_facts"));
     assert!(instructions.contains("native_scan"));
 
@@ -202,12 +204,16 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
         .collect::<Vec<_>>();
     assert_eq!(tools, MCP_TOOLS);
 
-    let accepted = response_with_id(&responses, 3);
+    let snapshot = response_with_id(&responses, 3);
+    assert!(!tool_is_error(snapshot));
+    assert_snapshot_structured(snapshot, 0);
+
+    let accepted = response_with_id(&responses, 4);
     assert!(!tool_is_error(accepted));
     assert!(tool_text(accepted).contains("ACCEPTED"));
     assert_accepted_assert_structured(accepted);
 
-    let rejected = response_with_id(&responses, 4);
+    let rejected = response_with_id(&responses, 5);
     assert!(tool_is_error(rejected));
     let rejected_text = tool_text(rejected);
     assert!(
@@ -217,15 +223,19 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
     assert!(rejected_text.contains("source:cursor"), "{rejected_text}");
     assert_rejected_supersede_structured(rejected);
 
-    let facts = response_with_id(&responses, 5);
+    let facts = response_with_id(&responses, 6);
     assert!(!tool_is_error(facts));
     assert!(tool_text(facts).contains("dent8://repo/myproj/database"));
     assert_list_facts_structured(facts);
 
-    let verify = response_with_id(&responses, 6);
+    let verify = response_with_id(&responses, 7);
     assert!(!tool_is_error(verify));
     assert!(tool_text(verify).contains("STRUCTURAL integrity holds"));
     assert_verify_structured(verify);
+
+    let snapshot = response_with_id(&responses, 8);
+    assert!(!tool_is_error(snapshot));
+    assert_snapshot_structured(snapshot, 1);
 }
 
 fn mcp_authority_scenario_requests() -> String {
@@ -234,6 +244,10 @@ fn mcp_authority_scenario_requests() -> String {
         json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         json!({
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "snapshot", "arguments": {} }
+        }),
+        json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
             "params": { "name": "assert", "arguments": {
                 "subject": "repo:myproj",
                 "predicate": "database",
@@ -243,7 +257,7 @@ fn mcp_authority_scenario_requests() -> String {
             }}
         }),
         json!({
-            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
             "params": { "name": "supersede", "arguments": {
                 "subject": "repo:myproj",
                 "predicate": "database",
@@ -253,12 +267,16 @@ fn mcp_authority_scenario_requests() -> String {
             }}
         }),
         json!({
-            "jsonrpc": "2.0", "id": 5, "method": "tools/call",
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
             "params": { "name": "list_facts", "arguments": {} }
         }),
         json!({
-            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "jsonrpc": "2.0", "id": 7, "method": "tools/call",
             "params": { "name": "verify", "arguments": {} }
+        }),
+        json!({
+            "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+            "params": { "name": "snapshot", "arguments": {} }
         }),
     ]
     .into_iter()
@@ -319,6 +337,18 @@ fn assert_verify_structured(response: &Value) {
     let structured = tool_structured(response);
     assert_eq!(structured["status"], "ok");
     assert_eq!(structured["integrity_verified"], true);
+}
+
+fn assert_snapshot_structured(response: &Value, expected_facts: i64) {
+    let structured = tool_structured(response);
+    assert_eq!(structured["status"], "ok");
+    assert_eq!(structured["tool"], "snapshot");
+    assert_eq!(structured["summary"]["facts"], expected_facts);
+    assert_eq!(structured["summary"]["integrity_verified"], true);
+    assert_eq!(structured["summary"]["conflicts"], 0);
+    assert_eq!(structured["runtime_status"]["tool"], "runtime_status");
+    assert_eq!(structured["verify"]["tool"], "verify");
+    assert_eq!(structured["conflicts"]["tool"], "conflicts");
 }
 
 /// Run a `dent8` subcommand with a controlled environment (per-process, so no env races).

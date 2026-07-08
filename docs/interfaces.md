@@ -18,6 +18,7 @@ Initial command groups:
 - `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
 - `dent8 replay <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 explain <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
+- `dent8 snapshot [--include-diagnostics]`
 - `dent8 conflicts`
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`
 - `dent8 mcp serve`
@@ -53,6 +54,7 @@ Source: [MCP tools specification](https://modelcontextprotocol.io/specification/
 Current v0 MCP tools:
 
 - `runtime_status`
+- `snapshot`
 - `list_facts`
 - `verify`
 - `conflicts`
@@ -73,14 +75,20 @@ URL/path, event count, authority registry, signed identity, and witness configur
 It exists so agents can detect stale MCP subprocesses or wrong stores before relying on
 project memory.
 
+`snapshot` is the stable read/audit aggregate for debugger and control-plane clients. It
+combines `runtime_status`, fact-stream browsing, `verify`, and `conflicts` into one
+structured payload with summary counts. Use it for polling or status panes; use the
+individual tools when a client needs a narrower result or lower-cost refresh.
+
 Tool definitions advertise `outputSchema` for every `structuredContent` shape. Tool results
 keep human-readable `content`, and also return MCP 2025-11-25 `structuredContent` for
 agents. `initialize` prefers `2025-11-25` and also accepts `2025-06-18` clients because
 dent8's v0 tool result shape is valid on both revisions. The structured payloads carry a
 stable `status` (`accepted`, `rejected`, `contested`, `ok`, `invalid`, `failed`, or
-`integrity_issues`). Writes include an `accepted_events` array with every committed event's
-id/kind/hash, plus a current-state receipt (`receipt_kind: "current_state"`) when the
-subject still resolves to an explainable fact. Refused firewall writes carry
+`integrity_issues`; runtime/snapshot probes may also report `degraded`). Writes include an
+`accepted_events` array with every committed event's id/kind/hash, plus a current-state
+receipt (`receipt_kind: "current_state"`) when the subject still resolves to an explainable
+fact. Refused firewall writes carry
 `rejection_reason`; malformed calls carry `error_reason` with `status: "invalid"`. For
 older clients that ignore `structuredContent`, dent8 also includes a serialized JSON mirror
 as a second text content block.
@@ -88,8 +96,8 @@ as a second text content block.
 Recommended behavior:
 
 - Treat writes as candidate events through the firewall.
-- Call `runtime_status` first when debugging setup or before trusting a long-running MCP
-  server's view of project memory.
+- Call `snapshot` first for a complete read/audit view, or `runtime_status` when debugging
+  just the live server/store wiring before trusting a long-running MCP server.
 - Carry evidence/provenance fields for assertions; signed identity may provide source and
   authority defaults, but explicit fields must still satisfy the same grant/ceiling checks.
 - Make stale, contested, expired, or superseded facts visible to clients.
@@ -168,6 +176,7 @@ Likely routes:
 - `POST /facts/{fact_id}/supersede`
 - `GET /facts/{fact_id}`
 - `GET /facts/{fact_id}/explain`
+- `GET /snapshot`
 - `GET /subjects/{subject_type}/{subject_key}/context`
 - `POST /replay`
 - `GET /conflicts`
@@ -177,8 +186,8 @@ Likely routes:
 The desktop app is accepted as a future product surface, but only as a debugger/control plane
 over the existing integrity boundary ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
 It should make the CLI/MCP/daemon state visible: connected agents, authority ceilings, grants,
-recent accepted/rejected writes, conflicts, stale facts, `explain`/`replay` timelines, native
-scan/reconcile findings, witness coverage, and doctor health.
+recent accepted/rejected writes, conflicts, stale facts, `snapshot` health, `explain`/`replay`
+timelines, native scan/reconcile findings, witness coverage, and doctor health.
 
 The desktop app must not become a separate memory provider or private write path. Read/audit
 views should come first. Any future write action must call the same signed, authority-checked

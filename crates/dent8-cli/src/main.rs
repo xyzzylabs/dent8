@@ -38,6 +38,7 @@ mod mcp_config;
 mod native;
 mod ops;
 mod setup;
+mod snapshot;
 mod status;
 mod witness;
 
@@ -98,6 +99,7 @@ fn run_cli(cli: Cli) -> i32 {
             0
         }
         Some(CliCommand::Verify) => cmd_verify(cli.output),
+        Some(CliCommand::Snapshot(args)) => snapshot::cmd_snapshot(&args, cli.output),
         Some(CliCommand::Conflicts) => ops::cmd_conflicts(cli.output),
         Some(CliCommand::Eval) => cmd_eval(cli.output),
         Some(CliCommand::Init(args)) => setup::cmd_init(&args, cli.output),
@@ -254,6 +256,8 @@ enum CliCommand {
     Facts(FactsArgs),
     /// Check log integrity.
     Verify,
+    /// Emit a debugger/control-plane snapshot of the current dent8 state.
+    Snapshot(SnapshotArgs),
     /// List contested facts.
     Conflicts,
     /// Run the adversarial corpus.
@@ -318,6 +322,7 @@ impl CliCommand {
             Self::Replay(_) => "replay",
             Self::Facts(_) => "facts",
             Self::Verify => "verify",
+            Self::Snapshot(_) => "snapshot",
             Self::Conflicts => "conflicts",
             Self::Eval => "eval",
             Self::Init(_) => "init",
@@ -443,6 +448,13 @@ struct FactsListArgs {
     #[arg(long, value_name = "PREDICATE", value_parser = parse_predicate)]
     predicate: Option<String>,
     /// Include dent8 internal diagnostic streams, such as doctor write-check facts.
+    #[arg(long)]
+    include_diagnostics: bool,
+}
+
+#[derive(Args, Debug)]
+struct SnapshotArgs {
+    /// Include dent8 internal diagnostic streams in the nested facts list.
     #[arg(long)]
     include_diagnostics: bool,
 }

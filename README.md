@@ -178,14 +178,15 @@ library-only vs. design-only. In brief, runnable today:
 
 - The full belief lifecycle — `assert` / `supersede` / `retract` / `contradict` / `reinforce`
   / `expire` / `derive` / `explain` / `replay` — plus the operator surfaces `facts list`,
-  `verify`, `conflicts`, `eval`, and `export`.
+  `snapshot`, `verify`, `conflicts`, `eval`, and `export`.
 - Three backends behind one contract: a local **file** dev log (default), embedded **SQLite**,
   and a DB-verified transactional **Postgres** adapter (`--features postgres`) — selected by
   `DENT8_STORE_URL`.
 - **Signed identity** with grant history + revocation, the **witness** transparency log, and an
   MCP server (`dent8 mcp serve`) — all in the stock binary.
-- MCP `runtime_status` diagnostics so agents can see the live binary, store, identity,
-  authority, and witness configuration before trusting a long-running server.
+- MCP `runtime_status` diagnostics and one-shot `snapshot` output so agents can see the live
+  binary, store, identity, authority, witness configuration, facts, verify status, and
+  conflicts before trusting a long-running server.
 - Machine-readable `--output json` across the read/write/audit surface, shell completions, and
   Parquet **export** for offline DuckDB analysis (`--features export`).
 - Read-only native memory/rules audit with `dent8 native scan --agent <profile>` and receipt

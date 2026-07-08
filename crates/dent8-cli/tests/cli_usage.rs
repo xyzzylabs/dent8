@@ -384,6 +384,23 @@ fn read_audit_commands_emit_machine_readable_json() {
     assert_eq!(conflicts["status"], "ok");
     assert_eq!(conflicts["count"], 0);
 
+    let snapshot = run_dent8(&["--output", "json", "snapshot"], &envs);
+    assert_success(&snapshot, "snapshot --output json");
+    let snapshot = stdout_json(&snapshot);
+    assert_eq!(snapshot["status"], "ok");
+    assert_eq!(snapshot["tool"], "snapshot");
+    assert_eq!(snapshot["runtime_status"]["tool"], "runtime_status");
+    assert_eq!(snapshot["summary"]["facts"], 1);
+    assert_eq!(snapshot["summary"]["hidden_diagnostics_count"], 0);
+    assert_eq!(snapshot["summary"]["integrity_verified"], true);
+    assert_eq!(snapshot["summary"]["conflicts"], 0);
+    assert_eq!(
+        snapshot["facts"]["facts"][0]["uri"],
+        "dent8://person/alice/favorite_drink"
+    );
+    assert_eq!(snapshot["verify"]["tool"], "verify");
+    assert_eq!(snapshot["conflicts"]["tool"], "conflicts");
+
     let doctor = run_dent8(&["--output", "json", "doctor"], &envs);
     assert_success(&doctor, "doctor --output json");
     let doctor = stdout_json(&doctor);
@@ -845,6 +862,23 @@ fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
                 .as_str()
                 .is_some_and(|text| text.contains("TAINTED"))),
         "{verify}"
+    );
+
+    let snapshot = run_dent8(&["--output", "json", "snapshot"], &envs);
+    assert_eq!(snapshot.status.code(), Some(1));
+    assert!(stderr(&snapshot).is_empty(), "{}", stderr(&snapshot));
+    let snapshot = stdout_json(&snapshot);
+    assert_eq!(snapshot["status"], "integrity_issues");
+    assert_eq!(snapshot["verify"]["ok"], false);
+    assert!(
+        snapshot["verify"]["findings"]
+            .as_array()
+            .expect("snapshot verify findings")
+            .iter()
+            .any(|finding| finding
+                .as_str()
+                .is_some_and(|text| text.contains("TAINTED"))),
+        "{snapshot}"
     );
 }
 
