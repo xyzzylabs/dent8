@@ -3,7 +3,7 @@
 {"subject":"repo:dent8","predicate":"gate.test","value":"cargo test --workspace (CI job: fmt + clippy + test in .github/workflows/ci.yml)"}
 {"subject":"repo:dent8","predicate":"gate.fmt","value":"cargo fmt --all -- --check"}
 {"subject":"repo:dent8","predicate":"gate.clippy","value":"cargo clippy --workspace --all-targets -- -D warnings (warnings are errors)"}
-{"subject":"repo:dent8","predicate":"commit.author","value":"single author: chicoxyzzy <chi187@gmail.com>"}
+{"subject":"repo:dent8","predicate":"commit.author","value":"single maintainer (chicoxyzzy / Sergey Rubanov) <chi187@gmail.com>"}
 {"subject":"repo:dent8","predicate":"commit.style","value":"Conventional Commits: feat/fix/docs/test/ci, optional scope, trailing (#PR)"}
 {"subject":"repo:dent8","predicate":"commit.attribution","value":"no Co-Authored-By trailers and no AI attribution in commits or PRs"}
 {"subject":"repo:dent8","predicate":"store.default","value":"default store is a file dev log at .dent8/memory.jsonl; the .dent8/ store is gitignored (machine-local) — rebuild with scripts/dogfood-seed.sh"}

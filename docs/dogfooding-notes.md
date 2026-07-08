@@ -23,6 +23,8 @@ here.
   believed facts) plus a native-memory integrity check; `SessionEnd` →
   `dent8 capture .dent8/proposals.jsonl --consume --keep-failed` (flush agent-queued
   proposals through the firewall); `PreToolUse`/`PostToolUse` guard native-memory writes.
+  Each hook command sources `.dent8/env` when present (so it reads the seeded store, not the
+  permissive default) and no-ops quietly when `dent8` isn't built.
 - **Flagship README example** built from this repo's real `dent8 context` pack.
 
 Capture was fully clean: `15 accepted, 0 contested, 0 rejected, 0 invalid`, every line
@@ -54,7 +56,8 @@ printing `ACCEPTED … (authority=high)` — zero silent no-ops.
    A command run without `set -a; . .dent8/env; set +a` falls back to the permissive dev
    default log (`./dent8-log.jsonl`), so a user who forgets can read/write a *different, empty*
    store and think their facts vanished. `init` prints the source snippet, which helps, but
-   nothing guards the omission.
+   nothing guards the omission. The committed hooks now guard against this by sourcing
+   `.dent8/env` themselves; the footgun remains only for ad-hoc CLI use outside the hooks.
 
 ### P2 — papercuts on the golden path
 

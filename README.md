@@ -75,9 +75,7 @@ scripts/dogfood-seed.sh    # rebuilds .dent8/ from scripts/dogfood-facts.jsonl (
 dent8 context              # the believed facts, with authority and provenance
 ```
 
-`dent8 context` emits a markdown pack ready to inject at session start. This is real output
-from this repo (abridged; the full pack has 15 facts across `repo:dent8`, `policy:authority`,
-`eval:corpus`, `hook:content-check`, and `roadmap:dent8`):
+`dent8 context` emits a markdown pack ready to inject at session start. Below is the pack from this repo's own store, curated for the README — 6 of the 15 facts, reordered by relevance, with the trailing `ref:` provenance field trimmed for width. Run `dent8 context` for the verbatim pack (all 15 facts, each with its `ref:`).
 
 ````markdown
 ## Project facts (dent8)

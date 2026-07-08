@@ -18,6 +18,7 @@ disagree, correct it through the firewall rather than editing around it.
   `source:human` at High; agent inferences enter as `source:agent` at Low.
 - Hooks are wired in `.claude/settings.json` (`SessionStart` → `dent8 context`,
   `SessionEnd` → `dent8 capture`).
+- Heads-up: once `dent8` is built and on `PATH`, the `PreToolUse` guard hard-blocks direct edits to native-memory files (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules/*`). Set `DENT8_ALLOW_NATIVE_MEMORY_WRITE=1` for an intentional edit, or route the change through the fact base.
 
 See [docs/dogfooding-notes.md](docs/dogfooding-notes.md) for the setup walkthrough and known rough edges.
 
