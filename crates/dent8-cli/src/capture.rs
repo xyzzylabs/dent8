@@ -13,7 +13,10 @@
 //! ```
 //!
 //! with optional `op` (`assert` — the default — `supersede`, `reinforce`, `contradict`,
-//! `retract`, `expire`), `authority`, `source`, `valid_from`, and `valid_to`. Authority and
+//! `retract`, `expire`, `used_in_decision`), `authority`, `source`, `valid_from`, and
+//! `valid_to`. A `used_in_decision` proposal takes a `decision` instead of a `value` and
+//! records a `fact.used_in_decision` audit event on the believed fact(s) — how an agent
+//! reports which facts informed a decision. Authority and
 //! source resolve per line: the line's own fields, then the `--authority`/`--source` flags,
 //! then the active signed grant (`DENT8_GRANT`), then the **agent tier of the default
 //! authority profile** (`source:agent` at `low`) — so unattributed agent capture enters at
@@ -29,7 +32,7 @@ use crate::{
     log_path,
     ops::{
         OpError, Validity, op_assert, op_contradict, op_expire, op_reinforce, op_retract,
-        op_supersede, with_write_retry,
+        op_supersede, op_used_in_decision, with_write_retry,
     },
     paint_status, parse_authority, print_json_stdout, print_json_stdout_with_code,
     status::Status,
@@ -57,6 +60,9 @@ struct Proposal {
     /// Required for `assert`/`supersede`/`contradict`; forbidden for the rest.
     #[serde(default)]
     value: Option<String>,
+    /// What the fact informed. Required for `used_in_decision`; forbidden for the rest.
+    #[serde(default)]
+    decision: Option<String>,
     #[serde(default)]
     authority: Option<String>,
     #[serde(default)]
@@ -82,6 +88,9 @@ pub(crate) struct CaptureOutcome {
     invalid: usize,
     /// The consumed proposals file, when `--consume` truncated one.
     consumed: Option<String>,
+    /// Rejected/malformed lines kept in the consumed file, when `--keep-failed` asked for
+    /// them (`None` when it did not).
+    kept_failed: Option<usize>,
 }
 
 impl CaptureOutcome {
@@ -159,11 +168,11 @@ fn apply_proposal(
     let op = proposal.op.as_deref().unwrap_or("assert");
     let takes_value = match op {
         "assert" | "supersede" | "contradict" => true,
-        "reinforce" | "retract" | "expire" => false,
+        "reinforce" | "retract" | "expire" | "used_in_decision" => false,
         other => {
             return Err(OpError::Invalid(format!(
                 "unknown proposal op {other:?} \
-                 (assert|supersede|reinforce|contradict|retract|expire)"
+                 (assert|supersede|reinforce|contradict|retract|expire|used_in_decision)"
             )));
         }
     };
@@ -176,6 +185,18 @@ fn apply_proposal(
             return Err(OpError::Invalid(format!("{op} proposal takes no value")));
         }
         (false, None) => "",
+    };
+    let decision = match (op, proposal.decision.as_deref()) {
+        ("used_in_decision", Some(decision)) => decision,
+        ("used_in_decision", None) => {
+            return Err(OpError::Invalid(
+                "used_in_decision proposal requires a decision".to_string(),
+            ));
+        }
+        (_, Some(_)) => {
+            return Err(OpError::Invalid(format!("{op} proposal takes no decision")));
+        }
+        (_, None) => "",
     };
     let identity = WriteIdentity::Env;
     let (kind, key, predicate) = (&subject.kind, &subject.key, proposal.predicate.as_str());
@@ -193,6 +214,9 @@ fn apply_proposal(
         ),
         "reinforce" => op_reinforce(path, kind, key, predicate, authority, &source, &identity),
         "retract" => op_retract(path, kind, key, predicate, authority, &source, &identity),
+        "used_in_decision" => op_used_in_decision(
+            path, kind, key, predicate, decision, authority, &source, &identity,
+        ),
         _ => op_expire(path, kind, key, predicate, authority, &source, &identity),
     })
 }
@@ -212,6 +236,7 @@ pub(crate) fn capture_outcome(
         rejected: 0,
         invalid: 0,
         consumed: None,
+        kept_failed: None,
     };
     for (index, line) in input.lines().enumerate() {
         let line_no = index + 1;
@@ -268,9 +293,33 @@ pub(crate) fn format_capture(outcome: &CaptureOutcome) -> String {
         outcome.invalid
     ));
     if let Some(consumed) = &outcome.consumed {
-        lines.push(format!("consumed {consumed}"));
+        match outcome.kept_failed {
+            Some(kept) if kept > 0 => lines.push(format!(
+                "consumed {consumed} (kept {kept} failed proposal line(s) for inspection/retry)"
+            )),
+            _ => lines.push(format!("consumed {consumed}")),
+        }
     }
     lines.join("\n")
+}
+
+/// The raw input lines whose proposals failed (rejected by the firewall or malformed) —
+/// what `--consume --keep-failed` writes back to the proposals file, in input order, so a
+/// failed proposal survives for inspection/retry instead of only in hook logs. Accepted and
+/// contested lines are done; blank lines are dropped like the processor dropped them.
+pub(crate) fn failed_lines<'a>(input: &'a str, outcome: &CaptureOutcome) -> Vec<&'a str> {
+    let failed: std::collections::BTreeSet<usize> = outcome
+        .results
+        .iter()
+        .filter(|result| matches!(result.status, Status::Rejected | Status::Invalid))
+        .map(|result| result.line)
+        .collect();
+    input
+        .lines()
+        .enumerate()
+        .filter(|(index, _)| failed.contains(&(index + 1)))
+        .map(|(_, line)| line)
+        .collect()
 }
 
 pub(crate) fn capture_json(outcome: &CaptureOutcome) -> serde_json::Value {
@@ -284,6 +333,7 @@ pub(crate) fn capture_json(outcome: &CaptureOutcome) -> serde_json::Value {
         "rejected": outcome.rejected,
         "invalid": outcome.invalid,
         "consumed": outcome.consumed,
+        "kept_failed": outcome.kept_failed,
         "results": outcome
             .results
             .iter()
@@ -341,13 +391,30 @@ pub(crate) fn cmd_capture(args: &CaptureArgs, output: CliOutput) -> i32 {
     let mut outcome = capture_outcome(&log_path(), &input, args.authority, args.source.as_deref());
     // Consume after processing: every line was read and has a reported outcome, so the
     // queue's job is done — leaving it in place would replay the same proposals (and mint
-    // duplicate uniqueness conflicts) on the next hook firing.
+    // duplicate uniqueness conflicts) on the next hook firing. With --keep-failed the
+    // rejected/malformed lines are written back instead of truncated away, so a failed
+    // proposal survives for inspection/retry rather than only in hook logs.
     if args.consume
         && let Some(path) = args.file.as_deref()
         && std::path::Path::new(path).exists()
     {
-        match std::fs::write(path, "") {
-            Ok(()) => outcome.consumed = Some(path.to_string()),
+        let kept = if args.keep_failed {
+            failed_lines(&input, &outcome)
+        } else {
+            Vec::new()
+        };
+        let contents = if kept.is_empty() {
+            String::new()
+        } else {
+            let mut contents = kept.join("\n");
+            contents.push('\n');
+            contents
+        };
+        match std::fs::write(path, contents) {
+            Ok(()) => {
+                outcome.consumed = Some(path.to_string());
+                outcome.kept_failed = args.keep_failed.then_some(kept.len());
+            }
             Err(error) => eprintln!("warning: could not consume {path}: {error}"),
         }
     }
@@ -457,6 +524,62 @@ mod tests {
         );
         let persisted = std::fs::read_to_string(&log).expect("read log");
         assert!(persisted.contains(CAPTURE_FALLBACK_SOURCE), "{persisted}");
+    }
+
+    #[test]
+    fn used_in_decision_proposals_record_the_audit_event() {
+        let log = temp_log("used-in-decision");
+        let input = concat!(
+            r#"{"subject": "repo:demo", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
+            "\n",
+            r#"{"op": "used_in_decision", "subject": "repo:demo", "predicate": "uses_database", "decision": "chose the sqlx driver"}"#,
+            "\n",
+            // A decision on nothing believed is a rejection, not a crash.
+            r#"{"op": "used_in_decision", "subject": "repo:demo", "predicate": "missing", "decision": "x"}"#,
+            "\n",
+            // Malformed shapes fail alone: no decision, a stray decision, a stray value.
+            r#"{"op": "used_in_decision", "subject": "repo:demo", "predicate": "uses_database"}"#,
+            "\n",
+            r#"{"op": "assert", "subject": "repo:demo", "predicate": "p", "value": "v", "decision": "x"}"#,
+            "\n",
+            r#"{"op": "used_in_decision", "subject": "repo:demo", "predicate": "uses_database", "value": "v", "decision": "x"}"#,
+            "\n",
+        );
+        let outcome = capture_outcome(&log, input, None, None);
+        assert_eq!(outcome.accepted, 2, "{}", format_capture(&outcome));
+        assert_eq!(outcome.rejected, 1, "{}", format_capture(&outcome));
+        assert_eq!(outcome.invalid, 3, "{}", format_capture(&outcome));
+        assert!(
+            outcome.results[1].message.contains("recorded decision use"),
+            "{}",
+            outcome.results[1].message
+        );
+        // The audit event is on the fact's stream: an unattributed reader (agent tier, low)
+        // recorded that it used the high-authority fact — audit is not authority-gated.
+        let persisted = std::fs::read_to_string(&log).expect("read log");
+        assert!(persisted.contains("UsedInDecision"), "{persisted}");
+        assert!(persisted.contains("chose the sqlx driver"), "{persisted}");
+    }
+
+    #[test]
+    fn failed_lines_keep_rejected_and_malformed_proposals_in_input_order() {
+        let log = temp_log("failed-lines");
+        let input = concat!(
+            r#"{"subject": "repo:demo", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
+            "\n",
+            "\n", // blank lines are skipped by the processor and never kept
+            r#"{"op": "supersede", "subject": "repo:demo", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            "\n",
+            "not json\n",
+        );
+        let outcome = capture_outcome(&log, input, None, None);
+        assert_eq!(outcome.accepted, 1);
+        assert_eq!(outcome.rejected, 1);
+        assert_eq!(outcome.invalid, 1);
+        let kept = failed_lines(input, &outcome);
+        assert_eq!(kept.len(), 2, "{kept:?}");
+        assert!(kept[0].contains("\"op\": \"supersede\""), "{kept:?}");
+        assert_eq!(kept[1], "not json");
     }
 
     #[test]

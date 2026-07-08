@@ -13,8 +13,12 @@ use dent8_core::{AuthorityLevel, FactEventKind, FactLifecycle, FactValue, Timest
 use dent8_store::{EventStore, IntegrityReceipt};
 
 use crate::{
-    CliOutput, ContextArgs, display_value, fact_value_json, load_store, log_path, now_millis,
-    ops::{FactFreshness, OpError, is_diagnostic_fact_stream, op_error_exit_code, op_error_json},
+    CliOutput, ContextArgs, WriteIdentity, display_value, fact_value_json, load_store, log_path,
+    now_millis,
+    ops::{
+        AuditFactRef, FactFreshness, OpError, is_diagnostic_fact_stream, op_error_exit_code,
+        op_error_json, op_record_retrievals,
+    },
     print_json_stdout, print_json_stdout_with_code,
     status::Status,
 };
@@ -22,6 +26,9 @@ use crate::{
 /// One believed fact as it appears in the context pack: the current value plus the cheap
 /// provenance annotations (authority, asserting source, freshness, contest state, receipt URI).
 pub(crate) struct ContextFact {
+    /// The believed fact's id — kept so `--record-retrieval` can append the audit event to
+    /// exactly the stream this pack emitted, without re-resolving (and racing) the read.
+    fact_id: String,
     subject_kind: String,
     subject_key: String,
     predicate: String,
@@ -48,6 +55,9 @@ pub(crate) struct ContextOutcome {
     /// Believed-but-not-yet-valid facts omitted because `--include-stale` was not passed.
     omitted_not_yet_valid: usize,
     generated_at: i64,
+    /// `fact.retrieved` audit events recorded because `--record-retrieval` was passed
+    /// (`None` when it was not).
+    recorded_retrievals: Option<usize>,
 }
 
 impl ContextOutcome {
@@ -142,6 +152,7 @@ pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextO
             0
         };
         facts.push(ContextFact {
+            fact_id: receipt.fact_id.as_str().to_string(),
             subject_kind: kind.to_string(),
             subject_key: key.to_string(),
             predicate: pred.to_string(),
@@ -165,7 +176,51 @@ pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextO
         omitted_stale,
         omitted_not_yet_valid,
         generated_at: now.as_unix_millis(),
+        recorded_retrievals: None,
     })
+}
+
+/// Record one `fact.retrieved` audit event per fact the pack emitted (`--record-retrieval`).
+/// Identity resolves like unattributed capture: the active signed grant's source/authority
+/// when configured, else the agent tier — a retrieval audit enters at the bottom of the
+/// trust ordering instead of minting authority. All-or-nothing: a failure is surfaced (the
+/// caller asked for the audit) rather than silently skipped.
+fn record_pack_retrievals(
+    path: &str,
+    outcome: &ContextOutcome,
+    purpose: &str,
+) -> Result<usize, OpError> {
+    let retrieved: Vec<AuditFactRef> = outcome
+        .facts
+        .iter()
+        .map(|fact| AuditFactRef {
+            fact_id: fact.fact_id.clone(),
+            subject_kind: fact.subject_kind.clone(),
+            subject_key: fact.subject_key.clone(),
+            predicate: fact.predicate.clone(),
+        })
+        .collect();
+    let defaults = crate::identity::IdentityContext::from_env()
+        .map_err(OpError::Invalid)?
+        .write_defaults()
+        .map_err(OpError::Invalid)?;
+    let (authority, source) = defaults.map_or_else(
+        || {
+            (
+                crate::capture::CAPTURE_FALLBACK_AUTHORITY,
+                crate::capture::CAPTURE_FALLBACK_SOURCE.to_string(),
+            )
+        },
+        |defaults| (defaults.authority, defaults.source),
+    );
+    op_record_retrievals(
+        path,
+        &retrieved,
+        purpose,
+        authority,
+        &source,
+        &WriteIdentity::Env,
+    )
 }
 
 /// The provenance annotation appended to each markdown fact line. Deliberately compact —
@@ -275,11 +330,23 @@ pub(crate) fn context_json(outcome: &ContextOutcome) -> serde_json::Value {
             "stale": outcome.omitted_stale,
             "not_yet_valid": outcome.omitted_not_yet_valid,
         },
+        "recorded_retrievals": outcome.recorded_retrievals,
     })
 }
 
 pub(crate) fn cmd_context(args: &ContextArgs, output: CliOutput) -> i32 {
-    match (context_outcome(&log_path(), args), output) {
+    let path = log_path();
+    let outcome = context_outcome(&path, args).and_then(|mut outcome| {
+        // Record the retrieval audit *before* emitting the pack, so an emitted pack is
+        // never un-audited; a recording failure fails the command (the caller explicitly
+        // asked for the audit) instead of injecting silently-unaudited context.
+        if args.record_retrieval {
+            outcome.recorded_retrievals =
+                Some(record_pack_retrievals(&path, &outcome, &args.purpose)?);
+        }
+        Ok(outcome)
+    });
+    match (outcome, output) {
         (Ok(outcome), CliOutput::Text) => {
             print!("{}", format_context_markdown(&outcome));
             0
@@ -300,6 +367,7 @@ mod tests {
 
     fn fact(subject_key: &str, predicate: &str, value: &str) -> ContextFact {
         ContextFact {
+            fact_id: format!("fact:repo:{subject_key}:{predicate}:0"),
             subject_kind: "repo".to_string(),
             subject_key: subject_key.to_string(),
             predicate: predicate.to_string(),
@@ -323,6 +391,7 @@ mod tests {
             omitted_stale: 0,
             omitted_not_yet_valid: 0,
             generated_at: 1,
+            recorded_retrievals: None,
         };
         let markdown = format_context_markdown(&outcome);
         assert!(markdown.contains("## Project facts (dent8)"), "{markdown}");
@@ -355,6 +424,7 @@ mod tests {
             omitted_stale: 0,
             omitted_not_yet_valid: 0,
             generated_at: 1,
+            recorded_retrievals: None,
         };
         let markdown = format_context_markdown(&outcome);
         assert!(
@@ -374,6 +444,7 @@ mod tests {
             omitted_stale: 2,
             omitted_not_yet_valid: 1,
             generated_at: 1,
+            recorded_retrievals: None,
         };
         let markdown = format_context_markdown(&empty);
         assert!(
@@ -395,6 +466,7 @@ mod tests {
             omitted_stale: 0,
             omitted_not_yet_valid: 0,
             generated_at: 7,
+            recorded_retrievals: None,
         };
         let json = context_json(&outcome);
         assert_eq!(json["status"], "contested");
@@ -407,6 +479,7 @@ mod tests {
             omitted_stale: 0,
             omitted_not_yet_valid: 0,
             generated_at: 7,
+            recorded_retrievals: None,
         };
         assert_eq!(context_json(&calm)["status"], "ok");
     }

@@ -15,12 +15,15 @@ The wedge is **multiple coding agents (and a human) sharing one verified fact ba
 one repository** ([project-brief.md](project-brief.md) §MVP User). Five items, in priority
 order:
 
-1. **Close the capture+inject loop.** A `dent8 context` context-pack export plus a session
-   capture hook, and emit `Retrieved`/`UsedInDecision` on reads — today those audit events
-   exist in the model and are rendered by replay only; no CLI/MCP command emits them.
-   *(Invariant: unexplained context retrieval becomes explainable.)*
-2. **Default authority profile for the repo wedge.** Ship human > CI > agent as the default
-   profile, and enforce grant issuer/scope at the write boundary. *(Invariant: authority is
+1. **Close the capture+inject loop.** ✅ `dent8 context` context-pack export plus the
+   `dent8 capture` session hook are built, and the CLI now emits both audit events —
+   `context --record-retrieval` records `Retrieved`, a `used_in_decision` capture proposal
+   records `UsedInDecision`. Remaining: MCP-side read auditing (e.g. auto-auditing
+   `resources/read`). *(Invariant: unexplained context retrieval becomes explainable.)*
+2. **Default authority profile for the repo wedge.** ✅ Human > CI > agent ships as
+   `dent8 authority defaults`, and grant issuer/scope are enforced at the write boundary
+   (scope restricts write subjects; a registered issuer's own grant caps what it can
+   delegate — no self-escalation). *(Invariant: authority is
    typed and policy-visible, not configured from scratch per repo.)*
 3. **On-ramp.** MSRV at or below current stable, init-to-first-fact under 2 minutes, and a
    value-first README lead. *(No invariant — adoption friction is its own failure mode.)*

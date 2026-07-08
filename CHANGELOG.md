@@ -10,6 +10,21 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- Added `dent8 context --record-retrieval [--purpose TEXT]`: every fact the context pack
+  emits now gains a `fact.retrieved` audit event on its stream — the read half of the
+  read-audit loop. Recorded before the pack is emitted, all-or-nothing, as the active
+  signed grant's source (else the agent tier) through the normal write boundary;
+  `--output json` reports `recorded_retrievals`.
+- Added the `used_in_decision` capture proposal op: `{"op": "used_in_decision",
+  "subject": ..., "predicate": ..., "decision": ...}` records a `fact.used_in_decision`
+  audit event on the believed fact(s), so an agent can report which facts informed a
+  decision through the proposals queue it already writes. Audit events never change
+  lifecycle, value, or authority, and are not authority-gated in the fold (the
+  write-boundary gate still applies).
+- Added `dent8 capture --keep-failed` (with `--consume`): rejected and malformed proposal
+  lines are written back to the queue file instead of truncated away, so a failed proposal
+  survives for inspection/retry rather than only in hook logs. `--output json` reports
+  `kept_failed`.
 - Added `dent8 context`: emit the currently-believed facts as an agent context pack —
   markdown ready for CLAUDE.md/AGENTS.md-style inclusion or `SessionStart`-hook injection,
   or `--output json`. Belief-state aware: terminal facts never appear, stale/not-yet-valid
@@ -55,6 +70,16 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   annotation.
 
 ### Security
+- The authority registry now **enforces** a grant's `issuer` and `scope` (previously
+  recorded but not enforced): a write about a subject outside the grant's scope (`"*"` or
+  an exact `<kind>:<key>`; a malformed scope covers nothing) is rejected, and a grant
+  issued by another registered source is capped by that issuer's own grant — ceiling and
+  scope, transitively — so an issuer cannot delegate authority it does not hold (no
+  self-escalation). Self-issued grants and issuer cycles authorize nothing (fail closed);
+  an issuer that is not a registered source remains an operator-level root recorded for
+  audit. `dent8 authority add` refuses self-escalating grants up front, and the write gate
+  re-checks the chain on every write so a hand-edited registry cannot smuggle an
+  escalation past it.
 - Hardened the operated-witness compose recipe: the private witness signing key now lives on a
   signer-only volume, while the publisher mounts only the witness logs and public key
   read-only before writing to the external published-heads volume.

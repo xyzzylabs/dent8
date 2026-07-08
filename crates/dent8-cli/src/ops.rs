@@ -1415,9 +1415,127 @@ pub(crate) fn op_expire(
     ))
 }
 
-/// Shared body for the single-event-per-believed-fact writes (`reinforce`, `expire`): find
-/// the believed incumbents, build one event per incumbent (its kind chosen by `kind_for`),
-/// admit each through the firewall, then persist all-or-nothing.
+/// Record a `fact.used_in_decision` audit event on every believed fact of a
+/// subject+predicate — the agent-report half of the read-audit loop. Audit events never
+/// change lifecycle, value, or authority (the fold ignores them for arbitration), and like
+/// dissent they are deliberately **not** authority-gated in the fold: a low-authority reader
+/// may record that it used a high-authority fact. The write-boundary gate (source ceiling,
+/// grant scope, signed identity) still applies via [`build_per_incumbent`], so an ungranted
+/// source cannot spam audit events. Reached through `dent8 capture` proposals with
+/// `"op": "used_in_decision"`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn op_used_in_decision(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    decision: &str,
+    authority: AuthorityLevel,
+    source: &str,
+    identity: &WriteIdentity,
+) -> Result<String, OpError> {
+    let decision = decision.trim();
+    if decision.is_empty() {
+        return Err(OpError::Invalid(
+            "used_in_decision proposal requires a non-empty decision".to_string(),
+        ));
+    }
+    let events = build_per_incumbent(
+        path,
+        subject_kind,
+        subject_key,
+        predicate,
+        authority,
+        source,
+        "mark used-in-decision",
+        |_incumbent| FactEventKind::UsedInDecision {
+            decision_id: decision.to_string(),
+        },
+        identity,
+    )?;
+    let count = events.len();
+    Ok(format!(
+        "ACCEPTED  recorded decision use ({decision}) on {count} believed fact(s) of \
+         {subject_kind}:{subject_key} {predicate}"
+    ))
+}
+
+/// One fact a read surface emitted, named precisely enough to append a retrieval audit
+/// event to its stream without re-resolving (and possibly racing) the read.
+pub(crate) struct AuditFactRef {
+    pub(crate) fact_id: String,
+    pub(crate) subject_kind: String,
+    pub(crate) subject_key: String,
+    pub(crate) predicate: String,
+}
+
+/// Record one `fact.retrieved` audit event per emitted fact — the read half of the
+/// read-audit loop, reached through `dent8 context --record-retrieval`. Same audit
+/// semantics as [`op_used_in_decision`]: lifecycle/value/authority untouched, no fold-level
+/// authority gate, but the full write-boundary gate applies. Persisted all-or-nothing so a
+/// partially-audited pack cannot exist.
+pub(crate) fn op_record_retrievals(
+    path: &str,
+    retrieved: &[AuditFactRef],
+    purpose: &str,
+    authority: AuthorityLevel,
+    source: &str,
+    identity: &WriteIdentity,
+) -> Result<usize, OpError> {
+    let purpose = purpose.trim();
+    if purpose.is_empty() {
+        return Err(OpError::Invalid(
+            "retrieval purpose must not be empty".to_string(),
+        ));
+    }
+    if retrieved.is_empty() {
+        return Ok(0);
+    }
+    for fact in retrieved {
+        enforce_write_authority(
+            &WriteAuth::new(&fact.subject_kind, &fact.subject_key, authority, source),
+            identity,
+        )?;
+    }
+    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let now = now_millis();
+    let seq = reserve_event_seq(&store, retrieved.len())
+        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
+    let mut events = Vec::with_capacity(retrieved.len());
+    for (index, fact) in retrieved.iter().enumerate() {
+        let event = build_event(
+            &format!("event:{}", seq + index),
+            &fact.fact_id,
+            &fact.subject_kind,
+            &fact.subject_key,
+            &fact.predicate,
+            FactEventKind::Retrieved {
+                purpose: purpose.to_string(),
+            },
+            None,
+            source,
+            authority,
+            now,
+        )
+        .map_err(|error| OpError::Invalid(format!("invalid retrieval record: {error}")))?;
+        events.push(event);
+    }
+    // Apply all in memory first; persist only if every record is admitted.
+    for event in &events {
+        if let Err(error) = store.append(event.clone()) {
+            return Err(OpError::Rejected(format!(
+                "could not record retrieval: {error}"
+            )));
+        }
+    }
+    append_events(path, &mut events, identity).map_err(write_error_to_op)?;
+    Ok(events.len())
+}
+
+/// Shared body for the single-event-per-believed-fact writes (`reinforce`, `expire`, and
+/// the `used_in_decision` audit): find the believed incumbents, build one event per
+/// incumbent (its kind chosen by `kind_for`), admit each through the firewall, then persist
+/// all-or-nothing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_per_incumbent(
     path: &str,
@@ -1706,8 +1824,10 @@ pub(crate) fn format_history_line(event: &FactEvent) -> String {
         FactEventKind::Retracted { reason } => format!("retracted    ({reason:?})"),
         FactEventKind::Expired { .. } => "expired".to_string(),
         FactEventKind::Reinforced { .. } => "reinforced".to_string(),
-        FactEventKind::Retrieved { .. } => "retrieved".to_string(),
-        FactEventKind::UsedInDecision { .. } => "used-in-decision".to_string(),
+        FactEventKind::Retrieved { purpose } => format!("retrieved    ({purpose})"),
+        FactEventKind::UsedInDecision { decision_id } => {
+            format!("used-in-decision ({decision_id})")
+        }
         FactEventKind::ChallengeRejected {
             challenge,
             by,

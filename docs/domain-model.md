@@ -33,10 +33,14 @@ user:project_owner + prefers_eval_style + formal fixtures and invariants
 - `fact.expired`: terminally closes a fact by explicit policy action; TTL staleness is a
   separate read-time predicate and does not mutate lifecycle.
 - `fact.retracted`: removes trust in a fact because the source, policy, or evidence failed.
-- `fact.retrieved`: audits that a fact was returned as context. (No CLI/MCP command
-  currently emits this event; it exists in the model and is rendered by replay only.)
-- `fact.used_in_decision`: audits that a fact influenced an agent decision. (Same
-  caveat: modeled and replayable, but no write surface emits it yet.)
+- `fact.retrieved`: audits that a fact was returned as context. Emitted by
+  `dent8 context --record-retrieval` for every fact the context pack emits.
+- `fact.used_in_decision`: audits that a fact influenced an agent decision. Emitted by a
+  `dent8 capture` proposal with `"op": "used_in_decision"` — the channel agents already use
+  to report back during a session. Audit events are deliberately **not** authority-gated in
+  the fold (like dissent): a low-authority reader may record that it retrieved or used a
+  high-authority fact; the write-boundary gate (source ceiling, grant scope, signed
+  identity) still applies.
 - `fact.challenge_rejected`: records that the firewall rejected a challenge against this
   fact on strength (ADR 0015) — written with the *challenger's* provenance and effective
   authority, so surviving an attack is replayable, attributed entrenchment evidence.
