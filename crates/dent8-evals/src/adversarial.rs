@@ -169,7 +169,7 @@ pub enum Disposition {
 /// *recency-only* projection. The variant models what "compromise" means for that attack
 /// shape (adopt a value / remove a fact / cast doubt), so the baseline verdict is honest.
 #[derive(Clone, Copy, Debug)]
-enum Goal {
+pub(crate) enum Goal {
     /// The attacker's `value` becomes a believed (non-terminal) fact for `predicate`.
     /// Freshness and taint are deliberately excluded — a stale/tainted-but-believed fact is
     /// still *in memory*, so counting it as "blocked" would overstate the firewall. Those
@@ -215,16 +215,18 @@ pub struct AdversarialCase {
     pub note: &'static str,
 }
 
-/// The authored spec for a case, before firewall/baseline evaluation.
-struct Spec {
-    name: &'static str,
-    class: AttackClass,
+/// The authored spec for a case, before firewall/baseline evaluation. `pub(crate)` so the
+/// content-hook eval mode ([`crate::content_hook`]) re-runs the same corpus with a scanner
+/// attached instead of maintaining a second copy.
+pub(crate) struct Spec {
+    pub(crate) name: &'static str,
+    pub(crate) class: AttackClass,
     source: &'static str,
     disposition: Disposition,
     note: &'static str,
-    now: i64,
-    events: Vec<FactEvent>,
-    goal: Goal,
+    pub(crate) now: i64,
+    pub(crate) events: Vec<FactEvent>,
+    pub(crate) goal: Goal,
 }
 
 /// Run the full externally-grounded adversarial corpus, computing every verdict from real
@@ -319,39 +321,14 @@ fn evaluate(spec: &Spec) -> AdversarialCase {
     let now = TimestampMillis::from_unix_millis(spec.now);
     let admitted = firewall_admitted(&spec.events);
     let states = project(&admitted);
-    let tainted: BTreeSet<FactId> = tainted_facts(&admitted)
+    let flagged_facts: BTreeSet<FactId> = tainted_facts(&admitted)
         .expect("taint analysis")
         .into_iter()
         .map(|t| t.fact)
         .collect();
 
     // Firewall side: does the attacker's goal hold over the firewall projection?
-    let incumbent = |fact: &str| {
-        let fact_id = FactId::new(fact).expect("fact id");
-        states.iter().find(move |state| state.fact_id == fact_id)
-    };
-    let (goal_reached, flagged) = match spec.goal {
-        Goal::ValueBelieved { predicate, value } => {
-            let hit = states.iter().find(|state| {
-                state.predicate.as_str() == predicate
-                    && !state.lifecycle.is_terminal()
-                    && text_of(&state.value) == Some(value)
-            });
-            let flagged = hit
-                .is_some_and(|state| !state.is_fresh_at(now) || tainted.contains(&state.fact_id));
-            (hit.is_some(), flagged)
-        }
-        Goal::IncumbentReplaced { fact, .. } | Goal::IncumbentRemoved { fact, .. } => {
-            // Displaced/removed iff the trusted fact is absent or has fallen to terminal.
-            let gone = incumbent(fact).is_none_or(|state| state.lifecycle.is_terminal());
-            (gone, false)
-        }
-        Goal::IncumbentContested { fact } => {
-            let contested =
-                incumbent(fact).is_some_and(|state| state.lifecycle == FactLifecycle::Contested);
-            (contested, false)
-        }
-    };
+    let (goal_reached, flagged) = goal_outcome(spec.goal, &states, &flagged_facts, now);
 
     let firewall_blocked = !goal_reached;
 
@@ -394,9 +371,48 @@ fn evaluate(spec: &Spec) -> AdversarialCase {
     }
 }
 
+/// Whether the attacker's goal holds over the projected states, plus whether the goal's
+/// hit is detect-only **flagged** — read-time staleness or membership in `flagged_facts`
+/// (retraction taint; the content-hook mode adds content flags). Shared by the plain
+/// corpus and [`crate::content_hook`] so both judge goals identically.
+pub(crate) fn goal_outcome(
+    goal: Goal,
+    states: &[FactState],
+    flagged_facts: &BTreeSet<FactId>,
+    now: TimestampMillis,
+) -> (bool, bool) {
+    let incumbent = |fact: &str| {
+        let fact_id = FactId::new(fact).expect("fact id");
+        states.iter().find(move |state| state.fact_id == fact_id)
+    };
+    match goal {
+        Goal::ValueBelieved { predicate, value } => {
+            let hit = states.iter().find(|state| {
+                state.predicate.as_str() == predicate
+                    && !state.lifecycle.is_terminal()
+                    && text_of(&state.value) == Some(value)
+            });
+            let flagged = hit.is_some_and(|state| {
+                !state.is_fresh_at(now) || flagged_facts.contains(&state.fact_id)
+            });
+            (hit.is_some(), flagged)
+        }
+        Goal::IncumbentReplaced { fact, .. } | Goal::IncumbentRemoved { fact, .. } => {
+            // Displaced/removed iff the trusted fact is absent or has fallen to terminal.
+            let gone = incumbent(fact).is_none_or(|state| state.lifecycle.is_terminal());
+            (gone, false)
+        }
+        Goal::IncumbentContested { fact } => {
+            let contested =
+                incumbent(fact).is_some_and(|state| state.lifecycle == FactLifecycle::Contested);
+            (contested, false)
+        }
+    }
+}
+
 /// Append every candidate through the real firewall, dropping rejects, and return the
 /// admitted log — exactly the operational store's behaviour.
-fn firewall_admitted(events: &[FactEvent]) -> Vec<FactEvent> {
+pub(crate) fn firewall_admitted(events: &[FactEvent]) -> Vec<FactEvent> {
     let mut store = InMemoryEventStore::new();
     for event in events {
         let _ = store.append(event.clone());
@@ -405,7 +421,7 @@ fn firewall_admitted(events: &[FactEvent]) -> Vec<FactEvent> {
 }
 
 /// Fold every admitted fact stream to its projected [`FactState`] (terminal facts included).
-fn project(admitted: &[FactEvent]) -> Vec<FactState> {
+pub(crate) fn project(admitted: &[FactEvent]) -> Vec<FactState> {
     let mut by_fact: BTreeMap<FactId, Vec<FactEvent>> = BTreeMap::new();
     for event in admitted {
         by_fact
@@ -652,7 +668,7 @@ fn with_derived(mut event: FactEvent, source_fact: &str) -> FactEvent {
 const NOW: i64 = 1_000_000;
 
 #[allow(clippy::too_many_lines)] // a flat data table; splitting it would obscure the corpus
-fn specs() -> Vec<Spec> {
+pub(crate) fn specs() -> Vec<Spec> {
     use AttackClass as C;
     use AuthorityLevel::{Canonical, High, Low, Medium};
 

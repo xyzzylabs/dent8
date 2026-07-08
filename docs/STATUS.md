@@ -436,6 +436,24 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   assert*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary. Supports `--output json`
   for `list`/`add`/`remove`.
+- **The content-check hook (`DENT8_CONTENT_CHECK`)** — the **pluggable content layer**
+  ([content-check.md](content-check.md)), enforced at the same CLI/MCP `op_*` write layer as
+  the authority gate: after authority enforcement and before arbitration/attestation/
+  persistence, every **value-carrying** candidate fact from every write entry point (the CLI
+  write commands, `dent8 capture`, the MCP write tools, daemon connections) is piped as JSON
+  to the configured external scanner command, which answers `allow`, `reject` (the write is
+  refused, nothing persists), or `taint` (admitted **but marked** with a `content-check:`
+  evidence flag — detect-only like retraction taint; `dent8 verify` reports still-believed
+  flagged facts as `CONTENT-FLAGGED`). Scanner failures (crash/timeout/garbage) are
+  **fail-closed by default** — a configured scanner going dark must not silently readmit
+  unchecked content; `DENT8_CONTENT_CHECK_FAIL_OPEN=1` opts into admit-but-flag.
+  Unconfigured = exact pass-through. This repositions dent8 as an **authority layer + a
+  composable content hook**: dent8 deliberately ships **no content classifier** — the eval
+  corpus's content classes (A/F/G/H) are owned by whatever scanner (LLM Guard, Rebuff,
+  Lakera/Azure Prompt Shields bridges) a deployment attaches; the demonstrative regex
+  scanner in [`examples/scanners/`](../examples/scanners/README.md) exists only to prove the
+  seam and drive the eval hook mode. Same `op_*`-layer caveat as the authority ceiling: a
+  process calling a storage adapter directly bypasses it (threat-model T9).
 - **`dent8 identity bootstrap | status | repair-env | rotate-source | revoke |
   backfill-grant-log | issuer-keygen |
   agent-keygen | trust-add | trust-list | grant-issue | grant-verify`** — the **signed source identity layer
@@ -681,6 +699,15 @@ subject+predicate.
   owns them). The recency-only baseline falls to 46/47. The per-class tally is frozen as a
   regression guard. See [evals.md](evals.md) for the full table, provenance/licensing, and the
   known-gaps / out-of-scope analysis.
+- **Content-hook eval mode** (`content_hook::run_adversarial_corpus_with_hook`): re-runs the
+  same 47 cases with a content-check scanner composed into the write boundary, exactly as the
+  CLI/MCP hook applies it (reject drops the candidate before the firewall, taint admits it
+  marked). With the repo's demonstrative regex scanner attached: **+9 blocked by the hook, +5
+  newly detect-only, 13 still admitted unflagged** — reported in [evals.md](evals.md) as a
+  separate, clearly-labeled table (the core arbitration numbers are unchanged; the demo
+  scanner's deliberate misses, rot13/translation, are themselves frozen as a regression guard
+  so the numbers stay honest). Run:
+  `cargo test -p dent8-evals --lib content_hook -- --nocapture`.
 
 ## Remaining Gaps
 

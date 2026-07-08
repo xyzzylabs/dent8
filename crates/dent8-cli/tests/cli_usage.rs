@@ -8649,6 +8649,386 @@ fn security_artifacts_reject_unknown_fields() {
     );
 }
 
+// ---- Content-check hook (DENT8_CONTENT_CHECK; docs/content-check.md) ------------------
+//
+// These tests exec `/bin/sh` scanner scripts, so they are Unix-only (CI runs Linux). The
+// unconfigured pass-through needs no test of its own: every other test in this file runs
+// with DENT8_CONTENT_CHECK removed.
+
+#[cfg(unix)]
+mod content_check_hook {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    use super::{
+        TempDir, assert_success, fs, json_response, json_rpc_lines, run_dent8, run_dent8_mcp,
+        run_dent8_stdin, stderr, stdout,
+    };
+    use serde_json::Value;
+
+    /// Write an executable scanner script into `temp` and return its path.
+    fn scanner_script(temp: &TempDir, name: &str, body: &str) -> String {
+        let path = temp.file(name);
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write scanner");
+        let mut perms = fs::metadata(&path).expect("stat scanner").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod scanner");
+        path.to_string_lossy().into_owned()
+    }
+
+    const REJECT_ALL: &str = "cat > /dev/null\nprintf '{\"verdict\":\"reject\",\"reason\":\"blocked by test scanner\"}\\n'";
+    const TAINT_ALL: &str = "cat > /dev/null\nprintf '{\"verdict\":\"taint\",\"reason\":\"flagged by test scanner\"}\\n'";
+    const ALLOW_ALL: &str = "cat > /dev/null\nprintf '{\"verdict\":\"allow\"}\\n'";
+    const CRASH: &str = "cat > /dev/null\nexit 3";
+
+    /// The no-bypass guarantee: with a reject-all scanner configured, every write entry
+    /// point that introduces fact content — the value-writing CLI commands (`assert`,
+    /// `supersede`, `contradict`, `derive`), `dent8 capture` proposals, and the MCP write
+    /// tools — refuses the write, and nothing new lands in the log.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one linear sweep over every write entry point
+    fn a_reject_verdict_blocks_every_write_entry_point() {
+        let temp = TempDir::new();
+        let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let clean = [("DENT8_LOG", log.as_str())];
+
+        // Seed an incumbent with no scanner configured, so the revising entry points
+        // (supersede/contradict/derive) have a believed fact to act on.
+        assert_success(
+            &run_dent8(
+                &[
+                    "assert",
+                    "repo:app",
+                    "database",
+                    "postgres",
+                    "--authority",
+                    "high",
+                    "--source",
+                    "source:owner",
+                ],
+                &clean,
+            ),
+            "seed assert",
+        );
+        let seeded = fs::read_to_string(&log).expect("read seeded log");
+
+        let scanner = scanner_script(&temp, "reject-all.sh", REJECT_ALL);
+        let envs = [
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_CONTENT_CHECK", scanner.as_str()),
+        ];
+
+        // CLI write commands.
+        let cli_writes: &[&[&str]] = &[
+            &[
+                "assert",
+                "repo:app",
+                "build_command",
+                "make",
+                "--authority",
+                "high",
+                "--source",
+                "source:owner",
+            ],
+            &[
+                "supersede",
+                "repo:app",
+                "database",
+                "attacker-db",
+                "--authority",
+                "high",
+                "--source",
+                "source:owner",
+            ],
+            &[
+                "contradict",
+                "repo:app",
+                "database",
+                "attacker-db",
+                "--authority",
+                "low",
+                "--source",
+                "source:agent",
+            ],
+            &[
+                "derive",
+                "repo:app",
+                "deploy_target",
+                "deploy-to-postgres",
+                "--basis",
+                "repo:app",
+                "database",
+                "--authority",
+                "high",
+                "--source",
+                "source:owner",
+            ],
+        ];
+        for args in cli_writes {
+            let output = run_dent8(args, &envs);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{} must be rejected by the content check: {}",
+                args[0],
+                stdout(&output)
+            );
+            assert!(
+                stderr(&output).contains("content check rejected"),
+                "{}: {}",
+                args[0],
+                stderr(&output)
+            );
+        }
+
+        // `dent8 capture` (stdin proposals) rides the same op layer.
+        let captured = run_dent8_stdin(
+            &["capture", "--source", "source:owner", "--authority", "high"],
+            "{\"subject\": \"repo:app\", \"predicate\": \"note\", \"value\": \"poison\"}\n",
+            &envs,
+        );
+        assert_eq!(
+            captured.status.code(),
+            Some(1),
+            "capture must reject: {}",
+            stdout(&captured)
+        );
+        assert!(
+            stderr(&captured).contains("content check rejected"),
+            "stdout: {}; stderr: {}",
+            stdout(&captured),
+            stderr(&captured)
+        );
+
+        // The MCP `assert` tool rides the same op layer.
+        let input = json_rpc_lines(&[
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+            serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "assert", "arguments": {
+                    "subject": "repo:app",
+                    "predicate": "note",
+                    "value": "poison",
+                    "authority": "high",
+                    "source": "source:owner"
+                }}
+            }),
+        ]);
+        let served = run_dent8_mcp(&input, &envs);
+        assert_success(&served, "mcp serve");
+        let responses = stdout(&served)
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("mcp response JSON"))
+            .collect::<Vec<_>>();
+        let response = json_response(&responses, 2);
+        assert_eq!(
+            response["result"]["isError"], true,
+            "MCP assert must be rejected: {response:#?}"
+        );
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .expect("tool text")
+                .contains("content check rejected"),
+            "{response:#?}"
+        );
+
+        // Nothing new landed in the log through any entry point.
+        assert_eq!(
+            fs::read_to_string(&log).expect("read log"),
+            seeded,
+            "a rejected write must never reach the log"
+        );
+
+        // Value-less writes introduce no new content and stay admitted (the incumbent's
+        // own text was already scanned when it was written).
+        assert_success(
+            &run_dent8(
+                &[
+                    "reinforce",
+                    "repo:app",
+                    "database",
+                    "--authority",
+                    "high",
+                    "--source",
+                    "source:ci",
+                ],
+                &envs,
+            ),
+            "value-less reinforce under a reject-all scanner",
+        );
+    }
+
+    /// `taint` admits but marks (detect-only, like retraction taint): the write succeeds,
+    /// and `verify` surfaces the flag instead of silently absorbing it.
+    #[test]
+    fn a_taint_verdict_admits_but_marks_and_verify_surfaces_it() {
+        let temp = TempDir::new();
+        let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let scanner = scanner_script(&temp, "taint-all.sh", TAINT_ALL);
+        let envs = [
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_CONTENT_CHECK", scanner.as_str()),
+        ];
+
+        assert_success(
+            &run_dent8(
+                &[
+                    "assert",
+                    "repo:app",
+                    "note",
+                    "suspicious content",
+                    "--authority",
+                    "high",
+                    "--source",
+                    "source:owner",
+                ],
+                &envs,
+            ),
+            "taint verdict admits",
+        );
+
+        let verify = run_dent8(&["verify"], &envs);
+        assert_eq!(verify.status.code(), Some(1), "{}", stdout(&verify));
+        let report = stderr(&verify);
+        assert!(report.contains("CONTENT-FLAGGED"), "{report}");
+        assert!(report.contains("flagged by test scanner"), "{report}");
+
+        // The fact itself is believed and explainable — detect-only, not removal.
+        let explained = run_dent8(&["explain", "repo:app", "note"], &envs);
+        assert_success(&explained, "explain a tainted fact");
+        assert!(stdout(&explained).contains("suspicious content"));
+    }
+
+    /// Scanner failure policy: DEFAULT fail-closed (a configured scanner going dark must
+    /// not silently readmit unchecked content); fail-open is an explicit opt-in and still
+    /// marks the unscanned admit.
+    #[test]
+    fn a_broken_scanner_fails_closed_by_default_and_flags_on_opt_in_fail_open() {
+        let temp = TempDir::new();
+        let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let scanner = scanner_script(&temp, "crash.sh", CRASH);
+        let args = [
+            "assert",
+            "repo:app",
+            "note",
+            "anything",
+            "--authority",
+            "high",
+            "--source",
+            "source:owner",
+        ];
+
+        let closed = run_dent8(
+            &args,
+            &[
+                ("DENT8_LOG", log.as_str()),
+                ("DENT8_CONTENT_CHECK", scanner.as_str()),
+            ],
+        );
+        assert_eq!(closed.status.code(), Some(1), "{}", stdout(&closed));
+        assert!(
+            stderr(&closed).contains("content check failed closed"),
+            "{}",
+            stderr(&closed)
+        );
+        assert_eq!(
+            fs::read_to_string(&log).unwrap_or_default(),
+            "",
+            "fail-closed must persist nothing"
+        );
+
+        let open_envs = [
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_CONTENT_CHECK", scanner.as_str()),
+            ("DENT8_CONTENT_CHECK_FAIL_OPEN", "1"),
+        ];
+        assert_success(&run_dent8(&args, &open_envs), "fail-open admits");
+        let verify = run_dent8(&["verify"], &open_envs);
+        assert_eq!(verify.status.code(), Some(1), "{}", stdout(&verify));
+        assert!(
+            stderr(&verify).contains("fail-open"),
+            "the unscanned admit must stay visible: {}",
+            stderr(&verify)
+        );
+    }
+
+    /// A hung scanner is killed at the configured `DENT8_CONTENT_CHECK_TIMEOUT_MS` budget
+    /// and counts as a scanner failure (fail-closed here).
+    #[test]
+    fn a_hung_scanner_is_killed_at_the_configured_timeout() {
+        let temp = TempDir::new();
+        let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let scanner = scanner_script(&temp, "hang.sh", "cat > /dev/null\nsleep 60");
+        let envs = [
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_CONTENT_CHECK", scanner.as_str()),
+            ("DENT8_CONTENT_CHECK_TIMEOUT_MS", "300"),
+        ];
+
+        let started = std::time::Instant::now();
+        let output = run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "note",
+                "anything",
+                "--authority",
+                "high",
+                "--source",
+                "source:owner",
+            ],
+            &envs,
+        );
+        assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+        assert!(
+            stderr(&output).contains("did not answer within"),
+            "{}",
+            stderr(&output)
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(30),
+            "the write path must not wait out the scanner's sleep"
+        );
+    }
+
+    /// An allow verdict is exact pass-through: the write lands and `verify` stays green.
+    #[test]
+    fn an_allow_verdict_admits_unchanged() {
+        let temp = TempDir::new();
+        let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let scanner = scanner_script(&temp, "allow-all.sh", ALLOW_ALL);
+        let envs = [
+            ("DENT8_LOG", log.as_str()),
+            ("DENT8_CONTENT_CHECK", scanner.as_str()),
+        ];
+
+        assert_success(
+            &run_dent8(
+                &[
+                    "assert",
+                    "repo:app",
+                    "note",
+                    "clean",
+                    "--authority",
+                    "high",
+                    "--source",
+                    "source:owner",
+                ],
+                &envs,
+            ),
+            "allow verdict admits",
+        );
+        let verify = run_dent8(&["verify"], &envs);
+        assert_success(&verify, "verify after an allowed write");
+        assert!(
+            !stdout(&verify).contains("CONTENT-FLAGGED"),
+            "{}",
+            stdout(&verify)
+        );
+    }
+}
+
 fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(None, args, envs)
 }
@@ -8672,6 +9052,9 @@ fn run_dent8_stdin(args: &[&str], input: &str, envs: &[(&str, &str)]) -> Output 
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_CONTENT_CHECK")
+        .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
+        .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
         .env_remove("DENT8_DAEMON_SOCKET")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -8705,6 +9088,9 @@ fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_CONTENT_CHECK")
+        .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
+        .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
         .env_remove("DENT8_DAEMON_SOCKET")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
@@ -8732,6 +9118,9 @@ fn run_dent8_mcp(input: &str, envs: &[(&str, &str)]) -> Output {
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_CONTENT_CHECK")
+        .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
+        .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
         .env_remove("DENT8_WITNESS_LOG")
@@ -8767,6 +9156,9 @@ fn run_dent8_mcp_proxy(socket: &str, input: &str, envs: &[(String, String)]) -> 
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_CONTENT_CHECK")
+        .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
+        .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
         .env_remove("DENT8_DAEMON_SOCKET")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
@@ -8803,6 +9195,9 @@ fn spawn_daemon(socket: &str, envs: &[(String, String)]) -> ChildGuard {
         .env_remove("DENT8_IDENTITY_KEY")
         .env_remove("DENT8_ISSUER_KEY")
         .env_remove("DENT8_REQUIRE_IDENTITY")
+        .env_remove("DENT8_CONTENT_CHECK")
+        .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
+        .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
         .env_remove("DENT8_DAEMON_SOCKET")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
@@ -8870,7 +9265,9 @@ fn shell_unquote_for_test(value: &str) -> String {
     }
 }
 
-#[cfg(all(unix, feature = "async-store"))]
+// Unix-only (not async-store-gated): the content-check hook tests drive the MCP
+// server in every build flavor.
+#[cfg(unix)]
 fn json_rpc_lines(messages: &[Value]) -> String {
     let mut text = String::new();
     for message in messages {
@@ -8880,7 +9277,9 @@ fn json_rpc_lines(messages: &[Value]) -> String {
     text
 }
 
-#[cfg(all(unix, feature = "async-store"))]
+// Unix-only (not async-store-gated): the content-check hook tests drive the MCP
+// server in every build flavor.
+#[cfg(unix)]
 fn json_response(responses: &[Value], id: i64) -> &Value {
     responses
         .iter()

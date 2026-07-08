@@ -4,6 +4,7 @@
 //! items. Materialized memory is a replayed projection of the event log.
 
 pub mod anchor;
+pub mod content_check;
 pub mod hash;
 pub mod ids;
 pub mod model;

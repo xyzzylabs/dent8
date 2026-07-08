@@ -127,7 +127,10 @@ expiration, and retraction are rejected
 ([ADR 0007](decisions/0007-authority-as-entrenchment.md),
 [ADR 0011](decisions/0011-authority-gated-expiration.md)). The CLI/MCP write
 surface runs through the same firewall path, with an additional source->authority
-ceiling registry at the `op_*` layer. The Postgres adapter commits accepted events
+ceiling registry at the `op_*` layer, plus an optional **pluggable content-check hook**
+at that same layer ([content-check.md](content-check.md)): arbitration never reads
+`value` text, so a deployment composes an external scanner in — dent8 ships no
+classifier of its own. The Postgres adapter commits accepted events
 transactionally under an advisory-lock-serialized append, and the read surface applies
 freshness by flagging stale receipts. Remaining product gaps are operational: signed
 identity key distribution/rotation, an operated witness service, richer transports, and
