@@ -630,9 +630,11 @@ subject+predicate.
   already-admitted log without re-arbitration), recomputing the global chain. Used by the
   file-backed CLI; the documented counterpart to the single arbitrated `append` path.
 - **`PredicateRegistry`** (coding-agent fact policies): per-predicate authority floor,
-  default TTL, and uniqueness, enforced via `enforce_policy` / `apply_policy_defaults`.
-  Ships `repo.database`, `repo.test_command`, `dependency.version`, `branch.status`,
-  `user.preference`.
+  default TTL, uniqueness, and a **retention ceiling** (a caller-supplied *bounded* TTL
+  reaching past the effective ceiling — a per-predicate override else a 90-day global default,
+  both overridable — is **rejected, not clamped**; `Ttl::Never` is out of scope), enforced via
+  `enforce_policy` / `apply_policy_defaults`. Ships `repo.database`, `repo.test_command`,
+  `dependency.version`, `branch.status`, `user.preference`.
 - `EventStore` / `AsyncEventStore` traits — implemented by the in-memory/file path and the
   async SQLite/Postgres adapters. Postgres and SQLite are DB-backed adapters of the same
   firewall boundary, not separate architectures.

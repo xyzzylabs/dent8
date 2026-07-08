@@ -147,8 +147,17 @@ it deliberately does not:
 4. **Enforce predicate uniqueness** at `append` (class E parallel-belief plant). A competing
    fact on the same subject/predicate coexists as a distinct fact id; the `PredicateRegistry`
    uniqueness layer (also not run by `append`) owns this.
-5. **Cap TTL reach** (class D far-future TTL). Arbitration does not police a "reasonable"
-   TTL; a retention-policy layer would.
+
+**Addressed at the registry layer (above `append`):**
+
+5. **Cap TTL reach** (class D far-future TTL). Arbitration still does not police TTL, but the
+   `PredicateRegistry` now enforces a **retention ceiling**: an assertion whose caller-supplied
+   *bounded* (finite) TTL reaches past the effective ceiling (a per-predicate override else a
+   90-day global default, both overridable) is **rejected, not clamped** — silently rewriting
+   an asserted freshness window would falsify the audit record. `Ttl::Never` is out of scope
+   (the append-only log keeps non-expiring beliefs regardless; the gap was far-*reaching finite*
+   TTLs). This runs on the `op_*` CLI/MCP path, not by `append`, so the class-D adversarial case
+   — which exercises `append`-arbitration only — remains a documented out-of-model admit there.
 
 **Detect-only (4/47):** retraction taint (a derivative of a retracted source stays believed
 but is flagged tainted — ADR 0010) and read-time freshness (an elapsed `valid_to` reads

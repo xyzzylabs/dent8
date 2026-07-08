@@ -576,6 +576,16 @@ pub enum StoreError {
     UniquenessViolation {
         predicate: String,
     },
+    /// The registry's retention ceiling rejected an assertion: its bounded (finite) TTL
+    /// reaches further than the effective ceiling (the per-predicate override, else the
+    /// global default). The write is **rejected, not clamped** — silently rewriting a
+    /// caller's asserted freshness would falsify the audit record. `ttl_ms` and
+    /// `ceiling_ms` are the offending and the maximum bounded durations, in milliseconds.
+    TtlCeilingExceeded {
+        predicate: String,
+        ttl_ms: u64,
+        ceiling_ms: u64,
+    },
     /// Replaying the existing fact stream failed.
     Replay(ReplayError),
 }
@@ -611,6 +621,16 @@ impl fmt::Display for StoreError {
             Self::UniquenessViolation { predicate } => write!(
                 f,
                 "policy rejected the write: {predicate} already has a believed fact (supersede it)"
+            ),
+            Self::TtlCeilingExceeded {
+                predicate,
+                ttl_ms,
+                ceiling_ms,
+            } => write!(
+                f,
+                "policy rejected the write: {predicate} TTL of {ttl_ms}ms exceeds the retention \
+                 ceiling of {ceiling_ms}ms; assert a shorter freshness window (or raise the \
+                 ceiling) — asserted TTLs are rejected, not silently clamped"
             ),
             Self::Replay(error) => write!(f, "{error}"),
         }
