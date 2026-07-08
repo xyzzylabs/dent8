@@ -9,7 +9,31 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-08
+
 ### Added
+- Added a pluggable **content-check hook at the write boundary**
+  ([content-check.md](docs/content-check.md)): `DENT8_CONTENT_CHECK` names an external scanner
+  run once per candidate fact (fact JSON on stdin, an `allow`/`reject`/`taint` verdict on
+  stdout) after the authority gate and before arbitration, attestation, and persistence — so it
+  covers **every** write entry point (CLI, `capture`, MCP, daemon) and cannot be bypassed on the
+  write path. `reject` refuses the write; `taint` admits-but-flags (surfaced by `dent8 verify`
+  as `CONTENT-FLAGGED`). A scanner failure is **fail-closed** by default (opt-in fail-open still
+  flags the unscanned admit). dent8 ships no classifier of its own — the hook makes an external
+  one un-bypassable on the write path — with a demonstrative reference scanner included.
+- Added a **TTL retention ceiling** to the predicate registry: an assertion with a bounded
+  (finite) TTL past the effective ceiling — a per-predicate override, else a 90-day global
+  default — is **rejected** (`StoreError::TtlCeilingExceeded`), not clamped. `Ttl::Never` is
+  out of scope, and the ceiling applies to registered predicates and library callers.
+- Added an externally-grounded **47-case adversarial eval corpus** (`dent8-evals::adversarial`)
+  across 10 attack classes, with patterns adapted from named public prompt-injection /
+  memory-poisoning corpora. Verdicts are computed from attacker-goal predicates over projected
+  belief state (never hardcoded) and reported **honestly**: **16/47 blocked** by arbitration,
+  **4/47 detect-only** (flagged, not removed), **27/47 out-of-model** (owned by a downstream
+  layer) — while a recency-only baseline is compromised by **46/47**. A separate lane re-runs the
+  corpus with the content-check hook + demo scanner attached (**25/47 blocked, 9 detect-only,
+  13 admitted unflagged**). Per-class tallies are frozen as regression guards; the shipped
+  `dent8 eval` demo is unchanged (still 5/5). See [docs/evals.md](docs/evals.md).
 - Added `dent8 context --record-retrieval [--purpose TEXT]`: every fact the context pack
   emits now gains a `fact.retrieved` audit event on its stream — the read half of the
   read-audit loop. Recorded before the pack is emitted, all-or-nothing, as the active
@@ -60,6 +84,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   deletes `dent8_event_log` and confirms the monitor exits on a rollback alarm.
 - Added a manual `workflow_dispatch` CI job for the live operated-witness rollback demo, so
   maintainers can regression-test the full Compose signer/publisher/monitor split on demand.
+- Dogfooded dent8 as this repo's own shared fact base: `scripts/dogfood-seed.sh` and
+  `scripts/dogfood-facts.jsonl` rebuild the (gitignored) `.dent8/` store from 15
+  human-authored facts at `source:human`/**High** — MSRV, the CI gates, commit conventions,
+  the authority profile, eval tallies, and roadmap — and `.claude/settings.json` wires a
+  `SessionStart` → `dent8 context` inject and a `SessionEnd` → `dent8 capture` flush so
+  agents share one verified, provenance-stamped fact base instead of a hand-maintained
+  rules file that drifts. The hooks are a silent no-op when the binary is absent, and
+  `.gitignore` un-ignores the shared settings file.
 
 ### Changed
 - Refreshed the README firewall GIF/tape: the walkthrough now starts with a clearer headline,
@@ -69,7 +101,31 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   and `docker/build-push-action@v7`) to remove the GitHub Actions Node 20 deprecation
   annotation.
 
+### Documentation
+- Reconciled the preprint and outline with the eval corpus: the five hand-authored scenarios are
+  scoped as illustrative and the 47-case corpus is presented as the substantive result (16
+  blocked / 4 detect-only / 27 out-of-model, 46/47 compromising a recency-only baseline), with
+  named provenance, the per-class blocked table, and Limitations bullets on the
+  content-inspection boundary and the blocked-means-displacement-prevented semantics.
+- Aligned the docs with the code and sharpened the multi-agent shared-fact-base wedge:
+  `formal-verification.md` describes the Kani harnesses as written but not yet in CI, the crate
+  count is corrected to seven, the Postgres adapter is noted as implemented and CI-tested, the
+  fuzz targets are split into implemented vs planned, and the project brief/roadmap are sharpened
+  around the shared-fact-base wedge.
+- Added a README **flagship example** built from this repo's own `dent8 context` pack, and
+  fixed the "Try it" walkthrough so it runs verbatim on a fresh store: the generated env is
+  exported inside `set -a`, and `--identity` is dropped so the low-authority supersede is
+  rejected for **arbitration** (Low can't override High) rather than a source/grant mismatch.
+  `AGENTS.md` points agents at the fact base as authoritative, and
+  [docs/dogfooding-notes.md](docs/dogfooding-notes.md) adds a candid usability report with a
+  prioritized fix list.
+
 ### Fixed
+- Hardened the `dent8 doctor --write-check` probe: it now retracts its own `ok` fact after the
+  checks complete (no believed residue across runs), asserts at the source's **own granted
+  authority ceiling** instead of a hardcoded `high` (the reject sub-check supersedes one level
+  below, and is skipped/noted at the minimum level), and hides its diagnostic streams by exact
+  path-segment match so a real predicate like `dent8.write_checkout` stays visible.
 - `dent8 doctor --write-check` no longer fails for a healthy **subject-scoped** source: the
   write probe is scope-aware and targets the scoped subject under a per-run
   `dent8.write_check.<run-id>` predicate instead of an out-of-scope `diagnostic:` subject —
@@ -97,7 +153,22 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   an issuer that is not a registered source remains an operator-level root recorded for
   audit. `dent8 authority add` refuses self-escalating grants up front, and the write gate
   re-checks the chain on every write so a hand-edited registry cannot smuggle an
-  escalation past it.
+  escalation past it. Add-time refusal of self-escalating and issuer-cycle-completing grants is
+  now **order-independent** — neither insertion order of a two-grant cycle slips past the
+  add-time check (previously one order was only caught later by the write gate).
+- A pluggable **content-check hook** now sits on the write boundary (see Added):
+  `DENT8_CONTENT_CHECK` runs an external scanner over every candidate fact across all write
+  entry points and can `reject` a write or `taint` it (admit-but-flag, surfaced by `dent8
+  verify` as `CONTENT-FLAGGED`) **by content** — after the authority gate, before persistence.
+  A scanner failure is fail-closed by default. dent8 ships no classifier of its own: the hook is
+  the un-bypassable seam an external scanner attaches to, so content-inspection quality is the
+  operator's scanner, not a dent8 claim.
+- The **TTL retention gap is narrowed, not closed**: the new retention ceiling (see Added)
+  rejects a finite-TTL assertion that exceeds the effective (per-predicate, else 90-day)
+  ceiling, but it only bounds *bounded* TTLs on **registered predicates and library callers** —
+  `Ttl::Never` and unregistered predicates stay out of scope. Far-future-but-finite retention on
+  covered predicates is capped; the broader staleness-versus-retention exposure remains a
+  read-time concern rather than a fully closed write-time guarantee.
 - Hardened the operated-witness compose recipe: the private witness signing key now lives on a
   signer-only volume, while the publisher mounts only the witness logs and public key
   read-only before writing to the external published-heads volume.
