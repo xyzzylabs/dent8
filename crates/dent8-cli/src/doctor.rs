@@ -2098,7 +2098,9 @@ pub(crate) fn doctor_witness(output: &mut String) -> bool {
 /// source may write about instead of bypassing or weakening the scope gate (a scoped source
 /// must never be able to persist an out-of-scope write, not even a diagnostic one). Scope
 /// resolution is best-effort: an unreadable registry/grant or a malformed scope falls back
-/// to the default subject and lets the write gate report the real rejection.
+/// to the default subject and lets the write gate report the real rejection. The probe
+/// always asserts at `high` authority, so a source whose authority ceiling is below `high`
+/// fails write-check even when otherwise healthy — a known limitation.
 pub(crate) struct WriteCheckProbe {
     subject_kind: String,
     subject_key: String,

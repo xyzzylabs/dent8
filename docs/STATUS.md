@@ -99,7 +99,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   authority-registry grant chain or its signed identity grant) it targets the scoped subject
   itself under a per-run `dent8.write_check.<run-id>` predicate — a legitimately-authorized
   write through the unchanged write gate, never an out-of-scope one — so a correctly-scoped
-  source passes doctor while an unauthorized source still fails. Diagnostic streams
+  source passes doctor while an unauthorized source still fails. The probe always asserts at
+  `high` authority, so a source whose authority ceiling is below `high` fails `--write-check`
+  even when otherwise healthy — a known limitation. Diagnostic streams
   (including scoped write-check probes) are hidden from normal MCP fact/resource browsing by
   default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections,
