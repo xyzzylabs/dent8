@@ -183,7 +183,9 @@ Authority ceiling: a source may assert at most its registered max. Enforced once
 exists (DENT8_AUTHORITY, default ./dent8-authority.json) — then deny-by-default: an unlisted
 source is blocked from writing. Without a registry the CLI is permissive (dev mode), unless
 DENT8_REQUIRE_AUTHORITY=1 is set. The registry is host-local config, independent of the event
-backend. issuer/scope are recorded but NOT enforced in v0. See docs/STATUS.md.";
+backend. A grant's scope restricts write subjects (\"*\" or exact <kind>:<key>), and a grant
+issued by another registered source is capped by that issuer's own grant — an issuer cannot
+delegate authority or scope it does not hold. See docs/STATUS.md.";
 
 fn cli_styles() -> Styles {
     Styles::styled()
@@ -261,7 +263,7 @@ enum CliCommand {
     Context(ContextArgs),
     /// Capture structured fact proposals (JSON lines) through the firewall.
     #[command(
-        override_usage = "dent8 capture [FILE] [--consume] [--authority <AUTHORITY>] [--source <SOURCE>]"
+        override_usage = "dent8 capture [FILE] [--consume [--keep-failed]] [--authority <AUTHORITY>] [--source <SOURCE>]"
     )]
     Capture(CaptureArgs),
     /// Browse fact streams known to dent8.
@@ -483,6 +485,20 @@ pub(crate) struct ContextArgs {
     /// Include dent8 internal diagnostic streams, such as doctor write-check facts.
     #[arg(long)]
     include_diagnostics: bool,
+    /// Record a `fact.retrieved` audit event for every fact the pack emits (the read half
+    /// of the read-audit loop). Recorded as the active signed grant's source when
+    /// configured, else the agent tier (`source:agent` at `low`), through the normal
+    /// write boundary.
+    #[arg(long)]
+    record_retrieval: bool,
+    /// Purpose stamped on recorded retrieval events.
+    #[arg(
+        long,
+        value_name = "TEXT",
+        default_value = "context-pack",
+        requires = "record_retrieval"
+    )]
+    purpose: String,
 }
 
 #[derive(Args, Debug)]
@@ -494,6 +510,11 @@ pub(crate) struct CaptureArgs {
     /// queue without replaying it on the next firing.
     #[arg(long, requires = "file")]
     consume: bool,
+    /// With --consume, keep rejected and malformed proposal lines in the file (accepted
+    /// lines are still removed) so they can be inspected or retried instead of surviving
+    /// only in hook logs.
+    #[arg(long, requires = "consume")]
+    keep_failed: bool,
     /// Default authority for proposals that do not state one.
     #[arg(long, short = 'a', value_enum)]
     authority: Option<CliAuthority>,
@@ -874,7 +895,11 @@ struct AuthorityAddArgs {
     source: String,
     #[arg(value_enum)]
     max: CliAuthority,
+    /// Who granted this ceiling. Naming another registered source caps this grant by that
+    /// issuer's own grant (no self-escalation); any other name is an operator-level root.
     issuer: Option<String>,
+    /// Subject scope: "*" (the default when omitted) or an exact <kind>:<key> subject the
+    /// source may write about.
     scope: Option<String>,
 }
 
@@ -1750,8 +1775,14 @@ fn log_path() -> String {
 #[serde(deny_unknown_fields)]
 struct SourceGrant {
     max_authority: AuthorityLevel,
+    /// Who granted this ceiling. When it names another **registered source**, the write gate
+    /// also enforces that issuer's own grant (ceiling and scope), transitively — an issuer
+    /// cannot delegate authority it does not hold, and a cyclic/self-issued chain authorizes
+    /// nothing. An unregistered issuer is an operator-level root recorded for audit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     issuer: Option<String>,
+    /// Subject scope: `"*"` (or absent) covers every subject; any other value covers exactly
+    /// the literal `<kind>:<key>` subject it names (see [`scope_covers`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
 }
@@ -1878,12 +1909,13 @@ fn write_atomic(path: &str, contents: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|error| format!("cannot install {path}: {error}"))
 }
 
-/// The authz gate, run before the firewall on every write: reject a stated `authority` above
-/// its `source`'s registered ceiling. A no-op only when no registry is configured and
+/// The authz gate, run before the firewall on every write: reject a write above its
+/// `source`'s registered ceiling, outside its grant's scope, or beyond what the grant's
+/// issuer chain can delegate. A no-op only when no registry is configured and
 /// `DENT8_REQUIRE_AUTHORITY` is not enabled.
-fn enforce_source_ceiling(source: &str, requested: AuthorityLevel) -> Result<(), ops::OpError> {
+fn enforce_registry_grant(auth: &WriteAuth<'_>) -> Result<(), ops::OpError> {
     let registry = load_authority_registry().map_err(ops::OpError::Invalid)?;
-    ceiling_check(registry.as_ref(), source, requested)
+    registry_grant_check(registry.as_ref(), auth)
 }
 
 /// Which source identity a write is authorized and attested under, threaded from the request
@@ -1917,7 +1949,7 @@ fn enforce_write_authority(
     auth: &WriteAuth<'_>,
     identity: &WriteIdentity,
 ) -> Result<(), ops::OpError> {
-    enforce_source_ceiling(auth.source, auth.authority)?;
+    enforce_registry_grant(auth)?;
     enforce_source_identity(auth, identity).map_err(ops::OpError::Invalid)
 }
 
@@ -1938,21 +1970,49 @@ fn enforce_source_identity(auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Re
     }
 }
 
-/// The pure decision: reject `requested` above the source's ceiling. `None` registry is
-/// permissive (dev mode); production can disable that path with `DENT8_REQUIRE_AUTHORITY`.
-/// Rejection — not silent capping — keeps a laundering attempt visible. Only `max_authority`
-/// is consulted: a grant's `issuer`/`scope` are recorded metadata, **not** enforced in v0
-/// (scope does not restrict which predicates a source may write). An active registry is
+/// Whether a grant's `scope` covers a write subject. Scope is a **subject scope** — the same
+/// grammar as signed identity grants: `None` and `"*"` cover every subject; any other value
+/// covers exactly the literal `<kind>:<key>` subject it names. Conservative by construction:
+/// a malformed scope covers *nothing* (fail closed), never everything, and scope does not
+/// restrict predicates — it restricts which subjects a source may write about.
+fn scope_covers(scope: Option<&str>, subject: &str) -> bool {
+    match scope {
+        None => true,
+        Some(scope) => scope == "*" || scope == subject,
+    }
+}
+
+/// The pure decision: reject a write above the source's ceiling, outside its grant's scope,
+/// or beyond what the grant's **issuer chain** can delegate. `None` registry is permissive
+/// (dev mode); production can disable that path with `DENT8_REQUIRE_AUTHORITY`. Rejection —
+/// not silent capping — keeps a laundering attempt visible. An active registry is
 /// deny-by-default — an unlisted source's ceiling is `Unknown`, below the lowest requestable
 /// level (`Low`), so it is blocked from writing entirely.
-fn ceiling_check(
+///
+/// Enforcement semantics (where the domain model was silent, the conservative reading):
+///
+/// - **Scope** ([`scope_covers`]): a grant scoped to a subject authorizes writes about that
+///   subject only; the write's *subject* is checked against every registered link of the
+///   issuer chain, so an issuer scoped to X cannot delegate writes outside X.
+/// - **Issuer / no self-escalation**: when a grant's `issuer` names another *registered
+///   source*, the write must also satisfy that issuer's own grant (ceiling and scope),
+///   transitively — an issuer cannot delegate authority it does not hold. An issuer that is
+///   not a registered source is an operator-level root recorded for audit; the registry has
+///   nothing to rank it against, so the chain grounds out there (the registry file itself is
+///   operator-managed config).
+/// - **Cycles fail closed**: a self-issued grant or an issuer cycle never grounds out in an
+///   operator root, so it authorizes nothing — a grant cannot be the source of its own
+///   authority.
+fn registry_grant_check(
     registry: Option<&SourceRegistry>,
-    source: &str,
-    requested: AuthorityLevel,
+    auth: &WriteAuth<'_>,
 ) -> Result<(), ops::OpError> {
     let Some(registry) = registry else {
         return Ok(());
     };
+    let source = auth.source;
+    let requested = auth.authority;
+    // The direct ceiling first, preserving the deny-by-default Unknown for unlisted sources.
     let ceiling = registry.ceiling(source);
     if requested > ceiling {
         return Err(ops::OpError::Rejected(format!(
@@ -1960,7 +2020,52 @@ fn ceiling_check(
              {requested} (grant it with `dent8 authority add {source} <max>`)"
         )));
     }
-    Ok(())
+    // Then walk the grant and its issuer chain: every registered link must cover the write's
+    // subject and hold a ceiling at or above the request.
+    let subject = auth.subject();
+    let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut link: &str = source;
+    loop {
+        if !visited.insert(link) {
+            return Err(ops::OpError::Rejected(format!(
+                "authority grant: the issuer chain for source {source:?} cycles at {link:?} — \
+                 a grant cannot ground its own authority (no self-escalation); re-issue it \
+                 from an operator with `dent8 authority add`"
+            )));
+        }
+        let Some(grant) = registry.sources.get(link) else {
+            // An issuer that is not a registered source is an operator-level root recorded
+            // for audit — the chain grounds out here. (For the first link this is the
+            // unlisted-source case, already rejected above unless requested <= Unknown.)
+            return Ok(());
+        };
+        if !scope_covers(grant.scope.as_deref(), &subject) {
+            let via = if link == source {
+                String::new()
+            } else {
+                format!(" (issuing {source:?}'s grant)")
+            };
+            return Err(ops::OpError::Rejected(format!(
+                "authority scope: source {link:?}{via} is scoped to {:?}, which does not \
+                 cover write subject {subject:?}",
+                grant.scope.as_deref().unwrap_or("*"),
+            )));
+        }
+        // Only reachable on issuer links (the direct ceiling was checked above): an issuer
+        // cannot delegate authority above its own ceiling.
+        if requested > grant.max_authority {
+            return Err(ops::OpError::Rejected(format!(
+                "authority ceiling: source {source:?} was granted by issuer {link:?}, whose \
+                 own ceiling is {}, but requested {requested} — an issuer cannot delegate \
+                 authority it does not hold",
+                grant.max_authority
+            )));
+        }
+        let Some(issuer) = grant.issuer.as_deref() else {
+            return Ok(());
+        };
+        link = issuer;
+    }
 }
 
 struct AuthorityListOutcome {
@@ -2012,7 +2117,7 @@ fn format_authority_list(outcome: &AuthorityListOutcome) -> String {
                     .as_deref()
                     .map_or_else(String::new, |scope| format!("  scope={scope}"));
                 let note = if grant.issuer.is_some() || grant.scope.is_some() {
-                    "  (issuer/scope recorded, NOT enforced in v0)"
+                    "  (issuer/scope enforced)"
                 } else {
                     ""
                 };
@@ -2043,8 +2148,8 @@ fn authority_sources_json(registry: Option<&SourceRegistry>) -> Vec<serde_json::
                     "max_authority": grant.max_authority.name(),
                     "issuer": grant.issuer,
                     "scope": grant.scope,
-                    "issuer_enforced": false,
-                    "scope_enforced": false,
+                    "issuer_enforced": true,
+                    "scope_enforced": true,
                 })
             })
             .collect()
@@ -2095,6 +2200,70 @@ fn cmd_authority_list(output: CliOutput) -> i32 {
     }
 }
 
+/// Validate an `authority add` up front, so the registry never records a grant the write
+/// gate would treat as self-escalation or nonsense. Write-time [`registry_grant_check`]
+/// remains the security boundary (the file can be hand-edited); this is the operator UX.
+fn validate_authority_grant(
+    registry: &SourceRegistry,
+    source: &str,
+    max_authority: AuthorityLevel,
+    issuer: Option<&str>,
+    scope: Option<&str>,
+) -> Result<(), String> {
+    if let Some(scope) = scope
+        && scope != "*"
+        && CliSubject::from_str(scope).is_err()
+    {
+        return Err(format!(
+            "invalid scope {scope:?}: expected \"*\" or an exact subject <kind>:<key> \
+             (e.g. repo:dent8)"
+        ));
+    }
+    let Some(issuer) = issuer else {
+        return Ok(());
+    };
+    if issuer == source {
+        return Err(format!(
+            "a grant for {source:?} cannot name itself as issuer — a grant cannot ground \
+             its own authority (no self-escalation)"
+        ));
+    }
+    // An issuer that is not a registered source is an operator-level root recorded for
+    // audit; the registry has nothing to rank it against.
+    let mut link = issuer;
+    let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    while let Some(grant) = registry.sources.get(link) {
+        if link == source || !visited.insert(link) {
+            return Err(format!(
+                "issuer {issuer:?} would create an issuer cycle through {link:?} — a grant \
+                 cannot ground its own authority (no self-escalation)"
+            ));
+        }
+        if max_authority > grant.max_authority {
+            return Err(format!(
+                "issuer {link:?} may grant at most {}, but the new grant requests \
+                 {max_authority} — an issuer cannot delegate authority it does not hold",
+                grant.max_authority
+            ));
+        }
+        if let Some(issuer_scope) = grant.scope.as_deref()
+            && issuer_scope != "*"
+            && scope != Some(issuer_scope)
+        {
+            return Err(format!(
+                "issuer {link:?} is scoped to {issuer_scope:?}, so the new grant's scope \
+                 must be exactly {issuer_scope:?} — an issuer cannot delegate scope it \
+                 does not hold"
+            ));
+        }
+        let Some(next) = grant.issuer.as_deref() else {
+            break;
+        };
+        link = next;
+    }
+    Ok(())
+}
+
 fn cmd_authority_add(
     source: &str,
     max_authority: AuthorityLevel,
@@ -2116,6 +2285,17 @@ fn cmd_authority_add(
             };
         }
     };
+    if let Err(error) = validate_authority_grant(&registry, source, max_authority, issuer, scope) {
+        return match output {
+            CliOutput::Text => {
+                eprintln!("{error}");
+                2
+            }
+            CliOutput::Json => {
+                print_json_stdout_with_code(&authority_error_json("authority add", &error), 2)
+            }
+        };
+    }
     registry.sources.insert(
         source.to_string(),
         SourceGrant {
@@ -2140,8 +2320,8 @@ fn cmd_authority_add(
                     "max_authority": max_authority.name(),
                     "issuer": issuer,
                     "scope": scope,
-                    "issuer_enforced": false,
-                    "scope_enforced": false,
+                    "issuer_enforced": true,
+                    "scope_enforced": true,
                     "message": message,
                 })),
             }
@@ -3408,18 +3588,36 @@ fn base(
 mod tests {
     use super::*;
 
+    fn grant(
+        max_authority: AuthorityLevel,
+        issuer: Option<&str>,
+        scope: Option<&str>,
+    ) -> SourceGrant {
+        SourceGrant {
+            max_authority,
+            issuer: issuer.map(str::to_string),
+            scope: scope.map(str::to_string),
+        }
+    }
+
+    fn registry_of(entries: &[(&str, SourceGrant)]) -> SourceRegistry {
+        let mut registry = SourceRegistry::default();
+        for (source, grant) in entries {
+            registry
+                .sources
+                .insert((*source).to_string(), grant.clone());
+        }
+        registry
+    }
+
+    fn write(source: &'static str, level: AuthorityLevel) -> WriteAuth<'static> {
+        WriteAuth::new("repo", "app", level, source)
+    }
+
     #[test]
     fn the_authority_ceiling_rejects_writes_above_a_source_grant() {
-        let mut registry = SourceRegistry::default();
-        registry.sources.insert(
-            "source:owner".to_string(),
-            SourceGrant {
-                max_authority: AuthorityLevel::High,
-                issuer: None,
-                scope: None,
-            },
-        );
-        let check = |source, level| ceiling_check(Some(&registry), source, level);
+        let registry = registry_of(&[("source:owner", grant(AuthorityLevel::High, None, None))]);
+        let check = |source, level| registry_grant_check(Some(&registry), &write(source, level));
 
         // At or below the grant is admitted.
         assert!(check("source:owner", AuthorityLevel::High).is_ok());
@@ -3436,7 +3634,196 @@ mod tests {
         ));
         assert!(check("source:web-scrape", AuthorityLevel::Unknown).is_ok());
         // No registry configured -> permissive (dev mode).
-        assert!(ceiling_check(None, "source:web-scrape", AuthorityLevel::Canonical).is_ok());
+        assert!(
+            registry_grant_check(None, &write("source:web-scrape", AuthorityLevel::Canonical))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_scoped_grant_rejects_writes_outside_its_subject() {
+        let registry = registry_of(&[
+            (
+                "source:scoped",
+                grant(AuthorityLevel::High, None, Some("repo:app")),
+            ),
+            ("source:star", grant(AuthorityLevel::High, None, Some("*"))),
+            (
+                "source:malformed",
+                grant(AuthorityLevel::High, None, Some("not a subject")),
+            ),
+        ]);
+        let check = |source: &'static str, kind, key| {
+            registry_grant_check(
+                Some(&registry),
+                &WriteAuth::new(kind, key, AuthorityLevel::High, source),
+            )
+        };
+
+        // The scoped subject is admitted; any other subject is rejected.
+        assert!(check("source:scoped", "repo", "app").is_ok());
+        let outside = check("source:scoped", "repo", "other")
+            .expect_err("a write outside the grant scope must be rejected");
+        assert!(
+            outside.message().contains("authority scope"),
+            "{}",
+            outside.message()
+        );
+        assert!(matches!(
+            check("source:scoped", "person", "alice"),
+            Err(ops::OpError::Rejected(_))
+        ));
+        // "*" covers everything, like an absent scope.
+        assert!(check("source:star", "person", "alice").is_ok());
+        // A malformed scope covers nothing (fail closed), never everything.
+        assert!(matches!(
+            check("source:malformed", "repo", "app"),
+            Err(ops::OpError::Rejected(_))
+        ));
+    }
+
+    #[test]
+    fn an_issuer_chain_caps_delegated_authority_and_scope() {
+        let registry = registry_of(&[
+            (
+                "source:lead",
+                grant(AuthorityLevel::Medium, None, Some("repo:app")),
+            ),
+            (
+                "source:bot",
+                grant(AuthorityLevel::High, Some("source:lead"), None),
+            ),
+            (
+                "source:rooted",
+                grant(AuthorityLevel::High, Some("operator"), None),
+            ),
+        ]);
+        let check = |auth: &WriteAuth<'_>| registry_grant_check(Some(&registry), auth);
+
+        // Within the issuer's own ceiling and scope the delegated grant works.
+        assert!(check(&write("source:bot", AuthorityLevel::Medium)).is_ok());
+        assert!(check(&write("source:bot", AuthorityLevel::Low)).is_ok());
+        // Above the issuer's own ceiling is rejected even though the grant says High:
+        // an issuer cannot delegate authority it does not hold.
+        let escalated = check(&write("source:bot", AuthorityLevel::High))
+            .expect_err("delegation above the issuer's ceiling must be rejected");
+        assert!(
+            escalated.message().contains("source:lead"),
+            "{}",
+            escalated.message()
+        );
+        // The issuer's scope constrains the delegate too.
+        let outside = check(&WriteAuth::new(
+            "repo",
+            "other",
+            AuthorityLevel::Low,
+            "source:bot",
+        ))
+        .expect_err("delegation outside the issuer's scope must be rejected");
+        assert!(
+            outside.message().contains("authority scope"),
+            "{}",
+            outside.message()
+        );
+        // An issuer that is not a registered source is an operator-level root: the chain
+        // grounds out there and the grant's own ceiling governs.
+        assert!(check(&write("source:rooted", AuthorityLevel::High)).is_ok());
+    }
+
+    #[test]
+    fn issuer_cycles_and_self_issuance_fail_closed() {
+        let registry = registry_of(&[
+            (
+                "source:self",
+                grant(AuthorityLevel::High, Some("source:self"), None),
+            ),
+            (
+                "source:a",
+                grant(AuthorityLevel::High, Some("source:b"), None),
+            ),
+            (
+                "source:b",
+                grant(AuthorityLevel::High, Some("source:a"), None),
+            ),
+        ]);
+        for source in ["source:self", "source:a", "source:b"] {
+            let error = registry_grant_check(
+                Some(&registry),
+                &WriteAuth::new("repo", "app", AuthorityLevel::Low, source),
+            )
+            .expect_err("a cyclic issuer chain must authorize nothing");
+            assert!(
+                error.message().contains("no self-escalation"),
+                "{}",
+                error.message()
+            );
+        }
+    }
+
+    #[test]
+    fn authority_add_rejects_self_escalating_grants_up_front() {
+        let registry = registry_of(&[(
+            "source:lead",
+            grant(AuthorityLevel::Medium, None, Some("repo:app")),
+        )]);
+
+        // A grant above its registered issuer's ceiling is refused.
+        let error = validate_authority_grant(
+            &registry,
+            "source:bot",
+            AuthorityLevel::High,
+            Some("source:lead"),
+            None,
+        )
+        .expect_err("delegating above the issuer ceiling must be rejected");
+        assert!(error.contains("cannot delegate"), "{error}");
+        // A grant broader than its registered issuer's scope is refused.
+        let error = validate_authority_grant(
+            &registry,
+            "source:bot",
+            AuthorityLevel::Low,
+            Some("source:lead"),
+            Some("*"),
+        )
+        .expect_err("delegating outside the issuer scope must be rejected");
+        assert!(error.contains("scoped to"), "{error}");
+        // Self-issuance is refused.
+        let error = validate_authority_grant(
+            &registry,
+            "source:bot",
+            AuthorityLevel::Low,
+            Some("source:bot"),
+            None,
+        )
+        .expect_err("self-issuance must be rejected");
+        assert!(error.contains("no self-escalation"), "{error}");
+        // A malformed scope is refused (it would cover nothing at write time).
+        let error =
+            validate_authority_grant(&registry, "source:bot", AuthorityLevel::Low, None, Some(""))
+                .expect_err("a malformed scope must be rejected");
+        assert!(error.contains("invalid scope"), "{error}");
+        // The valid shape passes: within the issuer's ceiling, matching its scope.
+        assert!(
+            validate_authority_grant(
+                &registry,
+                "source:bot",
+                AuthorityLevel::Low,
+                Some("source:lead"),
+                Some("repo:app"),
+            )
+            .is_ok()
+        );
+        // An unregistered issuer is an operator root: no delegation constraint applies.
+        assert!(
+            validate_authority_grant(
+                &registry,
+                "source:bot",
+                AuthorityLevel::Canonical,
+                Some("operator"),
+                None,
+            )
+            .is_ok()
+        );
     }
 
     #[test]

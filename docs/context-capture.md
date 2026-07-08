@@ -23,6 +23,8 @@ dent8 context                       # markdown, ready for CLAUDE.md/AGENTS.md-st
 dent8 context --output json        # machine-readable
 dent8 context --kind repo          # scope by subject kind/key/predicate, like `facts list`
 dent8 context --include-stale      # also show believed-but-stale facts, annotated
+dent8 context --record-retrieval [--purpose session-start]
+                                   # also record a fact.retrieved audit event per emitted fact
 ```
 
 Semantics, in belief terms:
@@ -41,6 +43,14 @@ Semantics, in belief terms:
   `dent8 explain`.
 - Internal `diagnostic:*` streams are hidden unless `--include-diagnostics` is passed,
   matching `facts list`.
+- **`--record-retrieval` closes the read-audit loop**: every fact the pack emits gains a
+  `fact.retrieved` audit event on its stream, stamped with `--purpose` (default
+  `context-pack`). The audit is recorded *before* the pack is emitted and all-or-nothing,
+  so an emitted pack is never un-audited; the markdown itself stays a pure context block,
+  and `--output json` reports `recorded_retrievals`. Identity resolves like unattributed
+  capture — the active signed grant's source when configured, else `source:agent` at
+  `low` — through the normal write boundary. Audit events never change lifecycle, value,
+  or authority; `dent8 replay` shows them with their purpose.
 
 ## `dent8 capture` — structured fact proposals
 
@@ -48,6 +58,8 @@ Semantics, in belief terms:
 dent8 capture                        # read JSON-lines proposals from stdin
 dent8 capture proposals.jsonl        # ... or from a file
 dent8 capture proposals.jsonl --consume   # ... and truncate the queue afterwards
+dent8 capture proposals.jsonl --consume --keep-failed
+                                     # ... keeping rejected/malformed lines for retry
 ```
 
 Each input line is one proposal:
@@ -55,10 +67,19 @@ Each input line is one proposal:
 ```json
 {"subject": "repo:dent8", "predicate": "cli_binary", "value": "dent8"}
 {"op": "supersede", "subject": "repo:dent8", "predicate": "repo.database", "value": "postgres", "authority": "high", "source": "source:human"}
+{"op": "used_in_decision", "subject": "repo:dent8", "predicate": "repo.database", "decision": "chose the sqlx driver"}
 ```
 
-- `op` is `assert` (the default), `supersede`, `reinforce`, `contradict`, `retract`, or
-  `expire`; `value` is required for the first three and forbidden for the rest.
+- `op` is `assert` (the default), `supersede`, `reinforce`, `contradict`, `retract`,
+  `expire`, or `used_in_decision`; `value` is required for the first three and forbidden
+  for the rest.
+- **`used_in_decision` closes the report half of the read-audit loop**: it records a
+  `fact.used_in_decision` audit event (with the required `decision` field instead of a
+  `value`) on the believed fact(s) of the subject+predicate — how an agent reports which
+  facts informed a decision, through the queue it already writes. Audit events never
+  change lifecycle, value, or authority, and — like dissent — are not authority-gated in
+  the fold, so a low-authority agent can report using a high-authority fact; the
+  write-boundary gate (source ceiling, grant scope, signed identity) still applies.
 - Authority and source resolve **per line**: the proposal's own fields, then the
   `--authority`/`--source` flags, then the active signed grant (`DENT8_GRANT`), then the
   **agent tier of the default profile** — `source:agent` at `low`. Unattributed agent
@@ -69,6 +90,11 @@ Each input line is one proposal:
   silently misattribute a write).
 - Exit codes: `2` if any line was malformed, `1` if the firewall rejected any proposal —
   a **safety signal** worth surfacing in hook logs, not a crash — else `0`.
+- `--consume` truncates the queue after processing; with `--keep-failed`, rejected and
+  malformed lines are written back (accepted lines are still removed), so a failed
+  proposal survives in the file for inspection/retry instead of only in hook logs. Note a
+  kept line is retried verbatim on the next flush — fix or remove it, or it will fail
+  again.
 - Predicate policy still applies: a registry predicate with an authority floor (for
   example `repo.test_command` at `medium`) rejects an agent-tier proposal, exactly as it
   rejects the same write from `dent8 assert`.
@@ -178,6 +204,7 @@ $ echo $?
 - Not a daemon: both commands are one-shot processes over the existing store.
 - Not natural-language ingestion: capture takes structured proposals only. Inferring facts
   from prose remains out of scope, like `native scan`/`native reconcile`.
-- Not read-audit events yet: `context` does not emit `fact.retrieved` audit events for the
-  facts it packs. The `Retrieved`/`UsedInDecision` event kinds exist in the model and fold
-  deterministically, but no read surface emits them yet — that is tracked roadmap work.
+- Not automatic read auditing: `fact.retrieved` is recorded only when
+  `context --record-retrieval` asks for it, and `fact.used_in_decision` only when an agent
+  reports one through a `used_in_decision` proposal. MCP-side read auditing (e.g.
+  auto-auditing `resources/read`) remains roadmap work.

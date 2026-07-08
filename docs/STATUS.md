@@ -194,26 +194,42 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `resources/list` (which carry the same `freshness`); pass `--include-diagnostics` when
   auditing setup noise. Supports `--output json` (each fact gains a `freshness` field).
 - **`dent8 context [--kind KIND] [--key KEY] [--predicate PREDICATE] [--include-stale]
-  [--include-diagnostics]`** — emits the **currently-believed facts as an agent context
+  [--include-diagnostics] [--record-retrieval [--purpose TEXT]]`** — emits the
+  **currently-believed facts as an agent context
   pack**: markdown ready for CLAUDE.md/AGENTS.md-style inclusion or `SessionStart`-hook
   injection, or `--output json` for machines. Belief-state aware: terminal facts never
   appear, believed-but-stale / not-yet-valid facts are omitted by default (counted in a
   trailer; `--include-stale` shows them annotated), and a contested fact is flagged inline —
   with JSON `status: "contested"` — rather than silently picked. Each fact carries its
   authority, asserting source, and `dent8://` receipt reference, so a generated block stays
-  verifiable with `dent8 native reconcile`. See [context-capture.md](context-capture.md).
-- **`dent8 capture [FILE] [--consume] [--authority <level>] [--source <source>]`** — batches
+  verifiable with `dent8 native reconcile`. With **`--record-retrieval`**, every fact the
+  pack emits also gains a **`fact.retrieved` audit event** on its stream (stamped with
+  `--purpose`, default `context-pack`) — the read half of the read-audit loop. Recorded
+  *before* the pack is emitted (an emitted pack is never un-audited), all-or-nothing, as the
+  active signed grant's source when configured, else the agent tier (`source:agent` at
+  `low`), through the normal write boundary; the markdown stays a pure context block and
+  `--output json` reports `recorded_retrievals`. See
+  [context-capture.md](context-capture.md).
+- **`dent8 capture [FILE] [--consume [--keep-failed]] [--authority <level>]
+  [--source <source>]`** — batches
   structured **fact proposals** (JSON lines from stdin or a file) through the *same* `op_*`
   firewall path as the interactive writes: `op` is `assert` (default) / `supersede` /
-  `reinforce` / `contradict` / `retract` / `expire`, and a below-ceiling, laundered, or
-  below-floor proposal is rejected exactly as it would be on `dent8 assert`. Authority and
+  `reinforce` / `contradict` / `retract` / `expire` / `used_in_decision`, and a
+  below-ceiling, laundered, or
+  below-floor proposal is rejected exactly as it would be on `dent8 assert`. A
+  **`used_in_decision`** proposal takes a `decision` instead of a `value` and records a
+  **`fact.used_in_decision` audit event** on the believed fact(s) — how an agent reports
+  which facts informed a decision (the report half of the read-audit loop; audit events
+  never change lifecycle, value, or authority). Authority and
   source resolve per line (line fields, then flags, then `DENT8_GRANT` defaults, then the
   **agent tier of the default profile** — `source:agent` at `low`). Every line is attempted
   and reported; exit `2` on any malformed line, `1` on any firewall rejection (a safety
   signal for hook logs), else `0`. `--consume` truncates the proposals file after
   processing, so a session-end hook can flush an agent-written queue idempotently (a missing
-  file is an empty session). Supports `--output json` with per-line results. See
-  [context-capture.md](context-capture.md) for Claude Code hook wiring.
+  file is an empty session); with `--keep-failed`, rejected and malformed lines are written
+  back instead of truncated away, so a failed proposal survives for inspection/retry rather
+  than only in hook logs. Supports `--output json` with per-line results and `kept_failed`.
+  See [context-capture.md](context-capture.md) for Claude Code hook wiring.
 - **`dent8 snapshot [--include-diagnostics]`** — emits one debugger/control-plane read/audit
   payload over the same durable store: live runtime status, fact-stream browsing, `verify`,
   `conflicts`, and summary counts. In text mode it is a compact operator status; in
@@ -384,10 +400,22 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   source's ceiling is `Unknown`, below the lowest requestable level (`Low`), so it is blocked
   from writing until granted. The registry is **host-local config**, independent of the event
   backend (a Postgres deployment still reads `DENT8_AUTHORITY` from the local filesystem; sync
-  it per instance). Caveats: a grant's `issuer`/`scope` are **recorded but not enforced** in
-  v0 (scope does not restrict predicates); the ceiling is an `op_*`-layer check, so a process
-  calling the Postgres adapter *directly* (bypassing the CLI/MCP) is outside this trust
-  boundary. The ceiling caps *the authority a source may assert*; use signed source identity below to
+  it per instance). A grant's `issuer` and `scope` are **enforced** at the same write gate:
+  `scope` is a *subject* scope — `"*"` (or absent) covers every subject, any other value covers
+  exactly the literal `<kind>:<key>` subject it names (a malformed scope covers *nothing*,
+  fail closed; scope does not restrict predicates) — and a write about a subject outside the
+  grant's scope is rejected. When `issuer` names another **registered source**, the write must
+  also satisfy that issuer's own grant (ceiling *and* scope), transitively — an issuer cannot
+  delegate authority it does not hold (**no self-escalation**), and a self-issued grant or an
+  issuer cycle authorizes nothing (it never grounds out). An issuer that is not a registered
+  source is an operator-level root recorded for audit; the registry has nothing to rank it
+  against, so the chain grounds out there. `authority add` refuses a self-escalating grant up
+  front (above its registered issuer's ceiling, broader than its scope, self-issued, or with a
+  malformed scope), and the write gate re-checks the chain on every write so a hand-edited
+  registry cannot smuggle an escalation past it. Remaining caveat: the ceiling is an
+  `op_*`-layer check, so a process calling the Postgres adapter *directly* (bypassing the
+  CLI/MCP) is outside this trust boundary. The ceiling caps *the authority a source may
+  assert*; use signed source identity below to
   prove *who is holding that source's key* at the CLI/MCP boundary. Supports `--output json`
   for `list`/`add`/`remove`.
 - **`dent8 identity bootstrap | status | repair-env | rotate-source | revoke |
@@ -674,10 +702,12 @@ subject+predicate.
   (`dent8 identity`, above), and the witness *primitive* is runnable (`dent8 witness`, above).
   The remaining product gap is operating those controls: source-key provisioning/rotation,
   hardware/secret-store-backed keys, and the *operated* witness service.
-- **`Retrieved` / `UsedInDecision` have no write surface.** Both audit event kinds are
-  modeled in `dent8-core`, fold deterministically, and are rendered by replay/explain and
-  the MCP output schemas — but no CLI/MCP command currently emits them. The capture side
-  of the read-audit loop is roadmap work.
+- **`Retrieved` / `UsedInDecision` are emitted by the CLI only.** The read-audit loop is
+  now runnable: `dent8 context --record-retrieval` emits `fact.retrieved` for every fact it
+  packs, and a `dent8 capture` proposal with `"op": "used_in_decision"` records
+  `fact.used_in_decision` (both above). The MCP server renders these events in
+  replay/explain and its output schemas but does not yet expose a tool that *emits* them —
+  MCP-side read auditing (e.g. auto-auditing `resources/read`) remains roadmap work.
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
   surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.

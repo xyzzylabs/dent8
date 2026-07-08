@@ -395,6 +395,298 @@ fn capture_reads_stdin_and_reports_json() {
 }
 
 #[test]
+fn context_record_retrieval_appends_audit_events() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "uses_database",
+                "postgres",
+                "--authority",
+                "high",
+                "--source",
+                "source:human",
+            ],
+            &envs,
+        ),
+        "seed retrieval fact",
+    );
+
+    // A plain context read records nothing.
+    let plain = stdout_json(&run_dent8(&["--output", "json", "context"], &envs));
+    assert_eq!(plain["recorded_retrievals"], Value::Null);
+
+    // With --record-retrieval every emitted fact gains a fact.retrieved audit event.
+    let audited = run_dent8(
+        &[
+            "--output",
+            "json",
+            "context",
+            "--record-retrieval",
+            "--purpose",
+            "session-start",
+        ],
+        &envs,
+    );
+    assert_success(&audited, "context --record-retrieval");
+    let audited = stdout_json(&audited);
+    assert_eq!(audited["status"], "ok");
+    assert_eq!(audited["count"], 1);
+    assert_eq!(audited["recorded_retrievals"], 1);
+
+    // The audit event is on the fact's stream, replayable with its purpose, and recorded
+    // as the unattributed agent tier (context takes no --source; the reader is an agent).
+    let replayed = stdout_json(&run_dent8(
+        &["--output", "json", "replay", "repo:app", "uses_database"],
+        &envs,
+    ));
+    let events = replayed["events"].as_array().expect("events array");
+    let retrieved = events
+        .iter()
+        .find(|event| event["kind"] == "fact.retrieved")
+        .expect("a fact.retrieved event");
+    assert_eq!(retrieved["details"]["purpose"], "session-start");
+    assert_eq!(retrieved["source"], "source:agent");
+    assert_eq!(retrieved["authority"], "low");
+    // Retrieval is an audit event: the believed fact is untouched.
+    assert_eq!(replayed["current"]["value"]["text"], "postgres");
+
+    // The audited log still verifies, and the markdown pack stays a pure context block
+    // (the audit rides on the store, not in the injected text).
+    assert_success(
+        &run_dent8(&["verify"], &envs),
+        "verify after retrieval audit",
+    );
+    let markdown = run_dent8(&["context", "--record-retrieval"], &envs);
+    assert_success(&markdown, "context --record-retrieval markdown");
+    let markdown = stdout(&markdown);
+    assert!(markdown.contains("## Project facts (dent8)"), "{markdown}");
+    assert!(!markdown.contains("retriev"), "{markdown}");
+}
+
+#[test]
+fn capture_keep_failed_preserves_rejected_lines_on_consume() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let proposals = temp.file("proposals.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    fs::write(
+        &proposals,
+        concat!(
+            r#"{"subject": "repo:app", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
+            "\n",
+            r#"{"op": "supersede", "subject": "repo:app", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            "\n",
+            "not json\n",
+        ),
+    )
+    .expect("write proposals");
+
+    let captured = run_dent8(
+        &[
+            "--output",
+            "json",
+            "capture",
+            &proposals,
+            "--consume",
+            "--keep-failed",
+        ],
+        &envs,
+    );
+    // The malformed line dominates the batch status (exit 2); the rejection is line 2.
+    assert_eq!(captured.status.code(), Some(2), "{}", stdout(&captured));
+    let json = stdout_json(&captured);
+    assert_eq!(json["accepted"], 1);
+    assert_eq!(json["rejected"], 1);
+    assert_eq!(json["invalid"], 1);
+    assert_eq!(json["consumed"], proposals.as_str());
+    assert_eq!(json["kept_failed"], 2);
+
+    // The accepted line is gone; the rejected + malformed lines survive for retry.
+    let remaining = fs::read_to_string(&proposals).expect("read proposals");
+    assert_eq!(line_count(&proposals), 2, "{remaining}");
+    assert!(remaining.contains("\"op\": \"supersede\""), "{remaining}");
+    assert!(remaining.contains("not json"), "{remaining}");
+    assert!(!remaining.contains("\"postgres\""), "{remaining}");
+
+    // Without --keep-failed the same consume truncates everything, as before.
+    let flushed = run_dent8(&["capture", &proposals, "--consume"], &envs);
+    assert_eq!(flushed.status.code(), Some(2), "{}", stderr(&flushed));
+    assert!(
+        stderr(&flushed).contains("consumed"),
+        "{}",
+        stderr(&flushed)
+    );
+    assert_eq!(line_count(&proposals), 0);
+
+    // --keep-failed without --consume is a usage error.
+    let usage = run_dent8(&["capture", &proposals, "--keep-failed"], &envs);
+    assert_eq!(usage.status.code(), Some(2), "{}", stderr(&usage));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // one linear scenario: grant -> scope -> delegate -> tamper
+fn scoped_and_issuer_capped_grants_are_enforced_end_to_end() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let registry = temp.file("authority.json").to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", registry.as_str()),
+    ];
+
+    // A lead scoped to repo:app, and a bot whose grant is issued by that lead.
+    assert_success(
+        &run_dent8(
+            &[
+                "authority",
+                "add",
+                "source:lead",
+                "medium",
+                "operator",
+                "repo:app",
+            ],
+            &envs,
+        ),
+        "add scoped lead grant",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "authority",
+                "add",
+                "source:bot",
+                "low",
+                "source:lead",
+                "repo:app",
+            ],
+            &envs,
+        ),
+        "add issuer-capped bot grant",
+    );
+
+    // The scope admits writes about its subject...
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "uses_database",
+                "postgres",
+                "--authority",
+                "medium",
+                "--source",
+                "source:lead",
+            ],
+            &envs,
+        ),
+        "in-scope write",
+    );
+    // ...and rejects writes about any other subject.
+    let outside = run_dent8(
+        &[
+            "assert",
+            "repo:other",
+            "uses_database",
+            "postgres",
+            "--authority",
+            "medium",
+            "--source",
+            "source:lead",
+        ],
+        &envs,
+    );
+    assert_eq!(outside.status.code(), Some(1), "{}", stderr(&outside));
+    assert!(
+        stderr(&outside).contains("authority scope"),
+        "{}",
+        stderr(&outside)
+    );
+
+    // authority add refuses a delegation the issuer cannot make: above its ceiling...
+    let escalated = run_dent8(
+        &["authority", "add", "source:bot2", "high", "source:lead"],
+        &envs,
+    );
+    assert_eq!(escalated.status.code(), Some(2), "{}", stderr(&escalated));
+    assert!(
+        stderr(&escalated).contains("cannot delegate"),
+        "{}",
+        stderr(&escalated)
+    );
+    // ...or a self-issued grant.
+    let self_issued = run_dent8(
+        &["authority", "add", "source:loop", "low", "source:loop"],
+        &envs,
+    );
+    assert_eq!(
+        self_issued.status.code(),
+        Some(2),
+        "{}",
+        stderr(&self_issued)
+    );
+    assert!(
+        stderr(&self_issued).contains("no self-escalation"),
+        "{}",
+        stderr(&self_issued)
+    );
+
+    // A hand-edited registry cannot smuggle self-escalation past the write gate: raise the
+    // bot's recorded ceiling above its issuer's and the write is still capped by the issuer.
+    let mut edited: Value =
+        serde_json::from_str(&fs::read_to_string(&registry).expect("read registry"))
+            .expect("parse registry");
+    edited["sources"]["source:bot"]["max_authority"] = Value::String("high".to_string());
+    fs::write(
+        &registry,
+        serde_json::to_string_pretty(&edited).expect("serialize registry"),
+    )
+    .expect("write registry");
+    let laundered = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "build_tool",
+            "cargo",
+            "--authority",
+            "high",
+            "--source",
+            "source:bot",
+        ],
+        &envs,
+    );
+    assert_eq!(laundered.status.code(), Some(1), "{}", stderr(&laundered));
+    assert!(
+        stderr(&laundered).contains("cannot delegate"),
+        "{}",
+        stderr(&laundered)
+    );
+    // Within the issuer's ceiling and scope the bot still writes.
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "build_tool",
+                "cargo",
+                "--authority",
+                "medium",
+                "--source",
+                "source:bot",
+            ],
+            &envs,
+        ),
+        "delegated in-scope write",
+    );
+}
+
+#[test]
 fn authority_defaults_seeds_the_human_ci_agent_profile() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
@@ -1081,8 +1373,8 @@ fn authority_commands_emit_machine_readable_json() {
     assert_eq!(add["max_authority"], "high");
     assert_eq!(add["issuer"], "owner");
     assert_eq!(add["scope"], "project:dent8");
-    assert_eq!(add["issuer_enforced"], false);
-    assert_eq!(add["scope_enforced"], false);
+    assert_eq!(add["issuer_enforced"], true);
+    assert_eq!(add["scope_enforced"], true);
 
     let listed = run_dent8(&["--output", "json", "authority", "list"], &envs);
     assert_success(&listed, "authority list --output json after add");
