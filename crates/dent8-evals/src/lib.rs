@@ -15,6 +15,13 @@
 //! This is the empirical complement to the `#[cfg(kani)]` proofs and the exhaustive
 //! authority-lattice tests in `dent8-core`.
 
+pub mod adversarial;
+
+pub use adversarial::{
+    AdversarialCase, AttackClass, ClassReport, Disposition, Layer, adversarial_summary_table,
+    class_reports, run_adversarial_corpus,
+};
+
 use dent8_core::{
     ActorId, Authority, AuthorityLevel, Confidence, ContradictionBasis, Evidence, EvidenceId,
     EvidenceKind, FactEvent, FactEventId, FactEventKind, FactId, FactLifecycle, FactState,

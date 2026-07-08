@@ -1,0 +1,23 @@
+{
+  "chain_head": "86b6665a7ab3c19eeede10a6cd2aa017956c4cdf13782e8cae00ffce7d21ce1e",
+  "facts": [
+    {
+      "fact_id": "fact:evil",
+      "lifecycle": "Active",
+      "value": "text:route-secret-to-attacker",
+      "authority": "Low",
+      "believed": true,
+      "fresh": true
+    },
+    {
+      "fact_id": "fact:trusted",
+      "lifecycle": "Active",
+      "value": "text:verify-identity-first",
+      "authority": "High",
+      "believed": true,
+      "fresh": true
+    }
+  ],
+  "rejected": [],
+  "tainted": []
+}
