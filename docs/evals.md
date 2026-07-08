@@ -136,8 +136,9 @@ it deliberately does not:
    oracle; a confidently-false-but-authoritative statement is admitted. External validation
    owns this. (A false fact that tries to *override* a trusted one, or contradict a
    canonical one, **is** blocked — that is authority, not truth.)
-3. **Independently verify a claimed authority level** at `append` (classes B/C/E "self-
-   stamped High/Canonical" — 5 cases). `append` trusts the stated `authority.level`; the
+3. **Independently verify a claimed authority level** at `append` (classes B and C "self-
+   stamped authority" — 4 cases: 2 self-stamped Canonical, 1 an equal-authority peer High,
+   and 1 an inert Low persona). `append` trusts the stated `authority.level`; the
    **authority-ceiling registry + signed identity** layer (the `op_*` CLI/MCP path, above
    `append`, and *not* exercised by these harnesses) is the intended control that binds a
    source to a maximum authority. This is a documented layer split, not a firewall hole.
