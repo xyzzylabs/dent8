@@ -177,50 +177,76 @@ fn fact_markers(fact: &ContextFact) -> String {
     markers
 }
 
-/// Splice the block into the existing file content idempotently. If the sentinels are present,
-/// only the block between them is replaced — everything outside is preserved byte-for-byte. If
-/// not, the block is appended after the existing content (separated by a blank line). A missing
-/// file becomes just the block.
-fn splice_managed_block(existing: Option<&str>, block: &str) -> (String, BlockOutcome) {
+/// Splice the block into the existing file content idempotently. Exactly one well-formed
+/// `BEGIN … END` pair is replaced in place (everything outside preserved byte-for-byte); a file
+/// with no sentinels gets the block appended (or created). Any *malformed* sentinel arrangement
+/// — a `BEGIN` with no matching `END`, an orphan `END`, `END` before `BEGIN`, or duplicate
+/// sentinels — is refused rather than appended-to, because appending past an unterminated `BEGIN`
+/// would let the next export delete the user's content between the stray `BEGIN` and the new
+/// `END`. The caller surfaces the error as a nonzero exit and leaves the file untouched.
+fn splice_managed_block(
+    existing: Option<&str>,
+    block: &str,
+) -> Result<(String, BlockOutcome), String> {
     let Some(existing) = existing else {
-        return (format!("{block}\n"), BlockOutcome::Created);
+        return Ok((format!("{block}\n"), BlockOutcome::Created));
     };
-    if let Some(begin_start) = existing.find(BEGIN_SENTINEL)
-        && let Some(end_rel) = existing[begin_start..].find(END_SENTINEL)
-    {
-        let end_after = begin_start + end_rel + END_SENTINEL.len();
-        let had_newline = existing[end_after..].starts_with('\n');
-        let replace_end = if had_newline {
-            end_after + 1
-        } else {
-            end_after
-        };
-        let replacement = if had_newline {
-            format!("{block}\n")
-        } else {
-            block.to_string()
-        };
-        let mut result =
-            String::with_capacity(existing.len().saturating_sub(end_after) + block.len() + 1);
-        result.push_str(&existing[..begin_start]);
-        result.push_str(&replacement);
-        result.push_str(&existing[replace_end..]);
-        return (result, BlockOutcome::Refreshed);
-    }
-    if existing.is_empty() {
-        return (format!("{block}\n"), BlockOutcome::Created);
-    }
-    let separator = if existing.ends_with("\n\n") {
-        ""
-    } else if existing.ends_with('\n') {
-        "\n"
-    } else {
-        "\n\n"
+    let begins: Vec<usize> = existing
+        .match_indices(BEGIN_SENTINEL)
+        .map(|(i, _)| i)
+        .collect();
+    let ends: Vec<usize> = existing
+        .match_indices(END_SENTINEL)
+        .map(|(i, _)| i)
+        .collect();
+    let stray_sentinel = || {
+        Err(
+            "found a dent8 BEGIN/END managed-block sentinel that is not exactly one well-formed \
+             BEGIN … END pair — refusing to overwrite; fix or remove the stray sentinel"
+                .to_string(),
+        )
     };
-    (
-        format!("{existing}{separator}{block}\n"),
-        BlockOutcome::Appended,
-    )
+    match (begins.as_slice(), ends.as_slice()) {
+        // No managed block yet: append after existing content (or create).
+        ([], []) => {
+            if existing.is_empty() {
+                return Ok((format!("{block}\n"), BlockOutcome::Created));
+            }
+            let separator = if existing.ends_with("\n\n") {
+                ""
+            } else if existing.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            };
+            Ok((
+                format!("{existing}{separator}{block}\n"),
+                BlockOutcome::Appended,
+            ))
+        }
+        // Exactly one well-formed pair (BEGIN before END): replace in place.
+        ([begin_start], [end_start]) if begin_start < end_start => {
+            let end_after = end_start + END_SENTINEL.len();
+            let had_newline = existing[end_after..].starts_with('\n');
+            let replace_end = if had_newline {
+                end_after + 1
+            } else {
+                end_after
+            };
+            let replacement = if had_newline {
+                format!("{block}\n")
+            } else {
+                block.to_string()
+            };
+            let mut result =
+                String::with_capacity(existing.len().saturating_sub(end_after) + block.len() + 1);
+            result.push_str(&existing[..*begin_start]);
+            result.push_str(&replacement);
+            result.push_str(&existing[replace_end..]);
+            Ok((result, BlockOutcome::Refreshed))
+        }
+        _ => stray_sentinel(),
+    }
 }
 
 struct ExportReport {
@@ -243,7 +269,8 @@ fn export_native(target: &Path) -> Result<ExportReport, OpError> {
             )));
         }
     };
-    let (contents, block_outcome) = splice_managed_block(existing.as_deref(), &block);
+    let (contents, block_outcome) =
+        splice_managed_block(existing.as_deref(), &block).map_err(OpError::Rejected)?;
     std::fs::write(target, contents).map_err(|error| {
         OpError::Rejected(format!("cannot write {}: {error}", target.display()))
     })?;
@@ -388,8 +415,11 @@ fn parse_receipt_line(line: &str) -> Option<Result<ParsedReceipt, String>> {
     let after_uri = marker_pos + uri_end;
     let equals = line[after_uri..].find('=')?;
     let region = line[after_uri + equals + 1..].trim_start();
-    // Split the rendered value from the trailing receipt metadata comment (if any).
-    let (value_token, meta_region) = match region.split_once(RECEIPT_COMMENT_PREFIX) {
+    // Split the rendered value from the trailing receipt metadata comment. The receipt comment is
+    // always the trailing element of a managed-block line, so split on its LAST occurrence — a
+    // Text value that itself contains the literal `<!-- dent8 receipt` token then survives intact
+    // instead of being truncated (and silently dropped as "skipped").
+    let (value_token, meta_region) = match region.rsplit_once(RECEIPT_COMMENT_PREFIX) {
         Some((value, meta)) => (value, meta),
         None => (region, ""),
     };
@@ -959,13 +989,13 @@ mod tests {
         );
 
         // Created.
-        let (created, kind) = splice_managed_block(None, block);
+        let (created, kind) = splice_managed_block(None, block).expect("create");
         assert_eq!(kind, BlockOutcome::Created);
         assert_eq!(created, format!("{block}\n"));
 
         // Appended after existing prose (existing bytes preserved).
         let existing = "# Title\n\nHuman prose.\n";
-        let (appended, kind) = splice_managed_block(Some(existing), block);
+        let (appended, kind) = splice_managed_block(Some(existing), block).expect("append");
         assert_eq!(kind, BlockOutcome::Appended);
         assert!(appended.starts_with(existing), "{appended}");
         assert!(appended.contains(block), "{appended}");
@@ -975,7 +1005,7 @@ mod tests {
         let after = "\nAfter prose that must survive.\n";
         let old_block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nOLD\n<!-- END dent8 managed block -->";
         let file = format!("{before}{old_block}{after}");
-        let (refreshed, kind) = splice_managed_block(Some(&file), block);
+        let (refreshed, kind) = splice_managed_block(Some(&file), block).expect("refresh");
         assert_eq!(kind, BlockOutcome::Refreshed);
         assert!(
             refreshed.starts_with(before),
@@ -993,5 +1023,40 @@ mod tests {
             !refreshed.contains("OLD"),
             "old block content leaked:\n{refreshed}"
         );
+    }
+
+    #[test]
+    fn splice_refuses_a_stray_begin_sentinel_without_a_matching_end() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+        // An orphan BEGIN (no END) followed by human content: appending would let the next export
+        // match the orphan BEGIN and delete that content. Refuse instead.
+        let orphan = "# Title\n\n<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nprecious human content\n";
+        assert!(
+            splice_managed_block(Some(orphan), block).is_err(),
+            "an unterminated BEGIN sentinel must be refused"
+        );
+        // Orphan END, duplicate BEGINs, and END-before-BEGIN are all refused too.
+        let orphan_end = "text\n<!-- END dent8 managed block -->\n";
+        assert!(splice_managed_block(Some(orphan_end), block).is_err());
+        let two_begins = format!(
+            "{block}\n<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\n"
+        );
+        assert!(splice_managed_block(Some(&two_begins), block).is_err());
+    }
+
+    #[test]
+    fn value_containing_the_receipt_token_survives_parsing() {
+        // A Text value that itself contains the literal receipt-comment token must not be
+        // truncated: the split is on the LAST occurrence, which is the trailing receipt comment.
+        let raw = "a value with a  <!-- dent8 receipt look-alike inside";
+        let encoded = encode_block_value(&FactValue::Text(raw.to_string())).expect("encode");
+        let line = format!(
+            "- `dent8://repo/demo/note` = {encoded}  <!-- dent8 receipt fact=fact:repo:demo:note:0 event_hash=abc authority=high source=source:human -->"
+        );
+        let parsed = parse_receipt_line(&line)
+            .expect("has a marker")
+            .expect("well-formed");
+        assert_eq!(parsed.value, raw, "value must survive intact");
+        assert_eq!(parsed.authority.as_deref(), Some("high"));
     }
 }
