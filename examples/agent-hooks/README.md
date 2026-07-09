@@ -17,9 +17,12 @@ Provider profiles:
 - [`claude-code/settings.sample.json`](claude-code/settings.sample.json)
 - [`gemini/settings.sample.json`](gemini/settings.sample.json)
 - [`cascade/hooks.sample.json`](cascade/hooks.sample.json)
-- [`cursor/`](cursor/)
+- [`cursor/`](cursor/) — MCP + `stop`-hook capture + `.mdc` rules block
 - [`grok-build/`](grok-build/)
 - [`hecate/`](hecate/)
+- [`generic/`](generic/) — provider-neutral POSIX scripts (`dent8 context` in, `dent8 capture`
+  out, and an idempotent `AGENTS.md` managed-block writer) for any framework with no native
+  hook schema. See also [connect any MCP client](../../docs/mcp-clients.md).
 
 ## Install shape
 

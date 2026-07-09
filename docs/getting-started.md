@@ -192,6 +192,27 @@ and (b).
 
 ## 4. Wire your agents
 
+Every adapter reduces to two moves — **context in** (inject the believed facts before the model
+runs) and **capture out** (flush proposed facts through the firewall after) — plus, where the
+tool speaks it, the **MCP** server for live tool-mediated access. The matrix below maps common
+tools to their adapter; only the Claude Code row is verified end-to-end in this repo, the rest
+are documented per each vendor's docs.
+
+| Agent / framework | Context in | Capture out | MCP | Adapter |
+| --- | --- | --- | --- | --- |
+| Claude Code *(verified)* | `SessionStart` → `dent8 context` | `SessionEnd` → `dent8 capture` | yes | [`.claude/settings.json`](../.claude/settings.json), [`examples/agent-hooks/claude-code/`](../examples/agent-hooks/claude-code/) |
+| Cursor | `.cursor/rules/*.mdc` block (or AGENTS.md) | `stop` hook → `dent8 capture` | yes | [`examples/agent-hooks/cursor/`](../examples/agent-hooks/cursor/) |
+| Codex CLI | `AGENTS.md` block | `notify` wrapper (coarse) | `mcp_servers` TOML | [`examples/codex/`](../examples/codex/), [mcp-clients](mcp-clients.md) |
+| Windsurf / Cline / Zed | `AGENTS.md` or native rules block | manual / wrapper | yes | [`examples/agent-hooks/generic/`](../examples/agent-hooks/generic/), [mcp-clients](mcp-clients.md) |
+| aider | `AGENTS.md` / `--read` file | wrapper → `dent8 capture` | no | [`examples/agent-hooks/generic/`](../examples/agent-hooks/generic/) |
+| Any MCP client | (via MCP tools) | (via MCP tools) | yes | [`docs/mcp-clients.md`](mcp-clients.md) |
+| Any shell framework | `pre-session.sh` (`dent8 context`) | `post-session.sh` (`dent8 capture`) | — | [`examples/agent-hooks/generic/`](../examples/agent-hooks/generic/) |
+
+Claude Code is verified end-to-end (this repo dogfoods it); every other row is documented per
+that vendor's docs and not exercised here. The sub-sections below detail the load-bearing
+patterns — Claude Code hooks (a), the universal `dent8 context` pipe (b), CI capture (c), and
+the MCP server (d).
+
 **(a) Claude Code hooks.** This repo ships its own wiring in
 [`.claude/settings.json`](../.claude/settings.json). The two load-bearing hooks are
 `SessionStart` (inject the believed facts via `dent8 context`) and `SessionEnd` (flush
@@ -290,6 +311,25 @@ jobs:
           dent8 assert repo:dent8 test_command "cargo test --workspace" \
             --authority medium --source source:ci
 ```
+
+**(d) MCP — live tool-mediated access.** For any MCP-capable client, `dent8 mcp serve` exposes
+the belief surface over JSON-RPC 2.0 stdio (16 tools; the 7 write tools go through the same
+firewall as the CLI). The canonical `mcpServers` block:
+
+```json
+{
+  "mcpServers": {
+    "dent8": { "command": "dent8", "args": ["mcp", "serve"], "env": {} }
+  }
+}
+```
+
+Zed uses `context_servers` instead of `mcpServers`, and Codex uses an `mcp_servers` TOML table —
+see [Connect any MCP client](mcp-clients.md) for the verified stdio handshake and per-client
+configs, and [`examples/mcp/`](../examples/mcp/) for the belief model and env-var reference. For
+a framework with **no** MCP client and **no** native hooks, the provider-neutral scripts in
+[`examples/agent-hooks/generic/`](../examples/agent-hooks/generic/) provide the same context-in
+/ capture-out loop plus an idempotent `AGENTS.md` writer.
 
 ## 5. Day-2 operations
 
