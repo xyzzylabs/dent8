@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-09
+
 ### BREAKING
 - **Store resolution now discovers `.dent8/` within the enclosing git repository.** When
   `DENT8_LOG` / `DENT8_AUTHORITY` / `DENT8_STORE_URL` are unset, the CLI locates the project
@@ -57,6 +59,22 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   existing `TtlCeilingExceeded` error. Omitting it leaves the predicate default (or non-expiring).
   This is the first shipped write surface that accepts a caller TTL; the MCP write tools do not yet
   expose one.
+- Added **native memory import/export** so agents can round-trip through a `CLAUDE.md` / `AGENTS.md`
+  file without hand-editing the store ([native-memory.md](docs/native-memory.md)). Both are **stock
+  commands** — they ship in every build (work under `--no-default-features`) and are not tied to the
+  Parquet `export` feature.
+  - `dent8 export --target <FILE>` renders the currently-believed facts into a receipt-bearing,
+    sentinel-delimited **managed block** that is spliced idempotently into the target memory file:
+    it preserves the surrounding human-authored text, refreshes byte-identically on re-export, and
+    **rejects malformed or stray sentinels before writing** rather than corrupting the file. Each
+    fact is emitted as a bullet carrying a `dent8://kind/key/predicate` receipt marker plus the
+    event hash, authority, and source, between the `BEGIN`/`END` sentinels.
+  - `dent8 import <FILE>` parses durable facts back out of a memory file and routes **each one
+    through the full write firewall** (authority → content-check → policy → arbitrate → append) with
+    no bypass. It recovers facts three ways — managed-block lines, inline `dent8://…= value`
+    markers, and fenced ` ```dent8 ` JSON proposals — supports `--dry-run` to preview without
+    writing, and accepts `--authority` / `--source` proposal metadata (still subject to the
+    authority ceiling).
 
 ### Changed
 - `dent8 init` now **seeds the default authority profile** (`source:human`/High,
@@ -64,6 +82,20 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   addition to the init source grant — so a fresh store carries the profile without a follow-up
   `dent8 authority defaults`. Running `authority defaults` afterwards stays idempotent (merge-only,
   never downgrades an existing grant).
+
+### Fixed
+- `dent8 export --target` locates the managed block with a Markdown-fence-aware sentinel scan, so
+  `BEGIN`/`END` markers inside a fenced example (e.g. in the docs) are ignored instead of mistaken
+  for the live block; the emitted block now matches the target file's dominant line ending (a CRLF
+  file stays CRLF, no mixed endings); and it refuses to append into an unclosed code fence rather
+  than corrupting the file.
+
+### Documentation
+- Added a **Getting Started guide** ([getting-started.md](docs/getting-started.md)): a zero-to-shared
+  fact base walkthrough with commands run against a real binary and trimmed-but-verbatim output.
+- Added a **native-memory reference** ([native-memory.md](docs/native-memory.md)) documenting the
+  `dent8 export --target` / `dent8 import` memory-file round trip, the managed-block/sentinel format,
+  and how imported facts are firewalled through the write path.
 
 ## [0.4.0] - 2026-07-08
 

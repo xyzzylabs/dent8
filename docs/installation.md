@@ -1,7 +1,7 @@
 # Installation
 
 The published CLI package is `dent8` and the installed binary is `dent8`. The current
-release is `0.4.0`.
+release is `0.5.0`.
 
 ## crates.io
 
@@ -15,7 +15,7 @@ dent8 --version
 For a reproducible install pinned to this release:
 
 ```sh
-cargo install dent8 --version 0.4.0 --locked
+cargo install dent8 --version 0.5.0 --locked
 ```
 
 The stock binary includes the file dev store, embedded SQLite, signed identity, witness
@@ -47,7 +47,7 @@ because the Arrow/Parquet stack is large and less common.
 Example for macOS/Linux:
 
 ```sh
-version=v0.4.0
+version=v0.5.0
 target=aarch64-apple-darwin
 base="https://github.com/xyzzylabs/dent8/releases/download/$version"
 
@@ -60,7 +60,7 @@ install -m 0755 "dent8-$version-$target/dent8" "$HOME/.local/bin/dent8"
 dent8 --version
 ```
 
-For Windows, download `dent8-v0.4.0-x86_64-pc-windows-msvc.zip` and its `.sha256`, verify
+For Windows, download `dent8-v0.5.0-x86_64-pc-windows-msvc.zip` and its `.sha256`, verify
 the checksum, then put `dent8.exe` on `PATH`.
 
 ## First Project
@@ -149,5 +149,5 @@ daemon socket with the generated agent identity and prints the exact
 Authenticated daemon connections can write through the same firewall and receive
 offline-verifiable write attestations. The daemon is still per-user and single-source in v0:
 use separate stdio MCP subprocesses, or separate daemon instances, when distinct agent
-provenance matters. Remote HTTP/streamable MCP is future work, not part of the `0.4.0`
+provenance matters. Remote HTTP/streamable MCP is future work, not part of the `0.5.0`
 release.
