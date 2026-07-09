@@ -50,6 +50,188 @@ fn alice_fact_round_trips_with_subject_and_metadata_flags() {
 }
 
 #[test]
+fn a_subdir_write_with_unset_env_uses_the_discovered_dent8_store() {
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+
+    // Initialize a project store at <root>/.dent8 with no env sourced.
+    let init = run_dent8_in(&root, &["init"], &[]);
+    assert_success(&init, "init");
+    let store_log = root.join(".dent8").join("memory.jsonl");
+    assert!(
+        store_log.exists(),
+        "init should create the .dent8 store log"
+    );
+
+    // From a nested subdirectory, with every DENT8_* var unset, a write must discover the
+    // project's .dent8 store upward (git-style) instead of silently creating a parallel
+    // ./dent8-log.jsonl in the cwd — the old first-run footgun.
+    let subdir = root.join("nested").join("deeper");
+    fs::create_dir_all(&subdir).expect("create subdir");
+    let asserted = run_dent8_in(
+        &subdir,
+        &[
+            "assert",
+            "repo:app",
+            "database",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+        ],
+        &[],
+    );
+    assert_success(&asserted, "assert from subdir");
+
+    // The write landed in the discovered store, and NOT in a parallel cwd log.
+    assert!(
+        !subdir.join("dent8-log.jsonl").exists(),
+        "must not create a parallel ./dent8-log.jsonl in the subdir"
+    );
+    assert!(
+        !root.join("dent8-log.jsonl").exists(),
+        "must not create a parallel ./dent8-log.jsonl in the project root either"
+    );
+    let store_contents = fs::read_to_string(&store_log).expect("read discovered store");
+    assert!(
+        store_contents.contains("postgres"),
+        "the discovered store must hold the write: {store_contents}"
+    );
+
+    // A read from the subdir sees the same discovered store.
+    let explained = run_dent8_in(&subdir, &["explain", "repo:app", "database"], &[]);
+    assert_success(&explained, "explain from subdir");
+    assert!(stdout(&explained).contains("postgres"));
+}
+
+#[test]
+fn init_seeds_the_default_authority_profile_in_a_single_registry() {
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+
+    let init = run_dent8_in(&root, &["init"], &[]);
+    assert_success(&init, "init");
+
+    let registry_path = root.join(".dent8").join("authority.json");
+    let read_sources = || -> Value {
+        let raw = fs::read_to_string(&registry_path).expect("read registry");
+        serde_json::from_str::<Value>(&raw)
+            .expect("parse registry")
+            .get("sources")
+            .cloned()
+            .expect("sources object")
+    };
+
+    // A fresh init seeds the shipped default profile AND keeps its own source:local grant, all
+    // in the one discovered registry — no second `authority defaults` step required.
+    let sources = read_sources();
+    for src in ["source:local", "source:human", "source:ci", "source:agent"] {
+        assert!(
+            sources.get(src).is_some(),
+            "init registry must contain {src}: {sources}"
+        );
+    }
+    let seeded_count = sources.as_object().expect("sources map").len();
+
+    // `authority defaults` with unset env must touch that SAME discovered registry (merge-only,
+    // idempotent) rather than writing a divergent ./dent8-authority.json in the cwd.
+    let defaults = run_dent8_in(&root, &["authority", "defaults"], &[]);
+    assert_success(&defaults, "authority defaults");
+    assert!(
+        !root.join("dent8-authority.json").exists(),
+        "authority defaults must not create a parallel ./dent8-authority.json"
+    );
+    let after = read_sources();
+    assert_eq!(
+        after.as_object().expect("sources map").len(),
+        seeded_count,
+        "merge-only defaults must not add or duplicate sources"
+    );
+    assert!(
+        after.get("source:local").is_some(),
+        "source:local grant must be kept (merge-only): {after}"
+    );
+}
+
+#[test]
+fn assert_with_ttl_sets_the_fact_ttl_and_enforces_the_ceiling() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // A within-ceiling --ttl on an unregistered predicate is admitted and the persisted fact
+    // carries a finite DurationMillis TTL (30 days).
+    let ok = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "note",
+            "temporary",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+            "--ttl",
+            "30d",
+        ],
+        &envs,
+    );
+    assert_success(&ok, "assert --ttl 30d");
+    let contents = fs::read_to_string(&log).expect("read log");
+    let thirty_days_ms = (30u64 * 86_400_000).to_string();
+    assert!(
+        contents.contains("DurationMillis") && contents.contains(&thirty_days_ms),
+        "the fact must carry a finite {thirty_days_ms}ms TTL: {contents}"
+    );
+
+    // A --ttl past the 90-day retention ceiling is rejected on write (Item 3 + Item 4).
+    let rejected = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "note",
+            "toolong",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+            "--ttl",
+            "120d",
+        ],
+        &envs,
+    );
+    assert!(
+        !rejected.status.success(),
+        "assert --ttl 120d must be rejected, stdout: {}",
+        stdout(&rejected)
+    );
+    assert!(
+        stderr(&rejected).contains("exceeds the retention"),
+        "rejection must cite the retention ceiling: {}",
+        stderr(&rejected)
+    );
+
+    // A bad --ttl value is a usage error, not a silent no-op.
+    let bad = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "note",
+            "x",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+            "--ttl",
+            "90",
+        ],
+        &envs,
+    );
+    assert!(!bad.status.success(), "a unit-less --ttl must be rejected");
+}
+
+#[test]
 fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

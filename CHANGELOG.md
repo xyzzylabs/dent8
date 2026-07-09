@@ -9,6 +9,47 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### BREAKING
+- **Store resolution now discovers `.dent8/` upward (git-style).** When `DENT8_LOG` /
+  `DENT8_AUTHORITY` (and `DENT8_STORE_URL`) are unset, the CLI walks up from the current
+  directory to the first ancestor containing a `.dent8/` store and uses the log and
+  `authority.json` **inside it**, instead of silently creating a parallel `./dent8-log.jsonl`
+  in the cwd. A command run from a sub-directory of an initialized project now reads and writes
+  that project's store even when `.dent8/env` was never sourced. An explicit env override still
+  wins (backward compatible), and a fresh directory with no `.dent8/` upward still falls back to
+  the legacy cwd default so `dent8 init` keeps working. **Migration:** a stray `./dent8-log.jsonl`
+  a previous run created in a sub-directory is no longer read — point `DENT8_LOG` at it, or
+  re-capture its facts into the discovered store.
+- **The authority registry is unified to one location per store.** `dent8 authority add` /
+  `defaults` / `list` / `remove` now resolve to the discovered `.dent8/authority.json` (the same
+  file `dent8 init` seeds) when `DENT8_AUTHORITY` is unset, rather than a separate
+  `./dent8-authority.json`. **Migration:** a `./dent8-authority.json` created by an unsourced-env
+  `authority` command is no longer read — its grants must be re-added (or `DENT8_AUTHORITY` set to
+  its path). Because discovery now finds the registry a sub-directory command previously missed,
+  the registry's deny-by-default enforcement applies in more situations than before.
+- **Unregistered predicates are now subject to the TTL retention ceiling.** `enforce_policy`
+  previously skipped every check for a predicate not in the registry, so an assertion with an
+  arbitrarily far-future *finite* TTL on an unknown predicate bypassed the ceiling. Unregistered
+  predicates now fall back to the registry-wide global ceiling (registered predicates are
+  unchanged; `Ttl::Never` remains out of scope). An over-ceiling finite TTL on any predicate is
+  now rejected on `assert`/`derive`.
+
+### Added
+- Added a **`--ttl <DURATION>` flag** to `assert`, `supersede`, `contradict`, and `derive`, and a
+  matching **`ttl` field to capture proposals**. The duration accepts `ms`/`s`/`m`/`h`/`d`
+  suffixes (e.g. `90d`, `12h`). The caller-supplied finite TTL flows through the write boundary and
+  is bounded by the retention ceiling, so a `--ttl` beyond the ceiling is rejected with the
+  existing `TtlCeilingExceeded` error. Omitting it leaves the predicate default (or non-expiring).
+  This is the first shipped write surface that accepts a caller TTL; the MCP write tools do not yet
+  expose one.
+
+### Changed
+- `dent8 init` now **seeds the default authority profile** (`source:human`/High,
+  `source:ci`/Medium, `source:agent`/Low) into the store's `authority.json`, merge-only, in
+  addition to the init source grant — so a fresh store carries the profile without a follow-up
+  `dent8 authority defaults`. Running `authority defaults` afterwards stays idempotent (merge-only,
+  never downgrades an existing grant).
+
 ## [0.4.0] - 2026-07-08
 
 ### Added

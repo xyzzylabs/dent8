@@ -383,6 +383,11 @@ struct ValueWriteArgs {
     /// Past it the fact reads as stale, like an elapsed TTL.
     #[arg(long = "valid-to", value_name = "MILLIS")]
     valid_to: Option<i64>,
+    /// Retention TTL as a human duration (e.g. 90d, 12h, 30m, 45s). The fact reads as stale
+    /// once its freshness window elapses. A value beyond the predicate's retention ceiling is
+    /// rejected. Omitted leaves the predicate default (or non-expiring when there is none).
+    #[arg(long = "ttl", value_name = "DURATION", value_parser = parse_duration_ms)]
+    ttl: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -424,6 +429,10 @@ struct DeriveWriteArgs {
     /// Valid-time upper bound (unix millis) for the derived assertion (ADR 0016).
     #[arg(long = "valid-to", value_name = "MILLIS")]
     valid_to: Option<i64>,
+    /// Retention TTL as a human duration (e.g. 90d, 12h). Rejected if beyond the predicate's
+    /// retention ceiling. Omitted leaves the predicate default (or non-expiring).
+    #[arg(long = "ttl", value_name = "DURATION", value_parser = parse_duration_ms)]
+    ttl: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -1476,6 +1485,48 @@ fn parse_source(raw: &str) -> Result<String, String> {
     Ok(raw.to_string())
 }
 
+/// Parse a human retention duration (`--ttl`) into milliseconds. Accepts a whole number with a
+/// unit suffix — `ms`, `s`, `m`, `h`, or `d` (e.g. `90d`, `12h`, `30m`, `45s`). A missing or
+/// unknown unit is rejected so an ambiguous bare number never silently means milliseconds.
+fn parse_duration_ms(raw: &str) -> Result<u64, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err("duration must not be empty (e.g. 90d, 12h, 30m, 45s)".to_string());
+    }
+    let split = value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, unit) = value.split_at(split);
+    if number.is_empty() {
+        return Err(format!(
+            "invalid duration '{raw}': expected a whole number with a unit (e.g. 90d, 12h)"
+        ));
+    }
+    let amount: u64 = number
+        .parse()
+        .map_err(|_| format!("invalid duration '{raw}': '{number}' is not a whole number"))?;
+    let unit_ms: u64 = match unit.trim() {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        "" => {
+            return Err(format!(
+                "duration '{raw}' needs a unit suffix: ms, s, m, h, or d (e.g. 90d)"
+            ));
+        }
+        other => {
+            return Err(format!(
+                "unknown duration unit '{other}' in '{raw}': use ms, s, m, h, or d"
+            ));
+        }
+    };
+    amount
+        .checked_mul(unit_ms)
+        .ok_or_else(|| format!("duration '{raw}' is too large"))
+}
+
 fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
     match command {
         IdentityCommand::Bootstrap(args) => identity::bootstrap(
@@ -1759,9 +1810,64 @@ fn short(hash: &str) -> String {
 
 const DEFAULT_LOG: &str = "dent8-log.jsonl";
 const DEFAULT_AUTHORITY: &str = "dent8-authority.json";
+/// The per-project store directory `dent8 init` creates.
+const STORE_DIR: &str = ".dent8";
+
+/// Git-style upward discovery of the project store directory: walk from the current directory
+/// through its ancestors and return the first `.dent8/` found. This lets a command run from a
+/// sub-directory of an initialized project resolve the project's store instead of silently
+/// creating a parallel one in the cwd. `None` when no ancestor holds a `.dent8/`, so the caller
+/// can fall back to the legacy cwd default (keeping `dent8 init` in a fresh directory working).
+fn discover_dent8_dir() -> Option<std::path::PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    cwd.ancestors()
+        .map(|dir| dir.join(STORE_DIR))
+        .find(|candidate| candidate.is_dir())
+}
+
+/// Undo the single-quote shell quoting [`shell_quote`] applies to a value in `.dent8/env`. A
+/// value without surrounding quotes is returned trimmed and unchanged.
+fn shell_unquote(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+        trimmed[1..trimmed.len() - 1].replace("'\\''", "'")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Read a `KEY=value` assignment out of a discovered `.dent8/env` file, unquoting the value.
+/// Used so store discovery lands on exactly the file a sourced `.dent8/env` would select, even
+/// when `init` chose a non-default log name (e.g. `<agent>-memory.jsonl`).
+fn dent8_env_value(store_dir: &std::path::Path, key: &str) -> Option<String> {
+    let contents = std::fs::read_to_string(store_dir.join("env")).ok()?;
+    contents.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(key)
+            .and_then(|rest| rest.strip_prefix('='))
+            .map(shell_unquote)
+    })
+}
 
 fn log_path() -> String {
-    std::env::var("DENT8_LOG").unwrap_or_else(|_| DEFAULT_LOG.to_string())
+    // An explicit `DENT8_LOG` override always wins — backward compatible with sourced env.
+    if let Ok(explicit) = std::env::var("DENT8_LOG") {
+        return explicit;
+    }
+    // Otherwise discover the project store upward and use the log *inside* it, so a subdir run
+    // with unsourced env reads/writes the real store rather than a parallel `./dent8-log.jsonl`.
+    if let Some(store_dir) = discover_dent8_dir() {
+        if let Some(log) = dent8_env_value(&store_dir, "DENT8_LOG") {
+            return log;
+        }
+        return store_dir
+            .join("memory.jsonl")
+            .to_string_lossy()
+            .into_owned();
+    }
+    // No project store anywhere upward: fall back to the legacy cwd default so a fresh `init`
+    // (and ad-hoc dev use) still works.
+    DEFAULT_LOG.to_string()
 }
 
 // ---- Source authority registry (authz: cap what a source may *fact*) ----------------
@@ -1809,7 +1915,20 @@ impl SourceRegistry {
 }
 
 fn authority_registry_path() -> String {
-    std::env::var("DENT8_AUTHORITY").unwrap_or_else(|_| DEFAULT_AUTHORITY.to_string())
+    // An explicit `DENT8_AUTHORITY` override always wins — backward compatible with sourced env.
+    if let Ok(explicit) = std::env::var("DENT8_AUTHORITY") {
+        return explicit;
+    }
+    // Otherwise discover the project store upward and use its single `authority.json`, so
+    // `init` and the `authority` subcommands agree on one registry per store even when the env
+    // file was never sourced (no more divergent `./dent8-authority.json`).
+    if let Some(store_dir) = discover_dent8_dir() {
+        return store_dir
+            .join("authority.json")
+            .to_string_lossy()
+            .into_owned();
+    }
+    DEFAULT_AUTHORITY.to_string()
 }
 
 /// What the write-boundary auth gate needs to know about a write: the subject (for grant
@@ -2601,6 +2720,34 @@ const DEFAULT_AUTHORITY_PROFILE: [(&str, AuthorityLevel); 3] = [
     ("source:agent", AuthorityLevel::Low),
 ];
 
+/// Merge [`DEFAULT_AUTHORITY_PROFILE`] into `registry`. Merge-only: an existing grant for one
+/// of the profile sources is **kept**, never downgraded or overwritten — an operator's explicit
+/// taxonomy (or a prior `init`) out-ranks the shipped default (`dent8 authority add` still
+/// replaces). Returns, per source, whether it was `added` or `kept` and the resulting ceiling.
+/// Shared by `dent8 init` (which seeds the profile at bootstrap) and `dent8 authority defaults`.
+fn seed_default_authority_profile(
+    registry: &mut SourceRegistry,
+) -> Vec<(&'static str, &'static str, AuthorityLevel)> {
+    let mut entries = Vec::new();
+    for (source, max_authority) in DEFAULT_AUTHORITY_PROFILE {
+        let action = match registry.sources.entry(source.to_string()) {
+            std::collections::btree_map::Entry::Occupied(existing) => {
+                ("kept", existing.get().max_authority)
+            }
+            std::collections::btree_map::Entry::Vacant(slot) => {
+                slot.insert(SourceGrant {
+                    max_authority,
+                    issuer: None,
+                    scope: None,
+                });
+                ("added", max_authority)
+            }
+        };
+        entries.push((source, action.0, action.1));
+    }
+    entries
+}
+
 /// Seed the registry with [`DEFAULT_AUTHORITY_PROFILE`]. Merge-only: an existing grant for
 /// one of the profile sources is **kept**, never downgraded or overwritten — an operator's
 /// explicit taxonomy out-ranks the shipped default (`dent8 authority add` still replaces).
@@ -2620,23 +2767,7 @@ fn cmd_authority_defaults(output: CliOutput) -> i32 {
             };
         }
     };
-    let mut entries = Vec::new();
-    for (source, max_authority) in DEFAULT_AUTHORITY_PROFILE {
-        let action = match registry.sources.entry(source.to_string()) {
-            std::collections::btree_map::Entry::Occupied(existing) => {
-                ("kept", existing.get().max_authority)
-            }
-            std::collections::btree_map::Entry::Vacant(slot) => {
-                slot.insert(SourceGrant {
-                    max_authority,
-                    issuer: None,
-                    scope: None,
-                });
-                ("added", max_authority)
-            }
-        };
-        entries.push((source, action.0, action.1));
-    }
+    let entries = seed_default_authority_profile(&mut registry);
     match save_authority_registry(&registry) {
         Ok(()) => {
             let lines = entries
@@ -3776,6 +3907,37 @@ fn base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_duration_ms_accepts_unit_suffixes() {
+        assert_eq!(parse_duration_ms("45s"), Ok(45_000));
+        assert_eq!(parse_duration_ms("30m"), Ok(1_800_000));
+        assert_eq!(parse_duration_ms("12h"), Ok(43_200_000));
+        assert_eq!(parse_duration_ms("90d"), Ok(90 * 86_400_000));
+        assert_eq!(parse_duration_ms("500ms"), Ok(500));
+        // Surrounding whitespace is tolerated.
+        assert_eq!(parse_duration_ms(" 1d "), Ok(86_400_000));
+    }
+
+    #[test]
+    fn parse_duration_ms_rejects_bad_input() {
+        // A bare number has no unit and must not silently mean milliseconds.
+        assert!(parse_duration_ms("90").is_err());
+        assert!(parse_duration_ms("").is_err());
+        assert!(parse_duration_ms("d").is_err());
+        assert!(parse_duration_ms("10y").is_err());
+        assert!(parse_duration_ms("abc").is_err());
+    }
+
+    #[test]
+    fn parse_duration_ms_matches_the_retention_ceiling() {
+        // `90d` is exactly the 90-day default retention ceiling, so a fact written at that TTL
+        // sits at the ceiling and one past it is rejected on write.
+        assert_eq!(
+            parse_duration_ms("90d"),
+            Ok(dent8_store::registry::DEFAULT_MAX_TTL_MS)
+        );
+    }
 
     fn grant(
         max_authority: AuthorityLevel,

@@ -2223,11 +2223,14 @@ fn optional_i64(arguments: &Value, name: &str) -> Result<Option<i64>, ToolError>
     }
 }
 
-/// The valid-time interval carried by the write tools (ADR 0016).
+/// The valid-time interval carried by the write tools (ADR 0016). The MCP tools do not (yet)
+/// expose a caller-supplied retention TTL, so `ttl` stays `None` and the predicate default
+/// applies — the `--ttl` surface lives on the CLI and capture proposals.
 fn arg_validity(arguments: &Value) -> Result<crate::ops::Validity, ToolError> {
     Ok(crate::ops::Validity {
         from: optional_i64(arguments, "valid_from")?,
         to: optional_i64(arguments, "valid_to")?,
+        ttl: None,
     })
 }
 

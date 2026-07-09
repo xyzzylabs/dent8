@@ -245,7 +245,11 @@ pub fn apply_policy_defaults(registry: &PredicateRegistry, candidate: &mut FactE
 /// - **Uniqueness** — a new assertion may not create a second *fresh* believed fact for
 ///   the same subject+predicate; stale (TTL-expired at `now`) facts do not block it.
 ///
-/// Unregistered predicates pass. Run *before* the base firewall (`EventStore::append`).
+/// The **retention ceiling applies to every predicate**, registered or not: an unregistered
+/// predicate has no authority floor or uniqueness rule, but its caller-supplied finite TTL is
+/// still bounded by the registry-wide global ceiling — closing the hole where an unknown
+/// predicate could assert an arbitrarily far-future finite TTL. Run *before* the base firewall
+/// (`EventStore::append`).
 pub fn enforce_policy<S>(
     registry: &PredicateRegistry,
     store: &S,
@@ -255,12 +259,14 @@ pub fn enforce_policy<S>(
 where
     S: EventStore + ?Sized,
 {
-    let Some(policy) = registry.policy_for(&candidate.subject, &candidate.predicate) else {
-        return Ok(());
-    };
+    // May be `None` for an unregistered predicate: the floor and uniqueness rules below then
+    // do not apply, but the global retention ceiling still does.
+    let policy = registry.policy_for(&candidate.subject, &candidate.predicate);
 
-    // The floor gates assertion of a new authoritative fact only — never dissent.
-    if matches!(candidate.kind, FactEventKind::Asserted)
+    // The floor gates assertion of a new authoritative fact only — never dissent. Registered
+    // predicates only (an unregistered predicate has no floor).
+    if let Some(policy) = policy
+        && matches!(candidate.kind, FactEventKind::Asserted)
         && candidate.authority.level < policy.authority_floor
     {
         return Err(StoreError::BelowAuthorityFloor {
@@ -271,12 +277,15 @@ where
     }
 
     // Retention ceiling: reject (never clamp) an assertion whose *bounded* TTL reaches
-    // further than the effective ceiling (the per-predicate override, else the registry
-    // global). Runs on assertions only; predicate-default TTLs are all below the ceiling, so
+    // further than the effective ceiling. Registered predicates may raise/tighten it via
+    // their per-predicate override; an unregistered predicate falls back to the registry
+    // global. Runs on assertions only; predicate-default TTLs are all below the ceiling, so
     // only a caller-supplied finite TTL can trip this. `Ttl::Never` is out of scope (see
     // `bounded_ttl_ms`), and a `Never` ceiling disables the cap.
     if matches!(candidate.kind, FactEventKind::Asserted) {
-        let ceiling = policy.max_ttl.as_ref().unwrap_or(&registry.max_ttl);
+        let ceiling = policy
+            .and_then(|policy| policy.max_ttl.as_ref())
+            .unwrap_or(&registry.max_ttl);
         if let (Some(ceiling_ms), Some(ttl_ms)) = (ceiling_ms(ceiling), bounded_ttl_ms(candidate))
             && ttl_ms > ceiling_ms
         {
@@ -288,7 +297,10 @@ where
         }
     }
 
-    if policy.unique && matches!(candidate.kind, FactEventKind::Asserted) {
+    if let Some(policy) = policy
+        && policy.unique
+        && matches!(candidate.kind, FactEventKind::Asserted)
+    {
         let filter = EventFilter {
             subject: Some(candidate.subject.clone()),
             predicate: Some(candidate.predicate.clone()),
@@ -772,6 +784,53 @@ mod tests {
             NOW,
         )
         .expect("unregistered predicate admitted");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn an_unregistered_predicate_over_the_ceiling_is_rejected() {
+        // Regression: an unregistered predicate used to short-circuit `enforce_policy` before
+        // the retention ceiling, so a far-future *finite* TTL slipped through. It is now bound
+        // by the registry-wide global ceiling like any other predicate.
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        let mut event = assertion(
+            "e1",
+            "fact:A",
+            "fact",
+            "mfa",
+            "mfa_state",
+            "disabled",
+            AuthorityLevel::Low,
+        );
+        // One millisecond past the 90-day global ceiling.
+        event.ttl = Ttl::DurationMillis(super::DEFAULT_MAX_TTL_MS + 1);
+        let result = admit(&mut store, &registry, event, NOW);
+        assert!(
+            matches!(result, Err(StoreError::TtlCeilingExceeded { .. })),
+            "an unregistered predicate past the global ceiling must be rejected, got {result:?}"
+        );
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn an_unregistered_predicate_within_the_ceiling_is_admitted() {
+        // The complement of the regression above: an unregistered predicate whose finite TTL
+        // sits at/under the global ceiling is still admitted (no floor, no uniqueness rule).
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        let mut event = assertion(
+            "e1",
+            "fact:A",
+            "fact",
+            "mfa",
+            "mfa_state",
+            "disabled",
+            AuthorityLevel::Low,
+        );
+        event.ttl = Ttl::DurationMillis(super::DEFAULT_MAX_TTL_MS);
+        admit(&mut store, &registry, event, NOW)
+            .expect("an unregistered predicate at the ceiling is admitted");
         assert_eq!(store.len(), 1);
     }
 

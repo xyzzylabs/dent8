@@ -71,6 +71,11 @@ struct Proposal {
     valid_from: Option<i64>,
     #[serde(default)]
     valid_to: Option<i64>,
+    /// Retention TTL as a human duration (e.g. `"90d"`, `"12h"`). Parsed like the `--ttl`
+    /// flag and bounded by the predicate's retention ceiling. Absent leaves the predicate
+    /// default (or non-expiring).
+    #[serde(default)]
+    ttl: Option<String>,
 }
 
 /// The outcome of one proposal line, in input order.
@@ -161,9 +166,16 @@ fn apply_proposal(
     let subject = CliSubject::from_str(&proposal.subject).map_err(OpError::Invalid)?;
     let (authority, source) =
         resolve_proposal_meta(&proposal, flag_authority, flag_source).map_err(OpError::Invalid)?;
+    let ttl = proposal
+        .ttl
+        .as_deref()
+        .map(crate::parse_duration_ms)
+        .transpose()
+        .map_err(OpError::Invalid)?;
     let validity = Validity {
         from: proposal.valid_from,
         to: proposal.valid_to,
+        ttl,
     };
     let op = proposal.op.as_deref().unwrap_or("assert");
     let takes_value = match op {
@@ -463,6 +475,44 @@ mod tests {
         assert_eq!(outcome.total(), 2);
         assert_eq!(outcome.accepted, 2, "{}", format_capture(&outcome));
         assert_eq!(outcome.overall().1, 0);
+    }
+
+    #[test]
+    fn a_proposal_with_a_ttl_field_round_trips() {
+        let proposal: Proposal = serde_json::from_str(
+            r#"{"subject":"repo:demo","predicate":"note","value":"v","ttl":"90d"}"#,
+        )
+        .expect("a proposal carrying a ttl field must deserialize");
+        assert_eq!(proposal.ttl.as_deref(), Some("90d"));
+        // deny_unknown_fields is preserved: a typo'd field still fails loudly.
+        assert!(
+            serde_json::from_str::<Proposal>(
+                r#"{"subject":"repo:demo","predicate":"note","value":"v","tt1":"90d"}"#,
+            )
+            .is_err(),
+            "an unknown field must be rejected"
+        );
+    }
+
+    #[test]
+    fn capture_applies_a_proposal_ttl_and_enforces_the_ceiling() {
+        let log = temp_log("ttl");
+        let input = concat!(
+            r#"{"subject": "repo:demo", "predicate": "note", "value": "temp", "authority": "high", "source": "source:human", "ttl": "30d"}"#,
+            "\n",
+            // Past the 90-day retention ceiling: rejected on write even for an unregistered predicate.
+            r#"{"subject": "repo:demo", "predicate": "note", "value": "toolong", "authority": "high", "source": "source:human", "ttl": "120d"}"#,
+            "\n",
+        );
+        let outcome = capture_outcome(&log, input, None, None);
+        assert_eq!(outcome.accepted, 1, "{}", format_capture(&outcome));
+        assert_eq!(outcome.rejected, 1, "{}", format_capture(&outcome));
+        let contents = std::fs::read_to_string(&log).expect("read capture log");
+        let thirty_days_ms = (30u64 * 86_400_000).to_string();
+        assert!(
+            contents.contains("DurationMillis") && contents.contains(&thirty_days_ms),
+            "the captured fact must carry the finite {thirty_days_ms}ms TTL: {contents}"
+        );
     }
 
     #[test]
