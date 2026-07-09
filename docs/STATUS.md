@@ -14,7 +14,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 - **`dent8 eval`** — runs the adversarial corpus against the real firewall and a recency-only
   baseline. It is the built-in proof that dent8 blocks the attack classes the baseline accepts;
   use [`examples/firewall/demo.sh`](../examples/firewall/demo.sh) for a human-readable walkthrough
-  driven by real CLI writes, `explain`, and `verify`.
+  driven by real CLI writes, `explain`, and `verify`. For the adoption path (init → first fact
+  under 2 minutes once the binary is on `PATH`), use
+  [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh).
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
   [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
   [--witness] [--witness-log PATH] [--witness-pubkey PATH]

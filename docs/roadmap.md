@@ -26,8 +26,11 @@ order:
    (scope restricts write subjects; a registered issuer's own grant caps what it can
    delegate — no self-escalation). *(Invariant: authority is
    typed and policy-visible, not configured from scratch per repo.)*
-3. **On-ramp.** MSRV at or below current stable, init-to-first-fact under 2 minutes, and a
-   value-first README lead. *(No invariant — adoption friction is its own failure mode.)*
+3. **On-ramp.** ✅ MSRV is current stable (1.94), README / Getting Started lead with a value-first
+   first-fact path, `dent8 init` prints assert → explain next, and
+   [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh) times init → assert → explain under
+   the 2-minute budget (typically under a second with a binary on `PATH`). *(No invariant —
+   adoption friction is its own failure mode.)*
 4. **External evaluation.** Run the firewall against corpora dent8 did not author: MINJA
    scenarios, real agent traces, and a mem0/Zep comparison on the integrity axes.
    *(Invariant: the 0/5-vs-5/5 result generalizes beyond self-authored fixtures.)*

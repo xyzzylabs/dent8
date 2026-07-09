@@ -16,8 +16,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   else `source:agent` at `low`). Opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`; unauthenticated
   daemon connections still return the receipt but skip the audit write. Failures to record
   surface as a protocol error so a write-capable read is never silently un-audited.
+- **On-ramp acceptance script** [`examples/on-ramp/demo.sh`](examples/on-ramp/demo.sh): times
+  `init` → first `assert` → `explain` in a throwaway git repo and fails if wall time exceeds
+  120s (v0.4 under-2min-to-first-fact budget).
 
 ### Changed
+- **Value-first on-ramp:** README and [Getting Started](docs/getting-started.md) lead with a
+  first-fact path under 2 minutes once `dent8` is on `PATH`; `dent8 init` Next steps now show
+  `assert` + `explain` before `doctor --write-check`.
 - **Docs agree multi-agent dogfood MCP is project-scoped** (Codex/Claude/Cursor/Grok/Gemini/
   Cascade): install into repo-local agent config, not user-global paths, so a shared
   `.dent8` store does not attach in other workspaces.

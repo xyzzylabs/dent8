@@ -6,8 +6,9 @@ trusted fact, a stale value resurrecting itself, a poisoned source tainting ever
 derived from it. Every fact it keeps carries where it came from, and you can replay exactly
 *why* the agent believes it.
 
-**New here? Start with the [Getting Started guide](docs/getting-started.md)** — zero to a
-working shared fact base in under 15 minutes.
+**New here?** First fact in **under 2 minutes** once `dent8` is installed — see
+[Getting Started](docs/getting-started.md) or the path below. Timed acceptance:
+`./examples/on-ramp/demo.sh`.
 
 ![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt over a verified hash chain.](https://raw.githubusercontent.com/xyzzylabs/dent8/main/demo.gif)
 
@@ -17,10 +18,25 @@ source leaves its conclusions behind. dent8 treats memory as an **append-only lo
 events** — each carrying provenance, authority, and evidence — and **arbitrates every write**
 against what is already believed.
 
+## First fact (under 2 minutes)
+
+Install once (release binary is fastest; `cargo install dent8 --locked` also works), then in
+any git repo:
+
+```sh
+dent8 init --source source:owner
+set -a; . .dent8/env; set +a
+dent8 assert repo:myproj deploy_target production --authority high --source source:owner
+dent8 explain repo:myproj deploy_target
+```
+
+No services. With a binary already on `PATH`, wall time is typically **under a second**; the
+2-minute budget is for install + reading the receipt. Full walkthrough and agent wiring:
+[Getting Started](docs/getting-started.md).
+
 ## The 30-second proof
 
 ```sh
-cargo install dent8 --locked
 dent8 eval
 ```
 
@@ -38,33 +54,25 @@ baseline (newest-write-wins — the resolution Zep/Graphiti use):
 Five for five. The last one is the tell: retract a poisoned source and dent8 flags every fact
 *derived* from it — a dependency cascade a recency-only store structurally cannot express.
 
-## Try it
+## See the firewall reject a write
 
 ```sh
-dent8 init --source source:owner          # local setup: env + authority registry (file log, no services)
-set -a; . .dent8/env; set +a              # export the generated env INSIDE set -a (DENT8_REQUIRE_AUTHORITY=1, …)
-dent8 authority add web:scrape low        # let this source write at Low, so the next rejection
-                                          # is about arbitration, not a missing grant
+dent8 authority add web:scrape low
 
-# A trusted fact goes in — High authority, from the repo owner.
-dent8 assert repo:myproj deploy_target production --authority high --source source:owner
-
-# A low-authority source tries to overwrite it — the firewall rejects it: Low can't override High.
+# A low-authority source tries to overwrite the fact — rejected: Low can't override High.
 dent8 supersede repo:myproj deploy_target staging --authority low --source web:scrape
 
-# It is still production, and here is the receipt that proves why (survived: 1 challenge).
+# Still production, with a receipt (survived: 1 challenge).
 dent8 explain repo:myproj deploy_target
 
-# Derive a fact from it, then retract the basis — verify flags the derivative tainted.
+# Derive from it, retract the basis — verify flags the derivative tainted.
 dent8 derive service:api target production --basis repo:myproj deploy_target --authority high --source source:owner
 dent8 retract repo:myproj deploy_target --authority high --source source:owner
 dent8 verify
 ```
 
-No services required — dent8 uses a local file log by default. For binaries, pinned installs,
-and feature builds, see [Installation](docs/installation.md). From a clone, watch the whole
-firewall path run through the real CLI:
-**`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`**.
+For binaries, pinned installs, and feature builds, see [Installation](docs/installation.md).
+From a clone: **`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`**.
 
 ## The fact base, on this repo
 

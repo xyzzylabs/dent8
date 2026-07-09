@@ -585,7 +585,7 @@ pub(crate) fn init_base_message(
         format!("\n\nAgent wiring:\n  see {}", agent.example_path())
     });
     format!(
-        "initialized dent8 in {}\n  authority: {} (granted {} max={})\n  store: {}\n  env: {}{}{}{}\n\nNext:\n  set -a\n  . {}{}\n  set +a\n  dent8 doctor --source {} --write-check{}",
+        "initialized dent8 in {}\n  authority: {} (granted {} max={})\n  store: {}\n  env: {}{}{}{}\n\nNext (first fact in under a minute once `dent8` is on PATH):\n  set -a\n  . {}{}\n  set +a\n  dent8 assert repo:myproj deploy_target production --authority high --source {}\n  dent8 explain repo:myproj deploy_target\n  dent8 doctor --source {} --write-check{}",
         dir.display(),
         authority_path.display(),
         source,
@@ -597,6 +597,7 @@ pub(crate) fn init_base_message(
         agent_summary,
         shell_quote(&env_path.to_string_lossy()),
         identity.env_load,
+        source,
         source,
         agent_next,
     )

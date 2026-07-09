@@ -7,9 +7,28 @@ overwrite a trusted decision, and nothing goes stale without you seeing it. If y
 several agents in flight — Claude Code sessions, CI bots, a teammate's assistant — this is the
 one non-stale source of truth they all share.
 
-This guide takes you from zero to a working shared fact base in **under 15 minutes**. Every
-command below was run against the real `dent8` v0.5.0 binary; the output blocks are trimmed
-but verbatim.
+**Target:** first fact in **under 2 minutes** after `dent8` is on `PATH` (typically under a
+second of wall time for `init` → `assert` → `explain`). Timed check:
+`./examples/on-ramp/demo.sh`. The sections below expand install, multi-agent wiring, and hooks.
+
+Every command below was run against the real `dent8` v0.5.0 binary; the output blocks are
+trimmed but verbatim.
+
+## 0. Sixty-second path (binary already installed)
+
+In a git repository:
+
+```sh
+dent8 init --source source:owner
+set -a; . .dent8/env; set +a
+dent8 assert repo:myproj deploy_target production --authority high --source source:owner
+dent8 explain repo:myproj deploy_target
+dent8 context
+```
+
+`init` creates `.dent8/` (file log + authority registry with human > CI > agent defaults plus
+your `source:owner` grant). You do **not** need Postgres, identity, or MCP for the first fact.
+Optional smoke: `dent8 doctor --source source:owner --write-check`.
 
 ## 1. Install
 
@@ -64,10 +83,12 @@ initialized dent8 in .../.dent8
   store: file dev log at .../.dent8/memory.jsonl
   env: .../.dent8/env
 
-Next:
+Next (first fact in under a minute once `dent8` is on PATH):
   set -a
   . '.../.dent8/env'
   set +a
+  dent8 assert repo:myproj deploy_target production --authority high --source source:local
+  dent8 explain repo:myproj deploy_target
   dent8 doctor --source source:local --write-check
 ```
 

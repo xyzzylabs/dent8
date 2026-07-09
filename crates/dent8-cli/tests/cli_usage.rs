@@ -3961,6 +3961,10 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
     let init = run_dent8(&["init", "--dir", &dir], &[]);
     assert_success(&init, "init");
     assert!(stdout(&init).contains("initialized dent8"));
+    assert!(stdout(&init).contains(
+        "dent8 assert repo:myproj deploy_target production --authority high --source source:local"
+    ));
+    assert!(stdout(&init).contains("dent8 explain repo:myproj deploy_target"));
     assert!(stdout(&init).contains("dent8 doctor --source source:local --write-check"));
 
     let env_path = temp.file(".dent8/env");
