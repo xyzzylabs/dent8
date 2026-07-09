@@ -45,8 +45,11 @@ dent8 --version
 
 > The `cargo install` path wasn't smoke-tested for this guide (a locally built release binary
 > was used instead), and a from-source build takes about **3 minutes**. The crate name and
-> version are confirmed against `Cargo.toml` and the release page. Parquet `export` is not in
-> the release archives — it stays a `cargo install dent8 --features export --locked` build.
+> version are confirmed against `Cargo.toml` and the release page. Only the **Parquet**
+> analytical export (`dent8 export <file>.parquet`, for DuckDB) is feature-gated — it is not in
+> the release archives and stays a `cargo install dent8 --features export --locked` build.
+> Native-memory export (`dent8 export --target CLAUDE.md`) and `dent8 import` are stock: they
+> ship in every build, including the release binaries, with no extra feature.
 
 Full details, pinned/feature installs, and platform caveats: [Installation](installation.md).
 
@@ -81,6 +84,11 @@ authority.json  env  memory.jsonl
 ```sh
 set -a; . .dent8/env; set +a
 ```
+
+Since PR #12, repo-confined discovery resolves the store and authority registry without
+sourcing anything (running any command from inside the repo finds `.dent8/`). Sourcing still
+matters for the **enforcement** switch: `DENT8_REQUIRE_AUTHORITY=1` lives in `.dent8/env`, so
+load it when you want deny-by-default authority in the current shell.
 
 **`init` auto-seeds the authority profile.** As of PR #12 you no longer run a follow-up
 command — `init` writes the **human > CI > agent** ranking (plus the `source:local` init
@@ -148,11 +156,23 @@ consumed .dent8/proposals.jsonl
 writes rejected or malformed lines back for retry. This is exactly the shape of the
 `SessionEnd` hook (§5).
 
-**(c) From an existing `CLAUDE.md`.** There is **no `dent8 import` command** — native
-import/export is future work (see [STATUS](STATUS.md) and the README). Today you bootstrap by
-translating each `CLAUDE.md` / `AGENTS.md` bullet into an `assert` or a `capture` proposal
-line, as above. To preview what native memory files are present first, use the read-only
-audit:
+**(c) From an existing `CLAUDE.md`, with `import`.** `dent8 import <file>` ingests durable
+facts from a `CLAUDE.md` / `AGENTS.md` / markdown file **through the firewall** — every
+recovered fact runs the same authority / policy / content-check path as `assert` and
+`capture`, so nothing is smuggled in. It reads three deterministic shapes and **skips
+everything else** (free prose is never turned into a fact): a dent8 managed block (what
+`export --target` writes), inline `dent8://<kind>/<key>/<predicate> = <value>` receipt markers
+in prose, and fenced ` ```dent8 ` blocks of JSON `capture` proposals. Use `--dry-run` to see
+what it would propose without writing:
+
+```
+$ dent8 import CLAUDE.md --dry-run
+line 5 [inline-marker]: would assert repo:dent8 build_tool = "cargo"
+dry run over CLAUDE.md: 1 proposal(s) would be imported, 0 malformed, 5 line(s) skipped (nothing written)
+```
+
+To preview which native memory files are present first — a read-only inventory, not an ingest
+— use the audit; `import` is what actually pulls the facts in:
 
 ```
 $ dent8 native scan --agent claude-code
@@ -163,6 +183,12 @@ dent8 native scan
   files: 1 native memory/rules file(s), 0 with dent8 receipt markers
   - CLAUDE.md (claude_memory, 26 bytes, sha256=2b65fa708f01, receipt=no)
 ```
+
+The reverse direction — writing the believed facts back into a `CLAUDE.md` / `AGENTS.md`
+managed block with `dent8 export --target` — is covered in
+[native-memory.md](native-memory.md). Plain markdown bullets that carry no receipt marker are
+still skipped by `import`; translate those into an `assert` or a `capture` proposal as in (a)
+and (b).
 
 ## 4. Wire your agents
 

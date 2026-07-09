@@ -37,6 +37,7 @@ mod mcp;
 #[cfg(all(unix, feature = "async-store"))]
 mod mcp_client;
 mod mcp_config;
+mod memory;
 mod native;
 mod ops;
 mod setup;
@@ -115,15 +116,22 @@ fn run_cli(cli: Cli) -> i32 {
         },
         Some(CliCommand::Completions(args)) => cmd_completions(args.shell, cli.output),
         Some(CliCommand::Export(args)) => {
-            #[cfg(feature = "export")]
-            {
-                cmd_export(&args.out, cli.output)
-            }
-            #[cfg(not(feature = "export"))]
-            {
-                cmd_export_unavailable(&args.out, cli.output)
+            if let Some(target) = args.target.as_deref() {
+                // The native-memory export is stock (like `context`), so it works under
+                // `--no-default-features`; only the Parquet path is feature-gated.
+                memory::cmd_export_native(target, cli.output)
+            } else {
+                #[cfg(feature = "export")]
+                {
+                    cmd_export(&args.out, cli.output)
+                }
+                #[cfg(not(feature = "export"))]
+                {
+                    cmd_export_unavailable(&args.out, cli.output)
+                }
             }
         }
+        Some(CliCommand::Import(args)) => memory::cmd_import(&args, cli.output),
         Some(CliCommand::Assert(args)) => ops::cmd_assert(&args, cli.output),
         Some(CliCommand::Derive(args)) => ops::cmd_derive(&args, cli.output),
         Some(CliCommand::Supersede(args)) => ops::cmd_supersede(&args, cli.output),
@@ -289,8 +297,10 @@ enum CliCommand {
     /// Generate shell completion scripts.
     #[command(visible_aliases = ["completion", "autocomplete"])]
     Completions(CompletionsArgs),
-    /// Export the log to Parquet for `DuckDB` analysis.
+    /// Export the log to Parquet, or (with `--target`) into a native memory/rules file.
     Export(ExportArgs),
+    /// Import durable facts from a native memory/rules file through the firewall.
+    Import(ImportArgs),
     /// Manage the source -> authority ceiling.
     Authority(AuthorityArgs),
     /// Manage signed source identity keys and grants.
@@ -349,6 +359,7 @@ impl CliCommand {
             Self::Daemon(_) => "daemon",
             Self::Completions(_) => "completions",
             Self::Export(_) => "export",
+            Self::Import(_) => "import",
             Self::Authority(_) => "authority",
             Self::Identity(_) => "identity",
             Self::Hook(_) => "hook",
@@ -479,7 +490,7 @@ struct FactsListArgs {
     include_diagnostics: bool,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub(crate) struct ContextArgs {
     /// Only include facts with this subject kind.
     #[arg(long, value_name = "KIND", value_parser = parse_non_empty_filter)]
@@ -543,9 +554,33 @@ struct SnapshotArgs {
 
 #[derive(Args, Debug)]
 struct ExportArgs {
-    /// Parquet output path.
+    /// Parquet output path (used when `--target` is not given).
     #[arg(default_value = "dent8-events.parquet", value_name = "OUT")]
     out: String,
+    /// Write the currently-believed facts into a native memory/rules file (`CLAUDE.md`,
+    /// `AGENTS.md`, …) as a receipt-bearing dent8-managed block, spliced in idempotently. This
+    /// path is always available (it is not gated behind `--features export`).
+    #[arg(long, value_name = "FILE")]
+    target: Option<std::path::PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct ImportArgs {
+    /// Native memory/rules file (`CLAUDE.md`, `AGENTS.md`, markdown, …) to import durable
+    /// facts from. Only dent8 managed blocks, inline `dent8://` receipt markers, and fenced
+    /// `dent8` proposal blocks are read; free prose is skipped and reported.
+    #[arg(value_name = "FILE")]
+    file: std::path::PathBuf,
+    /// Parse and report the proposals that would be made, writing nothing to the store.
+    #[arg(long)]
+    dry_run: bool,
+    /// Default authority for imported proposals that do not carry one (a marker's or proposal's
+    /// own authority still takes precedence; the firewall makes the final call).
+    #[arg(long, short = 'a', value_enum)]
+    authority: Option<CliAuthority>,
+    /// Default provenance source for imported proposals that do not carry one.
+    #[arg(long, short = 's', value_parser = parse_source)]
+    source: Option<String>,
 }
 
 #[derive(Args, Debug)]

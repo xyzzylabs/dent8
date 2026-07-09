@@ -40,11 +40,50 @@ pub(crate) struct ContextFact {
     /// Rival facts contradicting this one (non-empty means the fact is contested).
     contested_by: usize,
     expires_at: Option<TimestampMillis>,
+    /// The believed event's chain hash, carried so `export --target` can stamp a receipt on
+    /// each rendered line (auditable, re-verifiable by `native reconcile`).
+    event_hash: String,
 }
 
 impl ContextFact {
-    fn uri(&self) -> String {
+    pub(crate) fn uri(&self) -> String {
         crate::mcp::resource_uri(&self.subject_kind, &self.subject_key, &self.predicate)
+    }
+
+    pub(crate) fn subject_kind(&self) -> &str {
+        &self.subject_kind
+    }
+
+    pub(crate) fn subject_key(&self) -> &str {
+        &self.subject_key
+    }
+
+    pub(crate) fn value(&self) -> &FactValue {
+        &self.value
+    }
+
+    pub(crate) fn authority(&self) -> AuthorityLevel {
+        self.authority
+    }
+
+    pub(crate) fn source(&self) -> Option<&str> {
+        self.source.as_deref()
+    }
+
+    pub(crate) fn freshness(&self) -> FactFreshness {
+        self.freshness
+    }
+
+    pub(crate) fn contested_by(&self) -> usize {
+        self.contested_by
+    }
+
+    pub(crate) fn fact_id(&self) -> &str {
+        &self.fact_id
+    }
+
+    pub(crate) fn event_hash(&self) -> &str {
+        &self.event_hash
     }
 }
 
@@ -67,6 +106,10 @@ impl ContextOutcome {
 
     fn omitted(&self) -> usize {
         self.omitted_stale + self.omitted_not_yet_valid
+    }
+
+    pub(crate) fn facts(&self) -> &[ContextFact] {
+        &self.facts
     }
 }
 
@@ -162,6 +205,7 @@ pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextO
             freshness,
             contested_by,
             expires_at: receipt.expires_at,
+            event_hash: receipt.event_hash.clone(),
         });
     }
     facts.sort_by(|a, b| {
@@ -377,6 +421,7 @@ mod tests {
             freshness: FactFreshness::Fresh,
             contested_by: 0,
             expires_at: None,
+            event_hash: "abc123def456".to_string(),
         }
     }
 

@@ -49,11 +49,19 @@ access to the event tables.
    identities.
    Future remote HTTP transport should authenticate the source per request without requiring
    the service to hold user source keys.
-5. **Native import, design-only.** Read `CLAUDE.md`, Claude `MEMORY.md`, `GEMINI.md`,
-   `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and `AGENTS.md` as low/medium
-   authority candidate events. Imported facts need provenance and review.
-6. **Native export, design-only.** Generate provider-native Markdown/rules files from dent8
-   receipts. Exported files should carry dent8 fact ids and hash receipts in comments.
+5. **Native import, built.** `dent8 import <file>` reads durable facts from `CLAUDE.md`,
+   Claude `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`, `.windsurf/rules`, and
+   `AGENTS.md` with deterministic, documented rules (dent8 managed block, inline `dent8://`
+   receipt markers, and fenced `dent8` proposal blocks) and routes every recovered proposal
+   through the same firewall funnel as `dent8 capture` — authority, policy, and the content
+   check all apply, and free prose is skipped, never invented. See
+   [native-memory.md](native-memory.md).
+6. **Native export, built.** `dent8 export --target <file>` generates provider-native
+   Markdown/rules files from dent8 receipts: it splices a receipt-bearing **managed block**
+   (each line carrying a `dent8://` reference plus the believed event's id and hash) into the
+   target file idempotently, preserving human prose outside the block, and writes the file from
+   the CLI process — the channel the write-time guard does not intercept. See
+   [native-memory.md](native-memory.md).
 7. **Native rewrite/reconcile loop, design-only.** Go beyond explicit receipt references:
    compare native prose with dent8 projections, propose import candidates, and regenerate
    receipt-bearing provider-native files.
@@ -72,16 +80,19 @@ access to the event tables.
 
 ## v0 rule
 
-Do not auto-write provider native memory from dent8 until export/reconcile exists. A generated
-native file can make a stale fact look authoritative to the agent, so exports must be
-receipt-bearing and auditable.
+A generated native file can make a stale fact look authoritative to the agent, so exports must
+be receipt-bearing and auditable — which `dent8 export --target` is: it only emits currently
+believed facts, each carrying a `dent8://` reference plus its event id and hash, and never
+writes a redacted value. Regenerate the managed block rather than hand-editing it; the
+`PreToolUse` guard blocks direct edits so `dent8 export` stays the source of truth.
 
 The first production-worthy adapter flow is:
 
 ```text
 agent -> dent8 MCP assert/supersede/retract -> fact-event log
-native memory/rules hook -> guard bypasses and run verify
+native memory/rules hook -> guard blocks direct edits and runs verify
 operator -> review explain/replay/conflicts
-future export -> regenerate native rules with receipts
+dent8 import -> pull durable facts out of an existing/stale native file (through the firewall)
+dent8 export --target -> regenerate native rules with receipts
 native reconcile -> verify generated receipt references stay current
 ```
