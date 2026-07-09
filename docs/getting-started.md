@@ -8,7 +8,7 @@ several agents in flight — Claude Code sessions, CI bots, a teammate's assista
 one non-stale source of truth they all share.
 
 This guide takes you from zero to a working shared fact base in **under 15 minutes**. Every
-command below was run against the real `dent8` v0.4.0 binary; the output blocks are trimmed
+command below was run against the real `dent8` v0.5.0 binary; the output blocks are trimmed
 but verbatim.
 
 ## 1. Install
@@ -16,23 +16,23 @@ but verbatim.
 The stock binary needs no services — it uses a local file log by default. MSRV is Rust
 **1.94**.
 
-**Release binaries (recommended, v0.4.0+).** The [releases page][releases] ships prebuilt
+**Release binaries (recommended, v0.5.0+).** The [releases page][releases] ships prebuilt
 archives for five targets, each with a `.sha256` sidecar (built with `postgres,sqlite`):
 
-- `dent8-v0.4.0-aarch64-apple-darwin.tar.gz`
-- `dent8-v0.4.0-x86_64-apple-darwin.tar.gz`
-- `dent8-v0.4.0-aarch64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.4.0-x86_64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.4.0-x86_64-pc-windows-msvc.zip`
+- `dent8-v0.5.0-aarch64-apple-darwin.tar.gz`
+- `dent8-v0.5.0-x86_64-apple-darwin.tar.gz`
+- `dent8-v0.5.0-aarch64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.5.0-x86_64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.5.0-x86_64-pc-windows-msvc.zip`
 
 Download, verify, and install one target (Linux x86_64 shown):
 
 ```sh
-BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.4.0
-curl -LO "$BASE/dent8-v0.4.0-x86_64-unknown-linux-gnu.tar.gz"
-curl -LO "$BASE/dent8-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
-sha256sum -c dent8-v0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar xzf dent8-v0.4.0-x86_64-unknown-linux-gnu.tar.gz
+BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.5.0
+curl -LO "$BASE/dent8-v0.5.0-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "$BASE/dent8-v0.5.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum -c dent8-v0.5.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf dent8-v0.5.0-x86_64-unknown-linux-gnu.tar.gz
 chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 ```
 

@@ -80,7 +80,7 @@ docker compose down
 ## Packaging
 
 All workspace crates that depend on another dent8 crate must specify both `path` and a
-`version` matching the current workspace version (currently `0.4.0`) so crates.io packaging
+`version` matching the current workspace version (currently `0.5.0`) so crates.io packaging
 can replace local paths with published versions.
 
 Fast manifest/package check:
@@ -115,7 +115,7 @@ cargo publish -p dent8
 After publishing, verify the install path in a clean temp directory:
 
 ```sh
-cargo install dent8 --version 0.4.0 --locked
+cargo install dent8 --version 0.5.0 --locked
 dent8 --version
 ```
 
