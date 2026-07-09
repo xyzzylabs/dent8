@@ -8,8 +8,10 @@
 # Project-local dogfood/adoption state. These contain machine-local paths, grants,
 # private source keys, local stores, and agent MCP config.
 .dent8/
+.dent8
 .codex/
 .cursor/
+.grok/
 .claude/*
 !.claude/settings.json
 /.mcp.json
