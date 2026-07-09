@@ -12,6 +12,7 @@
 # Mirrors the hardened Claude Code SessionStart hook (.claude/settings.json): no-op silently
 # when dent8 is absent, source .dent8/env when present.
 command -v dent8 >/dev/null 2>&1 || exit 0
+# shellcheck source=/dev/null
 if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi
 
 exec dent8 context "$@"

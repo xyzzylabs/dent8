@@ -15,7 +15,7 @@ what these scripts expose to everything else.
 | --- | --- | --- |
 | [`pre-session.sh`](pre-session.sh) | `dent8 context` | Session start — prepend its stdout to the agent's prompt / system message. |
 | [`post-session.sh`](post-session.sh) | `dent8 capture … --consume --keep-failed` | Session end — drain the agent's queued proposals through the firewall. |
-| [`sync-agents-md.sh`](sync-agents-md.sh) | `dent8 context` into a managed block | Whenever facts change — refresh a static instructions file (`AGENTS.md`). |
+| [`sync-agents-md.sh`](sync-agents-md.sh) | `dent8 export --target` managed block | Whenever facts change — refresh a static instructions file (`AGENTS.md`). |
 
 Every script starts with the same two hardening lines from the live Claude Code hooks:
 
@@ -72,46 +72,81 @@ $ cat .dent8/proposals.jsonl
 {"subject":"repo:demo","predicate":"ci_runner","value":"ubuntu-latest","authority":"medium","source":"source:ci"}
 this line is not valid json
 
-$ ./post-session.sh
+$ ./post-session.sh; echo "exit=$?"
 line 1: ACCEPTED  repo:demo ci_runner = "ubuntu-latest"  (authority=medium)
 line 2: malformed proposal: expected ident at line 1 column 2
 captured 2 proposal(s): 1 accepted, 0 contested, 0 rejected, 1 invalid
 consumed .dent8/proposals.jsonl (kept 1 failed proposal line(s) for inspection/retry)
+post-session.sh: dent8 capture exited 2 (kept-invalid-lines is normal; not a hook failure)
+exit=0
 
 $ cat .dent8/proposals.jsonl
 this line is not valid json
 ```
 
+**Exit code — why the hook returns 0.** `dent8 capture --keep-failed` exits non-zero (2) when
+it keeps invalid lines. That is a *normal* outcome, but a generic lifecycle hook may read any
+non-zero exit as a hook failure and surface an error (or abort the session). Following the
+hardened hooks' "seatbelt, never break the session" philosophy, `post-session.sh` logs
+capture's outcome to stderr and then **exits 0**, swallowing the benign non-zero. To opt into
+strict propagation of capture's exit code, set `DENT8_STRICT=1` (or `true`/`on`/`yes`):
+
+```text
+$ DENT8_STRICT=1 ./post-session.sh; echo "exit=$?"
+… (same capture output) …
+post-session.sh: dent8 capture exited 2 (kept-invalid-lines is normal; not a hook failure)
+exit=2
+```
+
+Parity with the Claude Code path is deliberate. Claude Code's `SessionEnd` hook *cannot* block
+or abort a session, so its non-zero capture exit is harmless — that is why the live
+`.claude/settings.json` and [`claude-code/settings.sample.json`](../claude-code/settings.sample.json)
+run `dent8 capture` directly without swallowing. A *generic* hook makes no such guarantee, so
+this adapter defaults to the safe swallow and leaves strict propagation behind `DENT8_STRICT`.
+
 ### `sync-agents-md.sh` — one file, many tools
 
-Injects (or refreshes) a `<!-- dent8:begin -->` … `<!-- dent8:end -->` managed block containing
-`dent8 context` output into a static instructions file. `AGENTS.md` is honored by Codex,
-Cursor, Windsurf, Cline, Zed, and aider, so a single managed block reaches all of them — the
-highest-leverage universal context target. The target defaults to `AGENTS.md`; override it with
-the first argument (e.g. a Cursor rule file — see the [Cursor adapter](../cursor/)):
+Injects (or refreshes) a receipt-bearing `<!-- BEGIN dent8 managed block ... -->` …
+`<!-- END dent8 managed block -->` block of the currently-believed facts into a static
+instructions file. `AGENTS.md` is honored by Codex, Cursor, Windsurf, Cline, Zed, and aider, so
+a single managed block reaches all of them — the highest-leverage universal context target. The
+target defaults to `AGENTS.md`; override it with the first argument (e.g. a Cursor rule file —
+see the [Cursor adapter](../cursor/)):
 
 ```sh
 ./sync-agents-md.sh                      # writes/refreshes AGENTS.md
 ./sync-agents-md.sh .cursor/rules/dent8.mdc
 ```
 
-It is **idempotent**: run it repeatedly and the block is replaced in place, never duplicated;
-prose outside the markers is preserved; a missing file or block is created. Verified locally by
-running it twice against an `AGENTS.md` that already carried human prose — exactly one marker
-pair remained and the only change between runs was the regenerated timestamp:
+The splice is **delegated to core's `dent8 export --target`** rather than done with in-script
+`awk`, so it reuses the same hardened, **fence-aware** block logic as the CLI. It is
+**idempotent**: run it repeatedly and the block is refreshed in place, never duplicated; prose
+outside the markers is preserved; a missing file (or block, or parent directory) is created.
+Crucially, a fenced *literal example* of the markers inside a ```` ```code block ```` ` ` in the
+target is left untouched — only the real managed block is rewritten. Verified locally by running
+it twice against an `AGENTS.md` that carried both human prose and a fenced marker example:
 
 ```text
-$ grep -c 'dent8:begin' AGENTS.md   # after two runs
+$ sh sync-agents-md.sh          # run 1 — appends the real block after the fenced example
+exported 2 believed fact(s) to AGENTS.md
+  dent8-managed block appended (dent8:// receipts embedded; the PreToolUse guard blocks hand-edits …)
+
+$ sh sync-agents-md.sh          # run 2 — refreshes the real block in place
+exported 2 believed fact(s) to AGENTS.md
+  dent8-managed block refreshed (dent8:// receipts embedded; the PreToolUse guard blocks hand-edits …)
+
+$ grep -c 'BEGIN dent8 managed block' AGENTS.md   # 1 fenced example + 1 real block
+2
+$ grep -c '<fact> = ' AGENTS.md                   # the fenced literal example, preserved
 1
-$ diff run2.md AGENTS.md            # third run vs second
-11c11
-< <!-- generated by `dent8 context` at 1783602147469; regenerate instead of hand-editing -->
----
-> <!-- generated by `dent8 context` at 1783602164171; regenerate instead of hand-editing -->
+$ diff run1.snapshot AGENTS.md && echo identical   # run 2 changed nothing
+identical
 ```
 
-The human `# Demo project` heading and `- Keep commits focused.` bullet outside the block
-survived every run untouched.
+The human `# Demo project` heading and `- Keep commits focused.` bullet outside the block, and
+the fenced example of the markers, all survived every run untouched. Because core owns the
+splice you never have to worry about a fenced marker example being clobbered — the failure mode
+the older in-script `awk` splice was prone to.
 
 ## Wire it into a framework
 
