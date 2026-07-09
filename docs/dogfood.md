@@ -19,20 +19,27 @@ set +a
 .dent8/bin/dent8 doctor --agent codex --dir .dent8
 ```
 
-Use the source identity for the agent doing the work:
+Use the source identity for the agent doing the work. **MCP config is project-scoped** —
+each agent points at this repo's `.dent8` store only when the session is in this project.
+Do **not** install the dogfood store into user-global agent config (`~/.codex`,
+`~/.cursor/mcp.json`, `~/.grok/config.toml`, Claude user settings, etc.); that would attach
+this belief base in every other workspace.
 
-| Agent | Identity env |
-|---|---|
-| Codex | `.dent8/identity-codex.env` |
-| Claude Code | `.dent8/identity-claude-code.env` |
-| Cursor | `.dent8/identity-cursor.env` |
-| Grok Build | `.dent8/identity-grok-build.env` |
+| Agent | Identity env | Project MCP config | Project hooks |
+|---|---|---|---|
+| Codex | `.dent8/identity-codex.env` | `.codex/config.toml` | `.codex/hooks.json` |
+| Claude Code | `.dent8/identity-claude-code.env` | `.mcp.json` | `.claude/settings.json` |
+| Cursor | `.dent8/identity-cursor.env` | `.cursor/mcp.json` | `.cursor/hooks.json` |
+| Grok Build | `.dent8/identity-grok-build.env` | `.grok/config.toml` | `.grok/hooks/dent8.json` |
+
+MCP and hooks are **project-scoped** (gitignored except committed Claude settings when shared).
 
 Grok Build does **not** share Claude Code's project-root `.mcp.json` in this dogfood
 setup (that file is bound to `source:claude-code`). Install Grok's MCP entry with
 `dent8 agent add --agent grok-build --mcp-local-bin --mcp-config .dent8/mcp-grok-build.json`,
-then wire the same env into Grok's native config (`~/.grok/config.toml` or project
-`.grok/config.toml`) — see [`examples/grok-build/`](../examples/grok-build/).
+then wire the same env into project `.grok/config.toml` only. Doctor must pass that side
+file: `dent8 doctor --agent grok-build --dir .dent8 --mcp-config .dent8/mcp-grok-build.json`.
+See [`examples/grok-build/`](../examples/grok-build/).
 
 Run the full dogfood acceptance path when the setup itself changed:
 

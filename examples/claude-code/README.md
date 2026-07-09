@@ -3,7 +3,7 @@
 Claude Code supports local stdio MCP servers. dent8 exposes `dent8 mcp serve`, so Claude Code
 can use dent8 as a project memory firewall.
 
-## Local scope
+## Project scope
 
 From the target project:
 
@@ -11,20 +11,13 @@ From the target project:
 dent8 init --agent claude-code --install-mcp
 ```
 
-This patches project `.mcp.json`, preserves unrelated MCP servers, and prints the resulting
-file. Check it inside Claude Code with:
+This patches **project** `.mcp.json` (not Claude user-global MCP settings), preserves
+unrelated MCP servers, and prints the resulting file. Re-run
+`dent8 mcp install --agent claude-code` later; the installer is idempotent. Prefer project
+scope so other repos do not inherit this store. Check it inside Claude Code with:
 
 ```text
 /mcp
-```
-
-## Project scope
-
-For a local project-scoped setup, run the same install command from the target project. The
-installer is idempotent for an existing `.mcp.json`:
-
-```sh
-dent8 mcp install --agent claude-code
 ```
 
 For a team-shared checked-in `.mcp.json`, start from [`mcp.sample.json`](mcp.sample.json)

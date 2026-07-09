@@ -10,23 +10,25 @@ or a future HTTP transport; v0 is stdio.
 ## Local MCP profile
 
 Grok Build accepts Claude Code's project-root `.mcp.json`, **and** a native config —
-`[mcp_servers.dent8]` in `~/.grok/config.toml` (user) or `.grok/config.toml` (project),
-the same TOML shape as the [Codex example](../codex/config.sample.toml) — or
-`grok mcp add dent8 -- …`.
+`[mcp_servers.dent8]` in project `.grok/config.toml` (preferred for dogfood) or
+`~/.grok/config.toml` (user-global; avoid for a single-repo store), the same TOML
+shape as the [Codex example](../codex/config.sample.toml) — or `grok mcp add dent8 -- …`.
 
 When this repo already dogfoods Claude Code on `.mcp.json` (bound to
 `source:claude-code`), **do not** overwrite that file for Grok. Add Grok as a second
-agent and keep its MCP entry separate:
+agent and keep its MCP entry **project-scoped** so other Grok sessions do not attach
+this store:
 
 ```sh
 cd /abs/path/to/project
 # Shared store already exists:
 dent8 agent add --agent grok-build --mcp-local-bin \
   --mcp-config .dent8/mcp-grok-build.json
-# Wire Grok's native config from the generated env (user or project scope):
+# Wire Grok's native config from the generated env (project scope only):
 grok mcp add dent8 --scope project \
   -e DENT8_STORE_URL=… -e DENT8_GRANT=… -e DENT8_IDENTITY_KEY=… \
   -- .dent8/bin/dent8 mcp serve
+# Do not use --scope user for a repo dogfood store.
 ```
 
 Fresh project (no Claude `.mcp.json` yet):
@@ -65,7 +67,13 @@ user:<name> preference
 
 ## Optional hook guard
 
-If your Grok Build host exposes Claude-compatible hooks, adapt the Claude Code sample in
-[`../agent-hooks/claude-code/settings.sample.json`](../agent-hooks/claude-code/settings.sample.json).
-If Grok Build is supervised through Hecate, put the hook policy at the Hecate or child-agent
-profile layer instead. See [`../agent-hooks/grok-build/`](../agent-hooks/grok-build/).
+Install the project hook sample at `.grok/hooks/dent8.json` (not `~/.grok/hooks/`):
+
+```sh
+mkdir -p .grok/hooks
+cp examples/agent-hooks/grok-build/hooks.sample.json .grok/hooks/dent8.json
+```
+
+Trust the project (`/hooks-trust`) so Grok loads project hooks. See
+[`../agent-hooks/grok-build/`](../agent-hooks/grok-build/). If Grok is supervised through
+Hecate, prefer the supervisor-layer policy instead.

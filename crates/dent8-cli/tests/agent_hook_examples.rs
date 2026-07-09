@@ -12,6 +12,8 @@ fn hook_samples_parse_and_reference_the_shared_guard() {
         include_str!("../../../examples/agent-hooks/claude-code/settings.sample.json"),
         include_str!("../../../examples/agent-hooks/gemini/settings.sample.json"),
         include_str!("../../../examples/agent-hooks/cascade/hooks.sample.json"),
+        include_str!("../../../examples/agent-hooks/cursor/hooks.sample.json"),
+        include_str!("../../../examples/agent-hooks/grok-build/hooks.sample.json"),
     ];
 
     for raw in samples {

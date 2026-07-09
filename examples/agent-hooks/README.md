@@ -13,13 +13,14 @@ Use hooks for three narrow jobs:
 
 Provider profiles:
 
-- [`codex/hooks.sample.json`](codex/hooks.sample.json)
-- [`claude-code/settings.sample.json`](claude-code/settings.sample.json)
-- [`gemini/settings.sample.json`](gemini/settings.sample.json)
-- [`cascade/hooks.sample.json`](cascade/hooks.sample.json)
-- [`cursor/`](cursor/) — MCP + `stop`-hook capture + `.mdc` rules block
-- [`grok-build/`](grok-build/)
+- [`codex/hooks.sample.json`](codex/hooks.sample.json) → project `.codex/hooks.json`
+- [`claude-code/settings.sample.json`](claude-code/settings.sample.json) → project `.claude/settings.json`
+- [`gemini/settings.sample.json`](gemini/settings.sample.json) → project `.gemini/settings.json`
+- [`cascade/hooks.sample.json`](cascade/hooks.sample.json) → project `.windsurf/hooks.json`
+- [`cursor/hooks.sample.json`](cursor/hooks.sample.json) → project `.cursor/hooks.json` (plus MCP/rules in [`cursor/`](cursor/))
+- [`grok-build/hooks.sample.json`](grok-build/hooks.sample.json) → project `.grok/hooks/dent8.json`
 - [`hecate/`](hecate/)
+
 - [`generic/`](generic/) — provider-neutral POSIX scripts (`dent8 context` in, `dent8 capture`
   out, and an idempotent `AGENTS.md` managed-block writer) for any framework with no native
   hook schema. See also [connect any MCP client](../../docs/mcp-clients.md).
@@ -27,9 +28,10 @@ Provider profiles:
 ## Install shape
 
 1. Install the MCP profile for the agent first, from `examples/<agent>/`.
-2. Copy the hook sample into the provider's hook config location.
+2. Copy the hook sample into the provider's **project** hook config location (not user-global
+   `~/.cursor`, `~/.grok/hooks`, etc., for a single-repo store).
 3. Make sure `dent8` is on `PATH`, or replace `dent8 hook native-memory-guard` with the
-   absolute path to the binary.
+   absolute path to the binary (dogfood often uses `.dent8/bin/dent8`).
 4. Keep `DENT8_HOOK_ENFORCE=1` only after the team has confirmed the hook runs correctly.
 
 The guard is built into the CLI — one command, no extra runtime:

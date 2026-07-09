@@ -87,12 +87,12 @@ A remote HTTP/streamable transport is future work, not part of v0.
 
 Client-specific examples:
 
-- [Codex](../codex/) — `config.toml` stdio MCP setup.
-- [Claude Code](../claude-code/) — `claude mcp add` and project `.mcp.json` setup.
+- [Codex](../codex/) — project `.codex/config.toml` stdio MCP setup.
+- [Claude Code](../claude-code/) — project `.mcp.json` setup.
 - [Gemini CLI](../gemini/) — project `.gemini/settings.json` / `gemini mcp add` setup.
-- [Devin/Cascade](../cascade/) — Cascade MCP config + rules/memory guard stance.
-- [Cursor](../cursor/) — project/global `mcp.json` setup.
-- [Grok Build](../grok-build/) — client-neutral stdio MCP profile for Grok Build hosts.
+- [Devin/Cascade](../cascade/) — project Cascade MCP config + rules/memory guard stance.
+- [Cursor](../cursor/) — project `.cursor/mcp.json` setup (prefer over user-global).
+- [Grok Build](../grok-build/) — project `.grok/config.toml` (or side MCP JSON; not Claude's `.mcp.json` when that file is already bound to another agent).
 - [Hecate](../hecate/) — Hecate task / external-agent MCP server config.
 - [LangChain / in-process Python·TS](../langchain/) — use dent8 as a memory firewall from a
   framework over MCP.

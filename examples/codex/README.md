@@ -11,8 +11,9 @@ From the target project:
 dent8 init --agent codex --install-mcp
 ```
 
-This patches the trusted project's `.codex/config.toml` and prints the resulting file. The
-generated entry is equivalent to:
+This patches the **trusted project's** `.codex/config.toml` (not `~/.codex/config.toml`) and
+prints the resulting file. Prefer project scope so other repos do not inherit this store.
+The generated entry is equivalent to:
 
 ```toml
 [mcp_servers.dent8]

@@ -10,7 +10,7 @@ this directory is about the *wiring* of the three surfaces together.
 | --- | --- | --- |
 | MCP server | [`mcp.sample.json`](mcp.sample.json) → `.cursor/mcp.json` | live `assert`/`explain`/… over stdio |
 | Context injection | [`rules/dent8.mdc`](rules/dent8.mdc) → `.cursor/rules/dent8.mdc` | a managed block of `dent8 context` |
-| Capture | [`hooks.sample.json`](hooks.sample.json) → `.cursor/hooks.json` | `stop` hook flushes proposals |
+| Guard + capture | [`hooks.sample.json`](hooks.sample.json) → `.cursor/hooks.json` | `preToolUse` native-memory guard, `postToolUse` audit, `stop` capture |
 
 ## MCP — `.cursor/mcp.json`
 
@@ -31,26 +31,28 @@ This bare shape is the wiring; for a hardened, per-project profile with `DENT8_L
 or let `dent8 init --agent cursor --install-mcp` patch it. Don't ship both blocks in one
 `.cursor/mcp.json` — pick the profile version once identity is set up.
 
-## Capture — `.cursor/hooks.json`
+## Guard + capture — `.cursor/hooks.json`
 
-Cursor added lifecycle hooks in **Cursor 1.7** (Oct 2025). The `stop` event fires when a task
-completes and is the cleanest place to flush the proposal queue through the firewall:
+Cursor added lifecycle hooks in **Cursor 1.7** (Oct 2025). Prefer **project**
+`.cursor/hooks.json` (not `~/.cursor/hooks.json`) so the guard only runs in this repo.
 
-```json
-{
-  "version": 1,
-  "hooks": {
-    "stop": [
-      { "command": "dent8 capture .dent8/proposals.jsonl --consume --keep-failed" }
-    ]
-  }
-}
+Copy the sample:
+
+```sh
+cp examples/agent-hooks/cursor/hooks.sample.json .cursor/hooks.json
 ```
+
+The sample wires:
+
+- **`preToolUse`** — enforced `dent8 hook native-memory-guard` (blocks direct native-memory writes)
+- **`postToolUse`** — post-write audit when those tools run
+- **`stop`** — `dent8 capture … --consume --keep-failed` to flush proposals
+
+`dent8 doctor --agent cursor` looks for that file and the same enforce markers as Codex/Claude.
 
 **Context does NOT ride on a hook.** Cursor's `beforeSubmitPrompt` hook is informational per
 Cursor's docs — it cannot mutate the outgoing prompt — so context injection must go through the
-rules file (below) or MCP, not a hook. Only include hooks that genuinely help; the `stop`
-capture hook is the one that closes the loop.
+rules file (below) or MCP, not a hook.
 
 ## Context — `.cursor/rules/dent8.mdc`
 
@@ -95,7 +97,7 @@ other AGENTS.md-aware tool at once). See [`../generic/`](../generic/).
 
 **Documented per Cursor's docs — NOT exercised in this environment** (no Cursor install, and
 Cursor's first-party doc hosts were egress-blocked, so syntax follows public docs): Cursor
-picking up `.cursor/mcp.json`, running `.cursor/hooks.json` `stop` hooks, and applying
+picking up `.cursor/mcp.json`, running `.cursor/hooks.json` `preToolUse`/`stop` hooks, and applying
 `.cursor/rules/*.mdc`. Verify against the Cursor version your team runs:
 
 - MCP: <https://cursor.com/docs/mcp>

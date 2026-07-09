@@ -361,10 +361,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   config action, generated argv, rendered contents, and local-bin wrapper metadata. It reads the generated
   `.dent8/env` plus the selected source's identity env instead of asking the user to paste paths
   by hand. Built-in defaults cover Codex
-  (`.codex/config.toml`), Claude Code/Grok Build (`.mcp.json`), Cursor
+  (`.codex/config.toml`), Claude Code (`.mcp.json`), Grok Build (`.mcp.json` by default, or
+  a side file / project `.grok/config.toml` when Claude already owns `.mcp.json`), Cursor
   (`.cursor/mcp.json`), Gemini (`.gemini/settings.json`), and Cascade
   (`.windsurf/mcp_config.json`); Hecate requires `--config` because its MCP servers live in a
-  task/UI payload rather than a stable project config file. If `--dir` is not literally named
+  task/UI payload rather than a stable project config file. Prefer those **project** paths over
+  user-global agent config for a single shared store. If `--dir` is not literally named
   `.dent8`, pass `--config` (or `--mcp-config` through `dent8 init`) because the installer
   cannot infer the project root safely. The default command is `dent8`,
   which is intended for one globally installed binary used by many agents. Stdio MCP clients

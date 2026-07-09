@@ -68,14 +68,14 @@ access to the event tables.
 
 ## Provider stance
 
-| Provider | v0 integration | Hook stance |
+| Provider | v0 integration (prefer **project** MCP config) | Hook stance |
 | --- | --- | --- |
-| Codex | MCP through `config.toml`; `AGENTS.md` for durable repo guidance | Good fit: session, pre-tool, post-tool, stop hooks |
-| Claude Code | MCP through `.mcp.json`; `CLAUDE.md` and auto memory are native surfaces | Good fit: session/tool/stop hooks |
+| Codex | MCP through project `.codex/config.toml`; `AGENTS.md` for durable repo guidance | Good fit: session, pre-tool, post-tool, stop hooks |
+| Claude Code | MCP through project `.mcp.json`; `CLAUDE.md` and auto memory are native surfaces | Good fit: session/tool/stop hooks |
 | Gemini CLI | MCP plus `GEMINI.md`/`/memory`; Auto Memory has review semantics | Good fit: session, before/after tool, session end hooks |
-| Cursor | MCP through `.cursor/mcp.json`; `.cursor/rules` and `AGENTS.md` as native surfaces | MCP-first; hook config should be version-checked before team use |
+| Cursor | MCP through project `.cursor/mcp.json`; `.cursor/rules` and `AGENTS.md` as native surfaces | Project `.cursor/hooks.json` (`preToolUse` guard + `stop` capture); schema is Cursor 1.7+ |
 | Devin/Cascade | MCP plus `.devin/rules`/`.windsurf/rules` and auto memories | Good fit: pre/post write hooks |
-| Grok Build | MCP profile; often Claude-compatible or supervisor-driven | Reuse Claude/Hecate hook profile when the host exposes hooks |
+| Grok Build | MCP via project `.grok/config.toml` (or `.mcp.json` when not shared with Claude) | Project `.grok/hooks/dent8.json` (Claude-compatible events); folder must be trusted |
 | Hecate | MCP server in task config; supervised external agents | Use Hecate to distribute MCP and child-agent hook policy |
 
 ## v0 rule

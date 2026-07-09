@@ -1,9 +1,21 @@
 {
   "version": 1,
   "hooks": {
+    "preToolUse": [
+      {
+        "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
+        "matcher": "Write|StrReplace|Edit|Shell|TabWrite|ApplyPatch"
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; DENT8_HOOK_MODE=post-write-audit dent8 hook native-memory-guard",
+        "matcher": "Write|StrReplace|Edit|Shell|TabWrite|ApplyPatch"
+      }
+    ],
     "stop": [
       {
-        "command": "dent8 capture .dent8/proposals.jsonl --consume --keep-failed"
+        "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; dent8 capture .dent8/proposals.jsonl --consume --keep-failed"
       }
     ]
   }

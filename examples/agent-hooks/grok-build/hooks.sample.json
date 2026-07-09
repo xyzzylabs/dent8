@@ -1,0 +1,66 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; dent8 context",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; DENT8_HOOK_MODE=post-write-audit dent8 hook native-memory-guard",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; DENT8_HOOK_MODE=session-start dent8 hook native-memory-guard",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; if [ -f .dent8/env ]; then set -a; . .dent8/env; set +a; fi; if [ -f .dent8/identity-grok-build.env ]; then set -a; . .dent8/identity-grok-build.env; set +a; fi; dent8 capture .dent8/proposals.jsonl --consume --keep-failed",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -43,16 +43,19 @@ See [docs/dogfooding-notes.md](docs/dogfooding-notes.md) for the setup walkthrou
 
 ## Dogfood
 
-- This repo may have ignored local dogfood state in `.dent8/`, `.codex/config.toml`, and
-  `.cursor/mcp.json`. Do not commit those files.
+- This repo may have ignored local dogfood state in `.dent8/`, project MCP configs
+  (`.codex/config.toml`, `.mcp.json`, `.cursor/mcp.json`, `.grok/config.toml`), and related
+  agent dirs. Do not commit those files. Keep dogfood MCP **project-scoped** — not in
+  user-global agent config — so other workspaces do not attach this store.
 - When dogfood state is present, consult dent8 for durable project facts before relying on
   remembered setup or preferences. Prefer MCP tools (`list_facts`, `explain`, `verify`) when
   available; otherwise use the local CLI after loading `.dent8/env` and the agent-specific
-  identity env (for example `.dent8/identity-codex.env` or `.dent8/identity-cursor.env`).
-- The local Codex MCP config should point at `.dent8/bin/dent8`, an ignored wrapper that runs
-  a SQLite-capable stock build from `.dent8/target-sqlite`. Claude Code uses `.mcp.json`;
-  Cursor uses `.cursor/mcp.json`. This avoids Cargo startup on every MCP launch and keeps the
-  dogfood binary isolated from normal `target/debug` rebuilds.
+  identity env (for example `.dent8/identity-codex.env`, `.dent8/identity-claude-code.env`,
+  or `.dent8/identity-grok-build.env`).
+- Project MCP configs should point at `.dent8/bin/dent8`, an ignored wrapper that runs a
+  SQLite-capable stock build from `.dent8/target-sqlite` (Codex `.codex/config.toml`, Claude
+  `.mcp.json`, Cursor `.cursor/mcp.json`, Grok `.grok/config.toml`). This avoids Cargo startup
+  on every MCP launch and keeps the dogfood binary isolated from normal `target/debug` rebuilds.
 - The local dogfood store may be witness-backed with `.dent8/witness.jsonl` and
   `.dent8/witness.key.pub`. The private `.dent8/witness.key` stays out of `.dent8/env` and
   should only be passed explicitly when signing a head.
@@ -63,6 +66,8 @@ CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check
+.dent8/bin/dent8 doctor --agent grok-build --dir .dent8 \
+  --mcp-config .dent8/mcp-grok-build.json --write-check
 set -a; . .dent8/env; set +a
 export DENT8_WITNESS_GRANTS_LOG=.dent8/witness-grants.jsonl
 DENT8_WITNESS_KEY=.dent8/witness.key .dent8/bin/dent8 witness sign

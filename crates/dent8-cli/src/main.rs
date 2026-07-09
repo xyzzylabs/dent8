@@ -3803,6 +3803,15 @@ fn store_url() -> Option<String> {
     {
         return Some(url);
     }
+    // Explicit `DENT8_LOG` selects the file-dev log for this process. Do not fall through to a
+    // discovered `.dent8/env` `DENT8_STORE_URL` (e.g. dogfood SQLite), or hooks/tests that set
+    // only `DENT8_LOG` silently verify the wrong store.
+    if std::env::var("DENT8_LOG")
+        .ok()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        return None;
+    }
     discover_store().and_then(|store| store.env_value("DENT8_STORE_URL"))
 }
 

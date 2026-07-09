@@ -819,7 +819,10 @@ pub(crate) fn agent_hook_config_path(
         InitAgent::ClaudeCode => Some(root.join(".claude/settings.json")),
         InitAgent::Gemini => Some(root.join(".gemini/settings.json")),
         InitAgent::Cascade => Some(root.join(".windsurf/hooks.json")),
-        InitAgent::Cursor | InitAgent::GrokBuild | InitAgent::Hecate => None,
+        // Project-scoped only (not ~/.cursor or ~/.grok) — same dogfood rule as MCP.
+        InitAgent::Cursor => Some(root.join(".cursor/hooks.json")),
+        InitAgent::GrokBuild => Some(root.join(".grok/hooks/dent8.json")),
+        InitAgent::Hecate => None,
     }
 }
 
@@ -839,16 +842,15 @@ pub(crate) fn agent_hook_unvalidated_message(agent: InitAgent, dir: &std::path::
         );
     }
     match agent {
-        InitAgent::Cursor => {
-            "Cursor hook schema is version-dependent; install MCP first, then version-check a native-memory guard manually from examples/agent-hooks/cursor".to_string()
-        }
-        InitAgent::GrokBuild => {
-            "Grok Build hook support is host-dependent; reuse the Claude/Hecate guard profile only when the host exposes compatible hooks".to_string()
-        }
         InitAgent::Hecate => {
             "Hecate distributes policy to child agents; inspect the supervised child agent hook profile rather than one Hecate-local file".to_string()
         }
-        InitAgent::Codex | InitAgent::ClaudeCode | InitAgent::Gemini | InitAgent::Cascade => {
+        InitAgent::Codex
+        | InitAgent::ClaudeCode
+        | InitAgent::Gemini
+        | InitAgent::Cascade
+        | InitAgent::Cursor
+        | InitAgent::GrokBuild => {
             "native-memory hook profile is not validated for this agent".to_string()
         }
     }

@@ -12,8 +12,9 @@ From the target project:
 dent8 init --agent gemini --install-mcp
 ```
 
-This patches `.gemini/settings.json`, preserves unrelated settings/MCP servers, and prints
-the resulting file. Re-run `dent8 mcp install --agent gemini` to regenerate it later.
+This patches **project** `.gemini/settings.json` (prefer `-s project` over user scope),
+preserves unrelated settings/MCP servers, and prints the resulting file. Re-run
+`dent8 mcp install --agent gemini` to regenerate it later.
 
 ## CLI install shape
 

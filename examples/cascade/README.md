@@ -12,8 +12,9 @@ From the target project:
 dent8 init --agent cascade --install-mcp
 ```
 
-This patches `.windsurf/mcp_config.json`, preserves unrelated MCP servers, and prints the
-resulting file. For the desktop app's global config, pass an explicit path:
+This patches **project** `.windsurf/mcp_config.json`, preserves unrelated MCP servers, and
+prints the resulting file. Prefer project scope for a single-repo store. For the desktop
+app's global config only when you intentionally want one personal store everywhere:
 
 ```sh
 dent8 mcp install --agent cascade --config "$HOME/.codeium/windsurf/mcp_config.json"

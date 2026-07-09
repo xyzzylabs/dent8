@@ -14,11 +14,12 @@ dent8 init --agent cursor --install-mcp
 This patches `.cursor/mcp.json`, preserves unrelated MCP servers, and prints the resulting
 file. Re-run `dent8 mcp install --agent cursor` to regenerate it later.
 
-## Global scope
+## Scope note
 
-Use the same JSON shape in `~/.cursor/mcp.json` when you want one global dent8 server entry.
-Prefer per-project logs (`DENT8_LOG`) and authority registries (`DENT8_AUTHORITY`) so one
-workspace cannot accidentally inherit another workspace's facts.
+Prefer **project** `.cursor/mcp.json` so the server only attaches in this repository.
+Avoid `~/.cursor/mcp.json` for a single-repo dogfood or team store — a user-global entry
+loads that store in every Cursor workspace. If you intentionally run one personal global
+store, keep its paths distinct from any project `.dent8` bundle.
 
 ## Prompt Cursor
 
@@ -42,6 +43,7 @@ user:<name> preference
 
 ## Optional hook/rules guard
 
-Cursor should use dent8 through MCP first. See [`../agent-hooks/cursor/`](../agent-hooks/cursor/)
-for the current hook stance: guard `.cursor/rules/` and `AGENTS.md` only after confirming the
-hook schema for the Cursor version your team runs.
+Cursor should use dent8 through MCP first. Install the project hook profile from
+[`../agent-hooks/cursor/hooks.sample.json`](../agent-hooks/cursor/hooks.sample.json) into
+`.cursor/hooks.json` for an enforced native-memory `preToolUse` guard and `stop` capture
+(Cursor 1.7+). Prefer project scope over `~/.cursor/hooks.json` for a single-repo store.

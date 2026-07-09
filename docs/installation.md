@@ -98,10 +98,12 @@ dent8 agent add --agent cursor
 dent8 doctor --all-agents --write-check
 ```
 
-Each agent gets its own source key/grant and MCP config, but all profiles point at the same
-`DENT8_STORE_URL`, authority registry, trust registry, active-grant registry, and grant log.
-Use SQLite for local no-server dogfooding; use Postgres for heavier concurrency or team
-deployments.
+Each agent gets its own source key/grant and **project-local** MCP config (for example
+`.codex/config.toml`, `.mcp.json`, `.cursor/mcp.json`, `.grok/config.toml`), but all profiles
+point at the same `DENT8_STORE_URL`, authority registry, trust registry, active-grant
+registry, and grant log. Keep those MCP entries project-scoped so other workspaces do not
+attach this store. Use SQLite for local no-server dogfooding; use Postgres for heavier
+concurrency or team deployments.
 
 The local daemon is a second v0 shape for many local processes that share one source identity:
 

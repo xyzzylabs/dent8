@@ -17,6 +17,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   daemon connections still return the receipt but skip the audit write. Failures to record
   surface as a protocol error so a write-capable read is never silently un-audited.
 
+### Changed
+- **Docs agree multi-agent dogfood MCP is project-scoped** (Codex/Claude/Cursor/Grok/Gemini/
+  Cascade): install into repo-local agent config, not user-global paths, so a shared
+  `.dent8` store does not attach in other workspaces.
+- **`doctor --agent` validates Cursor and Grok Build native-memory hooks** at project
+  `.cursor/hooks.json` and `.grok/hooks/dent8.json` (same enforce markers as Codex/Claude).
+  Samples: `examples/agent-hooks/cursor/hooks.sample.json`,
+  `examples/agent-hooks/grok-build/hooks.sample.json`.
+- **Explicit `DENT8_LOG` is not overridden by a discovered `.dent8/env` `DENT8_STORE_URL`**
+  (hooks/tests that set only `DENT8_LOG` verify that file log, not dogfood SQLite).
+
 ## [0.5.0] - 2026-07-09
 
 ### BREAKING

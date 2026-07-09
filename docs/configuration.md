@@ -234,12 +234,23 @@ the aggregate command. Hecate task configs are custom paths, so check them with
 `dent8 doctor --agent hecate --mcp-config PATH`.
 
 `doctor --agent` also reports native-memory bypass posture. For Codex, Claude Code, Gemini,
-and Cascade it inspects the expected hook config and reports OK only when it finds
-`dent8 hook native-memory-guard` in enforced write-guard mode (`DENT8_HOOK_ENFORCE=1`). A
-missing hook is a WARN, not a failure: MCP remains the dent8 integrity boundary, but native
-memory/rules files are not guarded against direct writes. Cursor, Grok Build, and Hecate are
-reported as WARN/unknown because their hook surface is host- or supervisor-specific; validate
-those manually from [`examples/agent-hooks/`](../examples/agent-hooks/). `doctor --agent` also
+Cascade, Cursor, and Grok Build it inspects the expected **project** hook config and reports
+OK only when it finds `dent8 hook native-memory-guard` in enforced write-guard mode
+(`DENT8_HOOK_ENFORCE=1`):
+
+| Agent | Hook config path |
+|---|---|
+| Codex | `.codex/hooks.json` |
+| Claude Code | `.claude/settings.json` |
+| Gemini | `.gemini/settings.json` |
+| Cascade | `.windsurf/hooks.json` |
+| Cursor | `.cursor/hooks.json` |
+| Grok Build | `.grok/hooks/dent8.json` |
+
+A missing hook is a WARN, not a failure: MCP remains the dent8 integrity boundary, but native
+memory/rules files are not guarded against direct writes. Hecate is reported as WARN/unknown
+because policy is distributed to supervised child agents rather than one Hecate-local file;
+validate those from [`examples/agent-hooks/`](../examples/agent-hooks/). `doctor --agent` also
 runs the read-only `dent8 native scan --agent <profile>` audit and reports how many native
 memory/rules files are visible and how many carry dent8 receipt markers. Run
 `dent8 native reconcile --agent <profile>` when native files contain explicit

@@ -10,6 +10,11 @@ This is the canonical, client-agnostic guide. For the belief model and env-var r
 [`examples/mcp/README.md`](../examples/mcp/README.md); for per-agent installers see the
 `examples/<agent>/` profiles.
 
+**Scope:** install the server in the **project** agent config (repo-local `.mcp.json`,
+`.codex/config.toml`, `.cursor/mcp.json`, `.grok/config.toml`, and so on) when the store is
+that project's belief base. User-global MCP config attaches the same store in every
+workspace — fine for one intentional personal store, wrong for multi-agent repo dogfood.
+
 ## Tools and access
 
 The server exposes **16 tools** plus readable `dent8://{kind}/{key}/{predicate}` resources.
@@ -119,8 +124,9 @@ below), which the generic adapter maintains.
 
 ### 3. Codex CLI — `[mcp_servers.dent8]` TOML (NOT JSON)
 
-Codex **diverges**: config is **TOML** in `~/.codex/config.toml` (or `.codex/config.toml` in a
-trusted project), and the table is `mcp_servers` (underscore).
+Codex **diverges**: config is **TOML** in `.codex/config.toml` in a trusted project
+(preferred for a repo store) or `~/.codex/config.toml` (user-global), and the table is
+`mcp_servers` (underscore).
 
 ```toml
 [mcp_servers.dent8]
