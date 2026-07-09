@@ -2175,6 +2175,456 @@ fn json_output_fails_closed_for_unsupported_commands() {
     }
 }
 
+/// The sorted `(subject, predicate, value-display)` tuples the store currently believes, read
+/// through `dent8 context -o json`. Used to assert import/export round-trip stability.
+fn believed_facts(log: &str) -> Vec<(String, String, String)> {
+    let envs = [("DENT8_LOG", log)];
+    let context = run_dent8(&["--output", "json", "context"], &envs);
+    assert_success(&context, "context -o json");
+    let json = stdout_json(&context);
+    let mut facts: Vec<(String, String, String)> = json["facts"]
+        .as_array()
+        .expect("facts array")
+        .iter()
+        .map(|fact| {
+            (
+                format!(
+                    "{}:{}",
+                    fact["subject"]["kind"].as_str().unwrap_or_default(),
+                    fact["subject"]["key"].as_str().unwrap_or_default()
+                ),
+                fact["predicate"].as_str().unwrap_or_default().to_string(),
+                fact["value"]["display"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    facts.sort();
+    facts
+}
+
+#[test]
+fn export_target_writes_a_managed_block_and_import_round_trips() {
+    let temp = TempDir::new();
+    let source_log = temp.file("source.jsonl").to_string_lossy().into_owned();
+    let claude = temp.file("CLAUDE.md");
+    let claude_path = claude.to_string_lossy().into_owned();
+
+    // Seed the source store with two believed facts through the normal firewall path.
+    for (predicate, value, authority) in [
+        ("test_command", "cargo test --workspace", "high"),
+        ("uses_database", "postgres", "medium"),
+    ] {
+        let asserted = run_dent8(
+            &[
+                "assert",
+                "repo:demo",
+                predicate,
+                value,
+                "--authority",
+                authority,
+                "--source",
+                "source:human",
+            ],
+            &[("DENT8_LOG", source_log.as_str())],
+        );
+        assert_success(&asserted, "seed assert");
+    }
+
+    // Hand-authored prose the export must not disturb.
+    fs::write(&claude, "# CLAUDE.md\n\nHand-authored intro.\n").expect("seed CLAUDE.md");
+
+    let exported = run_dent8(
+        &[
+            "--output",
+            "json",
+            "export",
+            "--target",
+            claude_path.as_str(),
+        ],
+        &[("DENT8_LOG", source_log.as_str())],
+    );
+    assert_success(&exported, "export --target");
+    let exported = stdout_json(&exported);
+    assert_eq!(exported["tool"], "export");
+    assert_eq!(exported["format"], "native-memory");
+    assert_eq!(exported["facts_written"], 2);
+    assert_eq!(exported["block"], "appended");
+
+    let file = fs::read_to_string(&claude).expect("read exported CLAUDE.md");
+    assert!(
+        file.starts_with("# CLAUDE.md\n\nHand-authored intro.\n"),
+        "{file}"
+    );
+    assert!(file.contains("BEGIN dent8 managed block"), "{file}");
+    assert!(file.contains("dent8://repo/demo/test_command"), "{file}");
+    assert!(file.contains("= \"cargo test --workspace\""), "{file}");
+
+    // Import into a fresh store and confirm the believed set matches the source store.
+    let imported_log = temp.file("imported.jsonl").to_string_lossy().into_owned();
+    let imported = run_dent8(
+        &["--output", "json", "import", claude_path.as_str()],
+        &[("DENT8_LOG", imported_log.as_str())],
+    );
+    assert_success(&imported, "import");
+    let imported = stdout_json(&imported);
+    assert_eq!(imported["imported"], 2, "{imported}");
+    assert_eq!(imported["accepted"], 2, "{imported}");
+    assert_eq!(
+        believed_facts(&source_log),
+        believed_facts(&imported_log),
+        "import must reconstruct the source store's believed facts"
+    );
+
+    // Round-trip stability: export the imported store to a new file, import again into a third
+    // store; the believed set is identical (stable).
+    let claude2 = temp.file("CLAUDE2.md");
+    let claude2_path = claude2.to_string_lossy().into_owned();
+    let export2 = run_dent8(
+        &["export", "--target", claude2_path.as_str()],
+        &[("DENT8_LOG", imported_log.as_str())],
+    );
+    assert_success(&export2, "second export");
+    let third_log = temp.file("third.jsonl").to_string_lossy().into_owned();
+    let import2 = run_dent8(
+        &["import", claude2_path.as_str()],
+        &[("DENT8_LOG", third_log.as_str())],
+    );
+    assert_success(&import2, "second import");
+    assert_eq!(
+        believed_facts(&imported_log),
+        believed_facts(&third_log),
+        "round-trip (import -> export -> import) must be stable"
+    );
+}
+
+#[test]
+fn export_target_is_idempotent_and_preserves_surrounding_prose() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let claude = temp.file("CLAUDE.md");
+
+    let asserted = run_dent8(
+        &[
+            "assert",
+            "repo:demo",
+            "test_command",
+            "cargo test",
+            "--authority",
+            "high",
+            "--source",
+            "source:human",
+        ],
+        &[("DENT8_LOG", log.as_str())],
+    );
+    assert_success(&asserted, "seed assert");
+
+    // A file that already carries a managed block wedged between human prose.
+    let before = "# Title\n\nPrologue prose.\n\n";
+    let stale_block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nSTALE — must be replaced\n<!-- END dent8 managed block -->";
+    let after = "\n## Epilogue\n\nClosing prose that must survive.\n";
+    fs::write(&claude, format!("{before}{stale_block}{after}")).expect("seed CLAUDE.md");
+
+    let claude_path = claude.to_string_lossy().into_owned();
+    let refreshed = run_dent8(
+        &[
+            "--output",
+            "json",
+            "export",
+            "--target",
+            claude_path.as_str(),
+        ],
+        &[("DENT8_LOG", log.as_str())],
+    );
+    assert_success(&refreshed, "export refresh");
+    assert_eq!(stdout_json(&refreshed)["block"], "refreshed");
+
+    let file = fs::read_to_string(&claude).expect("read refreshed file");
+    assert!(
+        file.starts_with(before),
+        "prose before block not preserved:\n{file}"
+    );
+    assert!(
+        file.ends_with(after),
+        "prose after block not preserved:\n{file}"
+    );
+    assert!(
+        !file.contains("STALE"),
+        "stale block content leaked:\n{file}"
+    );
+    assert!(file.contains("dent8://repo/demo/test_command"), "{file}");
+
+    // Export again: the file is byte-for-byte identical (no wall-clock drift in the block).
+    let first = file;
+    let again = run_dent8(
+        &["export", "--target", claude_path.as_str()],
+        &[("DENT8_LOG", log.as_str())],
+    );
+    assert_success(&again, "second export");
+    let second = fs::read_to_string(&claude).expect("read second export");
+    assert_eq!(first, second, "export must be idempotent");
+}
+
+#[test]
+fn export_target_flags_contested_facts() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let claude = temp.file("AGENTS.md");
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let asserted = run_dent8(
+        &[
+            "assert",
+            "repo:demo",
+            "db",
+            "postgres",
+            "--authority",
+            "medium",
+            "--source",
+            "source:human",
+        ],
+        &envs,
+    );
+    assert_success(&asserted, "assert");
+    let contradicted = run_dent8(
+        &[
+            "contradict",
+            "repo:demo",
+            "db",
+            "mysql",
+            "--authority",
+            "medium",
+            "--source",
+            "source:ci",
+        ],
+        &envs,
+    );
+    assert_success(&contradicted, "contradict");
+
+    let claude_path = claude.to_string_lossy().into_owned();
+    let exported = run_dent8(&["export", "--target", claude_path.as_str()], &envs);
+    assert_success(&exported, "export contested");
+    let file = fs::read_to_string(&claude).expect("read AGENTS.md");
+    assert!(
+        file.contains("[contested"),
+        "contested fact must be flagged:\n{file}"
+    );
+}
+
+#[test]
+fn import_applies_all_three_rules_and_reports_skips() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let file = temp.file("CLAUDE.md");
+    let contents = concat!(
+        "# Project notes\n",
+        "Free prose that must be skipped.\n",
+        "\n",
+        "Durable: dent8://repo/demo/build_tool = \"cargo\"\n",
+        "\n",
+        "```dent8\n",
+        "{\"subject\":\"repo:demo\",\"predicate\":\"uses_database\",\"value\":\"postgres\"}\n",
+        "```\n",
+        "\n",
+        "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\n",
+        "### repo:demo\n",
+        "- `dent8://repo/demo/test_command` = \"cargo test\"  <!-- dent8 receipt fact=fact:repo:demo:test_command:1 event_hash=abc authority=medium source=source:human -->\n",
+        "<!-- END dent8 managed block -->\n",
+    );
+    fs::write(&file, contents).expect("seed import file");
+
+    let file_path = file.to_string_lossy().into_owned();
+    let imported = run_dent8(
+        &["--output", "json", "import", file_path.as_str()],
+        &[("DENT8_LOG", log.as_str())],
+    );
+    assert_success(&imported, "import three rules");
+    let imported = stdout_json(&imported);
+    assert_eq!(imported["accepted"], 3, "{imported}");
+    assert!(
+        imported["skipped"].as_u64().expect("skipped") >= 2,
+        "{imported}"
+    );
+    let rules: Vec<&str> = imported["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|r| r["rule"].as_str().unwrap_or_default())
+        .collect();
+    assert!(rules.contains(&"inline-marker"), "{imported}");
+    assert!(rules.contains(&"dent8-block"), "{imported}");
+    assert!(rules.contains(&"managed-block"), "{imported}");
+}
+
+#[test]
+fn import_dry_run_writes_nothing() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let file = temp.file("CLAUDE.md");
+    fs::write(&file, "Durable: dent8://repo/demo/build_tool = \"cargo\"\n")
+        .expect("seed import file");
+
+    let file_path = file.to_string_lossy().into_owned();
+    let dry = run_dent8(
+        &[
+            "--output",
+            "json",
+            "import",
+            "--dry-run",
+            file_path.as_str(),
+        ],
+        &[("DENT8_LOG", log.as_str())],
+    );
+    assert_success(&dry, "import --dry-run");
+    let dry = stdout_json(&dry);
+    assert_eq!(dry["dry_run"], true);
+    assert_eq!(dry["accepted"], 0, "{dry}");
+    assert!(
+        !std::path::Path::new(&log).exists(),
+        "dry run must not create the store"
+    );
+}
+
+#[test]
+fn import_cannot_bypass_the_authority_ceiling() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let authority = temp.file("authority.json");
+    fs::write(
+        &authority,
+        r#"{"sources":{"source:agent":{"max_authority":"low"},"source:human":{"max_authority":"high"}}}"#,
+    )
+    .expect("seed authority registry");
+    let authority_path = authority.to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_AUTHORITY", authority_path.as_str()),
+    ];
+
+    let asserted = run_dent8(
+        &[
+            "assert",
+            "repo:demo",
+            "db",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:human",
+        ],
+        &envs,
+    );
+    assert_success(&asserted, "seed high fact");
+
+    let over_ceiling = r#"{"op":"supersede","subject":"repo:demo","predicate":"db","value":"mysql","authority":"high","source":"source:agent"}"#;
+
+    // The same proposal through `capture` — the reference funnel.
+    let captured = run_dent8_stdin(&["--output", "json", "capture"], over_ceiling, &envs);
+    let captured = stdout_json(&captured);
+    let capture_message = captured["results"][0]["message"]
+        .as_str()
+        .expect("capture message")
+        .to_string();
+
+    // The same proposal through `import` (fenced dent8 block) — must be rejected identically.
+    let file = temp.file("CLAUDE.md");
+    fs::write(&file, format!("```dent8\n{over_ceiling}\n```\n")).expect("seed import file");
+    let file_path = file.to_string_lossy().into_owned();
+    let imported = run_dent8(&["--output", "json", "import", file_path.as_str()], &envs);
+    assert_eq!(imported.status.code(), Some(1), "{}", stderr(&imported));
+    let imported = stdout_json(&imported);
+    assert_eq!(imported["rejected"], 1, "{imported}");
+    assert_eq!(imported["accepted"], 0, "{imported}");
+    assert_eq!(
+        imported["results"][0]["message"]
+            .as_str()
+            .expect("import message"),
+        capture_message,
+        "import must be rejected with the same OpError as capture"
+    );
+}
+
+#[test]
+fn native_memory_guard_blocks_raw_writes_but_export_block_is_recognized() {
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+    fs::create_dir(root.join(".git")).expect("mark repo root");
+    let dir = root.join(".dent8");
+    fs::create_dir(&dir).expect("create .dent8");
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // (i) The PreToolUse guard still exits 2 on a raw agent Write of arbitrary prose to CLAUDE.md.
+    let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/repo/CLAUDE.md","content":"just arbitrary prose"}}"#;
+    let guarded = run_dent8_stdin(
+        &["hook", "native-memory-guard"],
+        payload,
+        &[
+            ("DENT8_HOOK_MODE", "guard-native-memory-write"),
+            ("DENT8_HOOK_ENFORCE", "1"),
+            ("DENT8_LOG", log.as_str()),
+        ],
+    );
+    assert_eq!(guarded.status.code(), Some(2), "{}", stderr(&guarded));
+    assert!(stdout(&guarded).is_empty(), "guard must not write stdout");
+
+    // (ii) A dent8-managed export block is recognized as receipt-bearing by the audit path.
+    let asserted = run_dent8(
+        &[
+            "assert",
+            "repo:demo",
+            "test_command",
+            "cargo test",
+            "--authority",
+            "high",
+            "--source",
+            "source:human",
+        ],
+        &envs,
+    );
+    assert_success(&asserted, "seed fact");
+    let claude = root.join("CLAUDE.md");
+    let claude_path = claude.to_string_lossy().into_owned();
+    let exported = run_dent8(&["export", "--target", claude_path.as_str()], &envs);
+    assert_success(&exported, "export managed block");
+
+    let root_path = root.to_string_lossy().into_owned();
+    let dir_path = dir.to_string_lossy().into_owned();
+    let scan = run_dent8(
+        &[
+            "--output",
+            "json",
+            "native",
+            "scan",
+            "--agent",
+            "claude-code",
+            "--root",
+            root_path.as_str(),
+            "--dir",
+            dir_path.as_str(),
+        ],
+        &envs,
+    );
+    assert_success(&scan, "native scan");
+    let scan = stdout_json(&scan);
+    let claude_file = scan["files"]
+        .as_array()
+        .expect("scan files")
+        .iter()
+        .find(|file| {
+            file["path"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("CLAUDE.md"))
+        })
+        .expect("CLAUDE.md in scan");
+    assert_eq!(
+        claude_file["has_receipt_marker"], true,
+        "the managed block must read as receipt-bearing: {scan}"
+    );
+}
+
 #[test]
 fn artifact_commands_emit_machine_readable_json() {
     let schema = run_dent8(&["--output", "json", "schema", "postgres"], &[]);
