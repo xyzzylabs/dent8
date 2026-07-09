@@ -6,6 +6,10 @@ a low-authority or stale write can't silently override a trusted fact, a contrad
 surfaces instead of overwriting, and every believed fact is replayable with an integrity
 receipt.
 
+For a client-agnostic guide — the verified stdio handshake plus copy-paste configs for the
+standard `mcpServers` shape, Zed's `context_servers`, and Codex's `mcp_servers` TOML — see
+[Connect any MCP client](../../docs/mcp-clients.md).
+
 ## Wire it into an MCP client
 
 Install dent8 first:

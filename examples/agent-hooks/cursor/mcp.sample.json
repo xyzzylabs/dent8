@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "dent8": {
+      "command": "dent8",
+      "args": ["mcp", "serve"],
+      "env": {}
+    }
+  }
+}
