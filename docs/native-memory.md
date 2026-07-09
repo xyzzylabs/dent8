@@ -54,6 +54,7 @@ Block format:
 <!-- dent8 export: 2 believed fact(s); do not edit inside this block — run `dent8 export --target <file>` to refresh -->
 
 ### repo:demo
+
 - `dent8://repo/demo/test_command` = "cargo test"  <!-- dent8 receipt fact=fact:repo:demo:test_command:0 event_hash=152f57126ca9… authority=high source=source:human -->
 - `dent8://repo/demo/uses_database` = "postgres"  <!-- dent8 receipt fact=fact:repo:demo:uses_database:1 event_hash=ca4354c82fbb… authority=medium source=source:human -->
 
@@ -139,3 +140,21 @@ facts, which the uniqueness rule rejects, leaving the believed set unchanged. A 
 `CLAUDE.md` (human prose + a fenced `dent8` proposal block and/or a managed block) therefore
 survives repeated export/import cycles without drift. This is exercised by the CLI integration
 tests in `crates/dent8-cli/tests/cli_usage.rs`.
+
+## Known limitations
+
+- **Contested state does not round-trip.** A contested fact exports only its
+  currently-believed **primary** value, with a cosmetic `**[contested — N rival value(s)]**`
+  marker. Import is assert-only, so it reconstructs just that primary value — the **rival
+  value(s) and the contradiction edge are not recreated**. To reproduce a contradiction on the
+  destination store, re-issue it explicitly (`dent8 contradict`, or a fenced `dent8` proposal
+  with `"op":"contradict"`). The `[contested]` marker in the block is a human warning to check
+  `dent8 conflicts`, not a machine-recoverable record.
+- **Only text values round-trip losslessly.** Import asserts text values (matching `op_assert`).
+  A `Json`-typed value exports as `json:<canonical>` and re-imports as the equivalent text; a
+  `Redacted` value is never written to a plaintext file, so it does not round-trip at all.
+- **Import only asserts.** A managed block or inline marker recovers `assert` proposals; it
+  never supersedes or retracts. Because the uniqueness rule rejects a second fresh fact for a
+  subject+predicate that is already believed, re-importing an exported file is a stable no-op
+  rather than an overwrite. Use a fenced `dent8` proposal block (`"op":"supersede"` /
+  `"op":"retract"`) to change an existing belief through import.
