@@ -155,7 +155,7 @@ fn resolve_proposal_meta(
 
 /// Parse and apply one proposal line through the shared op layer. `Invalid` never reaches
 /// the store; `Rejected` is the firewall speaking.
-fn apply_proposal(
+pub(crate) fn apply_proposal(
     path: &str,
     raw: &str,
     flag_authority: Option<CliAuthority>,

@@ -912,7 +912,7 @@ pub(crate) fn resource_uri(kind: &str, key: &str, predicate: &str) -> String {
 
 /// Parse a `dent8://{kind}/{key}/{predicate}` uri into its three decoded segments. Returns
 /// `None` unless there are exactly three non-empty, well-formed segments.
-fn parse_resource_uri(uri: &str) -> Option<(String, String, String)> {
+pub(crate) fn parse_resource_uri(uri: &str) -> Option<(String, String, String)> {
     let rest = uri.strip_prefix("dent8://")?;
     let parts: Vec<&str> = rest.split('/').collect();
     if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
