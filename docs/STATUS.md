@@ -12,8 +12,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 ## Runnable today (the entire user-facing surface)
 
 - **`dent8 eval`** — runs the adversarial corpus against the real firewall and a recency-only
-  baseline. It is the built-in proof that dent8 blocks the attack classes the baseline accepts;
-  use [`examples/firewall/demo.sh`](../examples/firewall/demo.sh) for a human-readable walkthrough
+  baseline, then an integrity-axis comparison against **modeled** Mem0 mutate-in-place and
+  Zep/Graphiti recency semantics (not live peer APIs). It is the built-in proof that dent8
+  blocks the attack classes those baselines accept; use
+  [`examples/firewall/demo.sh`](../examples/firewall/demo.sh) for a human-readable walkthrough
   driven by real CLI writes, `explain`, and `verify`. For the adoption path (init → first fact
   under 2 minutes once the binary is on `PATH`), use
   [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh).
@@ -265,11 +267,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `--output json` (with a structured `advisories` array); integrity findings still return a
   nonzero exit code, with the structured report on stdout.
 - **`dent8 eval`** — runs the demonstrative corpus and prints the firewall-vs-recency-baseline
-  contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline) —
-  the self-demonstrating "why dent8" benchmark. Supports `--output json`. The larger,
-  externally-grounded 47-case adversarial corpus (with its honest per-class block rates and
-  out-of-scope analysis) is a library + test surface in `dent8-evals::adversarial`, not this
-  CLI subcommand; see [evals.md](evals.md).
+  contrast (5/5 attacks blocked by the firewall, 5/5 compromising a recency-only baseline),
+  then the Mem0/Zep integrity-axis comparison (5/5 attack axes differentiate dent8; positive
+  control admitted by all three models) — the self-demonstrating "why dent8" benchmark.
+  Supports `--output json` (includes a `comparison` object). The larger, externally-grounded
+  47-case adversarial corpus (with its honest per-class block rates and out-of-scope analysis)
+  is a library + test surface in `dent8-evals::adversarial`, not this CLI subcommand; see
+  [evals.md](evals.md).
 - **`dent8 conflicts`** — lists every contested fact (in dispute) across all subjects, showing
   **both** rival facts (value + authority + lifecycle). Supports `--output json`.
 - **`dent8 export [out.parquet]`** — the **analytical/export lane** (behind `--features
@@ -702,6 +706,11 @@ subject+predicate.
   run against the **real firewall** vs a **recency-only baseline**. `dent8 eval` (or
   `cargo test -p dent8-evals`) asserts the firewall blocks all five while the baseline is
   compromised by all five (plus a positive control admitting legitimate revision).
+- **Integrity-axis comparison** (`comparison::run_comparison`, also behind `dent8 eval`): the
+  same sequences judged against **modeled** Mem0 mutate-in-place and Zep/Graphiti recency
+  semantics (documented peer resolution, not live API clients). Frozen tally: dent8 holds
+  6/6 axes; both peers fall on all 5 attack axes; all three admit legitimate supersession.
+  See [evals.md](evals.md) §Integrity-axis comparison.
 - **Externally-grounded adversarial corpus** (`adversarial::run_adversarial_corpus`): **47
   cases across 10 attack classes**, patterns adapted (not copied) from public prompt-injection
   / memory-poisoning corpora (AgentDojo, InjecAgent, BIPIA, MINJA, AgentPoison, PoisonedRAG,

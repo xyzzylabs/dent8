@@ -41,18 +41,20 @@ dent8 eval
 ```
 
 `dent8 eval` runs an adversarial corpus against the real firewall **and** a recency-only
-baseline (newest-write-wins — the resolution Zep/Graphiti use):
+baseline (newest-write-wins — the resolution Zep/Graphiti use), then the same axes against a
+Mem0-style mutate-in-place model:
 
-| attack | firewall | recency-only baseline |
-|---|---|---|
-| low-authority memory injection (MINJA) | blocked ✓ | **compromised** |
-| authority laundering | blocked ✓ | **compromised** |
-| canonical contradiction | blocked ✓ | **compromised** |
-| Sybil corroboration | blocked ✓ | **compromised** |
-| poisoned-source retraction | blocked ✓ | **compromised** |
+| attack | firewall | recency-only (Zep) | mutate-in-place (Mem0) |
+|---|---|---|---|
+| low-authority memory injection (MINJA) | blocked ✓ | **compromised** | **compromised** |
+| authority laundering | blocked ✓ | **compromised** | **compromised** |
+| canonical contradiction | blocked ✓ | **compromised** | **compromised** |
+| Sybil corroboration | blocked ✓ | **compromised** | **compromised** |
+| poisoned-source retraction | blocked ✓ | **compromised** | **compromised** |
 
-Five for five. The last one is the tell: retract a poisoned source and dent8 flags every fact
-*derived* from it — a dependency cascade a recency-only store structurally cannot express.
+Five for five against both peer models. The last one is the tell: retract a poisoned source
+and dent8 flags every fact *derived* from it — a dependency cascade neither recency-only nor
+mutate-in-place memory structurally expresses. Details: [evals.md](docs/evals.md).
 
 ## See the firewall reject a write
 

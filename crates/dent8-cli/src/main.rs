@@ -284,7 +284,7 @@ enum CliCommand {
     Snapshot(SnapshotArgs),
     /// List contested facts.
     Conflicts,
-    /// Run the adversarial corpus.
+    /// Run the adversarial corpus and Mem0/Zep integrity comparison.
     Eval,
     /// Bootstrap a local dent8 project configuration.
     Init(InitArgs),
@@ -3434,15 +3434,18 @@ fn cmd_verify(output: CliOutput) -> i32 {
     }
 }
 
-/// Run the adversarial corpus and print the firewall-vs-recency-baseline contrast — the
-/// self-demonstrating "why dent8" benchmark. Exits non-zero only if a scenario regresses.
+/// Run the adversarial corpus and the external integrity-axis comparison (modeled
+/// Mem0 / Zep-Graphiti resolution). Exits non-zero if a demonstrative scenario regresses
+/// or the comparison frozen tally drifts.
 fn cmd_eval(output: CliOutput) -> i32 {
     let results = dent8_evals::run_corpus();
     let demonstrated = results
         .iter()
         .filter(|result| result.demonstrates_defense())
         .count();
-    let exit_code = i32::from(demonstrated != results.len());
+    let comparison = dent8_evals::run_comparison();
+    let comparison_ok = dent8_evals::comparison_tally_ok(&comparison);
+    let exit_code = i32::from(demonstrated != results.len() || !comparison_ok);
     match output {
         CliOutput::Text => {
             println!(
@@ -3452,15 +3455,34 @@ fn cmd_eval(output: CliOutput) -> i32 {
                 results.len()
             );
             print!("{}", dent8_evals::summary_table());
+            println!(
+                "\nExternal integrity comparison (modeled peer semantics — not live APIs):\n\
+                 dent8 vs Zep/Graphiti-style recency vs Mem0-style mutate-in-place on the same \
+                 integrity axes.\n"
+            );
+            print!(
+                "{}",
+                dent8_evals::comparison_summary_table_from(&comparison)
+            );
+            if !comparison_ok {
+                eprintln!(
+                    "comparison tally regressed (expected dent8 holds all axes; peers fall on \
+                     attack axes; all three admit legitimate supersession)"
+                );
+            }
             exit_code
         }
         CliOutput::Json => {
-            print_json_stdout_with_code(&eval_json(&results, demonstrated), exit_code)
+            print_json_stdout_with_code(&eval_json(&results, demonstrated, &comparison), exit_code)
         }
     }
 }
 
-fn eval_json(results: &[dent8_evals::AttackResult], demonstrated: usize) -> serde_json::Value {
+fn eval_json(
+    results: &[dent8_evals::AttackResult],
+    demonstrated: usize,
+    comparison: &[dent8_evals::ComparisonRow],
+) -> serde_json::Value {
     let scenarios = results
         .iter()
         .map(|result| {
@@ -3473,12 +3495,38 @@ fn eval_json(results: &[dent8_evals::AttackResult], demonstrated: usize) -> serd
             })
         })
         .collect::<Vec<_>>();
+    let axes = comparison
+        .iter()
+        .map(|row| {
+            serde_json::json!({
+                "axis": row.axis,
+                "family": row.family,
+                "property": row.property,
+                "dent8_holds": row.dent8_holds,
+                "zep_holds": row.zep_holds,
+                "mem0_holds": row.mem0_holds,
+                "differentiates": row.differentiates(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let comparison_ok = dent8_evals::comparison_tally_ok(comparison);
+    let status = if demonstrated == results.len() && comparison_ok {
+        "ok"
+    } else {
+        "failed"
+    };
     serde_json::json!({
-        "status": if demonstrated == results.len() { "ok" } else { "failed" },
+        "status": status,
         "tool": "eval",
         "scenario_count": results.len(),
         "demonstrated_count": demonstrated,
         "scenarios": scenarios,
+        "comparison": {
+            "ok": comparison_ok,
+            "axis_count": comparison.len(),
+            "dent8_hold_count": comparison.iter().filter(|r| r.dent8_holds).count(),
+            "axes": axes,
+        },
     })
 }
 

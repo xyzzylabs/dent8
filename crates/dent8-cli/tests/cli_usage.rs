@@ -1927,6 +1927,27 @@ fn eval_emits_machine_readable_json() {
             .all(|scenario| scenario["demonstrates_defense"] == true),
         "{eval}"
     );
+    assert_eq!(eval["comparison"]["ok"], true);
+    assert_eq!(eval["comparison"]["axis_count"], 6);
+    assert_eq!(eval["comparison"]["dent8_hold_count"], 6);
+    let axes = eval["comparison"]["axes"]
+        .as_array()
+        .expect("comparison axes");
+    assert_eq!(axes.len(), 6);
+    assert!(
+        axes.iter().all(|axis| {
+            if axis["family"] == "positive_control" {
+                axis["dent8_holds"] == true
+                    && axis["zep_holds"] == true
+                    && axis["mem0_holds"] == true
+            } else {
+                axis["dent8_holds"] == true
+                    && axis["zep_holds"] == false
+                    && axis["mem0_holds"] == false
+            }
+        }),
+        "{eval}"
+    );
 }
 
 // The demo initializes a `--store sqlite` project (the stock-install story), so the binary

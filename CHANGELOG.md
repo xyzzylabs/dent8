@@ -19,8 +19,16 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 - **On-ramp acceptance script** [`examples/on-ramp/demo.sh`](examples/on-ramp/demo.sh): times
   `init` → first `assert` → `explain` in a throwaway git repo and fails if wall time exceeds
   120s (v0.4 under-2min-to-first-fact budget).
+- **External integrity comparison** (`dent8_evals::comparison`, printed by `dent8 eval`): the
+  demonstrative attack axes plus legitimate supersession judged against **modeled** Mem0
+  mutate-in-place and Zep/Graphiti recency semantics (not live peer APIs). Frozen tally:
+  dent8 holds 6/6; peers fall on all 5 attack axes; all three admit legitimate revision.
+  Docs: [evals.md](docs/evals.md) §Integrity-axis comparison.
 
 ### Changed
+- **`dent8 eval`** also prints the Mem0/Zep integrity comparison and includes a `comparison`
+  object in `--output json`; exit is non-zero if either the demonstrative corpus or the
+  comparison frozen tally regresses.
 - **Value-first on-ramp:** README and [Getting Started](docs/getting-started.md) lead with a
   first-fact path under 2 minutes once `dent8` is on `PATH`; `dent8 init` Next steps now show
   `assert` + `explain` before `doctor --write-check`.

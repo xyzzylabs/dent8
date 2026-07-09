@@ -1,6 +1,6 @@
 [package]
 name = "dent8-evals"
-description = "Adversarial evaluation corpus for the dent8 memory firewall: attack scenarios run against the real firewall, contrasted with a recency-only baseline."
+description = "Adversarial evaluation corpus for the dent8 memory firewall: attack scenarios against the real firewall, a recency-only baseline, and modeled Mem0/Zep integrity comparison."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

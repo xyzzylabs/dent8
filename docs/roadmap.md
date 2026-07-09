@@ -31,8 +31,10 @@ order:
    [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh) times init → assert → explain under
    the 2-minute budget (typically under a second with a binary on `PATH`). *(No invariant —
    adoption friction is its own failure mode.)*
-4. **External evaluation.** Run the firewall against corpora dent8 did not author: MINJA
-   scenarios, real agent traces, and a mem0/Zep comparison on the integrity axes.
+4. **External evaluation.** ✅ Literature-adapted adversarial corpus (47 cases, honest
+   block/detect/out-of-model tally) plus an integrity-axis comparison against **modeled**
+   Mem0 mutate-in-place and Zep/Graphiti recency semantics (`dent8_evals::comparison`,
+   printed by `dent8 eval`). Real agent-trace replay remains optional stretch work.
    *(Invariant: the 0/5-vs-5/5 result generalizes beyond self-authored fixtures.)*
 5. **Python/TS reachability.** An HTTP API or thin SDKs so non-Rust agents can reach the
    store. *(No new invariant; widens who the firewall protects.)*
