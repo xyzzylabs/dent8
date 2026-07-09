@@ -198,13 +198,22 @@ fn code_fence(trimmed: &str) -> Option<(char, usize)> {
     (run >= 3).then_some((ch, run))
 }
 
-/// Byte offsets of the BEGIN and END sentinels that sit **outside** any fenced code block.
-/// Sentinels inside a ```` ``` ````/`~~~` fence — e.g. the documented example block in
-/// `docs/native-memory.md` — are ignored so they are never mistaken for the live managed block
-/// and overwritten. Fence state toggles on an opening fence and clears on a bare closing fence of
-/// the same char that is at least as long (a robust subset of `CommonMark` that handles the
-/// common cases without panicking).
-fn managed_block_sentinels(existing: &str) -> (Vec<usize>, Vec<usize>) {
+/// Byte offsets of the BEGIN and END sentinels that sit **outside** any fenced code block, plus
+/// whether the file ends **inside an unclosed fence**. Sentinels inside a ```` ``` ````/`~~~`
+/// fenced code block — e.g. the documented example block in `docs/native-memory.md` — are ignored
+/// so they are never mistaken for the live managed block and overwritten. Fence state toggles on
+/// an opening fence and clears on a bare closing fence of the same char that is at least as long
+/// (a robust subset of `CommonMark` that handles the common cases without panicking). Fence
+/// awareness only covers fenced code blocks, not 4-space-indented code blocks. When the last line
+/// leaves a fence open, `unclosed_fence` is true so the caller can refuse to append a managed block
+/// that would land inside the never-closed fence.
+struct ManagedBlockScan {
+    begins: Vec<usize>,
+    ends: Vec<usize>,
+    unclosed_fence: bool,
+}
+
+fn managed_block_sentinels(existing: &str) -> ManagedBlockScan {
     let mut begins = Vec::new();
     let mut ends = Vec::new();
     let mut fence: Option<(char, usize)> = None;
@@ -225,6 +234,10 @@ fn managed_block_sentinels(existing: &str) -> (Vec<usize>, Vec<usize>) {
                 None => fence = Some((ch, run)),
             }
         } else if fence.is_none() {
+            // The scan records the FIRST sentinel of each kind per line. Sentinels are normally
+            // their own HTML-comment lines, so this is exact in practice; a pathological single
+            // newline-free line carrying two complete BEGIN…END blocks would be seen as one pair
+            // and refreshed rather than refused.
             if let Some(pos) = line.find(BEGIN_SENTINEL) {
                 begins.push(offset + pos);
             }
@@ -234,7 +247,11 @@ fn managed_block_sentinels(existing: &str) -> (Vec<usize>, Vec<usize>) {
         }
         offset += segment.len();
     }
-    (begins, ends)
+    ManagedBlockScan {
+        begins,
+        ends,
+        unclosed_fence: fence.is_some(),
+    }
 }
 
 /// Splice the block into the existing file content idempotently. Exactly one well-formed
@@ -243,9 +260,12 @@ fn managed_block_sentinels(existing: &str) -> (Vec<usize>, Vec<usize>) {
 /// block appended (or created). Any *malformed* sentinel arrangement — a `BEGIN` with no matching
 /// `END`, an orphan `END`, `END` before `BEGIN`, or duplicate sentinels — is refused rather than
 /// appended-to, because appending past an unterminated `BEGIN` would let the next export delete
-/// the user's content between the stray `BEGIN` and the new `END`. The caller surfaces the error
-/// as a nonzero exit and leaves the file untouched. The emitted block (and the newlines joining it
-/// to the surrounding text) use the file's dominant line ending so the result stays consistent.
+/// the user's content between the stray `BEGIN` and the new `END`. A file that ends inside an
+/// unclosed fenced code block is likewise refused on the append path, because appending would drop
+/// the managed block inside that never-closed fence (and each export would then re-append, growing
+/// the file). The caller surfaces the error as a nonzero exit and leaves the file untouched. The
+/// emitted block (and the newlines joining it to the surrounding text) use the file's dominant line
+/// ending so the result stays consistent.
 fn splice_managed_block(
     existing: Option<&str>,
     block: &str,
@@ -262,7 +282,11 @@ fn splice_managed_block(
         owned_block = block.replace('\n', ending);
         &owned_block
     };
-    let (begins, ends) = managed_block_sentinels(existing);
+    let ManagedBlockScan {
+        begins,
+        ends,
+        unclosed_fence,
+    } = managed_block_sentinels(existing);
     let stray_sentinel = || {
         Err(
             "found a dent8 BEGIN/END managed-block sentinel that is not exactly one well-formed \
@@ -275,6 +299,15 @@ fn splice_managed_block(
         ([], []) => {
             if existing.is_empty() {
                 return Ok((format!("{block}{ending}"), BlockOutcome::Created));
+            }
+            // Refuse rather than append into a never-closed fence (would nest the block inside it
+            // and let each subsequent export re-append, growing the file). Don't mutate the fence.
+            if unclosed_fence {
+                return Err(
+                    "target file ends inside an unclosed code fence — refusing to add a managed \
+                     block inside it; close the fence and re-run"
+                        .to_string(),
+                );
             }
             let separator = if existing.ends_with(&format!("{ending}{ending}")) {
                 String::new()
@@ -1171,6 +1204,30 @@ mod tests {
         assert!(
             splice_managed_block(Some(&orphan), block).is_err(),
             "a stray non-fenced BEGIN must still be refused"
+        );
+    }
+
+    #[test]
+    fn splice_refuses_a_file_that_ends_inside_an_unclosed_fence() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+        // An unclosed ``` fence swallows the real managed block that follows it, so the scan finds
+        // zero non-fenced sentinels. Appending would nest a fresh block inside the never-closed
+        // fence and repeated exports would keep appending (non-idempotent). Refuse instead.
+        let unclosed =
+            format!("# Title\n\n```text\nsome example\n{BEGIN_SENTINEL}\nOLD\n{END_SENTINEL}\n");
+        let scan = managed_block_sentinels(&unclosed);
+        assert!(scan.unclosed_fence, "fence must be reported open at EOF");
+        assert!(scan.begins.is_empty() && scan.ends.is_empty());
+        let err = splice_managed_block(Some(&unclosed), block).expect_err("must refuse");
+        assert!(
+            err.contains("unclosed code fence"),
+            "unexpected message: {err}"
+        );
+        // A closed fence with the same content is fine (refresh, not append/grow).
+        let closed = format!("{unclosed}```\n");
+        assert!(
+            !managed_block_sentinels(&closed).unclosed_fence,
+            "closing the fence must expose the real block"
         );
     }
 
