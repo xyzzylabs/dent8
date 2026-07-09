@@ -1490,9 +1490,10 @@ pub(crate) struct AuditFactRef {
 }
 
 /// Record one `fact.retrieved` audit event per emitted fact — the read half of the
-/// read-audit loop, reached through `dent8 context --record-retrieval`. Same audit
-/// semantics as [`op_used_in_decision`]: lifecycle/value/authority untouched, no fold-level
-/// authority gate, but the full write-boundary gate applies. Persisted all-or-nothing so a
+/// read-audit loop, reached through `dent8 context --record-retrieval` and MCP
+/// `resources/read` (purpose `mcp:resources/read`). Same audit semantics as
+/// [`op_used_in_decision`]: lifecycle/value/authority untouched, no fold-level authority
+/// gate, but the full write-boundary gate applies. Persisted all-or-nothing so a
 /// partially-audited pack cannot exist.
 pub(crate) fn op_record_retrievals(
     path: &str,

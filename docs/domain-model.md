@@ -34,7 +34,8 @@ user:project_owner + prefers_eval_style + formal fixtures and invariants
   separate read-time predicate and does not mutate lifecycle.
 - `fact.retracted`: removes trust in a fact because the source, policy, or evidence failed.
 - `fact.retrieved`: audits that a fact was returned as context. Emitted by
-  `dent8 context --record-retrieval` for every fact the context pack emits.
+  `dent8 context --record-retrieval` for every fact the context pack emits, and by
+  MCP `resources/read` (purpose `mcp:resources/read`) on a write-capable connection.
 - `fact.used_in_decision`: audits that a fact influenced an agent decision. Emitted by a
   `dent8 capture` proposal with `"op": "used_in_decision"` — the channel agents already use
   to report back during a session. Audit events are deliberately **not** authority-gated in

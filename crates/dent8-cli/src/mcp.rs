@@ -9,7 +9,8 @@
 //!   `native_reconcile`) which dispatch to the same shared `op_*`
 //!   functions the CLI uses, so the firewall decision is identical on both surfaces;
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
-//!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt);
+//!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt and,
+//!   for a write-capable connection, records a `fact.retrieved` audit event by default);
 //! - **JSON-RPC 2.0 batches** — a top-level array of requests yields an array of responses
 //!   (notifications omitted), per the spec.
 //!
@@ -23,8 +24,9 @@ use dent8_store::{EventFilter, EventStore, IntegrityReceipt};
 use serde_json::{Value, json};
 
 use crate::ops::{
-    OpError, op_assert, op_conflicts, op_contradict, op_derive, op_expire, op_explain,
-    op_explain_receipt, op_reinforce, op_replay, op_retract, op_supersede, with_write_retry,
+    AuditFactRef, OpError, op_assert, op_conflicts, op_contradict, op_derive, op_expire,
+    op_explain, op_explain_receipt, op_record_retrievals, op_reinforce, op_replay, op_retract,
+    op_supersede, with_write_retry,
 };
 use crate::{
     InitAgent, WriteIdentity, authority_registry_path, authority_required, display_value,
@@ -753,7 +755,12 @@ fn handle(request: &Value, path: &str, identity: &WriteIdentity) -> Option<Value
             Some(handle_tool_call(&id, request.get("params"), path, identity))
         }
         "resources/list" => Some(handle_resources_list(&id, path)),
-        "resources/read" => Some(handle_resources_read(&id, request.get("params"), path)),
+        "resources/read" => Some(handle_resources_read(
+            &id,
+            request.get("params"),
+            path,
+            identity,
+        )),
         _ => Some(error_response(
             &id,
             -32601,
@@ -868,34 +875,138 @@ fn handle_resources_list(id: &Value, path: &str) -> Value {
     }
 }
 
-/// `resources/read`: resolve a `dent8://` uri to its integrity receipt.
-fn handle_resources_read(id: &Value, params: Option<&Value>, path: &str) -> Value {
+/// Purpose stamped on every MCP `resources/read` retrieval audit event. Stable so
+/// `replay` / eval fixtures can filter "who read this over MCP" without parsing free text.
+const MCP_RESOURCES_READ_PURPOSE: &str = "mcp:resources/read";
+
+/// MCP auto-audits `resources/read` unless `DENT8_MCP_RECORD_RETRIEVAL` is explicitly
+/// falsy. Default-on matches the wedge invariant (unexplained retrieval becomes
+/// explainable); a malformed value keeps recording — same safe-direction convention as
+/// `DENT8_RECORD_CHALLENGES`.
+fn mcp_record_retrieval_enabled() -> bool {
+    mcp_record_retrieval_from_env(std::env::var("DENT8_MCP_RECORD_RETRIEVAL").ok().as_deref())
+}
+
+/// Pure flag parse for [`mcp_record_retrieval_enabled`]. `None` / empty → on; known
+/// falsy tokens → off; anything else (including a typo) → on.
+fn mcp_record_retrieval_from_env(raw: Option<&str>) -> bool {
+    match raw {
+        None => true,
+        Some(value) if value.trim().is_empty() => true,
+        Some(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        ),
+    }
+}
+
+/// `resources/read`: resolve a `dent8://` uri to its integrity receipt, and — for a
+/// write-capable identity with recording enabled — append a `fact.retrieved` audit event
+/// so MCP reads enter the same read-audit loop as `dent8 context --record-retrieval`.
+fn handle_resources_read(
+    id: &Value,
+    params: Option<&Value>,
+    path: &str,
+    identity: &WriteIdentity,
+) -> Value {
     let Some(uri) = params.and_then(|p| p.get("uri")).and_then(Value::as_str) else {
         return error_response(id, -32602, "missing params.uri");
     };
     let Some((kind, key, predicate)) = parse_resource_uri(uri) else {
         return error_response(id, -32602, &format!("not a dent8 resource uri: {uri}"));
     };
-    match op_explain(
-        path,
-        &kind,
-        &key,
-        &predicate,
-        crate::ops::ReadClock::default(),
-    ) {
-        Ok(text) => result_response(
-            id,
-            &json!({
-                "contents": [{ "uri": uri, "mimeType": "text/plain", "text": text }],
-            }),
-        ),
+    let clock = crate::ops::ReadClock::default();
+    let receipt = match op_explain_receipt(path, &kind, &key, &predicate, clock) {
+        Ok(receipt) => receipt,
         // A well-formed uri naming a fact that does not exist is "resource not found"
         // (-32002); an invalid subject/predicate is a bad request (-32602).
         Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
-            error_response(id, -32002, &message)
+            return error_response(id, -32002, &message);
         }
-        Err(OpError::Invalid(message)) => error_response(id, -32602, &message),
+        Err(OpError::Invalid(message)) => return error_response(id, -32602, &message),
+    };
+    let annotation =
+        crate::read_annotation(receipt.lifecycle, receipt.fresh, receipt.not_yet_valid);
+    let text = format!(
+        "explain {kind}:{key} {predicate}{annotation}\n{}",
+        crate::format_receipt(&receipt)
+    );
+
+    // Unauthenticated daemon connections are read-only by design (ADR 0018): they may
+    // browse receipts but cannot persist audit events. Opt-out is explicit only.
+    if access_for(identity) == Access::Full
+        && mcp_record_retrieval_enabled()
+        && let Err(error) = record_mcp_resource_retrieval(
+            path,
+            &kind,
+            &key,
+            &predicate,
+            receipt.fact_id.as_str(),
+            identity,
+        )
+    {
+        let message = match error {
+            OpError::Invalid(message) | OpError::Rejected(message) | OpError::Conflict(message) => {
+                message
+            }
+        };
+        return error_response(
+            id,
+            -32603,
+            &format!("could not record retrieval audit for {uri}: {message}"),
+        );
     }
+
+    result_response(
+        id,
+        &json!({
+            "contents": [{ "uri": uri, "mimeType": "text/plain", "text": text }],
+        }),
+    )
+}
+
+/// Append one `fact.retrieved` for the resource that was just returned. Identity resolves
+/// like unattributed capture / context retrieval: the active grant's source and ceiling
+/// when present, else `source:agent` at `low` — a retrieval audit enters at the bottom of
+/// the trust ordering instead of minting authority. Failures surface to the caller so a
+/// successful `resources/read` is never silently un-audited on a write-capable connection.
+fn record_mcp_resource_retrieval(
+    path: &str,
+    kind: &str,
+    key: &str,
+    predicate: &str,
+    fact_id: &str,
+    identity: &WriteIdentity,
+) -> Result<(), OpError> {
+    let defaults = write_defaults(identity).map_err(|error| match error {
+        ToolError::Invalid(message)
+        | ToolError::Failed(message)
+        | ToolError::Rejected(message)
+        | ToolError::Unknown(message) => OpError::Invalid(message),
+    })?;
+    let (authority, source) = defaults.map_or_else(
+        || {
+            (
+                crate::capture::CAPTURE_FALLBACK_AUTHORITY,
+                crate::capture::CAPTURE_FALLBACK_SOURCE.to_string(),
+            )
+        },
+        |defaults| (defaults.authority, defaults.source),
+    );
+    op_record_retrievals(
+        path,
+        &[AuditFactRef {
+            fact_id: fact_id.to_string(),
+            subject_kind: kind.to_string(),
+            subject_key: key.to_string(),
+            predicate: predicate.to_string(),
+        }],
+        MCP_RESOURCES_READ_PURPOSE,
+        authority,
+        &source,
+        identity,
+    )?;
+    Ok(())
 }
 
 /// Build the canonical resource uri for a fact stream, percent-encoding each segment so any
@@ -3542,6 +3653,95 @@ mod tests {
             .as_str()
             .expect("text");
         assert!(text.contains("postgres"), "{text}");
+    }
+
+    #[test]
+    fn resources_read_records_a_retrieval_audit_by_default() {
+        let (_guard, path) = temp_log();
+        let (err, _) = call_tool(&path, "assert", database("postgres", "high"));
+        assert!(!err);
+
+        let read = handle(
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+                "params": { "uri": "dent8://repo/p/database" },
+            }),
+            &path,
+        )
+        .expect("response");
+        assert!(read.get("error").is_none(), "read must succeed: {read}");
+        assert!(
+            read["result"]["contents"][0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("postgres")
+        );
+
+        // The audit event is on the stream with the stable MCP purpose and agent-tier
+        // provenance (stdio MCP without a grant falls back like unattributed capture).
+        let (err, replay) = call_tool_text(
+            &path,
+            "replay",
+            json!({ "subject": "repo:p", "predicate": "database" }),
+        );
+        assert!(!err, "{replay}");
+        // Text replay formats as `retrieved (mcp:resources/read)` (see format_event_kind).
+        assert!(
+            replay.contains("retrieved") && replay.contains("mcp:resources/read"),
+            "replay should surface the retrieval audit: {replay}"
+        );
+    }
+
+    #[test]
+    fn mcp_record_retrieval_flag_defaults_on_and_accepts_known_falsy_tokens() {
+        assert!(super::mcp_record_retrieval_from_env(None));
+        assert!(super::mcp_record_retrieval_from_env(Some("")));
+        assert!(super::mcp_record_retrieval_from_env(Some("1")));
+        assert!(super::mcp_record_retrieval_from_env(Some("yes")));
+        // A typo keeps recording — same safe-direction as challenge recording.
+        assert!(super::mcp_record_retrieval_from_env(Some("nope")));
+        assert!(!super::mcp_record_retrieval_from_env(Some("0")));
+        assert!(!super::mcp_record_retrieval_from_env(Some("false")));
+        assert!(!super::mcp_record_retrieval_from_env(Some("OFF")));
+        assert!(!super::mcp_record_retrieval_from_env(Some(" no ")));
+    }
+
+    #[test]
+    fn resources_read_skips_retrieval_audit_when_unauthenticated() {
+        let (_guard, path) = temp_log();
+        let (err, _) = call_tool(&path, "assert", database("postgres", "high"));
+        assert!(!err);
+
+        let read = raw_handle(
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "resources/read",
+                "params": { "uri": "dent8://repo/p/database" },
+            }),
+            &path,
+            &WriteIdentity::Unauthenticated,
+        )
+        .expect("response");
+        assert!(
+            read.get("error").is_none(),
+            "read-only connection may still read: {read}"
+        );
+        assert!(
+            read["result"]["contents"][0]["text"]
+                .as_str()
+                .expect("text")
+                .contains("postgres")
+        );
+
+        let (err, replay) = call_tool_text(
+            &path,
+            "replay",
+            json!({ "subject": "repo:p", "predicate": "database" }),
+        );
+        assert!(!err, "{replay}");
+        assert!(
+            !replay.contains("mcp:resources/read"),
+            "unauthenticated read must not persist audit events: {replay}"
+        );
     }
 
     #[test]

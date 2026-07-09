@@ -16,10 +16,11 @@ one repository** ([project-brief.md](project-brief.md) §MVP User). Five items, 
 order:
 
 1. **Close the capture+inject loop.** ✅ `dent8 context` context-pack export plus the
-   `dent8 capture` session hook are built, and the CLI now emits both audit events —
+   `dent8 capture` session hook are built, and both surfaces emit the read-audit events —
    `context --record-retrieval` records `Retrieved`, a `used_in_decision` capture proposal
-   records `UsedInDecision`. Remaining: MCP-side read auditing (e.g. auto-auditing
-   `resources/read`). *(Invariant: unexplained context retrieval becomes explainable.)*
+   records `UsedInDecision`, and MCP `resources/read` auto-records `Retrieved` (purpose
+   `mcp:resources/read`; opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`). *(Invariant:
+   unexplained context retrieval becomes explainable.)*
 2. **Default authority profile for the repo wedge.** ✅ Human > CI > agent ships as
    `dent8 authority defaults`, and grant issuer/scope are enforced at the write boundary
    (scope restricts write subjects; a registered issuer's own grant caps what it can

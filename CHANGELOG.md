@@ -9,6 +9,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- **MCP `resources/read` auto-records `fact.retrieved`** (purpose `mcp:resources/read`) on
+  every successful read from a write-capable connection, closing the MCP half of the
+  read-audit loop. Identity resolves like unattributed capture (active grant when present,
+  else `source:agent` at `low`). Opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`; unauthenticated
+  daemon connections still return the receipt but skip the audit write. Failures to record
+  surface as a protocol error so a write-capable read is never silently un-audited.
+
 ## [0.5.0] - 2026-07-09
 
 ### BREAKING

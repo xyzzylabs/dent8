@@ -199,12 +199,23 @@ $ echo $?
 1
 ```
 
+## MCP read auditing
+
+MCP `resources/read` **auto-records** a `fact.retrieved` audit event (purpose
+`mcp:resources/read`) on every successful read from a write-capable connection — the same
+audit event as `context --record-retrieval`, so an agent that pulls a fact through the
+resource URI leaves a replayable trail without an extra tool call. Identity resolves like
+unattributed capture (active grant when present, else `source:agent` at `low`). Opt out
+with `DENT8_MCP_RECORD_RETRIEVAL=0`. Unauthenticated (read-only) daemon connections still
+return the receipt but skip the audit write. The agent-report half remains a capture
+proposal (`"op": "used_in_decision"`).
+
 ## What this deliberately is not
 
 - Not a daemon: both commands are one-shot processes over the existing store.
 - Not natural-language ingestion: capture takes structured proposals only. Inferring facts
   from prose remains out of scope, like `native scan`/`native reconcile`.
-- Not automatic read auditing: `fact.retrieved` is recorded only when
-  `context --record-retrieval` asks for it, and `fact.used_in_decision` only when an agent
-  reports one through a `used_in_decision` proposal. MCP-side read auditing (e.g.
-  auto-auditing `resources/read`) remains roadmap work.
+- Not automatic *CLI* read auditing: `dent8 context` records `fact.retrieved` only when
+  `--record-retrieval` is passed (a whole pack is bulk retrieval; the flag keeps it
+  intentional). MCP `resources/read` is the opposite default — each read is already an
+  explicit retrieval, so it is audited unless opted out.

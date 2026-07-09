@@ -769,6 +769,106 @@ fn capture_reads_stdin_and_reports_json() {
 }
 
 #[test]
+fn mcp_resources_read_records_retrieval_and_honors_opt_out() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "uses_database",
+                "postgres",
+                "--authority",
+                "high",
+                "--source",
+                "source:human",
+            ],
+            &envs,
+        ),
+        "seed mcp retrieval fact",
+    );
+
+    // Default: resources/read appends fact.retrieved with the stable MCP purpose.
+    let requests = [
+        r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"dent8://repo/app/uses_database"}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"replay","arguments":{"subject":"repo:app","predicate":"uses_database"}}}"#,
+    ]
+    .join("\n");
+    let mcp = run_dent8_mcp(&format!("{requests}\n"), &envs);
+    let mcp_out = stdout(&mcp);
+    assert!(
+        mcp.status.success(),
+        "mcp serve failed\nstdout:\n{mcp_out}\nstderr:\n{}",
+        String::from_utf8_lossy(&mcp.stderr)
+    );
+    let lines: Vec<&str> = mcp_out.lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        lines.len() >= 2,
+        "expected read + replay responses, got: {mcp_out}"
+    );
+    let read: Value = serde_json::from_str(lines[0]).expect("read response json");
+    assert!(
+        read.get("error").is_none(),
+        "resources/read must succeed: {read}"
+    );
+    let replay: Value = serde_json::from_str(lines[1]).expect("replay response json");
+    let replay_text = replay["result"]["content"][0]["text"]
+        .as_str()
+        .expect("replay text");
+    assert!(
+        replay_text.contains("mcp:resources/read"),
+        "default resources/read must audit: {replay_text}"
+    );
+
+    // Opt-out: a second read with DENT8_MCP_RECORD_RETRIEVAL=0 must not add another audit.
+    let before = stdout_json(&run_dent8(
+        &["--output", "json", "replay", "repo:app", "uses_database"],
+        &envs,
+    ));
+    let before_count = before["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|e| e["kind"] == "fact.retrieved")
+        .count();
+
+    let opt_out_envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_MCP_RECORD_RETRIEVAL", "0"),
+    ];
+    let opt_out = run_dent8_mcp(
+        &format!(
+            "{}\n",
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"dent8://repo/app/uses_database"}}"#
+        ),
+        &opt_out_envs,
+    );
+    assert!(
+        opt_out.status.success(),
+        "opt-out mcp serve failed\nstdout:\n{}\nstderr:\n{}",
+        stdout(&opt_out),
+        String::from_utf8_lossy(&opt_out.stderr)
+    );
+    let after = stdout_json(&run_dent8(
+        &["--output", "json", "replay", "repo:app", "uses_database"],
+        &envs,
+    ));
+    let after_count = after["events"]
+        .as_array()
+        .expect("events")
+        .iter()
+        .filter(|e| e["kind"] == "fact.retrieved")
+        .count();
+    assert_eq!(
+        before_count, after_count,
+        "opt-out must not append another fact.retrieved"
+    );
+}
+
+#[test]
 fn context_record_retrieval_appends_audit_events() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
@@ -10348,6 +10448,7 @@ fn run_dent8_mcp(input: &str, envs: &[(&str, &str)]) -> Output {
         .env_remove("DENT8_CONTENT_CHECK")
         .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
         .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
+        .env_remove("DENT8_MCP_RECORD_RETRIEVAL")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
         .env_remove("DENT8_WITNESS_LOG")

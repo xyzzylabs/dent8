@@ -90,7 +90,7 @@ contested -> expired
 contested -> retracted
 ```
 
-Retrieval and decision-use events are audit events. They do not change lifecycle state but they matter for debugging stale or unsafe context use. On the CLI, `dent8 context --record-retrieval` emits `fact.retrieved` for every fact it packs, and a `dent8 capture` proposal with `"op": "used_in_decision"` records `fact.used_in_decision`; the MCP server renders both but does not yet emit them itself (see [STATUS.md](STATUS.md)).
+Retrieval and decision-use events are audit events. They do not change lifecycle state but they matter for debugging stale or unsafe context use. On the CLI, `dent8 context --record-retrieval` emits `fact.retrieved` for every fact it packs, and a `dent8 capture` proposal with `"op": "used_in_decision"` records `fact.used_in_decision`. MCP `resources/read` auto-emits `fact.retrieved` (purpose `mcp:resources/read`; opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`); the MCP server also renders both event kinds in replay/explain (see [STATUS.md](STATUS.md)).
 
 ## Write Path
 

@@ -311,9 +311,12 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   non-unique write is refused over MCP exactly as on the CLI (surfaced as a tool error,
   not a protocol error, so the agent sees the reason). It also serves **`resources/list` /
   `resources/read`** — each fact stream is a readable resource at
-  `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt) — and accepts
-  **JSON-RPC 2.0 batches** (an array of requests → an array of responses, notifications
-  omitted; an empty batch is `-32600`). With **`--daemon [--socket <path>]`** the same
+  `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt, and a
+  write-capable connection also appends a `fact.retrieved` audit event with purpose
+  `mcp:resources/read` by default; set `DENT8_MCP_RECORD_RETRIEVAL=0` to opt out) — and
+  accepts **JSON-RPC 2.0 batches** (an array of requests → an array of responses,
+  notifications omitted; an empty batch is `-32600`). With **`--daemon [--socket <path>]`**
+  the same
   surface is served over a per-user Unix-domain socket (default
   `$XDG_RUNTIME_DIR/dent8/dent8.sock`, `0700` dir + `0600` socket; `$TMPDIR` fallback where
   `$XDG_RUNTIME_DIR` is unset) so many agents share one belief base over one transport;
@@ -765,12 +768,16 @@ subject+predicate.
   (`dent8 identity`, above), and the witness *primitive* is runnable (`dent8 witness`, above).
   The remaining product gap is operating those controls: source-key provisioning/rotation,
   hardware/secret-store-backed keys, and the *operated* witness service.
-- **`Retrieved` / `UsedInDecision` are emitted by the CLI only.** The read-audit loop is
-  now runnable: `dent8 context --record-retrieval` emits `fact.retrieved` for every fact it
-  packs, and a `dent8 capture` proposal with `"op": "used_in_decision"` records
-  `fact.used_in_decision` (both above). The MCP server renders these events in
-  replay/explain and its output schemas but does not yet expose a tool that *emits* them —
-  MCP-side read auditing (e.g. auto-auditing `resources/read`) remains roadmap work.
+- **`Retrieved` / `UsedInDecision` close the read-audit loop on both CLI and MCP.** The
+  loop is runnable: `dent8 context --record-retrieval` emits `fact.retrieved` for every
+  fact it packs; a `dent8 capture` proposal with `"op": "used_in_decision"` records
+  `fact.used_in_decision`; and MCP **`resources/read` auto-records** `fact.retrieved`
+  with purpose `mcp:resources/read` on every successful read from a write-capable
+  connection (stdio MCP / authenticated daemon). Opt out with
+  `DENT8_MCP_RECORD_RETRIEVAL=0`; unauthenticated (read-only) daemon connections still
+  return the receipt but skip the audit write. The MCP server also *renders* these events
+  in replay/explain; the agent-report half (`used_in_decision`) remains a capture proposal
+  (agents already use that queue for session-end reporting).
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
   surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
   stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
