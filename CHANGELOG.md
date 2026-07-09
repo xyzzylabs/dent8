@@ -9,6 +9,62 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### BREAKING
+- **Store resolution now discovers `.dent8/` within the enclosing git repository.** When
+  `DENT8_LOG` / `DENT8_AUTHORITY` / `DENT8_STORE_URL` are unset, the CLI locates the project
+  store by scanning from the current directory up to and including the **enclosing repo root**
+  (the nearest ancestor holding a `.git` entry, bounded by `$HOME`/the filesystem root) and uses
+  the log, `authority.json`, and **backend URL inside it**, instead of silently creating a
+  parallel `./dent8-log.jsonl` in the cwd. Discovery is confined to that repo: a `.dent8/` in an
+  unrelated ancestor (e.g. `/tmp/.dent8` for a process merely running under `/tmp`) is **no
+  longer adopted** as an attacker-controlled store path and authority registry. When the cwd is
+  not inside a git repo, only `./.dent8/` in the cwd itself is considered — discovery does not
+  walk upward. A command run from a sub-directory of an initialized project still reads and writes
+  that project's store even when `.dent8/env` was never sourced. Explicit env overrides still win
+  (backward compatible, and the escape hatch for a store outside any repo), `.dent8/env` is parsed
+  as safe `KEY=value` (not shell-sourced), and a fresh directory with no store discovered still
+  falls back to the legacy cwd default so `dent8 init` keeps working. **Migration:** a stray
+  `./dent8-log.jsonl` a previous run created in a sub-directory is no longer read — point
+  `DENT8_LOG` at it, or re-capture its facts into the discovered store; a `.dent8/` outside your
+  repo that an earlier unbounded walk reached is no longer discovered — set the matching
+  `DENT8_*` var to reach it.
+- **A discovered `DENT8_STORE_URL` (DB backend) is now honored, not just `DENT8_LOG`.** When
+  `DENT8_STORE_URL` is unset in the process environment, the CLI reads it from the discovered
+  `.dent8/env` and selects that async backend (SQLite/Postgres) for reads and writes. Previously
+  discovery only read `DENT8_LOG`, so an unsourced run against a repo with a DB backend forked a
+  **new parallel `memory.jsonl`** inside `.dent8/` and diverged from the real store; that footgun
+  is fixed. **Migration:** if an unsourced run previously wrote to a stray `.dent8/memory.jsonl`
+  in a DB-backed project, re-capture those facts into the backend (or keep sourcing `.dent8/env`).
+- **The authority registry is unified to one location per store.** `dent8 authority add` /
+  `defaults` / `list` / `remove` now resolve to the discovered `.dent8/authority.json` (the same
+  file `dent8 init` seeds) when `DENT8_AUTHORITY` is unset, rather than a separate
+  `./dent8-authority.json`. **Migration:** a `./dent8-authority.json` created by an unsourced-env
+  `authority` command is no longer read — its grants must be re-added (or `DENT8_AUTHORITY` set to
+  its path). Because discovery now finds the registry a sub-directory command previously missed,
+  the registry's deny-by-default enforcement applies in more situations than before.
+- **Unregistered predicates are now subject to the TTL retention ceiling.** `enforce_policy`
+  previously skipped every check for a predicate not in the registry, so an assertion with an
+  arbitrarily far-future *finite* TTL on an unknown predicate bypassed the ceiling. Unregistered
+  predicates now fall back to the registry-wide global ceiling (registered predicates are
+  unchanged; `Ttl::Never` remains out of scope). An over-ceiling finite TTL on any predicate is
+  now rejected on `assert`/`derive`.
+
+### Added
+- Added a **`--ttl <DURATION>` flag** to `assert`, `supersede`, `contradict`, and `derive`, and a
+  matching **`ttl` field to capture proposals**. The duration accepts `ms`/`s`/`m`/`h`/`d`
+  suffixes (e.g. `90d`, `12h`). The caller-supplied finite TTL flows through the write boundary and
+  is bounded by the retention ceiling, so a `--ttl` beyond the ceiling is rejected with the
+  existing `TtlCeilingExceeded` error. Omitting it leaves the predicate default (or non-expiring).
+  This is the first shipped write surface that accepts a caller TTL; the MCP write tools do not yet
+  expose one.
+
+### Changed
+- `dent8 init` now **seeds the default authority profile** (`source:human`/High,
+  `source:ci`/Medium, `source:agent`/Low) into the store's `authority.json`, merge-only, in
+  addition to the init source grant — so a fresh store carries the profile without a follow-up
+  `dent8 authority defaults`. Running `authority defaults` afterwards stays idempotent (merge-only,
+  never downgrades an existing grant).
+
 ## [0.4.0] - 2026-07-08
 
 ### Added

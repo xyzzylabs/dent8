@@ -9,13 +9,13 @@ The CLI is the first operator and developer surface.
 Initial command groups:
 
 - `dent8 schema postgres`
-- `dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
 - `dent8 reinforce <subject> <predicate> [--authority <level>] [--source <source>]`
-- `dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
-- `dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
+- `dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
 - `dent8 expire <subject> <predicate> [--authority <level>] [--source <source>]`
 - `dent8 retract <subject> <predicate> [--authority <level>] [--source <source>]`
-- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>]`
+- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
 - `dent8 replay <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 explain <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
 - `dent8 snapshot [--include-diagnostics]`
@@ -27,6 +27,11 @@ Initial command groups:
 Authority and source are provenance metadata, not part of the fact's
 subject/predicate/value. They can be passed explicitly or defaulted from the active signed
 source grant.
+
+`--ttl` takes a human duration (`ms`/`s`/`m`/`h`/`d` suffixes, e.g. `90d`, `12h`) and sets the
+fact's retention freshness. It is bounded by the predicate's retention ceiling — a `--ttl`
+beyond the effective ceiling (a per-predicate override, else the 90-day global default) is
+**rejected, not clamped**. Omitting it leaves the predicate's default TTL (or non-expiring).
 
 The CLI should show integrity metadata by default: lifecycle, freshness (TTL *and* asserted
 `valid_to`), authority, evidence count, contradiction count, survived-challenge count,

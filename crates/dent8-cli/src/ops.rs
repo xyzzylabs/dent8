@@ -123,12 +123,20 @@ pub(crate) fn write_error_to_op(error: WriteError) -> OpError {
 pub(crate) struct Validity {
     pub(crate) from: Option<i64>,
     pub(crate) to: Option<i64>,
+    /// Caller-supplied retention TTL, in milliseconds (the `--ttl` flag / capture `ttl` field).
+    /// `None` leaves the event's TTL untouched, so the predicate default (or `Ttl::Never`)
+    /// applies; `Some` sets a finite `Ttl::DurationMillis`, later bounded by the retention
+    /// ceiling in `enforce_policy`.
+    pub(crate) ttl: Option<u64>,
 }
 
 impl Validity {
     fn stamp(self, event: &mut FactEvent) {
         event.valid_from = self.from.map(TimestampMillis::from_unix_millis);
         event.valid_to = self.to.map(TimestampMillis::from_unix_millis);
+        if let Some(ttl_ms) = self.ttl {
+            event.ttl = Ttl::DurationMillis(ttl_ms);
+        }
     }
 }
 
@@ -532,6 +540,7 @@ pub(crate) fn cmd_assert(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,
+                    ttl: args.ttl,
                 },
                 &WriteIdentity::Env,
             )
@@ -699,6 +708,7 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,
+                    ttl: args.ttl,
                 },
                 &WriteIdentity::Env,
             )
@@ -1226,6 +1236,7 @@ pub(crate) fn cmd_supersede(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,
+                    ttl: args.ttl,
                 },
                 &WriteIdentity::Env,
             )
@@ -1814,6 +1825,7 @@ pub(crate) fn cmd_contradict(args: &ValueWriteArgs, output: CliOutput) -> i32 {
                 Validity {
                     from: args.valid_from,
                     to: args.valid_to,
+                    ttl: args.ttl,
                 },
                 &WriteIdentity::Env,
             )

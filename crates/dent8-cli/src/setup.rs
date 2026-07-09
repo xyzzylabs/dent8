@@ -502,6 +502,10 @@ pub(crate) fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
             scope: None,
         },
     );
+    // Seed the shipped default authority profile (human > CI > agent) merge-only, so a fresh
+    // store carries the profile without a follow-up `dent8 authority defaults`. The init source
+    // grant just inserted above is kept (merge-only never downgrades an existing grant).
+    crate::seed_default_authority_profile(&mut registry);
     save_authority_registry_at(&authority_path_str, &registry)?;
 
     let identity = init_identity(args, &dir, &source, bootstrap_identity)?;

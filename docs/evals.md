@@ -155,17 +155,22 @@ it deliberately does not:
    `PredicateRegistry` now enforces a **retention ceiling**: an assertion whose caller-supplied
    *bounded* (finite) TTL reaches past the effective ceiling (a per-predicate override else a
    90-day global default, both overridable) is **rejected, not clamped** — silently rewriting
-   an asserted freshness window would falsify the audit record. Three honest scopings: the
-   ceiling gates **registered predicates only** (`enforce_policy` passes unregistered ones,
-   and the flagged case's `mfa_state` is not among the five registered predicates — so that
-   exact event would still be admitted even at the registry layer); `Ttl::Never` stays
-   **uncapped**, and it is the default for unregistered predicates and the default TTL of
-   four of the five registered ones, so permanence remains achievable by default and the
-   class-D attack itself remains open; and no shipped CLI/MCP/capture surface accepts a
-   caller-supplied TTL (`op_assert`/`op_derive` — the only ops that run `enforce_policy` —
-   hardcode `Ttl::Never`), so today the ceiling guards **library embedders only**. The
-   class-D adversarial case — which exercises `append`-arbitration only — remains a
-   documented out-of-model admit.
+   an asserted freshness window would falsify the audit record. The ceiling now applies to
+   **every predicate**: a registered predicate may raise or tighten it via its per-predicate
+   override, and an **unregistered predicate falls back to the global default** rather than
+   bypassing the check — so the flagged case's `mfa_state` finite TTL (~115 days), previously
+   admitted because `mfa_state` is not one of the five registered predicates, is now rejected
+   at the registry layer. Two honest scopings remain: `Ttl::Never` stays **uncapped** (it makes
+   no finite-freshness claim), and it is the default for a TTL-less assertion and the default
+   TTL of four of the five registered predicates, so permanence-by-`Never` remains achievable
+   and the class-D attack via a non-expiring belief remains open; and the ceiling runs inside
+   `enforce_policy`, which only `op_assert`/`op_derive` invoke — the CLI `--ttl` flag and the
+   capture `ttl` field now feed a caller-supplied finite TTL into that path (so the ceiling
+   guards the shipped write surface, not just library embedders), while the MCP write tools do
+   not yet expose a caller TTL. The class-D adversarial case exercises `append`-arbitration
+   only (the harness does not run `enforce_policy`), so the corpus still records it as an
+   out-of-model admit at the base-firewall layer even though the registry layer now rejects
+   that exact finite-TTL write.
 
 **Detect-only (4/47):** retraction taint (a derivative of a retracted source stays believed
 but is flagged tainted — ADR 0010) and read-time freshness (an elapsed `valid_to` reads

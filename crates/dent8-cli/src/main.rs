@@ -383,6 +383,11 @@ struct ValueWriteArgs {
     /// Past it the fact reads as stale, like an elapsed TTL.
     #[arg(long = "valid-to", value_name = "MILLIS")]
     valid_to: Option<i64>,
+    /// Retention TTL as a human duration (e.g. 90d, 12h, 30m, 45s). The fact reads as stale
+    /// once its freshness window elapses. A value beyond the predicate's retention ceiling is
+    /// rejected. Omitted leaves the predicate default (or non-expiring when there is none).
+    #[arg(long = "ttl", value_name = "DURATION", value_parser = parse_duration_ms)]
+    ttl: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -424,6 +429,10 @@ struct DeriveWriteArgs {
     /// Valid-time upper bound (unix millis) for the derived assertion (ADR 0016).
     #[arg(long = "valid-to", value_name = "MILLIS")]
     valid_to: Option<i64>,
+    /// Retention TTL as a human duration (e.g. 90d, 12h). Rejected if beyond the predicate's
+    /// retention ceiling. Omitted leaves the predicate default (or non-expiring).
+    #[arg(long = "ttl", value_name = "DURATION", value_parser = parse_duration_ms)]
+    ttl: Option<u64>,
 }
 
 #[derive(Args, Debug)]
@@ -1476,6 +1485,48 @@ fn parse_source(raw: &str) -> Result<String, String> {
     Ok(raw.to_string())
 }
 
+/// Parse a human retention duration (`--ttl`) into milliseconds. Accepts a whole number with a
+/// unit suffix — `ms`, `s`, `m`, `h`, or `d` (e.g. `90d`, `12h`, `30m`, `45s`). A missing or
+/// unknown unit is rejected so an ambiguous bare number never silently means milliseconds.
+fn parse_duration_ms(raw: &str) -> Result<u64, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err("duration must not be empty (e.g. 90d, 12h, 30m, 45s)".to_string());
+    }
+    let split = value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len());
+    let (number, unit) = value.split_at(split);
+    if number.is_empty() {
+        return Err(format!(
+            "invalid duration '{raw}': expected a whole number with a unit (e.g. 90d, 12h)"
+        ));
+    }
+    let amount: u64 = number
+        .parse()
+        .map_err(|_| format!("invalid duration '{raw}': '{number}' is not a whole number"))?;
+    let unit_ms: u64 = match unit.trim() {
+        "ms" => 1,
+        "s" => 1_000,
+        "m" => 60_000,
+        "h" => 3_600_000,
+        "d" => 86_400_000,
+        "" => {
+            return Err(format!(
+                "duration '{raw}' needs a unit suffix: ms, s, m, h, or d (e.g. 90d)"
+            ));
+        }
+        other => {
+            return Err(format!(
+                "unknown duration unit '{other}' in '{raw}': use ms, s, m, h, or d"
+            ));
+        }
+    };
+    amount
+        .checked_mul(unit_ms)
+        .ok_or_else(|| format!("duration '{raw}' is too large"))
+}
+
 fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
     match command {
         IdentityCommand::Bootstrap(args) => identity::bootstrap(
@@ -1759,9 +1810,148 @@ fn short(hash: &str) -> String {
 
 const DEFAULT_LOG: &str = "dent8-log.jsonl";
 const DEFAULT_AUTHORITY: &str = "dent8-authority.json";
+/// The per-project store directory `dent8 init` creates.
+const STORE_DIR: &str = ".dent8";
+
+/// Discover the project store directory, **confined to the enclosing git repository** so a
+/// `.dent8/` planted in an unrelated ancestor (e.g. `/tmp/.dent8` for a process running under
+/// `/tmp`) is never silently adopted as an attacker-controlled store *and* authority registry.
+///
+/// Discovery rules:
+/// - Find the enclosing repo root: the nearest ancestor of the cwd that holds a `.git` entry
+///   (file or dir), searching upward but stopping at (and never above) `$HOME` and the
+///   filesystem root.
+/// - Inside that repo, scan from the cwd up to and including the repo root; the first `.dent8/`
+///   found wins. This still lets a command run from any sub-directory of an initialized project
+///   resolve the project's store instead of creating a parallel one in the cwd.
+/// - When the cwd is **not** inside a git repo (no `.git` within bounds), only `./.dent8/` in
+///   the cwd itself is considered — discovery does *not* walk upward.
+///
+/// `None` when nothing is found, so the caller falls back to the legacy cwd default (keeping a
+/// fresh `dent8 init` working). Explicit `DENT8_LOG` / `DENT8_STORE_URL` / `DENT8_AUTHORITY`
+/// overrides bypass discovery entirely (see the resolution helpers), so a store outside any repo
+/// stays reachable via those env vars.
+fn discover_dent8_dir() -> Option<std::path::PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let Some(repo_root) = enclosing_repo_root(&cwd) else {
+        // Not in a repo: only the cwd's own `.dent8/`, no upward walk.
+        let candidate = cwd.join(STORE_DIR);
+        return candidate.is_dir().then_some(candidate);
+    };
+    // Inside a repo: scan cwd..=repo_root; first `.dent8/` wins, never above the repo root.
+    for dir in cwd.ancestors() {
+        let candidate = dir.join(STORE_DIR);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if dir == repo_root {
+            break;
+        }
+    }
+    None
+}
+
+/// The nearest ancestor of `start` (inclusive) that contains a `.git` entry — the enclosing git
+/// repository root — searching upward but never above `$HOME` or the filesystem root. `None`
+/// when `start` is not inside a repo within those bounds. This is the security boundary that
+/// confines store discovery to the repo you are actually working in.
+fn enclosing_repo_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    for dir in start.ancestors() {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        // `$HOME` is checked (above) but never crossed; the filesystem root, where `ancestors()`
+        // terminates, is the other bound.
+        if home.as_deref() == Some(dir) {
+            break;
+        }
+    }
+    None
+}
+
+/// Undo the single-quote shell quoting [`shell_quote`] applies to a value in `.dent8/env`. A
+/// value without surrounding quotes is returned trimmed and unchanged.
+fn shell_unquote(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+        trimmed[1..trimmed.len() - 1].replace("'\\''", "'")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// A discovered project store: the `.dent8/` directory plus the assignments parsed from its
+/// `env` file. The `env` file is parsed as **safe `KEY=value`** (single-quote-unquoted), never
+/// shell-sourced, so a discovered store only supplies configuration values and can never execute
+/// code. Callers layer this under the process environment (which always wins).
+struct DiscoveredStore {
+    dir: std::path::PathBuf,
+    env: std::collections::BTreeMap<String, String>,
+}
+
+impl DiscoveredStore {
+    /// The value a sourced `.dent8/env` would export for `key`, when present and non-empty.
+    fn env_value(&self, key: &str) -> Option<String> {
+        self.env
+            .get(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+}
+
+/// Discover the enclosing-repo project store (see [`discover_dent8_dir`]) and parse its
+/// `.dent8/env`. Centralizes discovery so log / authority / store-URL resolution all agree on
+/// one store and one parsed env per invocation.
+fn discover_store() -> Option<DiscoveredStore> {
+    let dir = discover_dent8_dir()?;
+    let env = parse_dent8_env(&dir);
+    Some(DiscoveredStore { dir, env })
+}
+
+/// Parse a discovered `.dent8/env` as safe `KEY=value` assignments (single-quote-unquoted),
+/// tolerating comments (`#…`) and blank lines. **Not** shell-sourced — values never run as
+/// code. A missing/unreadable env file yields an empty map so discovery degrades to store-dir
+/// defaults.
+fn parse_dent8_env(store_dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    let mut env = std::collections::BTreeMap::new();
+    let Ok(contents) = std::fs::read_to_string(store_dir.join("env")) else {
+        return env;
+    };
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            env.insert(key.trim().to_string(), shell_unquote(value));
+        }
+    }
+    env
+}
 
 fn log_path() -> String {
-    std::env::var("DENT8_LOG").unwrap_or_else(|_| DEFAULT_LOG.to_string())
+    // An explicit `DENT8_LOG` override always wins — the escape hatch for a store outside any
+    // git repo, and backward compatible with a sourced `.dent8/env`.
+    if let Ok(explicit) = std::env::var("DENT8_LOG") {
+        return explicit;
+    }
+    // Otherwise resolve against the discovered enclosing-repo store: honor a `DENT8_LOG` set in
+    // its `.dent8/env`, else the store's own `memory.jsonl`, so a subdir run with unsourced env
+    // reads/writes the real store rather than a parallel `./dent8-log.jsonl`.
+    if let Some(store) = discover_store() {
+        if let Some(log) = store.env_value("DENT8_LOG") {
+            return log;
+        }
+        return store
+            .dir
+            .join("memory.jsonl")
+            .to_string_lossy()
+            .into_owned();
+    }
+    // No project store within bounds: fall back to the legacy cwd default so a fresh `init`
+    // (and ad-hoc dev use) still works.
+    DEFAULT_LOG.to_string()
 }
 
 // ---- Source authority registry (authz: cap what a source may *fact*) ----------------
@@ -1809,7 +1999,25 @@ impl SourceRegistry {
 }
 
 fn authority_registry_path() -> String {
-    std::env::var("DENT8_AUTHORITY").unwrap_or_else(|_| DEFAULT_AUTHORITY.to_string())
+    // An explicit `DENT8_AUTHORITY` override always wins — backward compatible with sourced env.
+    if let Ok(explicit) = std::env::var("DENT8_AUTHORITY") {
+        return explicit;
+    }
+    // Otherwise resolve against the discovered enclosing-repo store: honor a `DENT8_AUTHORITY`
+    // set in its `.dent8/env`, else the store's own `authority.json`, so `init` and the
+    // `authority` subcommands agree on one registry per store even when the env file was never
+    // sourced (no more divergent `./dent8-authority.json`).
+    if let Some(store) = discover_store() {
+        if let Some(authority) = store.env_value("DENT8_AUTHORITY") {
+            return authority;
+        }
+        return store
+            .dir
+            .join("authority.json")
+            .to_string_lossy()
+            .into_owned();
+    }
+    DEFAULT_AUTHORITY.to_string()
 }
 
 /// What the write-boundary auth gate needs to know about a write: the subject (for grant
@@ -2601,25 +2809,14 @@ const DEFAULT_AUTHORITY_PROFILE: [(&str, AuthorityLevel); 3] = [
     ("source:agent", AuthorityLevel::Low),
 ];
 
-/// Seed the registry with [`DEFAULT_AUTHORITY_PROFILE`]. Merge-only: an existing grant for
-/// one of the profile sources is **kept**, never downgraded or overwritten — an operator's
-/// explicit taxonomy out-ranks the shipped default (`dent8 authority add` still replaces).
-fn cmd_authority_defaults(output: CliOutput) -> i32 {
-    let mut registry = match load_authority_registry_for_edit() {
-        Ok(registry) => registry.unwrap_or_default(),
-        Err(error) => {
-            return match output {
-                CliOutput::Text => {
-                    eprintln!("{error}");
-                    2
-                }
-                CliOutput::Json => print_json_stdout_with_code(
-                    &authority_error_json("authority defaults", &error),
-                    2,
-                ),
-            };
-        }
-    };
+/// Merge [`DEFAULT_AUTHORITY_PROFILE`] into `registry`. Merge-only: an existing grant for one
+/// of the profile sources is **kept**, never downgraded or overwritten — an operator's explicit
+/// taxonomy (or a prior `init`) out-ranks the shipped default (`dent8 authority add` still
+/// replaces). Returns, per source, whether it was `added` or `kept` and the resulting ceiling.
+/// Shared by `dent8 init` (which seeds the profile at bootstrap) and `dent8 authority defaults`.
+fn seed_default_authority_profile(
+    registry: &mut SourceRegistry,
+) -> Vec<(&'static str, &'static str, AuthorityLevel)> {
     let mut entries = Vec::new();
     for (source, max_authority) in DEFAULT_AUTHORITY_PROFILE {
         let action = match registry.sources.entry(source.to_string()) {
@@ -2637,6 +2834,28 @@ fn cmd_authority_defaults(output: CliOutput) -> i32 {
         };
         entries.push((source, action.0, action.1));
     }
+    entries
+}
+
+/// `dent8 authority defaults`: seed the shipped profile into the registry via
+/// [`seed_default_authority_profile`] (merge-only) and report what was added or kept.
+fn cmd_authority_defaults(output: CliOutput) -> i32 {
+    let mut registry = match load_authority_registry_for_edit() {
+        Ok(registry) => registry.unwrap_or_default(),
+        Err(error) => {
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("{error}");
+                    2
+                }
+                CliOutput::Json => print_json_stdout_with_code(
+                    &authority_error_json("authority defaults", &error),
+                    2,
+                ),
+            };
+        }
+    };
+    let entries = seed_default_authority_profile(&mut registry);
     match save_authority_registry(&registry) {
         Ok(()) => {
             let lines = entries
@@ -3532,17 +3751,24 @@ fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(
 /// failed closed if identity is *configured* in this build (or the write is from an
 /// unauthenticated daemon connection), so reaching here means dev mode — events are simply
 /// written unattested.
-/// The async-backend URL from `DENT8_STORE_URL` (dispatched by scheme). `None` selects the
-/// file dev store. Always available (just env reads), so the file-only build can still detect
-/// "a store URL is set but no backend is compiled in."
+/// The async-backend URL (dispatched by scheme). `None` selects the file dev store. Always
+/// available (just env reads plus discovery), so the file-only build can still detect "a store
+/// URL is set but no backend is compiled in."
 ///
-/// A set-but-empty (or whitespace-only) value counts as **unset** (`DENT8_STORE_URL=` does not
-/// disable the file store); the value is trimmed so a quoted/padded `.env` entry still dispatches.
+/// Resolution: the process-env `DENT8_STORE_URL` wins (the escape hatch); otherwise a
+/// `DENT8_STORE_URL` from the discovered enclosing-repo `.dent8/env` is honored, so an unsourced
+/// run in a repo with a SQLite/Postgres backend uses that backend instead of forking a parallel
+/// `memory.jsonl` inside `.dent8/`. A set-but-empty (or whitespace-only) value counts as
+/// **unset** at each layer; the value is trimmed so a quoted/padded entry still dispatches.
 fn store_url() -> Option<String> {
-    std::env::var("DENT8_STORE_URL")
+    if let Some(url) = std::env::var("DENT8_STORE_URL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+    {
+        return Some(url);
+    }
+    discover_store().and_then(|store| store.env_value("DENT8_STORE_URL"))
 }
 
 /// A throwaway current-thread runtime to bridge the sync CLI to an async backend. One per
@@ -3776,6 +4002,37 @@ fn base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_duration_ms_accepts_unit_suffixes() {
+        assert_eq!(parse_duration_ms("45s"), Ok(45_000));
+        assert_eq!(parse_duration_ms("30m"), Ok(1_800_000));
+        assert_eq!(parse_duration_ms("12h"), Ok(43_200_000));
+        assert_eq!(parse_duration_ms("90d"), Ok(90 * 86_400_000));
+        assert_eq!(parse_duration_ms("500ms"), Ok(500));
+        // Surrounding whitespace is tolerated.
+        assert_eq!(parse_duration_ms(" 1d "), Ok(86_400_000));
+    }
+
+    #[test]
+    fn parse_duration_ms_rejects_bad_input() {
+        // A bare number has no unit and must not silently mean milliseconds.
+        assert!(parse_duration_ms("90").is_err());
+        assert!(parse_duration_ms("").is_err());
+        assert!(parse_duration_ms("d").is_err());
+        assert!(parse_duration_ms("10y").is_err());
+        assert!(parse_duration_ms("abc").is_err());
+    }
+
+    #[test]
+    fn parse_duration_ms_matches_the_retention_ceiling() {
+        // `90d` is exactly the 90-day default retention ceiling, so a fact written at that TTL
+        // sits at the ceiling and one past it is rejected on write.
+        assert_eq!(
+            parse_duration_ms("90d"),
+            Ok(dent8_store::registry::DEFAULT_MAX_TTL_MS)
+        );
+    }
 
     fn grant(
         max_authority: AuthorityLevel,

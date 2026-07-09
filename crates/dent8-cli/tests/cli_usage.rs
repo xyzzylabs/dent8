@@ -50,6 +50,380 @@ fn alice_fact_round_trips_with_subject_and_metadata_flags() {
 }
 
 #[test]
+fn a_subdir_write_with_unset_env_uses_the_discovered_dent8_store() {
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+
+    // Discovery is confined to the enclosing git repo, so mark <root> as a repo root.
+    fs::create_dir(root.join(".git")).expect("create .git repo marker");
+
+    // Initialize a project store at <root>/.dent8 with no env sourced.
+    let init = run_dent8_in(&root, &["init"], &[]);
+    assert_success(&init, "init");
+    let store_log = root.join(".dent8").join("memory.jsonl");
+    assert!(
+        store_log.exists(),
+        "init should create the .dent8 store log"
+    );
+
+    // From a nested subdirectory, with every DENT8_* var unset, a write must discover the
+    // project's .dent8 store upward (within the enclosing repo) instead of silently creating a
+    // parallel ./dent8-log.jsonl in the cwd — the old first-run footgun.
+    let subdir = root.join("nested").join("deeper");
+    fs::create_dir_all(&subdir).expect("create subdir");
+    let asserted = run_dent8_in(
+        &subdir,
+        &[
+            "assert",
+            "repo:app",
+            "database",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+        ],
+        &[],
+    );
+    assert_success(&asserted, "assert from subdir");
+
+    // The write landed in the discovered store, and NOT in a parallel cwd log.
+    assert!(
+        !subdir.join("dent8-log.jsonl").exists(),
+        "must not create a parallel ./dent8-log.jsonl in the subdir"
+    );
+    assert!(
+        !root.join("dent8-log.jsonl").exists(),
+        "must not create a parallel ./dent8-log.jsonl in the project root either"
+    );
+    let store_contents = fs::read_to_string(&store_log).expect("read discovered store");
+    assert!(
+        store_contents.contains("postgres"),
+        "the discovered store must hold the write: {store_contents}"
+    );
+
+    // A read from the subdir sees the same discovered store.
+    let explained = run_dent8_in(&subdir, &["explain", "repo:app", "database"], &[]);
+    assert_success(&explained, "explain from subdir");
+    assert!(stdout(&explained).contains("postgres"));
+}
+
+#[test]
+fn a_planted_ancestor_dent8_store_outside_a_repo_is_not_adopted() {
+    // Security PoC for the bounded-discovery fix. An attacker plants a `.dent8/` in an ancestor
+    // of the victim's cwd (e.g. `/tmp/.dent8` when the victim runs under `/tmp`). Before the fix,
+    // unbounded upward discovery silently adopted it as BOTH the store and the authority registry
+    // (attacker-controlled store path + a `source:agent` ceiling it could lift). With discovery
+    // confined to the enclosing git repo — and NO repo in bounds here — only the cwd's own
+    // `.dent8/` is considered, so the planted ancestor store is never touched.
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+
+    // Plant a poisoned store in the ancestor: a `memory.jsonl` a naive adopt would append to, and
+    // an `env` whose DENT8_LOG would redirect writes to an attacker-chosen path.
+    let planted = root.join(".dent8");
+    fs::create_dir(&planted).expect("create planted .dent8");
+    fs::write(planted.join("memory.jsonl"), "").expect("plant memory.jsonl");
+    let poisoned_log = root.join("poisoned-memory.jsonl");
+    fs::write(
+        planted.join("env"),
+        format!("DENT8_LOG={}\n", poisoned_log.display()),
+    )
+    .expect("plant env");
+
+    // Write from a subdirectory with NO git repo anywhere in bounds and every DENT8_* var unset.
+    let work = root.join("work");
+    fs::create_dir(&work).expect("create work dir");
+    let asserted = run_dent8_in(
+        &work,
+        &[
+            "assert",
+            "repo:app",
+            "database",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+        ],
+        &[],
+    );
+    assert_success(&asserted, "assert from non-repo subdir");
+
+    // The planted ancestor store must NOT be adopted: neither its `memory.jsonl` nor its env's
+    // redirected log received the write.
+    assert_eq!(
+        fs::read_to_string(planted.join("memory.jsonl")).expect("read planted store"),
+        "",
+        "planted ancestor .dent8/memory.jsonl must stay empty — not adopted"
+    );
+    assert!(
+        !poisoned_log.exists(),
+        "planted .dent8/env DENT8_LOG must not be honored"
+    );
+    // With no repo and no cwd-local store, the write falls back to the legacy cwd default log.
+    let local_log = work.join("dent8-log.jsonl");
+    assert!(
+        local_log.exists(),
+        "write should fall back to the cwd's own log, not the planted ancestor store"
+    );
+    assert!(
+        fs::read_to_string(&local_log)
+            .expect("read local log")
+            .contains("postgres"),
+        "the fallback cwd log must hold the write"
+    );
+}
+
+#[test]
+fn discovery_is_confined_to_the_enclosing_git_repo() {
+    // A planted `.dent8/` ABOVE the repo root must not leak in: discovery scans only from the cwd
+    // up to and including the enclosing repo root. The repo's own `.dent8/` is still discovered
+    // from a nested subdirectory.
+    let temp = TempDir::new();
+    let outside = temp.path.clone();
+
+    // Planted, attacker-controlled store ABOVE the repo.
+    let planted = outside.join(".dent8");
+    fs::create_dir(&planted).expect("create planted .dent8");
+    fs::write(planted.join("memory.jsonl"), "").expect("plant memory.jsonl");
+
+    // The real repo, one level down, marked with `.git`, with its own initialized store.
+    let repo = outside.join("repo");
+    fs::create_dir(&repo).expect("create repo");
+    fs::create_dir(repo.join(".git")).expect("create .git");
+    let init = run_dent8_in(&repo, &["init"], &[]);
+    assert_success(&init, "init in repo");
+    let repo_store = repo.join(".dent8").join("memory.jsonl");
+    assert!(repo_store.exists(), "init should create the repo store");
+
+    // From a nested subdir of the repo, a write discovers the repo store (bounded at the repo
+    // root) and never escapes upward to the planted ancestor store.
+    let subdir = repo.join("src").join("deep");
+    fs::create_dir_all(&subdir).expect("create subdir");
+    let asserted = run_dent8_in(
+        &subdir,
+        &[
+            "assert",
+            "repo:app",
+            "database",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+        ],
+        &[],
+    );
+    assert_success(&asserted, "assert from repo subdir");
+
+    assert!(
+        fs::read_to_string(&repo_store)
+            .expect("read repo store")
+            .contains("postgres"),
+        "the write must land in the enclosing repo's store"
+    );
+    assert_eq!(
+        fs::read_to_string(planted.join("memory.jsonl")).expect("read planted store"),
+        "",
+        "the planted store above the repo root must never be adopted"
+    );
+}
+
+// A DB-backed store URL is only meaningful when an async backend is compiled in.
+#[cfg(feature = "sqlite")]
+#[test]
+fn a_discovered_store_url_selects_the_db_backend_when_the_process_env_is_unset() {
+    // An unsourced run in a repo whose `.dent8/env` sets DENT8_STORE_URL (a SQLite backend) must
+    // use that backend rather than forking a parallel `memory.jsonl` file log inside `.dent8/`.
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+    fs::create_dir(root.join(".git")).expect("create .git");
+
+    // Initialize a SQLite-backed project store; `init` records DENT8_STORE_URL in `.dent8/env`
+    // (the db file itself is created lazily on the first backend write).
+    let init = run_dent8_in(&root, &["init", "--store", "sqlite"], &[]);
+    assert_success(&init, "init --store sqlite");
+    let db = root.join(".dent8").join("dent8.db");
+    let env = fs::read_to_string(root.join(".dent8").join("env")).expect("read env");
+    assert!(
+        env.contains("DENT8_STORE_URL=") && env.contains("sqlite://"),
+        "init should record DENT8_STORE_URL in .dent8/env: {env}"
+    );
+
+    // From a subdir with EVERY DENT8_* var unset, a write must go to the discovered SQLite
+    // backend selected by the `.dent8/env` DENT8_STORE_URL.
+    let subdir = root.join("nested");
+    fs::create_dir(&subdir).expect("create subdir");
+    let asserted = run_dent8_in(
+        &subdir,
+        &[
+            "assert",
+            "repo:app",
+            "database",
+            "postgres",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+        ],
+        &[],
+    );
+    assert_success(&asserted, "assert into discovered sqlite backend");
+
+    // The write went to the discovered SQLite backend (its db file now exists) — not a file log.
+    assert!(
+        db.exists(),
+        "the discovered sqlite backend db must hold the write"
+    );
+    // No parallel file log anywhere — no forked memory.jsonl inside `.dent8/`.
+    assert!(
+        !root.join(".dent8").join("memory.jsonl").exists(),
+        "must not fork a parallel memory.jsonl when a DB backend is discovered"
+    );
+    assert!(
+        !subdir.join("dent8-log.jsonl").exists() && !root.join("dent8-log.jsonl").exists(),
+        "must not create a parallel cwd log"
+    );
+
+    // Reading from the subdir (still unsourced) sees the write through the same discovered
+    // backend, proving the store URL — not a file — is what resolution honored.
+    let explained = run_dent8_in(&subdir, &["explain", "repo:app", "database"], &[]);
+    assert_success(&explained, "explain from discovered sqlite backend");
+    assert!(
+        stdout(&explained).contains("postgres"),
+        "{}",
+        stdout(&explained)
+    );
+}
+
+#[test]
+fn init_seeds_the_default_authority_profile_in_a_single_registry() {
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+
+    let init = run_dent8_in(&root, &["init"], &[]);
+    assert_success(&init, "init");
+
+    let registry_path = root.join(".dent8").join("authority.json");
+    let read_sources = || -> Value {
+        let raw = fs::read_to_string(&registry_path).expect("read registry");
+        serde_json::from_str::<Value>(&raw)
+            .expect("parse registry")
+            .get("sources")
+            .cloned()
+            .expect("sources object")
+    };
+
+    // A fresh init seeds the shipped default profile AND keeps its own source:local grant, all
+    // in the one discovered registry — no second `authority defaults` step required.
+    let sources = read_sources();
+    for src in ["source:local", "source:human", "source:ci", "source:agent"] {
+        assert!(
+            sources.get(src).is_some(),
+            "init registry must contain {src}: {sources}"
+        );
+    }
+    let seeded_count = sources.as_object().expect("sources map").len();
+
+    // `authority defaults` with unset env must touch that SAME discovered registry (merge-only,
+    // idempotent) rather than writing a divergent ./dent8-authority.json in the cwd.
+    let defaults = run_dent8_in(&root, &["authority", "defaults"], &[]);
+    assert_success(&defaults, "authority defaults");
+    assert!(
+        !root.join("dent8-authority.json").exists(),
+        "authority defaults must not create a parallel ./dent8-authority.json"
+    );
+    let after = read_sources();
+    assert_eq!(
+        after.as_object().expect("sources map").len(),
+        seeded_count,
+        "merge-only defaults must not add or duplicate sources"
+    );
+    assert!(
+        after.get("source:local").is_some(),
+        "source:local grant must be kept (merge-only): {after}"
+    );
+}
+
+#[test]
+fn assert_with_ttl_sets_the_fact_ttl_and_enforces_the_ceiling() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // A within-ceiling --ttl on an unregistered predicate is admitted and the persisted fact
+    // carries a finite DurationMillis TTL (30 days).
+    let ok = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "note",
+            "temporary",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+            "--ttl",
+            "30d",
+        ],
+        &envs,
+    );
+    assert_success(&ok, "assert --ttl 30d");
+    let contents = fs::read_to_string(&log).expect("read log");
+    let thirty_days_ms = (30u64 * 86_400_000).to_string();
+    assert!(
+        contents.contains("DurationMillis") && contents.contains(&thirty_days_ms),
+        "the fact must carry a finite {thirty_days_ms}ms TTL: {contents}"
+    );
+
+    // A --ttl past the 90-day retention ceiling is rejected on write (Item 3 + Item 4).
+    let rejected = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "note",
+            "toolong",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+            "--ttl",
+            "120d",
+        ],
+        &envs,
+    );
+    assert!(
+        !rejected.status.success(),
+        "assert --ttl 120d must be rejected, stdout: {}",
+        stdout(&rejected)
+    );
+    assert!(
+        stderr(&rejected).contains("exceeds the retention"),
+        "rejection must cite the retention ceiling: {}",
+        stderr(&rejected)
+    );
+
+    // A bad --ttl value is a usage error, not a silent no-op.
+    let bad = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "note",
+            "x",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+            "--ttl",
+            "90",
+        ],
+        &envs,
+    );
+    assert!(!bad.status.success(), "a unit-less --ttl must be rejected");
+}
+
+#[test]
 fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

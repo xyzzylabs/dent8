@@ -32,9 +32,9 @@ dent8 doctor --agent codex --write-check
 
 | Variable | Used by | Default | Purpose |
 |---|---|---|---|
-| `DENT8_LOG` | CLI / MCP (file backend) | `./dent8-log.jsonl` | Path to the JSON-lines dev-store log. |
-| `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | *(unset → file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`sqlite://…` is included in the stock build; `postgres://…` needs `--features postgres`). When set, reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
-| `DENT8_AUTHORITY` | `dent8 init`, `dent8 authority` + every write | `./dent8-authority.json` | Path to the source→authority **ceiling** registry. Enforcement is **opt-in**: it activates only once this file exists (created by `dent8 init` or `dent8 authority add`); then it is deny-by-default. |
+| `DENT8_LOG` | CLI / MCP (file backend) | discovered `.dent8/` (in-repo), else `./dent8-log.jsonl` | Path to the JSON-lines dev-store log. When unset, the CLI resolves the project store by [repo-confined discovery](#store-and-registry-discovery) and uses the log inside it — a discovered `.dent8/env` `DENT8_LOG` if set, else the store's `memory.jsonl` — so a sub-directory command hits the project store instead of a parallel cwd log. With no store discovered it falls back to `./dent8-log.jsonl`. |
+| `DENT8_STORE_URL` | CLI / MCP (an async backend feature) | discovered `.dent8/env` value, else *(file backend)* | A backend store URL, dispatched by **scheme** to the matching async backend (`sqlite://…` is included in the stock build; `postgres://…` needs `--features postgres`). When unset in the process environment, a `DENT8_STORE_URL` recorded in the discovered `.dent8/env` is honored, so an unsourced run in a repo with a DB backend uses that backend instead of forking a parallel file log. When set (here or discovered), reads/writes go to that operational store instead of the file log. Set without a matching backend feature → a clear build-hint error. |
+| `DENT8_AUTHORITY` | `dent8 init`, `dent8 authority` + every write | discovered `.dent8/authority.json` (in-repo), else `./dent8-authority.json` | Path to the source→authority **ceiling** registry. When unset, it resolves against the discovered `.dent8/` store — a discovered `.dent8/env` `DENT8_AUTHORITY` if set, else the store's `authority.json` (the same file `dent8 init` seeds) — so `init` and the `authority` subcommands share one registry per store. Enforcement is **opt-in**: it activates only once this file exists (created by `dent8 init` or `dent8 authority add`); then it is deny-by-default. |
 | `DENT8_REQUIRE_AUTHORITY` | every write | *(unset / false)* | Fail-closed deployment guard. When true (`1`, `true`, `yes`, or `on`), a missing authority registry is an error instead of permissive dev mode. |
 | `DENT8_TRUST` | signed identity | `./dent8-trust.json` | Path to trusted issuer public keys. If this file exists, signed source identity is active for every write. |
 | `DENT8_ACTIVE_GRANTS` | signed identity | sibling `active-grants.json` next to `DENT8_TRUST`, when present | Path to the active source-grant registry. Bootstrap writes `.dent8/active-grants.json`; writes presenting an older grant for the same source are rejected once this registry exists. |
@@ -61,6 +61,34 @@ The optional hook helper `dent8 hook native-memory-guard` has its own variables:
 
 The bundled [`compose.yml`](../compose.yml) brings up a throwaway `postgres:16`; the matching
 URL is in [`.env.example`](../.env.example) (`postgres://postgres:dent8@localhost:5432/dent8`).
+
+## Store and registry discovery
+
+When `DENT8_LOG`, `DENT8_STORE_URL`, and `DENT8_AUTHORITY` are unset in the process environment,
+the CLI locates the project's `.dent8/` store and reads those values from its `.dent8/env`.
+Discovery is **confined to the enclosing git repository** — the shared fact base for the agents
+working on one repo — so a `.dent8/` planted in an unrelated ancestor cannot be silently adopted
+as an attacker-controlled store path and authority registry:
+
+- **Enclosing repo root** — the nearest ancestor of the current directory that contains a `.git`
+  entry (file or directory), searched upward but **stopping at (and never above) `$HOME` and the
+  filesystem root**.
+- **In-repo discovery** — inside that repo, scan from the current directory up to and *including*
+  the repo root; the first `.dent8/` found wins. A command run from any sub-directory of an
+  initialized project therefore resolves the project store, not a parallel one in the cwd.
+- **No repo → cwd only** — when the current directory is not inside a git repo (no `.git` within
+  bounds), only `./.dent8/` in the current directory itself is considered; discovery does **not**
+  walk upward. (So `/tmp/.dent8` is never adopted for a process merely running under `/tmp`.)
+- **Explicit env vars always win** — a `DENT8_LOG` / `DENT8_STORE_URL` / `DENT8_AUTHORITY` set in
+  the process environment bypasses discovery entirely, keeping a store *outside* any repo
+  reachable via those variables (the escape hatch).
+- **Safe parsing** — the discovered `.dent8/env` is parsed as safe `KEY=value` assignments
+  (single-quote-unquoted), **not** shell-sourced, so a discovered store only supplies
+  configuration values and can never execute code. Sourcing `.dent8/env` yourself (`set -a; .
+  .dent8/env; set +a`) still works and exports the same values.
+
+Per resolved key: **effective = process-environment value, else the discovered `.dent8/env`
+value, else the default.**
 
 ## Cargo features (on the `dent8` package)
 

@@ -39,9 +39,11 @@ printing `ACCEPTED … (authority=high)` — zero silent no-ops.
    `human > CI > agent`, which is a *separate* `dent8 authority defaults` call — and unless
    `.dent8/env` has already been sourced (so `DENT8_AUTHORITY` points at the init registry),
    `authority defaults` writes to a *different* file (`./dent8-authority.json` in the cwd). It
-   is easy to end up with two registries and a confusing deny-by-default. Fix idea: let
-   `init` seed the profile directly (e.g. via `--agent` or a flag), or have
-   `authority defaults` default to the `.dent8/authority.json` that `init` created.
+   is easy to end up with two registries and a confusing deny-by-default. **Fixed:** `init`
+   now seeds the `human > CI > agent` profile into `.dent8/authority.json` itself (merge-only,
+   keeping its `source:local` grant), and — with the store-resolution fix in #3 — the
+   `authority` subcommands resolve to that same discovered `.dent8/authority.json` when
+   `DENT8_AUTHORITY` is unset, so there is one registry per store.
 2. **The README "Try it" walkthrough was broken on a clean checkout** (fixed in this PR).
    Two independent bugs a first-run user hits: (a) `.dent8/identity-alice.env` was sourced
    *outside* `set -a`, so `DENT8_GRANT` was never exported and the first `dent8 assert` failed
@@ -57,7 +59,11 @@ printing `ACCEPTED … (authority=high)` — zero silent no-ops.
    default log (`./dent8-log.jsonl`), so a user who forgets can read/write a *different, empty*
    store and think their facts vanished. `init` prints the source snippet, which helps, but
    nothing guards the omission. The committed hooks now guard against this by sourcing
-   `.dent8/env` themselves; the footgun remains only for ad-hoc CLI use outside the hooks.
+   `.dent8/env` themselves. **Fixed:** store resolution now discovers `.dent8/` by walking up
+   from the cwd (git-style) when the env vars are unset, so an ad-hoc command from anywhere
+   inside the project reads/writes the real store instead of a parallel `./dent8-log.jsonl` —
+   an explicit env override still wins, and a fresh directory with no `.dent8/` upward still
+   falls back to the cwd default.
 
 ### P2 — papercuts on the golden path
 
