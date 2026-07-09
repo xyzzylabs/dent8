@@ -6,6 +6,9 @@ trusted fact, a stale value resurrecting itself, a poisoned source tainting ever
 derived from it. Every fact it keeps carries where it came from, and you can replay exactly
 *why* the agent believes it.
 
+**New here? Start with the [Getting Started guide](docs/getting-started.md)** — zero to a
+working shared fact base in under 15 minutes.
+
 ![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt over a verified hash chain.](https://raw.githubusercontent.com/xyzzylabs/dent8/main/demo.gif)
 
 Most agent memory is *newest-write-wins*: the last thing written becomes the truth. That's
