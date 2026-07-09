@@ -2748,9 +2748,8 @@ fn seed_default_authority_profile(
     entries
 }
 
-/// Seed the registry with [`DEFAULT_AUTHORITY_PROFILE`]. Merge-only: an existing grant for
-/// one of the profile sources is **kept**, never downgraded or overwritten — an operator's
-/// explicit taxonomy out-ranks the shipped default (`dent8 authority add` still replaces).
+/// `dent8 authority defaults`: seed the shipped profile into the registry via
+/// [`seed_default_authority_profile`] (merge-only) and report what was added or kept.
 fn cmd_authority_defaults(output: CliOutput) -> i32 {
     let mut registry = match load_authority_registry_for_edit() {
         Ok(registry) => registry.unwrap_or_default(),
