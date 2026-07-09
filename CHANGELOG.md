@@ -10,16 +10,31 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### BREAKING
-- **Store resolution now discovers `.dent8/` upward (git-style).** When `DENT8_LOG` /
-  `DENT8_AUTHORITY` (and `DENT8_STORE_URL`) are unset, the CLI walks up from the current
-  directory to the first ancestor containing a `.dent8/` store and uses the log and
-  `authority.json` **inside it**, instead of silently creating a parallel `./dent8-log.jsonl`
-  in the cwd. A command run from a sub-directory of an initialized project now reads and writes
-  that project's store even when `.dent8/env` was never sourced. An explicit env override still
-  wins (backward compatible), and a fresh directory with no `.dent8/` upward still falls back to
-  the legacy cwd default so `dent8 init` keeps working. **Migration:** a stray `./dent8-log.jsonl`
-  a previous run created in a sub-directory is no longer read — point `DENT8_LOG` at it, or
-  re-capture its facts into the discovered store.
+- **Store resolution now discovers `.dent8/` within the enclosing git repository.** When
+  `DENT8_LOG` / `DENT8_AUTHORITY` / `DENT8_STORE_URL` are unset, the CLI locates the project
+  store by scanning from the current directory up to and including the **enclosing repo root**
+  (the nearest ancestor holding a `.git` entry, bounded by `$HOME`/the filesystem root) and uses
+  the log, `authority.json`, and **backend URL inside it**, instead of silently creating a
+  parallel `./dent8-log.jsonl` in the cwd. Discovery is confined to that repo: a `.dent8/` in an
+  unrelated ancestor (e.g. `/tmp/.dent8` for a process merely running under `/tmp`) is **no
+  longer adopted** as an attacker-controlled store path and authority registry. When the cwd is
+  not inside a git repo, only `./.dent8/` in the cwd itself is considered — discovery does not
+  walk upward. A command run from a sub-directory of an initialized project still reads and writes
+  that project's store even when `.dent8/env` was never sourced. Explicit env overrides still win
+  (backward compatible, and the escape hatch for a store outside any repo), `.dent8/env` is parsed
+  as safe `KEY=value` (not shell-sourced), and a fresh directory with no store discovered still
+  falls back to the legacy cwd default so `dent8 init` keeps working. **Migration:** a stray
+  `./dent8-log.jsonl` a previous run created in a sub-directory is no longer read — point
+  `DENT8_LOG` at it, or re-capture its facts into the discovered store; a `.dent8/` outside your
+  repo that an earlier unbounded walk reached is no longer discovered — set the matching
+  `DENT8_*` var to reach it.
+- **A discovered `DENT8_STORE_URL` (DB backend) is now honored, not just `DENT8_LOG`.** When
+  `DENT8_STORE_URL` is unset in the process environment, the CLI reads it from the discovered
+  `.dent8/env` and selects that async backend (SQLite/Postgres) for reads and writes. Previously
+  discovery only read `DENT8_LOG`, so an unsourced run against a repo with a DB backend forked a
+  **new parallel `memory.jsonl`** inside `.dent8/` and diverged from the real store; that footgun
+  is fixed. **Migration:** if an unsourced run previously wrote to a stray `.dent8/memory.jsonl`
+  in a DB-backed project, re-capture those facts into the backend (or keep sourcing `.dent8/env`).
 - **The authority registry is unified to one location per store.** `dent8 authority add` /
   `defaults` / `list` / `remove` now resolve to the discovered `.dent8/authority.json` (the same
   file `dent8 init` seeds) when `DENT8_AUTHORITY` is unset, rather than a separate

@@ -1813,16 +1813,61 @@ const DEFAULT_AUTHORITY: &str = "dent8-authority.json";
 /// The per-project store directory `dent8 init` creates.
 const STORE_DIR: &str = ".dent8";
 
-/// Git-style upward discovery of the project store directory: walk from the current directory
-/// through its ancestors and return the first `.dent8/` found. This lets a command run from a
-/// sub-directory of an initialized project resolve the project's store instead of silently
-/// creating a parallel one in the cwd. `None` when no ancestor holds a `.dent8/`, so the caller
-/// can fall back to the legacy cwd default (keeping `dent8 init` in a fresh directory working).
+/// Discover the project store directory, **confined to the enclosing git repository** so a
+/// `.dent8/` planted in an unrelated ancestor (e.g. `/tmp/.dent8` for a process running under
+/// `/tmp`) is never silently adopted as an attacker-controlled store *and* authority registry.
+///
+/// Discovery rules:
+/// - Find the enclosing repo root: the nearest ancestor of the cwd that holds a `.git` entry
+///   (file or dir), searching upward but stopping at (and never above) `$HOME` and the
+///   filesystem root.
+/// - Inside that repo, scan from the cwd up to and including the repo root; the first `.dent8/`
+///   found wins. This still lets a command run from any sub-directory of an initialized project
+///   resolve the project's store instead of creating a parallel one in the cwd.
+/// - When the cwd is **not** inside a git repo (no `.git` within bounds), only `./.dent8/` in
+///   the cwd itself is considered — discovery does *not* walk upward.
+///
+/// `None` when nothing is found, so the caller falls back to the legacy cwd default (keeping a
+/// fresh `dent8 init` working). Explicit `DENT8_LOG` / `DENT8_STORE_URL` / `DENT8_AUTHORITY`
+/// overrides bypass discovery entirely (see the resolution helpers), so a store outside any repo
+/// stays reachable via those env vars.
 fn discover_dent8_dir() -> Option<std::path::PathBuf> {
     let cwd = std::env::current_dir().ok()?;
-    cwd.ancestors()
-        .map(|dir| dir.join(STORE_DIR))
-        .find(|candidate| candidate.is_dir())
+    let Some(repo_root) = enclosing_repo_root(&cwd) else {
+        // Not in a repo: only the cwd's own `.dent8/`, no upward walk.
+        let candidate = cwd.join(STORE_DIR);
+        return candidate.is_dir().then_some(candidate);
+    };
+    // Inside a repo: scan cwd..=repo_root; first `.dent8/` wins, never above the repo root.
+    for dir in cwd.ancestors() {
+        let candidate = dir.join(STORE_DIR);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if dir == repo_root {
+            break;
+        }
+    }
+    None
+}
+
+/// The nearest ancestor of `start` (inclusive) that contains a `.git` entry — the enclosing git
+/// repository root — searching upward but never above `$HOME` or the filesystem root. `None`
+/// when `start` is not inside a repo within those bounds. This is the security boundary that
+/// confines store discovery to the repo you are actually working in.
+fn enclosing_repo_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    for dir in start.ancestors() {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        // `$HOME` is checked (above) but never crossed; the filesystem root, where `ancestors()`
+        // terminates, is the other bound.
+        if home.as_deref() == Some(dir) {
+            break;
+        }
+    }
+    None
 }
 
 /// Undo the single-quote shell quoting [`shell_quote`] applies to a value in `.dent8/env`. A
@@ -1836,36 +1881,75 @@ fn shell_unquote(value: &str) -> String {
     }
 }
 
-/// Read a `KEY=value` assignment out of a discovered `.dent8/env` file, unquoting the value.
-/// Used so store discovery lands on exactly the file a sourced `.dent8/env` would select, even
-/// when `init` chose a non-default log name (e.g. `<agent>-memory.jsonl`).
-fn dent8_env_value(store_dir: &std::path::Path, key: &str) -> Option<String> {
-    let contents = std::fs::read_to_string(store_dir.join("env")).ok()?;
-    contents.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix(key)
-            .and_then(|rest| rest.strip_prefix('='))
-            .map(shell_unquote)
-    })
+/// A discovered project store: the `.dent8/` directory plus the assignments parsed from its
+/// `env` file. The `env` file is parsed as **safe `KEY=value`** (single-quote-unquoted), never
+/// shell-sourced, so a discovered store only supplies configuration values and can never execute
+/// code. Callers layer this under the process environment (which always wins).
+struct DiscoveredStore {
+    dir: std::path::PathBuf,
+    env: std::collections::BTreeMap<String, String>,
+}
+
+impl DiscoveredStore {
+    /// The value a sourced `.dent8/env` would export for `key`, when present and non-empty.
+    fn env_value(&self, key: &str) -> Option<String> {
+        self.env
+            .get(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+}
+
+/// Discover the enclosing-repo project store (see [`discover_dent8_dir`]) and parse its
+/// `.dent8/env`. Centralizes discovery so log / authority / store-URL resolution all agree on
+/// one store and one parsed env per invocation.
+fn discover_store() -> Option<DiscoveredStore> {
+    let dir = discover_dent8_dir()?;
+    let env = parse_dent8_env(&dir);
+    Some(DiscoveredStore { dir, env })
+}
+
+/// Parse a discovered `.dent8/env` as safe `KEY=value` assignments (single-quote-unquoted),
+/// tolerating comments (`#…`) and blank lines. **Not** shell-sourced — values never run as
+/// code. A missing/unreadable env file yields an empty map so discovery degrades to store-dir
+/// defaults.
+fn parse_dent8_env(store_dir: &std::path::Path) -> std::collections::BTreeMap<String, String> {
+    let mut env = std::collections::BTreeMap::new();
+    let Ok(contents) = std::fs::read_to_string(store_dir.join("env")) else {
+        return env;
+    };
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            env.insert(key.trim().to_string(), shell_unquote(value));
+        }
+    }
+    env
 }
 
 fn log_path() -> String {
-    // An explicit `DENT8_LOG` override always wins — backward compatible with sourced env.
+    // An explicit `DENT8_LOG` override always wins — the escape hatch for a store outside any
+    // git repo, and backward compatible with a sourced `.dent8/env`.
     if let Ok(explicit) = std::env::var("DENT8_LOG") {
         return explicit;
     }
-    // Otherwise discover the project store upward and use the log *inside* it, so a subdir run
-    // with unsourced env reads/writes the real store rather than a parallel `./dent8-log.jsonl`.
-    if let Some(store_dir) = discover_dent8_dir() {
-        if let Some(log) = dent8_env_value(&store_dir, "DENT8_LOG") {
+    // Otherwise resolve against the discovered enclosing-repo store: honor a `DENT8_LOG` set in
+    // its `.dent8/env`, else the store's own `memory.jsonl`, so a subdir run with unsourced env
+    // reads/writes the real store rather than a parallel `./dent8-log.jsonl`.
+    if let Some(store) = discover_store() {
+        if let Some(log) = store.env_value("DENT8_LOG") {
             return log;
         }
-        return store_dir
+        return store
+            .dir
             .join("memory.jsonl")
             .to_string_lossy()
             .into_owned();
     }
-    // No project store anywhere upward: fall back to the legacy cwd default so a fresh `init`
+    // No project store within bounds: fall back to the legacy cwd default so a fresh `init`
     // (and ad-hoc dev use) still works.
     DEFAULT_LOG.to_string()
 }
@@ -1919,11 +2003,16 @@ fn authority_registry_path() -> String {
     if let Ok(explicit) = std::env::var("DENT8_AUTHORITY") {
         return explicit;
     }
-    // Otherwise discover the project store upward and use its single `authority.json`, so
-    // `init` and the `authority` subcommands agree on one registry per store even when the env
-    // file was never sourced (no more divergent `./dent8-authority.json`).
-    if let Some(store_dir) = discover_dent8_dir() {
-        return store_dir
+    // Otherwise resolve against the discovered enclosing-repo store: honor a `DENT8_AUTHORITY`
+    // set in its `.dent8/env`, else the store's own `authority.json`, so `init` and the
+    // `authority` subcommands agree on one registry per store even when the env file was never
+    // sourced (no more divergent `./dent8-authority.json`).
+    if let Some(store) = discover_store() {
+        if let Some(authority) = store.env_value("DENT8_AUTHORITY") {
+            return authority;
+        }
+        return store
+            .dir
             .join("authority.json")
             .to_string_lossy()
             .into_owned();
@@ -3662,17 +3751,24 @@ fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(
 /// failed closed if identity is *configured* in this build (or the write is from an
 /// unauthenticated daemon connection), so reaching here means dev mode — events are simply
 /// written unattested.
-/// The async-backend URL from `DENT8_STORE_URL` (dispatched by scheme). `None` selects the
-/// file dev store. Always available (just env reads), so the file-only build can still detect
-/// "a store URL is set but no backend is compiled in."
+/// The async-backend URL (dispatched by scheme). `None` selects the file dev store. Always
+/// available (just env reads plus discovery), so the file-only build can still detect "a store
+/// URL is set but no backend is compiled in."
 ///
-/// A set-but-empty (or whitespace-only) value counts as **unset** (`DENT8_STORE_URL=` does not
-/// disable the file store); the value is trimmed so a quoted/padded `.env` entry still dispatches.
+/// Resolution: the process-env `DENT8_STORE_URL` wins (the escape hatch); otherwise a
+/// `DENT8_STORE_URL` from the discovered enclosing-repo `.dent8/env` is honored, so an unsourced
+/// run in a repo with a SQLite/Postgres backend uses that backend instead of forking a parallel
+/// `memory.jsonl` inside `.dent8/`. A set-but-empty (or whitespace-only) value counts as
+/// **unset** at each layer; the value is trimmed so a quoted/padded entry still dispatches.
 fn store_url() -> Option<String> {
-    std::env::var("DENT8_STORE_URL")
+    if let Some(url) = std::env::var("DENT8_STORE_URL")
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+    {
+        return Some(url);
+    }
+    discover_store().and_then(|store| store.env_value("DENT8_STORE_URL"))
 }
 
 /// A throwaway current-thread runtime to bridge the sync CLI to an async backend. One per
