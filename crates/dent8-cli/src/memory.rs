@@ -177,13 +177,95 @@ fn fact_markers(fact: &ContextFact) -> String {
     markers
 }
 
+/// The target file's dominant line ending: `\r\n` when CRLF strictly outnumbers lone `\n`,
+/// otherwise `\n`. A new/empty file, or one with no newlines, defaults to LF so fresh files keep
+/// the historical behavior and tests stay deterministic.
+fn dominant_line_ending(existing: &str) -> &'static str {
+    let crlf = existing.matches("\r\n").count();
+    let lf = existing.matches('\n').count().saturating_sub(crlf);
+    if crlf > lf { "\r\n" } else { "\n" }
+}
+
+/// If `trimmed` (already left-trimmed) opens or closes a Markdown code fence, return its fence
+/// char (`` ` `` or `~`) and run length. A line whose trimmed content starts with 3+ backticks or
+/// 3+ tildes is a fence line; `` ` `` and `~` are ASCII so `run` is also a valid byte offset.
+fn code_fence(trimmed: &str) -> Option<(char, usize)> {
+    let ch = trimmed.chars().next()?;
+    if ch != '`' && ch != '~' {
+        return None;
+    }
+    let run = trimmed.chars().take_while(|&c| c == ch).count();
+    (run >= 3).then_some((ch, run))
+}
+
+/// Byte offsets of the BEGIN and END sentinels that sit **outside** any fenced code block, plus
+/// whether the file ends **inside an unclosed fence**. Sentinels inside a ```` ``` ````/`~~~`
+/// fenced code block — e.g. the documented example block in `docs/native-memory.md` — are ignored
+/// so they are never mistaken for the live managed block and overwritten. Fence state toggles on
+/// an opening fence and clears on a bare closing fence of the same char that is at least as long
+/// (a robust subset of `CommonMark` that handles the common cases without panicking). Fence
+/// awareness only covers fenced code blocks, not 4-space-indented code blocks. When the last line
+/// leaves a fence open, `unclosed_fence` is true so the caller can refuse to append a managed block
+/// that would land inside the never-closed fence.
+struct ManagedBlockScan {
+    begins: Vec<usize>,
+    ends: Vec<usize>,
+    unclosed_fence: bool,
+}
+
+fn managed_block_sentinels(existing: &str) -> ManagedBlockScan {
+    let mut begins = Vec::new();
+    let mut ends = Vec::new();
+    let mut fence: Option<(char, usize)> = None;
+    let mut offset = 0usize;
+    for segment in existing.split_inclusive('\n') {
+        let line = segment.trim_end_matches('\n').trim_end_matches('\r');
+        let trimmed = line.trim_start();
+        if let Some((ch, run)) = code_fence(trimmed) {
+            match fence {
+                // A bare closing fence of the same char, at least as long as the opener.
+                Some((open_ch, open_run))
+                    if ch == open_ch && run >= open_run && trimmed[run..].trim().is_empty() =>
+                {
+                    fence = None;
+                }
+                // A fence-looking line that is not a valid closer stays inside the fence.
+                Some(_) => {}
+                None => fence = Some((ch, run)),
+            }
+        } else if fence.is_none() {
+            // The scan records the FIRST sentinel of each kind per line. Sentinels are normally
+            // their own HTML-comment lines, so this is exact in practice; a pathological single
+            // newline-free line carrying two complete BEGIN…END blocks would be seen as one pair
+            // and refreshed rather than refused.
+            if let Some(pos) = line.find(BEGIN_SENTINEL) {
+                begins.push(offset + pos);
+            }
+            if let Some(pos) = line.find(END_SENTINEL) {
+                ends.push(offset + pos);
+            }
+        }
+        offset += segment.len();
+    }
+    ManagedBlockScan {
+        begins,
+        ends,
+        unclosed_fence: fence.is_some(),
+    }
+}
+
 /// Splice the block into the existing file content idempotently. Exactly one well-formed
-/// `BEGIN … END` pair is replaced in place (everything outside preserved byte-for-byte); a file
-/// with no sentinels gets the block appended (or created). Any *malformed* sentinel arrangement
-/// — a `BEGIN` with no matching `END`, an orphan `END`, `END` before `BEGIN`, or duplicate
-/// sentinels — is refused rather than appended-to, because appending past an unterminated `BEGIN`
-/// would let the next export delete the user's content between the stray `BEGIN` and the new
-/// `END`. The caller surfaces the error as a nonzero exit and leaves the file untouched.
+/// `BEGIN … END` pair (counting only sentinels **outside** fenced code blocks) is replaced in
+/// place (everything outside preserved byte-for-byte); a file with no such sentinels gets the
+/// block appended (or created). Any *malformed* sentinel arrangement — a `BEGIN` with no matching
+/// `END`, an orphan `END`, `END` before `BEGIN`, or duplicate sentinels — is refused rather than
+/// appended-to, because appending past an unterminated `BEGIN` would let the next export delete
+/// the user's content between the stray `BEGIN` and the new `END`. A file that ends inside an
+/// unclosed fenced code block is likewise refused on the append path, because appending would drop
+/// the managed block inside that never-closed fence (and each export would then re-append, growing
+/// the file). The caller surfaces the error as a nonzero exit and leaves the file untouched. The
+/// emitted block (and the newlines joining it to the surrounding text) use the file's dominant line
+/// ending so the result stays consistent.
 fn splice_managed_block(
     existing: Option<&str>,
     block: &str,
@@ -191,14 +273,20 @@ fn splice_managed_block(
     let Some(existing) = existing else {
         return Ok((format!("{block}\n"), BlockOutcome::Created));
     };
-    let begins: Vec<usize> = existing
-        .match_indices(BEGIN_SENTINEL)
-        .map(|(i, _)| i)
-        .collect();
-    let ends: Vec<usize> = existing
-        .match_indices(END_SENTINEL)
-        .map(|(i, _)| i)
-        .collect();
+    // Emit the block with the file's dominant ending; the LF-rendered block has no `\r`.
+    let ending = dominant_line_ending(existing);
+    let owned_block;
+    let block: &str = if ending == "\n" {
+        block
+    } else {
+        owned_block = block.replace('\n', ending);
+        &owned_block
+    };
+    let ManagedBlockScan {
+        begins,
+        ends,
+        unclosed_fence,
+    } = managed_block_sentinels(existing);
     let stray_sentinel = || {
         Err(
             "found a dent8 BEGIN/END managed-block sentinel that is not exactly one well-formed \
@@ -210,38 +298,46 @@ fn splice_managed_block(
         // No managed block yet: append after existing content (or create).
         ([], []) => {
             if existing.is_empty() {
-                return Ok((format!("{block}\n"), BlockOutcome::Created));
+                return Ok((format!("{block}{ending}"), BlockOutcome::Created));
             }
-            let separator = if existing.ends_with("\n\n") {
-                ""
+            // Refuse rather than append into a never-closed fence (would nest the block inside it
+            // and let each subsequent export re-append, growing the file). Don't mutate the fence.
+            if unclosed_fence {
+                return Err(
+                    "target file ends inside an unclosed code fence — refusing to add a managed \
+                     block inside it; close the fence and re-run"
+                        .to_string(),
+                );
+            }
+            let separator = if existing.ends_with(&format!("{ending}{ending}")) {
+                String::new()
             } else if existing.ends_with('\n') {
-                "\n"
+                ending.to_string()
             } else {
-                "\n\n"
+                format!("{ending}{ending}")
             };
             Ok((
-                format!("{existing}{separator}{block}\n"),
+                format!("{existing}{separator}{block}{ending}"),
                 BlockOutcome::Appended,
             ))
         }
         // Exactly one well-formed pair (BEGIN before END): replace in place.
         ([begin_start], [end_start]) if begin_start < end_start => {
             let end_after = end_start + END_SENTINEL.len();
-            let had_newline = existing[end_after..].starts_with('\n');
-            let replace_end = if had_newline {
-                end_after + 1
+            let rest = &existing[end_after..];
+            let (replace_end, trailing) = if rest.starts_with("\r\n") {
+                (end_after + 2, ending)
+            } else if rest.starts_with('\n') {
+                (end_after + 1, ending)
             } else {
-                end_after
+                (end_after, "")
             };
-            let replacement = if had_newline {
-                format!("{block}\n")
-            } else {
-                block.to_string()
-            };
-            let mut result =
-                String::with_capacity(existing.len().saturating_sub(end_after) + block.len() + 1);
+            let mut result = String::with_capacity(
+                existing.len().saturating_sub(end_after) + block.len() + ending.len(),
+            );
             result.push_str(&existing[..*begin_start]);
-            result.push_str(&replacement);
+            result.push_str(block);
+            result.push_str(trailing);
             result.push_str(&existing[replace_end..]);
             Ok((result, BlockOutcome::Refreshed))
         }
@@ -1042,6 +1138,166 @@ mod tests {
             "{block}\n<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\n"
         );
         assert!(splice_managed_block(Some(&two_begins), block).is_err());
+    }
+
+    #[test]
+    fn splice_ignores_sentinels_inside_a_fenced_code_block() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+        // A file whose ONLY sentinels live inside a fenced example (like docs/native-memory.md):
+        // the fenced pair must be ignored, so this is treated as "no block present" and a fresh
+        // block is appended — leaving the fenced example byte-for-byte intact.
+        let fenced_example = format!(
+            "# Docs\n\nExample block:\n\n```text\n{BEGIN_SENTINEL}\ninside the example — must not be touched\n{END_SENTINEL}\n```\n"
+        );
+        let (spliced, kind) =
+            splice_managed_block(Some(&fenced_example), block).expect("append past fenced example");
+        assert_eq!(kind, BlockOutcome::Appended);
+        assert!(
+            spliced.starts_with(&fenced_example),
+            "fenced example not preserved:\n{spliced}"
+        );
+        assert!(
+            spliced.contains("inside the example — must not be touched"),
+            "fenced example interior overwritten:\n{spliced}"
+        );
+        assert!(
+            spliced.contains("\nX\n"),
+            "fresh block not appended:\n{spliced}"
+        );
+    }
+
+    #[test]
+    fn splice_refreshes_the_real_block_and_leaves_a_fenced_example_untouched() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nNEW\n<!-- END dent8 managed block -->";
+        // A real (non-fenced) managed block PLUS a fenced example of the same sentinels. Only the
+        // real block is refreshed; the fenced example interior survives.
+        let real = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nOLD\n<!-- END dent8 managed block -->";
+        let fenced = format!(
+            "\n\n## Example\n\n```text\n{BEGIN_SENTINEL}\nfenced sample body\n{END_SENTINEL}\n```\n"
+        );
+        let file = format!("# Title\n\n{real}{fenced}");
+        let (spliced, kind) = splice_managed_block(Some(&file), block).expect("refresh real block");
+        assert_eq!(kind, BlockOutcome::Refreshed);
+        assert!(
+            spliced.contains("NEW"),
+            "real block not refreshed:\n{spliced}"
+        );
+        assert!(!spliced.contains("OLD"), "old body leaked:\n{spliced}");
+        assert!(
+            spliced.contains("fenced sample body"),
+            "fenced example interior overwritten:\n{spliced}"
+        );
+        assert!(
+            spliced.ends_with(&fenced),
+            "fenced example not preserved:\n{spliced}"
+        );
+    }
+
+    #[test]
+    fn splice_still_refuses_a_stray_non_fenced_sentinel_beside_a_fenced_example() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+        // An orphan (non-fenced) BEGIN with no matching END, next to a well-formed fenced example.
+        // The fenced pair is ignored; the lone non-fenced BEGIN is still a stray → refuse.
+        let orphan = format!(
+            "# Title\n\n{BEGIN_SENTINEL}\nprecious human content\n\n```text\n{BEGIN_SENTINEL}\nexample\n{END_SENTINEL}\n```\n"
+        );
+        assert!(
+            splice_managed_block(Some(&orphan), block).is_err(),
+            "a stray non-fenced BEGIN must still be refused"
+        );
+    }
+
+    #[test]
+    fn splice_refuses_a_file_that_ends_inside_an_unclosed_fence() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+        // An unclosed ``` fence swallows the real managed block that follows it, so the scan finds
+        // zero non-fenced sentinels. Appending would nest a fresh block inside the never-closed
+        // fence and repeated exports would keep appending (non-idempotent). Refuse instead.
+        let unclosed =
+            format!("# Title\n\n```text\nsome example\n{BEGIN_SENTINEL}\nOLD\n{END_SENTINEL}\n");
+        let scan = managed_block_sentinels(&unclosed);
+        assert!(scan.unclosed_fence, "fence must be reported open at EOF");
+        assert!(scan.begins.is_empty() && scan.ends.is_empty());
+        let err = splice_managed_block(Some(&unclosed), block).expect_err("must refuse");
+        assert!(
+            err.contains("unclosed code fence"),
+            "unexpected message: {err}"
+        );
+        // A closed fence with the same content is fine (refresh, not append/grow).
+        let closed = format!("{unclosed}```\n");
+        assert!(
+            !managed_block_sentinels(&closed).unclosed_fence,
+            "closing the fence must expose the real block"
+        );
+    }
+
+    #[test]
+    fn dominant_line_ending_prefers_crlf_only_when_it_wins() {
+        assert_eq!(dominant_line_ending(""), "\n", "empty defaults to LF");
+        assert_eq!(
+            dominant_line_ending("no newline"),
+            "\n",
+            "no newline defaults to LF"
+        );
+        assert_eq!(dominant_line_ending("a\nb\n"), "\n");
+        assert_eq!(dominant_line_ending("a\r\nb\r\n"), "\r\n");
+        // Tie goes to LF.
+        assert_eq!(dominant_line_ending("a\r\nb\n"), "\n");
+    }
+
+    #[test]
+    fn splice_emits_the_block_with_the_files_crlf_ending() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+
+        // Append into a CRLF file: the emitted block uses CRLF, existing bytes preserved.
+        let crlf = "# Title\r\n\r\nHuman prose.\r\n";
+        let (appended, kind) = splice_managed_block(Some(crlf), block).expect("append crlf");
+        assert_eq!(kind, BlockOutcome::Appended);
+        assert!(
+            appended.starts_with(crlf),
+            "existing CRLF bytes not preserved:\n{appended:?}"
+        );
+        assert!(
+            appended.contains("edits inside are overwritten) -->\r\nX\r\n<!-- END"),
+            "block not emitted with CRLF:\n{appended:?}"
+        );
+        assert!(
+            !appended.contains("-->\nX"),
+            "block leaked an LF ending:\n{appended:?}"
+        );
+
+        // Refresh a CRLF file: the new block uses CRLF and the surrounding CRLF text survives.
+        let old = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\r\nOLD\r\n<!-- END dent8 managed block -->";
+        let file = format!("# Title\r\n\r\n{old}\r\n\r\nAfter.\r\n");
+        let (refreshed, kind) = splice_managed_block(Some(&file), block).expect("refresh crlf");
+        assert_eq!(kind, BlockOutcome::Refreshed);
+        assert!(
+            refreshed.contains("\r\nX\r\n"),
+            "refreshed block not CRLF:\n{refreshed:?}"
+        );
+        assert!(
+            !refreshed.contains("OLD"),
+            "old body leaked:\n{refreshed:?}"
+        );
+        assert!(
+            refreshed.ends_with("\r\n\r\nAfter.\r\n"),
+            "trailing CRLF text lost:\n{refreshed:?}"
+        );
+        assert!(
+            !refreshed.contains("\r\r"),
+            "doubled CR introduced:\n{refreshed:?}"
+        );
+    }
+
+    #[test]
+    fn splice_keeps_lf_files_on_lf() {
+        let block = "<!-- BEGIN dent8 managed block (generated by `dent8 export`; edits inside are overwritten) -->\nX\n<!-- END dent8 managed block -->";
+        let lf = "# Title\n\nHuman prose.\n";
+        let (appended, _) = splice_managed_block(Some(lf), block).expect("append lf");
+        assert!(
+            !appended.contains('\r'),
+            "LF file must not gain CR:\n{appended:?}"
+        );
     }
 
     #[test]

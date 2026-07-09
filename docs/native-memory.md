@@ -44,6 +44,13 @@ The block is delimited by two sentinels and spliced idempotently:
   separated by a blank line.
 - If the file does not exist, it is created containing just the block.
 
+Sentinels that appear inside a **fenced code block** (a ` ``` ` or `~~~` fence — such as the
+example above) are ignored when locating the managed block, so a documented example is never
+mistaken for the live block and overwritten. (Fence-awareness covers fenced code blocks only, not
+4-space-indented code blocks.) A file that ends inside an unclosed fence is refused rather than
+appended to, so the block is never nested inside a never-closed fence. The emitted block matches
+the file's dominant line ending (CRLF or LF) to keep line endings consistent.
+
 The export writes the file **from the CLI process itself** via `std::fs` — the channel the
 `Write`/`Edit`-scoped guard does not intercept (see below).
 
