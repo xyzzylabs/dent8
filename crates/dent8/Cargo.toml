@@ -1,0 +1,25 @@
+[package]
+name = "dent8"
+description = "A memory firewall for coding agents — the library facade (event model, firewall, stores)."
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+keywords = ["agent", "memory", "provenance", "firewall", "belief"]
+categories = ["data-structures", "development-tools"]
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+dent8-core = { path = "../dent8-core", version = "0.5.0" }
+dent8-store = { path = "../dent8-store", version = "0.5.0" }
+
+[features]
+# The async backend trait (`AsyncEventStore`), for adapters like dent8-store-postgres /
+# dent8-store-sqlite. The synchronous in-memory firewall path needs none of it.
+async-store = ["dent8-store/async-store"]
+# Ed25519 signed tree heads (the witness primitive) from dent8-core.
+signed-anchor = ["dent8-core/signed-anchor"]
+
+[lints]
+workspace = true

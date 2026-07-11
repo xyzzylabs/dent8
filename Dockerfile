@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release -p dent8 --features postgres,sqlite \
+RUN cargo build --release -p dent8-cli --features postgres,sqlite \
     && strip target/release/dent8
 
 FROM debian:bookworm-slim

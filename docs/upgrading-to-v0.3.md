@@ -68,7 +68,7 @@ For a repo-local no-Cargo-startup MCP binary, rebuild the isolated target and re
 the installed MCP config:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite
 dent8 mcp install --agent codex --local-bin
 dent8 doctor --agent codex --mcp-local-bin --write-check
 ```

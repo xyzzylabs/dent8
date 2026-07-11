@@ -9,6 +9,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### BREAKING
+- **The `dent8` package name now means the library; the CLI package is `dent8-cli`.** `cargo add
+  dent8` gets the new **facade crate** (`crates/dent8`): curated re-exports of the event model +
+  firewall + stores (`dent8::FactEvent`, `dent8::InMemoryEventStore`, `dent8::arbitrate`, …), a
+  `prelude`, and a typed `FactBuilder` (`FactBuilder::assert("repo:myproj", "database",
+  "postgres").authority(High).source("user:alice")…build()?`) that owns the construction
+  boilerplate while the firewall still arbitrates every append. The CLI/MCP package renames to
+  `dent8-cli` — the **installed binary is still `dent8`**, and nothing about the command surface
+  changes. **Migration:** `cargo install dent8` → `cargo install dent8-cli` (older published
+  `dent8` versions remain installable); in-repo `cargo <cmd> -p dent8` now targets the library —
+  use `-p dent8-cli` for the CLI.
+
 ### Added
 - **Human timestamps on every temporal flag.** `--valid-from`/`--valid-to`, `--as-of`/
   `--valid-at`, and the identity expirations now accept `now`, a ±duration offset from now

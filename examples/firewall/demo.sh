@@ -3,9 +3,9 @@
 # dent8 belief base, assert a trusted everyday fact, reject a low-authority override, then
 # explain and verify the retained fact.
 #
-# Requires the `dent8` binary. Either install it (`cargo install dent8 --locked`) and run
+# Requires the `dent8` binary. Either install it (`cargo install dent8-cli --locked`) and run
 # `./demo.sh`, or from a clone:
-#   DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh
+#   DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh
 # For recordings, set `DENT8_DEMO_PAUSE=0.8` to add short reader pauses.
 set -euo pipefail
 

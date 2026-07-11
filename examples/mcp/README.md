@@ -15,7 +15,7 @@ standard `mcpServers` shape, Zed's `context_servers`, and Codex's `mcp_servers` 
 Install dent8 first:
 
 ```sh
-cargo install dent8 --locked
+cargo install dent8-cli --locked
 ```
 
 For a known agent, initialize a protected local profile and let dent8 patch the MCP config:
@@ -123,5 +123,5 @@ $ ./demo.sh
 From a clone, point it at the workspace binary:
 
 ```sh
-DENT8="cargo run -q -p dent8 --" ./examples/mcp/demo.sh
+DENT8="cargo run -q -p dent8-cli --" ./examples/mcp/demo.sh
 ```

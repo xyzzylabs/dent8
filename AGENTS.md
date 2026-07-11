@@ -62,7 +62,7 @@ See [docs/dogfooding-notes.md](docs/dogfooding-notes.md) for the setup walkthrou
 - To validate the local dogfood path, build the isolated SQLite-capable target and run:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check
@@ -91,7 +91,7 @@ cargo test --workspace
 Useful smoke command:
 
 ```sh
-cargo run -q -p dent8 -- schema postgres
+cargo run -q -p dent8-cli -- schema postgres
 ```
 
 ## Documentation

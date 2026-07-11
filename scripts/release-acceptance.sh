@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -n "${DENT8_BIN:-}" ]; then
   BIN="$DENT8_BIN"
 else
-  cargo build -p dent8
+  cargo build -p dent8-cli
   TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
   case "$TARGET_DIR" in
     /*) ;;

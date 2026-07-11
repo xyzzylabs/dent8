@@ -34,7 +34,7 @@ Environment knobs:
 | `DENT8_DOGFOOD_DIR` | `.dent8` | Bundle directory to validate. |
 | `DENT8_DOGFOOD_AGENT` | `codex` | Agent profile used for the final focused doctor check. |
 | `DENT8_DOGFOOD_SOURCE` | same as agent | Identity env suffix, e.g. `codex` for `.dent8/identity-codex.env`. |
-| `DENT8` | `.dent8/bin/dent8`, then `cargo run -q -p dent8 --` | Binary/command to run. |
+| `DENT8` | `.dent8/bin/dent8`, then `cargo run -q -p dent8-cli --` | Binary/command to run. |
 
 This is a maintainer workflow, not a packaged acceptance test. CI should keep using hermetic
 examples and release scripts.

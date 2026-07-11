@@ -381,7 +381,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   and registries while keeping per-agent identity env values distinct. `--local-bin` is the
   repo-local no-Cargo-startup path: it writes/validates `.dent8/bin/dent8`, a wrapper around a
   prebuilt `.dent8/target-sqlite/debug/dent8` created with
-  `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite`.
+  `CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite`.
   `doctor --agent ... --mcp-local-bin` verifies that wrapper, checks the target can load the
   configured store, runs witness writer checks when witness env is present, and warns when the
   target is older than the workspace Rust sources. A single long-lived remote HTTP MCP server is

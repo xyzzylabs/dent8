@@ -101,12 +101,12 @@ value, else the default.**
 | `export` | the `dent8 export` analytical lane — the log to **Parquet** for offline DuckDB analysis (pulls the arrow/parquet stack) | no |
 
 ```sh
-cargo build -p dent8                                    # stock: file store + SQLite + signed identity + witness
-cargo build -p dent8 --no-default-features              # minimal: file store only (no async backend)
-cargo build -p dent8 --features postgres                # + Postgres backend
-cargo build -p dent8 --features sqlite                  # explicit SQLite (already default)
-cargo build -p dent8 --features export                  # + Parquet export for DuckDB
-cargo build -p dent8 --features postgres,sqlite,export  # all backends + export
+cargo build -p dent8-cli                                    # stock: file store + SQLite + signed identity + witness
+cargo build -p dent8-cli --no-default-features              # minimal: file store only (no async backend)
+cargo build -p dent8-cli --features postgres                # + Postgres backend
+cargo build -p dent8-cli --features sqlite                  # explicit SQLite (already default)
+cargo build -p dent8-cli --features export                  # + Parquet export for DuckDB
+cargo build -p dent8-cli --features postgres,sqlite,export  # all backends + export
 ```
 
 Postgres and export stay off by default so the stock binary stays free of the Postgres and
@@ -149,7 +149,7 @@ repo-local alternative is `--mcp-local-bin` on `init` / `agent add`, or `--local
 `mcp install`. Build the target first:
 
 ```sh
-CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8 --features sqlite
+CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite
 dent8 mcp install --agent codex --local-bin
 dent8 doctor --agent codex --mcp-local-bin
 ```

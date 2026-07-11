@@ -706,6 +706,14 @@ dependencies = [
 name = "dent8"
 version = "0.5.0"
 dependencies = [
+ "dent8-core",
+ "dent8-store",
+]
+
+[[package]]
+name = "dent8-cli"
+version = "0.5.0"
+dependencies = [
  "clap",
  "clap_complete",
  "dent8-core",

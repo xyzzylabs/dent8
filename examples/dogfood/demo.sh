@@ -27,7 +27,7 @@ if [ -n "${DENT8:-}" ]; then
 elif [ -x "$DIR/bin/dent8" ]; then
   DENT8_CMD=("$DIR/bin/dent8")
 else
-  DENT8_CMD=(cargo run -q -p dent8 --)
+  DENT8_CMD=(cargo run -q -p dent8-cli --)
 fi
 
 run_dent8() {

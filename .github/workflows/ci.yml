@@ -43,7 +43,7 @@ jobs:
         run: cargo clippy -p dent8-store-postgres --features adapter --all-targets -- -D warnings
       # The CLI's Postgres backend is feature-gated; compile-check + lint it too.
       - name: Clippy CLI Postgres feature
-        run: cargo clippy -p dent8 --features postgres --all-targets -- -D warnings
+        run: cargo clippy -p dent8-cli --features postgres --all-targets -- -D warnings
       # Signed source identity and the witness commands are always compiled into the CLI now, so
       # the default `cargo clippy --workspace` + `cargo test --workspace` cover them.
       # The asymmetric (signed) anchor is feature-gated; lint + test it too.
@@ -51,22 +51,22 @@ jobs:
         run: cargo clippy -p dent8-core --features signed-anchor --all-targets -- -D warnings
       # The CLI's Parquet export lane (arrow/parquet) is feature-gated; lint + test.
       - name: Clippy CLI export feature
-        run: cargo clippy -p dent8 --features export --all-targets -- -D warnings
+        run: cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
       # The embedded SQLite backend (sqlx) — the second async backend; lint + test (it runs
       # in-memory, no server needed, so its tests run in the default `cargo test --workspace`).
       - name: Clippy SQLite adapter
         run: cargo clippy -p dent8-store-sqlite --all-targets -- -D warnings
       - name: Clippy CLI SQLite feature
-        run: cargo clippy -p dent8 --features sqlite --all-targets -- -D warnings
+        run: cargo clippy -p dent8-cli --features sqlite --all-targets -- -D warnings
       # The minimal build (`--no-default-features` drops the SQLite/async backend down to the
       # file-only dev store): the docs advertise it, so keep it compiling + linting.
       - name: Clippy CLI no default features
-        run: cargo clippy -p dent8 --no-default-features --all-targets -- -D warnings
+        run: cargo clippy -p dent8-cli --no-default-features --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
       # The minimal file-only build (no async backend); its store-selection paths run here.
       - name: Test CLI no default features
-        run: cargo test -p dent8 --no-default-features
+        run: cargo test -p dent8-cli --no-default-features
       # The stock binary includes the witness, so this exercises the witness smoke too.
       - name: Release acceptance smoke
         run: scripts/release-acceptance.sh
@@ -107,7 +107,7 @@ jobs:
       # adapter tests below intentionally create several same-predicate fixtures that are useful
       # at the storage layer but should not pollute the product-level verifier smoke.
       - name: Build CLI with Postgres feature
-        run: cargo build -p dent8 --features postgres
+        run: cargo build -p dent8-cli --features postgres
       - name: CLI end-to-end over live Postgres
         env:
           DENT8_STORE_URL: postgres://postgres:dent8@localhost:5432/dent8
@@ -128,7 +128,7 @@ jobs:
       # mutex) and retry the initial connection, so no special flags are needed. Each test
       # truncates the log + materialized caches before it runs.
       - name: Test CLI concurrent writes over live Postgres
-        run: cargo test -p dent8 --features postgres --test cli_usage concurrent_cli_asserts_on_shared_postgres_store_get_unique_event_ids
+        run: cargo test -p dent8-cli --features postgres --test cli_usage concurrent_cli_asserts_on_shared_postgres_store_get_unique_event_ids
       - name: Test Postgres adapter
         run: cargo test -p dent8-store-postgres --features adapter
 

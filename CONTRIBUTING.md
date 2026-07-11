@@ -13,7 +13,7 @@ scripts/release-acceptance.sh
 For schema smoke testing:
 
 ```sh
-cargo run -q -p dent8 -- schema postgres
+cargo run -q -p dent8-cli -- schema postgres
 ```
 
 ## Design Expectations

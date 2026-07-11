@@ -58,7 +58,7 @@ chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 **crates.io.** The published crate is `dent8`:
 
 ```sh
-cargo install dent8 --locked
+cargo install dent8-cli --locked
 dent8 --version
 ```
 
@@ -66,7 +66,7 @@ dent8 --version
 > was used instead), and a from-source build takes about **3 minutes**. The crate name and
 > version are confirmed against `Cargo.toml` and the release page. Only the **Parquet**
 > analytical export (`dent8 export <file>.parquet`, for DuckDB) is feature-gated — it is not in
-> the release archives and stays a `cargo install dent8 --features export --locked` build.
+> the release archives and stays a `cargo install dent8-cli --features export --locked` build.
 > Native-memory export (`dent8 export --target CLAUDE.md`) and `dent8 import` are stock: they
 > ship in every build, including the release binaries, with no extra feature.
 
@@ -325,7 +325,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cargo install dent8 --locked
+      - run: cargo install dent8-cli --locked
       - name: record test command as a CI-sourced fact
         run: |
           set -a; . .dent8/env; set +a

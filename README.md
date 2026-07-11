@@ -20,7 +20,7 @@ against what is already believed.
 
 ## First fact (under 2 minutes)
 
-Install once (release binary is fastest; `cargo install dent8 --locked` also works), then in
+Install once (release binary is fastest; `cargo install dent8-cli --locked` also works), then in
 any git repo:
 
 ```sh
@@ -74,7 +74,7 @@ dent8 verify
 ```
 
 For binaries, pinned installs, and feature builds, see [Installation](docs/installation.md).
-From a clone: **`DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh`**.
+From a clone: **`DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh`**.
 
 ## The fact base, on this repo
 
@@ -219,7 +219,7 @@ Every connection proves the daemon-configured source identity with a signed sess
 and the daemon arbitrates and **attests each write as that source** — so a daemon-written fact
 re-verifies offline exactly like a local one, and many processes build one firewalled belief
 base over one transport. Reads stay local. Run the whole path with
-**`DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh`** (see
+**`DENT8="cargo run -q -p dent8-cli --" ./examples/daemon/demo.sh`** (see
 [examples/daemon/](examples/daemon/)). Today each daemon process is single-source: every
 client connection must prove the same source key the daemon holds, so this shares *one*
 identity across processes. Separate agent identities should use separate MCP subprocesses
@@ -304,7 +304,7 @@ keeping similar memories distinct.)*
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-DENT8="cargo run -q -p dent8 --" ./examples/firewall/demo.sh
+DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh
 
 # The Postgres adapter's integration tests are gated on DATABASE_URL (they skip without one):
 docker compose up -d

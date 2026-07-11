@@ -2,7 +2,7 @@
 # Timed on-ramp: init → first assert → explain in a throwaway git repo.
 # Requires the `dent8` binary. Either install it and run `./examples/on-ramp/demo.sh`,
 # or from a clone:
-#   DENT8="cargo run -q -p dent8 --" ./examples/on-ramp/demo.sh
+#   DENT8="cargo run -q -p dent8-cli --" ./examples/on-ramp/demo.sh
 # Exit 0 only when the path completes under 120 seconds wall time.
 set -euo pipefail
 
@@ -41,7 +41,7 @@ git commit -qm "on-ramp seed"
 
 START=$(date +%s)
 
-# Unquoted $DENT8 so wrappers like `cargo run -q -p dent8 --` work.
+# Unquoted $DENT8 so wrappers like `cargo run -q -p dent8-cli --` work.
 $DENT8 init --source source:owner
 set -a
 # shellcheck disable=SC1091

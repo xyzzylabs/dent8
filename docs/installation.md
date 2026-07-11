@@ -8,14 +8,14 @@ release is `0.5.0`.
 Install the stock binary from crates.io:
 
 ```sh
-cargo install dent8 --locked
+cargo install dent8-cli --locked
 dent8 --version
 ```
 
 For a reproducible install pinned to this release:
 
 ```sh
-cargo install dent8 --version 0.5.0 --locked
+cargo install dent8-cli --version 0.5.0 --locked
 ```
 
 The stock binary includes the file dev store, embedded SQLite, signed identity, witness
@@ -23,9 +23,9 @@ commands, MCP, the local Unix-socket daemon, and the normal CLI surfaces. Option
 builds are available when you need heavier integrations:
 
 ```sh
-cargo install dent8 --features postgres --locked
-cargo install dent8 --features export --locked
-cargo install dent8 --features postgres,export --locked
+cargo install dent8-cli --features postgres --locked
+cargo install dent8-cli --features export --locked
+cargo install dent8-cli --features postgres,export --locked
 ```
 
 `postgres` adds the transactional Postgres backend selected by `DENT8_STORE_URL=postgres://...`.

@@ -3,14 +3,14 @@
 This example runs the shared local service path from ADR 0018:
 
 ```sh
-cargo install dent8 --locked
+cargo install dent8-cli --locked
 ./examples/daemon/demo.sh
 ```
 
 From a clone, point the demo at the workspace binary:
 
 ```sh
-DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh
+DENT8="cargo run -q -p dent8-cli --" ./examples/daemon/demo.sh
 ```
 
 The script bootstraps a temporary signed identity bundle, starts `dent8 daemon serve`

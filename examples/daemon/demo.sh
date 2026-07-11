@@ -5,9 +5,9 @@
 # the source, so many processes share one firewalled belief base over one transport — and each
 # written event still re-verifies offline exactly like a local write.
 #
-# Requires the `dent8` binary. Either install it (`cargo install dent8 --locked`) and run
+# Requires the `dent8` binary. Either install it (`cargo install dent8-cli --locked`) and run
 # `./demo.sh`, or from a clone:
-#   DENT8="cargo run -q -p dent8 --" ./examples/daemon/demo.sh
+#   DENT8="cargo run -q -p dent8-cli --" ./examples/daemon/demo.sh
 #
 # The daemon is a per-user, single-source service: each connection must prove the same source
 # key the daemon holds. "Many processes" here means many connections sharing one identity; use

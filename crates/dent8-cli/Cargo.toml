@@ -1,6 +1,6 @@
 [package]
-name = "dent8"
-description = "Command-line interface for dent8."
+name = "dent8-cli"
+description = "The dent8 memory-firewall CLI and MCP server (installs the `dent8` binary)."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

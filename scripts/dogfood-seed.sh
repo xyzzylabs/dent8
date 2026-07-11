@@ -16,8 +16,8 @@ if [ -z "$DENT8_BIN" ]; then
   if command -v dent8 >/dev/null 2>&1; then
     DENT8_BIN="dent8"
   else
-    echo "dent8 not on PATH; building it (cargo build -p dent8)..." >&2
-    cargo build -p dent8 >/dev/null
+    echo "dent8 not on PATH; building it (cargo build -p dent8-cli)..." >&2
+    cargo build -p dent8-cli >/dev/null
     DENT8_BIN="$PWD/target/debug/dent8"
   fi
 fi

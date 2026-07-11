@@ -5,8 +5,8 @@ correct, installable memory-integrity tool, not to add new mechanisms during rel
 
 ## Package shape
 
-- Published CLI package: `dent8`; installed binary: `dent8`.
-- Source path for the CLI package stays `crates/dent8-cli`.
+- Published **library** package: `dent8` (`crates/dent8`) — the facade crate (`cargo add dent8`).
+- Published **CLI** package: `dent8-cli` (`crates/dent8-cli`); the installed binary is still `dent8`.
 - Default features: signed source identity + embedded SQLite. The stock install is enough for
   local file-backed use and no-server multi-agent dogfooding via `sqlite://`.
 - Opt-in features: `postgres`, `export`.
@@ -14,15 +14,15 @@ correct, installable memory-integrity tool, not to add new mechanisms during rel
 Install commands:
 
 ```sh
-cargo install dent8 --locked
-cargo install dent8 --features postgres --locked
-cargo install dent8 --features export --locked
+cargo install dent8-cli --locked
+cargo install dent8-cli --features postgres --locked
+cargo install dent8-cli --features export --locked
 ```
 
 To test unreleased `main` ahead of a release, use the Git source:
 
 ```sh
-cargo install --git https://github.com/xyzzylabs/dent8 dent8 --locked
+cargo install --git https://github.com/xyzzylabs/dent8 dent8-cli --locked
 ```
 
 ## Preflight
@@ -38,10 +38,10 @@ cargo test --workspace
 Run the feature-shape gates that CI keeps honest:
 
 ```sh
-cargo clippy -p dent8 --no-default-features --all-targets -- -D warnings
-cargo test -p dent8 --no-default-features
-cargo clippy -p dent8 --features postgres --all-targets -- -D warnings
-cargo clippy -p dent8 --features export --all-targets -- -D warnings
+cargo clippy -p dent8-cli --no-default-features --all-targets -- -D warnings
+cargo test -p dent8-cli --no-default-features
+cargo clippy -p dent8-cli --features postgres --all-targets -- -D warnings
+cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
 cargo test -p dent8-export
 ```
 
@@ -54,7 +54,7 @@ scripts/release-acceptance.sh
 To include the witness smoke (the witness is in the stock binary):
 
 ```sh
-cargo build -p dent8
+cargo build -p dent8-cli
 DENT8_BIN=target/debug/dent8 DENT8_EXPECT_WITNESS=1 scripts/release-acceptance.sh
 ```
 
@@ -70,7 +70,7 @@ Run the live Postgres gate when preparing a release locally:
 ```sh
 docker compose up -d --wait
 DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \
-  cargo test -p dent8 --features postgres --test cli_usage \
+  cargo test -p dent8-cli --features postgres --test cli_usage \
     concurrent_cli_asserts_on_shared_postgres_store_get_unique_event_ids
 DATABASE_URL=postgres://postgres:dent8@localhost:5432/dent8 \
   cargo test -p dent8-store-postgres --features adapter
@@ -99,6 +99,9 @@ cargo publish -p dent8-core
 cargo publish -p dent8-store --dry-run
 cargo publish -p dent8-store
 
+cargo publish -p dent8 --dry-run
+cargo publish -p dent8
+
 cargo publish -p dent8-evals --dry-run
 cargo publish -p dent8-evals
 cargo publish -p dent8-export --dry-run
@@ -108,14 +111,14 @@ cargo publish -p dent8-store-postgres
 cargo publish -p dent8-store-sqlite --dry-run
 cargo publish -p dent8-store-sqlite
 
-cargo publish -p dent8 --dry-run
-cargo publish -p dent8
+cargo publish -p dent8-cli --dry-run
+cargo publish -p dent8-cli
 ```
 
 After publishing, verify the install path in a clean temp directory:
 
 ```sh
-cargo install dent8 --version 0.5.0 --locked
+cargo install dent8-cli --version 0.5.0 --locked
 dent8 --version
 ```
 
