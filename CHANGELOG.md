@@ -23,6 +23,19 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
     (windows-native only, a Windows-only dependency — macOS/Linux stay subprocess-based and
     dependency-free). A `windows-keychain` CI job lints the CLI for the platform and runs a
     real Credential Manager round trip.
+- **[Team identity playbook](docs/team-identity.md)** (roadmap: the key-distribution story):
+  what to commit (trust registry, signed grants, active-grant index, grant log — all public
+  by construction) versus what never leaves a machine (private keys, ideally
+  keychain-backed); onboarding a remote teammate with only their public key traveling;
+  rotation, revocation-as-a-PR, CI-bot keys, and clone-side verification. Every command in
+  it is exercised against the real binary.
+
+### Fixed
+- **`identity repair-env` now works for keys that are not bundle files**: after
+  `grant-issue` for a remote teammate (their key never left their machine) or for a
+  keychain-backed key, repair-env restores the missing active-grant registry entry from the
+  signed grant and honestly skips the env rewrite (it used to hard-fail trying to stat the
+  absent key file, leaving no way to register the grant).
 
 ## [0.7.0] - 2026-07-11
 

@@ -148,15 +148,27 @@ struct RepairEnvOutput {
     active_grants_file: PathBuf,
     env_file: PathBuf,
     repaired_active: bool,
+    /// `false` when the source key is not a bundle file (keychain-backed, or held on a
+    /// teammate's machine): only the active-grant registry was repaired.
+    wrote_env: bool,
 }
 
 impl RepairEnvOutput {
     fn message(&self) -> String {
-        let mut lines = vec![
-            format!("repaired signed identity env for {}", self.source),
-            format!("  env: {}", self.env_file.display()),
-            format!("  active grants: {}", self.active_grants_file.display()),
-        ];
+        let mut lines = vec![format!("repaired signed identity env for {}", self.source)];
+        if self.wrote_env {
+            lines.push(format!("  env: {}", self.env_file.display()));
+        } else {
+            lines.push(
+                "  env: not rewritten — the source key is not a bundle file (keychain-backed \
+                 or held on the key owner's machine)"
+                    .to_string(),
+            );
+        }
+        lines.push(format!(
+            "  active grants: {}",
+            self.active_grants_file.display()
+        ));
         if self.repaired_active {
             lines.push(
                 "  active grants: restored current grant entry from signed grant".to_string(),

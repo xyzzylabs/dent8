@@ -8248,6 +8248,118 @@ fn identity_lifecycle_commands_emit_machine_readable_json() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
+fn repair_env_restores_active_grant_for_a_key_that_is_not_a_bundle_file() {
+    // The remote-teammate flow: the source key is born on another machine (or in an OS
+    // keychain), so only its PUBLIC key reaches the issuer, who runs grant-issue and then
+    // repair-env to register the active grant. The bundle never holds the private key.
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8");
+    let dir_str = dir.to_string_lossy().into_owned();
+    let issuer_key = temp.file("issuer.key").to_string_lossy().into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &dir_str,
+                "--source",
+                "source:owner",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        ),
+        "bootstrap",
+    );
+    // The teammate's key lives OUTSIDE the bundle (their machine); only the .pub travels.
+    let remote_key = temp
+        .file("elsewhere-carol.key")
+        .to_string_lossy()
+        .into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "agent-keygen",
+                "source:carol",
+                "--out",
+                &remote_key,
+            ],
+            &[],
+        ),
+        "remote keygen",
+    );
+    let grant_out = dir
+        .join("grants/source_carol.grant.json")
+        .to_string_lossy()
+        .into_owned();
+    assert_success(
+        &run_dent8(
+            &[
+                "identity",
+                "grant-issue",
+                "source:carol",
+                "--public-key",
+                &format!("{remote_key}.pub"),
+                "--max",
+                "medium",
+                "--issuer",
+                "owner",
+                "--issuer-key",
+                &issuer_key,
+                "--out",
+                &grant_out,
+            ],
+            &[],
+        ),
+        "grant-issue",
+    );
+    // repair-env restores the active-grant entry and honestly skips the env rewrite.
+    let repaired = run_dent8(
+        &[
+            "identity",
+            "repair-env",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:carol",
+        ],
+        &[],
+    );
+    assert_success(&repaired, "repair-env for a remote key");
+    let text = stdout(&repaired);
+    assert!(
+        text.contains("restored current grant entry"),
+        "should restore the active grant: {text}"
+    );
+    assert!(
+        text.contains("not rewritten"),
+        "should skip the env for a non-bundle key: {text}"
+    );
+    let registry = std::fs::read_to_string(dir.join("active-grants.json")).expect("registry");
+    assert!(
+        registry.contains("source:carol"),
+        "active grant registered: {registry}"
+    );
+    // Idempotent: a second run finds the entry current and restores nothing.
+    let again = run_dent8(
+        &[
+            "identity",
+            "repair-env",
+            "--dir",
+            &dir_str,
+            "--source",
+            "source:carol",
+        ],
+        &[],
+    );
+    assert_success(&again, "repair-env rerun");
+    assert!(!stdout(&again).contains("restored current grant entry"));
+}
+
+#[test]
 fn identity_keygen_rejects_malformed_keychain_references() {
     // Validation runs before any OS keychain is touched, so these behave identically on
     // every platform (the happy path needs a real macOS keychain and stays out of CI).

@@ -66,8 +66,9 @@ evidence of users, not on more features.
    Service — GNOME Keyring/KWallet — via `secret-tool`; Windows Credential Manager), the
    public key derives from the private item, and keygen refuses to overwrite, same as
    files. *(Invariant held: stealing a source identity now takes more than a same-user file
-   read — no dotfile, backup, or synced-home copy exists.)* Remaining: a team
-   key-distribution story.
+   read — no dotfile, backup, or synced-home copy exists.)* The team key-distribution story
+   is documented and exercised end to end in [team-identity.md](team-identity.md) — commit
+   the public artifacts, keys never travel, revocation is a reviewed PR.
 
 Explicitly **frozen until the wedge has users**: operated-witness hosting, the desktop
 debugger/control plane (its runway is built — the `snapshot` aggregate, the TS SDK, and

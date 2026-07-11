@@ -48,7 +48,14 @@ pub(super) fn repair_env_bundle_outcome(
             grant.grant.source
         ));
     }
-    verify_source_key_matches_grant(&paths.source_key_path, &grant)?;
+    // A bundle-file key must match the grant. A source key that is *not* a bundle file —
+    // keychain-backed, or held on a teammate's machine (the grant was issued from a sent
+    // public key) — has nothing to check here and no env file to generate; restoring the
+    // active-grant entry below is the half the issuer's side needs after `grant-issue`.
+    let key_is_bundle_file = paths.source_key_path.exists();
+    if key_is_bundle_file {
+        verify_source_key_matches_grant(&paths.source_key_path, &grant)?;
+    }
 
     let mut active = load_active_grants_at(&paths.active_grants_file, false)?.unwrap_or_default();
     let repaired_active = match active.sources.get(source) {
@@ -68,7 +75,9 @@ pub(super) fn repair_env_bundle_outcome(
             true
         }
     };
-    write_identity_env(&paths)?;
+    if key_is_bundle_file {
+        write_identity_env(&paths)?;
+    }
 
     Ok(RepairEnvOutput {
         source: source.to_string(),
@@ -76,6 +85,7 @@ pub(super) fn repair_env_bundle_outcome(
         active_grants_file: paths.active_grants_file,
         env_file: paths.env_file,
         repaired_active,
+        wrote_env: key_is_bundle_file,
     })
 }
 
