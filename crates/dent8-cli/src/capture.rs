@@ -162,16 +162,16 @@ pub(crate) fn apply_proposal(
     flag_source: Option<&str>,
 ) -> Result<String, OpError> {
     let proposal: Proposal = serde_json::from_str(raw)
-        .map_err(|error| OpError::Invalid(format!("malformed proposal: {error}")))?;
-    let subject = CliSubject::from_str(&proposal.subject).map_err(OpError::Invalid)?;
+        .map_err(|error| OpError::invalid(format!("malformed proposal: {error}")))?;
+    let subject = CliSubject::from_str(&proposal.subject).map_err(OpError::invalid)?;
     let (authority, source) =
-        resolve_proposal_meta(&proposal, flag_authority, flag_source).map_err(OpError::Invalid)?;
+        resolve_proposal_meta(&proposal, flag_authority, flag_source).map_err(OpError::invalid)?;
     let ttl = proposal
         .ttl
         .as_deref()
         .map(crate::parse_duration_ms)
         .transpose()
-        .map_err(OpError::Invalid)?;
+        .map_err(OpError::invalid)?;
     let validity = Validity {
         from: proposal.valid_from,
         to: proposal.valid_to,
@@ -182,7 +182,7 @@ pub(crate) fn apply_proposal(
         "assert" | "supersede" | "contradict" => true,
         "reinforce" | "retract" | "expire" | "used_in_decision" => false,
         other => {
-            return Err(OpError::Invalid(format!(
+            return Err(OpError::invalid(format!(
                 "unknown proposal op {other:?} \
                  (assert|supersede|reinforce|contradict|retract|expire|used_in_decision)"
             )));
@@ -191,22 +191,22 @@ pub(crate) fn apply_proposal(
     let value = match (takes_value, proposal.value.as_deref()) {
         (true, Some(value)) => value,
         (true, None) => {
-            return Err(OpError::Invalid(format!("{op} proposal requires a value")));
+            return Err(OpError::invalid(format!("{op} proposal requires a value")));
         }
         (false, Some(_)) => {
-            return Err(OpError::Invalid(format!("{op} proposal takes no value")));
+            return Err(OpError::invalid(format!("{op} proposal takes no value")));
         }
         (false, None) => "",
     };
     let decision = match (op, proposal.decision.as_deref()) {
         ("used_in_decision", Some(decision)) => decision,
         ("used_in_decision", None) => {
-            return Err(OpError::Invalid(
+            return Err(OpError::invalid(
                 "used_in_decision proposal requires a decision".to_string(),
             ));
         }
         (_, Some(_)) => {
-            return Err(OpError::Invalid(format!("{op} proposal takes no decision")));
+            return Err(OpError::invalid(format!("{op} proposal takes no decision")));
         }
         (_, None) => "",
     };
@@ -266,11 +266,11 @@ pub(crate) fn capture_outcome(
                     (Status::Accepted, message)
                 }
             }
-            Err(OpError::Invalid(message)) => {
+            Err(OpError::Invalid { message, .. }) => {
                 outcome.invalid += 1;
                 (Status::Invalid, message)
             }
-            Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
+            Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
                 outcome.rejected += 1;
                 (Status::Rejected, message)
             }

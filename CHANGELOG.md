@@ -10,6 +10,19 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Machine-readable error `code` on every error payload.** Each `--output json` error object
+  and every MCP tool error's `structuredContent` now carries a stable kebab-case `code` naming
+  the *cause* beside the existing `status`: firewall refusals classify from the typed error
+  (`insufficient-authority`, `canonical-contradiction`, `terminal-fact`, `laundered-authority`,
+  `unbacked-supersession`, `below-authority-floor`, `uniqueness-violation`,
+  `ttl-ceiling-exceeded`, `weaker-entrenchment`), the write-boundary gates name themselves
+  (`authority-ceiling`, `scope-violation`, `identity-rejected`, `unauthenticated-write`,
+  `content-rejected`), and commit/IO paths report `write-conflict` / `commit-failed` /
+  `store-unavailable` / `corrupt-event` / `replay-failed`, with generic fallbacks (`rejected`,
+  `invalid-argument`, `operation-failed`, `unknown-tool`) when no finer cause is known — so an
+  agent branches on the token instead of parsing prose. The MCP `outputSchema` advertises the
+  closed code enum and requires the field; a daemon-routed CLI write lifts the code out of the
+  daemon's reply, so it reports the same `code` a local write would.
 - **MCP `resources/read` auto-records `fact.retrieved`** (purpose `mcp:resources/read`) on
   every successful read from a write-capable connection, closing the MCP half of the
   read-audit loop. Identity resolves like unattributed capture (active grant when present,

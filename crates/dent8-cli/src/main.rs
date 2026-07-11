@@ -2163,7 +2163,7 @@ fn write_atomic(path: &str, contents: &str) -> Result<(), String> {
 /// issuer chain can delegate. A no-op only when no registry is configured and
 /// `DENT8_REQUIRE_AUTHORITY` is not enabled.
 fn enforce_registry_grant(auth: &WriteAuth<'_>) -> Result<(), ops::OpError> {
-    let registry = load_authority_registry().map_err(ops::OpError::Invalid)?;
+    let registry = load_authority_registry().map_err(ops::OpError::invalid)?;
     registry_grant_check(registry.as_ref(), auth)
 }
 
@@ -2199,7 +2199,16 @@ fn enforce_write_authority(
     identity: &WriteIdentity,
 ) -> Result<(), ops::OpError> {
     enforce_registry_grant(auth)?;
-    enforce_source_identity(auth, identity).map_err(ops::OpError::Invalid)
+    enforce_source_identity(auth, identity).map_err(|message| {
+        // The daemon backstop is the one identity failure with its own code; every other
+        // cause (bad/expired/revoked grant, key mismatch) classifies as the identity gate.
+        let code = if message == UNAUTHENTICATED_WRITE_ERROR {
+            crate::status::ErrorCode::UnauthenticatedWrite
+        } else {
+            crate::status::ErrorCode::IdentityRejected
+        };
+        ops::OpError::invalid_as(code, message)
+    })
 }
 
 /// The error a write that reaches the identity seam without a proven connection identity fails
@@ -2297,10 +2306,13 @@ fn registry_grant_check(
     // The direct ceiling first, preserving the deny-by-default Unknown for unlisted sources.
     let ceiling = registry.ceiling(source);
     if requested > ceiling {
-        return Err(ops::OpError::Rejected(format!(
-            "authority ceiling: source {source:?} may assert at most {ceiling}, but requested \
+        return Err(ops::OpError::rejected_as(
+            crate::status::ErrorCode::AuthorityCeiling,
+            format!(
+                "authority ceiling: source {source:?} may assert at most {ceiling}, but requested \
              {requested} (grant it with `dent8 authority add {source} <max>`)"
-        )));
+            ),
+        ));
     }
     // Then walk the grant and its issuer chain: every registered link must cover the write's
     // subject and hold a ceiling at or above the request.
@@ -2309,11 +2321,14 @@ fn registry_grant_check(
     let mut link: &str = source;
     loop {
         if !visited.insert(link) {
-            return Err(ops::OpError::Rejected(format!(
-                "authority grant: the issuer chain for source {source:?} cycles at {link:?} — \
-                 a grant cannot ground its own authority (no self-escalation); re-issue it \
-                 from an operator with `dent8 authority add`"
-            )));
+            return Err(ops::OpError::rejected_as(
+                crate::status::ErrorCode::AuthorityCeiling,
+                format!(
+                    "authority grant: the issuer chain for source {source:?} cycles at {link:?} \
+                     — a grant cannot ground its own authority (no self-escalation); re-issue it \
+                     from an operator with `dent8 authority add`"
+                ),
+            ));
         }
         let Some(grant) = registry.sources.get(link) else {
             // An issuer that is not a registered source is an operator-level root recorded
@@ -2327,21 +2342,27 @@ fn registry_grant_check(
             } else {
                 format!(" (issuing {source:?}'s grant)")
             };
-            return Err(ops::OpError::Rejected(format!(
-                "authority scope: source {link:?}{via} is scoped to {:?}, which does not \
-                 cover write subject {subject:?}",
-                grant.scope.as_deref().unwrap_or("*"),
-            )));
+            return Err(ops::OpError::rejected_as(
+                crate::status::ErrorCode::ScopeViolation,
+                format!(
+                    "authority scope: source {link:?}{via} is scoped to {:?}, which does not \
+                     cover write subject {subject:?}",
+                    grant.scope.as_deref().unwrap_or("*"),
+                ),
+            ));
         }
         // Only reachable on issuer links (the direct ceiling was checked above): an issuer
         // cannot delegate authority above its own ceiling.
         if requested > grant.max_authority {
-            return Err(ops::OpError::Rejected(format!(
-                "authority ceiling: source {source:?} was granted by issuer {link:?}, whose \
-                 own ceiling is {}, but requested {requested} — an issuer cannot delegate \
-                 authority it does not hold",
-                grant.max_authority
-            )));
+            return Err(ops::OpError::rejected_as(
+                crate::status::ErrorCode::AuthorityCeiling,
+                format!(
+                    "authority ceiling: source {source:?} was granted by issuer {link:?}, whose \
+                     own ceiling is {}, but requested {requested} — an issuer cannot delegate \
+                     authority it does not hold",
+                    grant.max_authority
+                ),
+            ));
         }
         let Some(issuer) = grant.issuer.as_deref() else {
             return Ok(());
@@ -2397,11 +2418,15 @@ fn content_check_config() -> Result<Option<content_check::ContentCheckConfig>, S
 /// events through here, so there is no write entry point that skips the scanner. A no-op
 /// when no scanner is configured.
 fn enforce_content_check(events: &mut [FactEvent]) -> Result<(), ops::OpError> {
-    let Some(config) = content_check_config().map_err(ops::OpError::Invalid)? else {
+    let Some(config) = content_check_config().map_err(ops::OpError::invalid)? else {
         return Ok(());
     };
-    content_check::enforce(&config, events)
-        .map_err(|refusal| ops::OpError::Rejected(format!("REJECTED: {refusal}")))
+    content_check::enforce(&config, events).map_err(|refusal| {
+        ops::OpError::rejected_as(
+            crate::status::ErrorCode::ContentRejected,
+            format!("REJECTED: {refusal}"),
+        )
+    })
 }
 
 /// Content flags on still-believed facts, for `verify` — the same detect-only surfacing as
@@ -4163,12 +4188,12 @@ mod tests {
         // Above the grant is rejected (a low/medium source cannot mint canonical).
         assert!(matches!(
             check("source:owner", AuthorityLevel::Canonical),
-            Err(ops::OpError::Rejected(_))
+            Err(ops::OpError::Rejected { .. })
         ));
         // An unregistered source has an Unknown ceiling: anything above Unknown is rejected.
         assert!(matches!(
             check("source:web-scrape", AuthorityLevel::Low),
-            Err(ops::OpError::Rejected(_))
+            Err(ops::OpError::Rejected { .. })
         ));
         assert!(check("source:web-scrape", AuthorityLevel::Unknown).is_ok());
         // No registry configured -> permissive (dev mode).
@@ -4209,14 +4234,14 @@ mod tests {
         );
         assert!(matches!(
             check("source:scoped", "person", "alice"),
-            Err(ops::OpError::Rejected(_))
+            Err(ops::OpError::Rejected { .. })
         ));
         // "*" covers everything, like an absent scope.
         assert!(check("source:star", "person", "alice").is_ok());
         // A malformed scope covers nothing (fail closed), never everything.
         assert!(matches!(
             check("source:malformed", "repo", "app"),
-            Err(ops::OpError::Rejected(_))
+            Err(ops::OpError::Rejected { .. })
         ));
     }
 

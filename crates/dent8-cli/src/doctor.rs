@@ -2305,7 +2305,7 @@ pub(crate) fn doctor_write_check(source: &str) -> Result<String, String> {
                         "below-ceiling override was accepted unexpectedly: {message}"
                     ));
                 }
-                Err(ops::OpError::Rejected(_)) => "rejected below-ceiling tampered value",
+                Err(ops::OpError::Rejected { .. }) => "rejected below-ceiling tampered value",
                 Err(error) => return Err(error.message().to_string()),
             }
         }

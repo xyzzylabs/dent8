@@ -25,7 +25,8 @@ use crate::{
     attest_events, display_value, enforce_content_check, enforce_write_authority, fact_value_json,
     format_receipt, load_store, log_path, now_millis, paint_status, parse_predicate,
     print_json_stdout, print_json_stdout_with_code, read_annotation, receipt_fields_json,
-    receipt_json, reserve_event_seq, short, status::Status,
+    receipt_json, reserve_event_seq, short,
+    status::{ErrorCode, Status},
 };
 
 /// Build a validated `FactEvent` from CLI strings, returning a friendly error rather than
@@ -84,10 +85,20 @@ pub(crate) fn build_event(
 /// A failed operation: `Invalid` is a malformed request (CLI exit 2 / MCP tool error),
 /// `Rejected` is a well-formed request the firewall or store refused (CLI exit 1 / MCP
 /// tool error). Carrying the distinction lets the CLI keep its exit codes while the MCP
-/// server reports both as tool errors.
+/// server reports both as tool errors. Each variant carries the machine-readable
+/// [`ErrorCode`] emitted as the `code` field beside `status` — built via the lowercase
+/// constructors: [`OpError::invalid`]/[`OpError::rejected`] attach the generic fallback,
+/// and the `_as` forms attach a classified cause at the chokepoints where the typed
+/// firewall error is still in hand.
 pub(crate) enum OpError {
-    Invalid(String),
-    Rejected(String),
+    Invalid {
+        code: ErrorCode,
+        message: String,
+    },
+    Rejected {
+        code: ErrorCode,
+        message: String,
+    },
     /// A retryable concurrent-writer conflict (duplicate id from a direct/legacy writer or a
     /// backend lock held past timeout). Surfaced so [`with_write_retry`] can re-run the operation
     /// against a fresh snapshot; it never reaches the user unless retries are exhausted (then it
@@ -96,9 +107,46 @@ pub(crate) enum OpError {
 }
 
 impl OpError {
+    /// A malformed request with the generic `invalid-argument` code.
+    pub(crate) fn invalid(message: impl Into<String>) -> Self {
+        Self::invalid_as(ErrorCode::InvalidArgument, message)
+    }
+
+    /// A malformed/unauthorized-config request with a classified code.
+    pub(crate) fn invalid_as(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::Invalid {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// A refused request with the generic `rejected` code.
+    pub(crate) fn rejected(message: impl Into<String>) -> Self {
+        Self::rejected_as(ErrorCode::Rejected, message)
+    }
+
+    /// A refused request with a classified code.
+    pub(crate) fn rejected_as(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::Rejected {
+            code,
+            message: message.into(),
+        }
+    }
+
+    // The arms bind different variant shapes (struct vs tuple), so they cannot merge.
+    #[allow(clippy::match_same_arms)]
     pub(crate) fn message(&self) -> &str {
         match self {
-            Self::Invalid(message) | Self::Rejected(message) | Self::Conflict(message) => message,
+            Self::Invalid { message, .. } | Self::Rejected { message, .. } => message,
+            Self::Conflict(message) => message,
+        }
+    }
+
+    /// The machine-readable cause emitted as the `code` field beside `status`.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::Invalid { code, .. } | Self::Rejected { code, .. } => *code,
+            Self::Conflict(_) => ErrorCode::WriteConflict,
         }
     }
 }
@@ -110,9 +158,10 @@ impl OpError {
 pub(crate) fn write_error_to_op(error: WriteError) -> OpError {
     match error {
         WriteError::Conflict(message) => OpError::Conflict(message),
-        WriteError::Other(message) => {
-            OpError::Rejected(format!("could not commit the write: {message}"))
-        }
+        WriteError::Other(message) => OpError::rejected_as(
+            ErrorCode::CommitFailed,
+            format!("could not commit the write: {message}"),
+        ),
     }
 }
 
@@ -158,15 +207,15 @@ fn resolve_write_meta(
     }
 
     let defaults = crate::identity::IdentityContext::from_env()
-        .map_err(OpError::Invalid)?
+        .map_err(OpError::invalid)?
         .write_defaults()
-        .map_err(OpError::Invalid)?;
+        .map_err(OpError::invalid)?;
 
     let authority = authority
         .map(CliAuthority::level)
         .or_else(|| defaults.as_ref().map(|defaults| defaults.authority))
         .ok_or_else(|| {
-            OpError::Invalid(
+            OpError::invalid(
                 "missing --authority (or configure a signed source grant with DENT8_GRANT)"
                     .to_string(),
             )
@@ -175,7 +224,7 @@ fn resolve_write_meta(
         .map(ToString::to_string)
         .or_else(|| defaults.map(|defaults| defaults.source))
         .ok_or_else(|| {
-            OpError::Invalid(
+            OpError::invalid(
                 "missing --source (or configure a signed source grant with DENT8_GRANT)"
                     .to_string(),
             )
@@ -430,7 +479,7 @@ pub(crate) fn with_write_retry(
             settled => return settled,
         }
     }
-    Err(OpError::Rejected(format!(
+    Err(OpError::rejected(format!(
         "write conflict persisted after {MAX_ATTEMPTS} attempts (last: {last}); a concurrent \
          writer or backend lock kept racing — try again"
     )))
@@ -471,12 +520,12 @@ pub(crate) fn op_assert(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
     )?;
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let now = now_millis();
     // A fresh fact per assertion (keyed by sequence); the registry's uniqueness governs
     // whether a second *fresh* fact for the same subject+predicate is admissible.
     let seq = reserve_event_seq(&store, 1)
-        .map_err(|error| OpError::Rejected(format!("could not reserve event id: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event id: {error}")))?;
     let mut event = build_event(
         &format!("event:{seq}"),
         &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
@@ -489,7 +538,7 @@ pub(crate) fn op_assert(
         authority,
         now,
     )
-    .map_err(|error| OpError::Invalid(format!("invalid assertion: {error}")))?;
+    .map_err(|error| OpError::invalid(format!("invalid assertion: {error}")))?;
     validity.stamp(&mut event);
     // The content gate (after authority, before arbitration/attestation/persistence): a
     // configured scanner may reject the candidate or taint-mark it in place, and the mark
@@ -502,9 +551,13 @@ pub(crate) fn op_assert(
     apply_policy_defaults(&registry, &mut event);
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
-    attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::Invalid)?;
-    let receipt = admit(&mut store, &registry, event.clone(), now)
-        .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::invalid)?;
+    let receipt = admit(&mut store, &registry, event.clone(), now).map_err(|error| {
+        OpError::rejected_as(
+            ErrorCode::for_store_error(&error),
+            format!("REJECTED: {error}"),
+        )
+    })?;
     append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority})\n  \
@@ -572,22 +625,22 @@ pub(crate) fn op_derive(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
     )?;
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let from_subject = Subject::new(from_kind, from_key)
-        .map_err(|error| OpError::Invalid(format!("invalid source subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid source subject: {error}")))?;
     let from_predicate_parsed = Predicate::new(from_predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid source predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid source predicate: {error}")))?;
     let sources = store
         .believed_fact_ids(&from_subject, &from_predicate_parsed)
-        .map_err(|error| OpError::Invalid(error.to_string()))?;
+        .map_err(|error| OpError::invalid(error.to_string()))?;
     if sources.is_empty() {
-        return Err(OpError::Rejected(format!(
+        return Err(OpError::rejected(format!(
             "nothing to derive from: no believed {from_kind}:{from_key} {from_predicate}"
         )));
     }
     let now = now_millis();
     let seq = reserve_event_seq(&store, 1)
-        .map_err(|error| OpError::Rejected(format!("could not reserve event id: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event id: {error}")))?;
     let mut event = build_event(
         &format!("event:{seq}"),
         &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
@@ -600,13 +653,13 @@ pub(crate) fn op_derive(
         authority,
         now,
     )
-    .map_err(|error| OpError::Invalid(format!("invalid derivation: {error}")))?;
+    .map_err(|error| OpError::invalid(format!("invalid derivation: {error}")))?;
     validity.stamp(&mut event);
     // Record a DerivedFrom evidence edge to each believed source fact.
     for (index, src) in sources.iter().enumerate() {
         event.evidence.push(Evidence {
             id: EvidenceId::new(format!("evidence:derived:{index}"))
-                .map_err(|error| OpError::Invalid(format!("evidence id: {error}")))?,
+                .map_err(|error| OpError::invalid(format!("evidence id: {error}")))?,
             kind: EvidenceKind::DerivedFrom,
             locator: src.as_str().to_string(),
             digest: None,
@@ -619,9 +672,13 @@ pub(crate) fn op_derive(
     apply_policy_defaults(&registry, &mut event);
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
-    attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::Invalid)?;
-    let receipt = admit(&mut store, &registry, event.clone(), now)
-        .map_err(|error| OpError::Rejected(format!("REJECTED: {error}")))?;
+    attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::invalid)?;
+    let receipt = admit(&mut store, &registry, event.clone(), now).map_err(|error| {
+        OpError::rejected_as(
+            ErrorCode::for_store_error(&error),
+            format!("REJECTED: {error}"),
+        )
+    })?;
     append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority}, \
@@ -636,7 +693,7 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
         Ok(subject) => subject,
         Err(message) => {
             return present_write(
-                Err(OpError::Invalid(message)),
+                Err(OpError::invalid(message)),
                 output,
                 &WriteJsonView::derive_without_meta(args),
             );
@@ -646,7 +703,7 @@ pub(crate) fn cmd_derive(args: &DeriveWriteArgs, output: CliOutput) -> i32 {
         Ok(predicate) => predicate,
         Err(message) => {
             return present_write(
-                Err(OpError::Invalid(message)),
+                Err(OpError::invalid(message)),
                 output,
                 &WriteJsonView::derive_without_meta(args),
             );
@@ -724,11 +781,11 @@ pub(crate) fn present(outcome: Result<String, OpError>) -> i32 {
             println!("{}", paint_status(&message, CliStream::Stdout));
             0
         }
-        Err(OpError::Invalid(message)) => {
+        Err(OpError::Invalid { message, .. }) => {
             eprintln!("{}", paint_status(&message, CliStream::Stderr));
             2
         }
-        Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
+        Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
             eprintln!("{}", paint_status(&message, CliStream::Stderr));
             1
         }
@@ -736,16 +793,15 @@ pub(crate) fn present(outcome: Result<String, OpError>) -> i32 {
 }
 
 pub(crate) fn op_error_json(error: &OpError) -> serde_json::Value {
-    match error {
-        OpError::Invalid(message) => serde_json::json!({
-            "status": Status::Invalid.as_str(),
-            "message": message,
-        }),
-        OpError::Rejected(message) | OpError::Conflict(message) => serde_json::json!({
-            "status": Status::Rejected.as_str(),
-            "message": message,
-        }),
-    }
+    let status = match error {
+        OpError::Invalid { .. } => Status::Invalid,
+        OpError::Rejected { .. } | OpError::Conflict(_) => Status::Rejected,
+    };
+    serde_json::json!({
+        "status": status.as_str(),
+        "code": error.code().as_str(),
+        "message": error.message(),
+    })
 }
 
 pub(crate) struct DerivedFromJson<'a> {
@@ -894,8 +950,8 @@ pub(crate) fn write_error_json(view: &WriteJsonView<'_>, error: &OpError) -> ser
 
 pub(crate) fn op_error_exit_code(error: &OpError) -> i32 {
     match error {
-        OpError::Invalid(_) => 2,
-        OpError::Rejected(_) | OpError::Conflict(_) => 1,
+        OpError::Invalid { .. } => 2,
+        OpError::Rejected { .. } | OpError::Conflict(_) => 1,
     }
 }
 
@@ -929,7 +985,7 @@ fn run_write(
     {
         let outcome = match crate::mcp_client::daemon_write(&socket, tool, arguments) {
             Ok(outcome) => outcome,
-            Err(transport) => Err(OpError::Invalid(transport)),
+            Err(transport) => Err(OpError::invalid(transport)),
         };
         return present_write(outcome, output, view);
     }
@@ -1075,21 +1131,21 @@ pub(crate) fn op_supersede(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
     )?;
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let subject = Subject::new(subject_kind, subject_key)
-        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
     let now = now_millis();
 
     // Every believed incumbent must be superseded so the end state is unique.
     let incumbents = match store
         .believed_fact_ids(&subject, &predicate_parsed)
-        .map_err(|error| OpError::Invalid(error.to_string()))?
+        .map_err(|error| OpError::invalid(error.to_string()))?
     {
         ids if !ids.is_empty() => ids,
         _ => {
-            return Err(OpError::Rejected(format!(
+            return Err(OpError::rejected(format!(
                 "nothing to supersede: no believed {subject_kind}:{subject_key} {predicate}"
             )));
         }
@@ -1107,14 +1163,17 @@ pub(crate) fn op_supersede(
     if let Some(policy) = registry.policy_for(&subject, &predicate_parsed)
         && authority < policy.authority_floor
     {
-        return Err(OpError::Rejected(format!(
-            "REJECTED: {subject_kind}.{predicate} requires authority {}, got {authority}",
-            policy.authority_floor
-        )));
+        return Err(OpError::rejected_as(
+            ErrorCode::BelowAuthorityFloor,
+            format!(
+                "REJECTED: {subject_kind}.{predicate} requires authority {}, got {authority}",
+                policy.authority_floor
+            ),
+        ));
     }
 
     let seq = reserve_event_seq(&store, 1 + incumbents.len())
-        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
     let (mut events, replacement_fact_id) = build_revision(
         seq,
         &incumbents,
@@ -1126,7 +1185,7 @@ pub(crate) fn op_supersede(
         authority,
         now,
     )
-    .map_err(|error| OpError::Invalid(format!("invalid supersession: {error}")))?;
+    .map_err(|error| OpError::invalid(format!("invalid supersession: {error}")))?;
     // The replacement is a fresh assertion of this predicate, so it inherits the same
     // default freshness as `assert` (e.g. a revised `branch.status` still goes stale).
     validity.stamp(&mut events[0]);
@@ -1174,13 +1233,16 @@ pub(crate) fn op_supersede(
                 } else {
                     ""
                 };
-                return Err(OpError::Rejected(format!(
-                    "REJECTED: unearned supersession: incumbent {incumbent} has earned \
-                     entrenchment {entrenchment} at {level:?} ({backing} corroborating \
-                     source(s) + {survived} survived challenge(s)), and a fresh single-source \
-                     replacement may not displace it (earned-supersession gate, \
-                     DENT8_ENTRENCHMENT_GATE){note}"
-                )));
+                return Err(OpError::rejected_as(
+                    ErrorCode::WeakerEntrenchment,
+                    format!(
+                        "REJECTED: unearned supersession: incumbent {incumbent} has earned \
+                         entrenchment {entrenchment} at {level:?} ({backing} corroborating \
+                         source(s) + {survived} survived challenge(s)), and a fresh single-source \
+                         replacement may not displace it (earned-supersession gate, \
+                         DENT8_ENTRENCHMENT_GATE){note}"
+                    ),
+                ));
             }
         }
     }
@@ -1190,7 +1252,10 @@ pub(crate) fn op_supersede(
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
             let note = record_survived_challenge(path, event, &error, identity);
-            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+            return Err(OpError::rejected_as(
+                ErrorCode::for_store_error(&error),
+                format!("REJECTED: {error}{note}"),
+            ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
@@ -1293,24 +1358,24 @@ pub(crate) fn op_retract(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
     )?;
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let subject = Subject::new(subject_kind, subject_key)
-        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
     let incumbents = match store
         .believed_fact_ids(&subject, &predicate_parsed)
-        .map_err(|error| OpError::Invalid(error.to_string()))?
+        .map_err(|error| OpError::invalid(error.to_string()))?
     {
         ids if !ids.is_empty() => ids,
         _ => {
-            return Err(OpError::Rejected(format!(
+            return Err(OpError::rejected(format!(
                 "nothing to retract: no believed {subject_kind}:{subject_key} {predicate}"
             )));
         }
     };
     let seq = reserve_event_seq(&store, incumbents.len())
-        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
     let mut events = build_retractions(
         seq,
         &incumbents,
@@ -1321,12 +1386,15 @@ pub(crate) fn op_retract(
         authority,
         now_millis(),
     )
-    .map_err(|error| OpError::Invalid(format!("invalid retraction: {error}")))?;
+    .map_err(|error| OpError::invalid(format!("invalid retraction: {error}")))?;
     // Apply all in memory first (each authority-gated); persist only if all are admitted.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
             let note = record_survived_challenge(path, event, &error, identity);
-            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+            return Err(OpError::rejected_as(
+                ErrorCode::for_store_error(&error),
+                format!("REJECTED: {error}{note}"),
+            ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
@@ -1456,7 +1524,7 @@ pub(crate) fn op_used_in_decision(
 ) -> Result<String, OpError> {
     let decision = decision.trim();
     if decision.is_empty() {
-        return Err(OpError::Invalid(
+        return Err(OpError::invalid(
             "used_in_decision proposal requires a non-empty decision".to_string(),
         ));
     }
@@ -1505,7 +1573,7 @@ pub(crate) fn op_record_retrievals(
 ) -> Result<usize, OpError> {
     let purpose = purpose.trim();
     if purpose.is_empty() {
-        return Err(OpError::Invalid(
+        return Err(OpError::invalid(
             "retrieval purpose must not be empty".to_string(),
         ));
     }
@@ -1518,10 +1586,10 @@ pub(crate) fn op_record_retrievals(
             identity,
         )?;
     }
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let now = now_millis();
     let seq = reserve_event_seq(&store, retrieved.len())
-        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
     let mut events = Vec::with_capacity(retrieved.len());
     for (index, fact) in retrieved.iter().enumerate() {
         let event = build_event(
@@ -1538,13 +1606,13 @@ pub(crate) fn op_record_retrievals(
             authority,
             now,
         )
-        .map_err(|error| OpError::Invalid(format!("invalid retrieval record: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid retrieval record: {error}")))?;
         events.push(event);
     }
     // Apply all in memory first; persist only if every record is admitted.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
-            return Err(OpError::Rejected(format!(
+            return Err(OpError::rejected(format!(
                 "could not record retrieval: {error}"
             )));
         }
@@ -1573,22 +1641,22 @@ pub(crate) fn build_per_incumbent(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
     )?;
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let subject = Subject::new(subject_kind, subject_key)
-        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
     let incumbents = store
         .believed_fact_ids(&subject, &predicate_parsed)
-        .map_err(|error| OpError::Invalid(error.to_string()))?;
+        .map_err(|error| OpError::invalid(error.to_string()))?;
     if incumbents.is_empty() {
-        return Err(OpError::Rejected(format!(
+        return Err(OpError::rejected(format!(
             "nothing to {verb}: no believed {subject_kind}:{subject_key} {predicate}"
         )));
     }
     let now = now_millis();
     let seq = reserve_event_seq(&store, incumbents.len())
-        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
     let mut events = Vec::with_capacity(incumbents.len());
     for (index, incumbent) in incumbents.iter().enumerate() {
         let event = build_event(
@@ -1603,13 +1671,16 @@ pub(crate) fn build_per_incumbent(
             authority,
             now,
         )
-        .map_err(|error| OpError::Invalid(format!("invalid {verb}: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid {verb}: {error}")))?;
         events.push(event);
     }
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
             let note = record_survived_challenge(path, event, &error, identity);
-            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+            return Err(OpError::rejected_as(
+                ErrorCode::for_store_error(&error),
+                format!("REJECTED: {error}{note}"),
+            ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
@@ -1736,11 +1807,11 @@ pub(crate) fn op_contradict(
         &WriteAuth::new(subject_kind, subject_key, authority, source),
         identity,
     )?;
-    let mut store = load_store(path).map_err(OpError::Invalid)?;
+    let mut store = load_store(path).map_err(OpError::invalid)?;
     let subject = Subject::new(subject_kind, subject_key)
-        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
     let now = now_millis();
     // Contradiction targets the *single* believed incumbent (explain_subject prefers the
     // contested/fresh one) — unlike supersede/retract, which act on every believed fact.
@@ -1751,12 +1822,12 @@ pub(crate) fn op_contradict(
         .ok()
         .flatten()
     else {
-        return Err(OpError::Rejected(format!(
+        return Err(OpError::rejected(format!(
             "nothing to contradict: no believed {subject_kind}:{subject_key} {predicate}"
         )));
     };
     let seq = reserve_event_seq(&store, 2)
-        .map_err(|error| OpError::Rejected(format!("could not reserve event ids: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
     let (mut events, opposing_fact_id) = build_contradiction(
         seq,
         incumbent.fact_id.as_str(),
@@ -1768,7 +1839,7 @@ pub(crate) fn op_contradict(
         authority,
         now,
     )
-    .map_err(|error| OpError::Invalid(format!("invalid contradiction: {error}")))?;
+    .map_err(|error| OpError::invalid(format!("invalid contradiction: {error}")))?;
     // The opposing fact is a fresh assertion of this predicate (default TTL like `assert`).
     validity.stamp(&mut events[0]);
     let registry = PredicateRegistry::coding_agent();
@@ -1782,7 +1853,10 @@ pub(crate) fn op_contradict(
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
             let note = record_survived_challenge(path, event, &error, identity);
-            return Err(OpError::Rejected(format!("REJECTED: {error}{note}")));
+            return Err(OpError::rejected_as(
+                ErrorCode::for_store_error(&error),
+                format!("REJECTED: {error}{note}"),
+            ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
@@ -1891,11 +1965,11 @@ pub(crate) fn replay_outcome(
     predicate: &str,
     clock: ReadClock,
 ) -> Result<ReplayOutcome, OpError> {
-    let store = clock.store(path).map_err(OpError::Invalid)?;
+    let store = clock.store(path).map_err(OpError::invalid)?;
     let subject = Subject::new(subject_kind, subject_key)
-        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
     let filter = EventFilter {
         subject: Some(subject.clone()),
         predicate: Some(predicate_parsed.clone()),
@@ -1903,9 +1977,9 @@ pub(crate) fn replay_outcome(
     };
     let events = store
         .scan_events(&filter)
-        .map_err(|error| OpError::Rejected(format!("replay failed: {error}")))?;
+        .map_err(|error| OpError::rejected(format!("replay failed: {error}")))?;
     if events.is_empty() {
-        return Err(OpError::Rejected(format!(
+        return Err(OpError::rejected(format!(
             "no events for {subject_kind}:{subject_key} {predicate}"
         )));
     }
@@ -2082,8 +2156,8 @@ pub(crate) fn cmd_replay(args: &ReadFactArgs, output: CliOutput) -> i32 {
         (Err(error), CliOutput::Text) => present(Err(error)),
         (Err(error), CliOutput::Json) => {
             let code = match error {
-                OpError::Invalid(_) => 2,
-                OpError::Rejected(_) | OpError::Conflict(_) => 1,
+                OpError::Invalid { .. } => 2,
+                OpError::Rejected { .. } | OpError::Conflict(_) => 1,
             };
             print_json_stdout_with_code(&op_error_json(&error), code)
         }
@@ -2116,17 +2190,17 @@ pub(crate) fn op_explain_receipt(
     predicate: &str,
     clock: ReadClock,
 ) -> Result<IntegrityReceipt, OpError> {
-    let store = clock.store(path).map_err(OpError::Invalid)?;
+    let store = clock.store(path).map_err(OpError::invalid)?;
     let subject = Subject::new(subject_kind, subject_key)
-        .map_err(|error| OpError::Invalid(format!("invalid subject: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
     let predicate_parsed = Predicate::new(predicate)
-        .map_err(|error| OpError::Invalid(format!("invalid predicate: {error}")))?;
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
     match store.explain_latest(&subject, &predicate_parsed, clock.now()) {
         Ok(Some(receipt)) => Ok(receipt),
-        Ok(None) => Err(OpError::Rejected(format!(
+        Ok(None) => Err(OpError::rejected(format!(
             "no fact for {subject_kind}:{subject_key} {predicate}"
         ))),
-        Err(error) => Err(OpError::Rejected(format!("explain failed: {error}"))),
+        Err(error) => Err(OpError::rejected(format!("explain failed: {error}"))),
     }
 }
 
@@ -2155,8 +2229,8 @@ pub(crate) fn cmd_explain(args: &ReadFactArgs, output: CliOutput) -> i32 {
             Ok(receipt) => print_json_stdout(&receipt_json("explain", &receipt)),
             Err(error) => {
                 let code = match error {
-                    OpError::Invalid(_) => 2,
-                    OpError::Rejected(_) | OpError::Conflict(_) => 1,
+                    OpError::Invalid { .. } => 2,
+                    OpError::Rejected { .. } | OpError::Conflict(_) => 1,
                 };
                 print_json_stdout_with_code(&op_error_json(&error), code)
             }
@@ -2217,7 +2291,7 @@ pub(crate) fn op_list_subjects_with_freshness(
     path: &str,
     include_diagnostics: bool,
 ) -> Result<Vec<(String, String, String, FactFreshness)>, OpError> {
-    let store = load_store(path).map_err(OpError::Invalid)?;
+    let store = load_store(path).map_err(OpError::invalid)?;
     let now = now_millis();
     let mut out = Vec::new();
     for (subject, predicate) in store.subjects() {
@@ -2411,8 +2485,8 @@ pub(crate) fn cmd_facts_list(args: &FactsListArgs, output: CliOutput) -> i32 {
             CliOutput::Text => present(Err(error)),
             CliOutput::Json => {
                 let code = match error {
-                    OpError::Invalid(_) => 2,
-                    OpError::Rejected(_) | OpError::Conflict(_) => 1,
+                    OpError::Invalid { .. } => 2,
+                    OpError::Rejected { .. } | OpError::Conflict(_) => 1,
                 };
                 print_json_stdout_with_code(&op_error_json(&error), code)
             }
@@ -2424,7 +2498,7 @@ pub(crate) fn cmd_facts_list(args: &FactsListArgs, output: CliOutput) -> i32 {
 /// subjects. Read-only; backend-aware via `load_store`. Wires `SubjectProjection::contested`
 /// to a runnable surface (gap-register #8).
 pub(crate) fn conflicts_outcome(path: &str) -> Result<Vec<ConflictFact>, OpError> {
-    let store = load_store(path).map_err(OpError::Invalid)?;
+    let store = load_store(path).map_err(OpError::invalid)?;
     let mut conflicts = Vec::new();
     for (subject, predicate) in store.subjects() {
         let filter = EventFilter {
@@ -2434,7 +2508,7 @@ pub(crate) fn conflicts_outcome(path: &str) -> Result<Vec<ConflictFact>, OpError
         };
         let events = store
             .scan_events(&filter)
-            .map_err(|error| OpError::Invalid(error.to_string()))?;
+            .map_err(|error| OpError::invalid(error.to_string()))?;
         let Ok(projection) = replay_subject(&events) else {
             continue;
         };
@@ -2555,8 +2629,8 @@ pub(crate) fn cmd_conflicts(output: CliOutput) -> i32 {
         (Err(error), CliOutput::Text) => present(Err(error)),
         (Err(error), CliOutput::Json) => {
             let code = match error {
-                OpError::Invalid(_) => 2,
-                OpError::Rejected(_) | OpError::Conflict(_) => 1,
+                OpError::Invalid { .. } => 2,
+                OpError::Rejected { .. } | OpError::Conflict(_) => 1,
             };
             print_json_stdout_with_code(&op_error_json(&error), code)
         }

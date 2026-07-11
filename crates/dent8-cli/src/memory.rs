@@ -359,16 +359,16 @@ fn export_native(target: &Path) -> Result<ExportReport, OpError> {
         Ok(contents) => Some(contents),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            return Err(OpError::Rejected(format!(
+            return Err(OpError::rejected(format!(
                 "cannot read {}: {error}",
                 target.display()
             )));
         }
     };
     let (contents, block_outcome) =
-        splice_managed_block(existing.as_deref(), &block).map_err(OpError::Rejected)?;
+        splice_managed_block(existing.as_deref(), &block).map_err(OpError::rejected)?;
     std::fs::write(target, contents).map_err(|error| {
-        OpError::Rejected(format!("cannot write {}: {error}", target.display()))
+        OpError::rejected(format!("cannot write {}: {error}", target.display()))
     })?;
     let facts_written = outcome.facts().len().saturating_sub(redacted_skipped);
     Ok(ExportReport {
@@ -788,11 +788,11 @@ pub(crate) fn import_outcome(
                     outcome.accepted += 1;
                     (Status::Accepted, message)
                 }
-                Err(OpError::Invalid(message)) => {
+                Err(OpError::Invalid { message, .. }) => {
                     outcome.invalid += 1;
                     (Status::Invalid, message)
                 }
-                Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
+                Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
                     outcome.rejected += 1;
                     (Status::Rejected, message)
                 }

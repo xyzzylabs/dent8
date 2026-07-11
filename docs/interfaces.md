@@ -98,6 +98,19 @@ fact. Refused firewall writes carry
 older clients that ignore `structuredContent`, dent8 also includes a serialized JSON mirror
 as a second text content block.
 
+Every error payload — MCP tool errors and the CLI's `--output json` alike — also carries a
+stable kebab-case **`code`** naming the *cause*, classified from the typed firewall error
+at the point the message is written, so an agent branches on the token instead of parsing
+prose. Where `status` says what happened (`rejected`), `code` says why:
+`insufficient-authority`, `canonical-contradiction`, `terminal-fact`,
+`laundered-authority`, `unbacked-supersession`, `below-authority-floor`,
+`uniqueness-violation`, `ttl-ceiling-exceeded`, `authority-ceiling`, `scope-violation`,
+`identity-rejected`, `unauthenticated-write`, `weaker-entrenchment`, `content-rejected`,
+`write-conflict`, `commit-failed`, and integrity/IO causes (`corrupt-event`,
+`replay-failed`, `canonicalization-failed`, `store-unavailable`), with generic fallbacks
+(`rejected`, `invalid-argument`, `operation-failed`, `unknown-tool`) when no finer cause is
+known. The MCP `outputSchema` advertises the closed enum of codes this build can emit.
+
 Recommended behavior:
 
 - Treat writes as candidate events through the firewall.

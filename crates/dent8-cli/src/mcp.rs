@@ -31,7 +31,8 @@ use crate::ops::{
 use crate::{
     InitAgent, WriteIdentity, authority_registry_path, authority_required, display_value,
     load_authority_registry_at, load_store, log_path, native, parse_authority, short,
-    status::Status, store_url, verify_log, witness,
+    status::{ErrorCode, Status},
+    store_url, verify_log, witness,
 };
 
 /// The latest MCP protocol revision this server prefers.
@@ -784,29 +785,49 @@ fn negotiated_protocol_version(params: Option<&Value>) -> &'static str {
 }
 
 /// A tool dispatch failure: `Unknown` is a protocol error (bad tool name), `Failed` is a
-/// tool-execution error surfaced to the agent as an `isError` result.
+/// tool-execution error surfaced to the agent as an `isError` result. `Invalid` and `Rejected`
+/// carry the machine-readable [`ErrorCode`] (built via the lowercase constructors), emitted as
+/// the `code` field in the error's `structuredContent` — the same vocabulary the CLI's
+/// `--output json` uses, so an agent branches identically on either surface.
 enum ToolError {
     Unknown(String),
-    Invalid(String),
-    Rejected(String),
+    Invalid { code: ErrorCode, message: String },
+    Rejected { code: ErrorCode, message: String },
     Failed(String),
 }
 
 impl ToolError {
+    /// A malformed request with the generic `invalid-argument` code.
+    fn invalid(message: impl Into<String>) -> Self {
+        Self::Invalid {
+            code: ErrorCode::InvalidArgument,
+            message: message.into(),
+        }
+    }
+
+    // The arms bind different variant shapes (tuple vs struct), so they cannot merge.
+    #[allow(clippy::match_same_arms)]
     fn message(&self) -> &str {
         match self {
-            Self::Unknown(message)
-            | Self::Invalid(message)
-            | Self::Rejected(message)
-            | Self::Failed(message) => message,
+            Self::Unknown(message) | Self::Failed(message) => message,
+            Self::Invalid { message, .. } | Self::Rejected { message, .. } => message,
         }
     }
 
     fn status(&self) -> &'static str {
         match self {
-            Self::Unknown(_) | Self::Invalid(_) => Status::Invalid.as_str(),
-            Self::Rejected(_) => Status::Rejected.as_str(),
+            Self::Unknown(_) | Self::Invalid { .. } => Status::Invalid.as_str(),
+            Self::Rejected { .. } => Status::Rejected.as_str(),
             Self::Failed(_) => Status::Failed.as_str(),
+        }
+    }
+
+    /// The machine-readable cause emitted as the `code` field beside `status`.
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::Unknown(_) => ErrorCode::UnknownTool,
+            Self::Invalid { code, .. } | Self::Rejected { code, .. } => *code,
+            Self::Failed(_) => ErrorCode::OperationFailed,
         }
     }
 }
@@ -920,10 +941,10 @@ fn handle_resources_read(
         Ok(receipt) => receipt,
         // A well-formed uri naming a fact that does not exist is "resource not found"
         // (-32002); an invalid subject/predicate is a bad request (-32602).
-        Err(OpError::Rejected(message) | OpError::Conflict(message)) => {
+        Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
             return error_response(id, -32002, &message);
         }
-        Err(OpError::Invalid(message)) => return error_response(id, -32602, &message),
+        Err(OpError::Invalid { message, .. }) => return error_response(id, -32602, &message),
     };
     let annotation =
         crate::read_annotation(receipt.lifecycle, receipt.fresh, receipt.not_yet_valid);
@@ -946,9 +967,9 @@ fn handle_resources_read(
         )
     {
         let message = match error {
-            OpError::Invalid(message) | OpError::Rejected(message) | OpError::Conflict(message) => {
-                message
-            }
+            OpError::Invalid { message, .. }
+            | OpError::Rejected { message, .. }
+            | OpError::Conflict(message) => message,
         };
         return error_response(
             id,
@@ -979,10 +1000,10 @@ fn record_mcp_resource_retrieval(
     identity: &WriteIdentity,
 ) -> Result<(), OpError> {
     let defaults = write_defaults(identity).map_err(|error| match error {
-        ToolError::Invalid(message)
-        | ToolError::Failed(message)
-        | ToolError::Rejected(message)
-        | ToolError::Unknown(message) => OpError::Invalid(message),
+        ToolError::Invalid { message, .. } | ToolError::Rejected { message, .. } => {
+            OpError::invalid(message)
+        }
+        ToolError::Failed(message) | ToolError::Unknown(message) => OpError::invalid(message),
     })?;
     let (authority, source) = defaults.map_or_else(
         || {
@@ -1807,7 +1828,7 @@ fn nonempty_env(name: &str) -> Option<String> {
 fn native_scan(arguments: &Value) -> Result<ToolOutput, ToolError> {
     let (agent, dent8_dir, root) = native_args(arguments)?;
     let scan = native::scan_from_options(agent, &dent8_dir, root.as_deref())
-        .map_err(ToolError::Invalid)?;
+        .map_err(ToolError::invalid)?;
     let structured = mcp_tool_structured(native::native_scan_json(&scan), "native_scan");
     Ok(ToolOutput::new(native::native_scan_text(&scan), structured))
 }
@@ -1816,7 +1837,7 @@ fn native_reconcile(path: &str, arguments: &Value) -> Result<ToolOutput, ToolErr
     let (agent, dent8_dir, root) = native_args(arguments)?;
     let clock = arg_read_clock(arguments)?;
     let reconcile = native::reconcile_from_options(agent, &dent8_dir, root.as_deref(), clock, path)
-        .map_err(ToolError::Invalid)?;
+        .map_err(ToolError::invalid)?;
     let structured = mcp_tool_structured(
         native::native_reconcile_json(&reconcile),
         "native_reconcile",
@@ -2082,8 +2103,9 @@ fn explain_structured(tool: &str, receipt: &IntegrityReceipt) -> Value {
 fn error_structured(tool: &str, arguments: &Value, error: &ToolError) -> Value {
     let mut structured = json!({
         "status": error.status(),
+        "code": error.code().as_str(),
         "tool": tool,
-        "rejection_reason": if matches!(error, ToolError::Rejected(_)) {
+        "rejection_reason": if matches!(error, ToolError::Rejected { .. }) {
             Some(error.message())
         } else {
             None
@@ -2214,7 +2236,7 @@ fn arg(arguments: &Value, name: &str) -> Result<String, ToolError> {
         .get(name)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| ToolError::Invalid(format!("missing required string argument: {name}")))
+        .ok_or_else(|| ToolError::invalid(format!("missing required string argument: {name}")))
 }
 
 #[derive(Clone, Debug)]
@@ -2244,7 +2266,7 @@ fn resolve_write_meta(
     let authority = authority
         .or_else(|| defaults.as_ref().map(|defaults| defaults.authority))
         .ok_or_else(|| {
-            ToolError::Invalid(
+            ToolError::invalid(
                 "missing authority (or configure a signed source grant with DENT8_GRANT)"
                     .to_string(),
             )
@@ -2252,7 +2274,7 @@ fn resolve_write_meta(
     let source = source
         .or_else(|| defaults.map(|defaults| defaults.source))
         .ok_or_else(|| {
-            ToolError::Invalid(
+            ToolError::invalid(
                 "missing source (or configure a signed source grant with DENT8_GRANT)".to_string(),
             )
         })?;
@@ -2265,11 +2287,11 @@ fn write_defaults(
 ) -> Result<Option<crate::identity::WriteDefaults>, ToolError> {
     match identity {
         WriteIdentity::Env => crate::identity::IdentityContext::from_env()
-            .map_err(ToolError::Invalid)?
+            .map_err(ToolError::invalid)?
             .write_defaults()
-            .map_err(ToolError::Invalid),
+            .map_err(ToolError::invalid),
         #[cfg(all(unix, feature = "async-store"))]
-        WriteIdentity::Connection(ctx) => ctx.write_defaults().map_err(ToolError::Invalid),
+        WriteIdentity::Connection(ctx) => ctx.write_defaults().map_err(ToolError::invalid),
         WriteIdentity::Unauthenticated => Ok(None),
     }
 }
@@ -2278,7 +2300,7 @@ fn optional_string(arguments: &Value, name: &str) -> Result<Option<String>, Tool
     match arguments.get(name) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(value)) => Ok(Some(value.clone())),
-        Some(_) => Err(ToolError::Invalid(format!(
+        Some(_) => Err(ToolError::invalid(format!(
             "optional argument {name} must be a string"
         ))),
     }
@@ -2287,7 +2309,7 @@ fn optional_string(arguments: &Value, name: &str) -> Result<Option<String>, Tool
 fn arg_agent(arguments: &Value) -> Result<InitAgent, ToolError> {
     let raw = arg(arguments, "agent")?;
     InitAgent::from_str(&raw, true).map_err(|_| {
-        ToolError::Invalid(format!(
+        ToolError::invalid(format!(
             "unknown agent '{raw}' (expected: codex | claude-code | cursor | grok-build | gemini | cascade | hecate)"
         ))
     })
@@ -2299,12 +2321,12 @@ fn arg_agent(arguments: &Value) -> Result<InitAgent, ToolError> {
 fn arg_subject(arguments: &Value, name: &str) -> Result<(String, String), ToolError> {
     let raw = arg(arguments, name)?;
     let Some((kind, key)) = raw.split_once(':') else {
-        return Err(ToolError::Invalid(format!(
+        return Err(ToolError::invalid(format!(
             "invalid {name} '{raw}' (expected <kind>:<key>, e.g. person:alice)"
         )));
     };
     dent8_core::Subject::new(kind, key).map_err(|error| {
-        ToolError::Invalid(format!(
+        ToolError::invalid(format!(
             "invalid {name} '{raw}' (expected <kind>:<key>): {error}"
         ))
     })?;
@@ -2314,7 +2336,7 @@ fn arg_subject(arguments: &Value, name: &str) -> Result<(String, String), ToolEr
 fn optional_bool(arguments: &Value, name: &str) -> Result<bool, ToolError> {
     match arguments.get(name) {
         Some(Value::Bool(value)) => Ok(*value),
-        Some(_) => Err(ToolError::Invalid(format!(
+        Some(_) => Err(ToolError::invalid(format!(
             "optional argument {name} must be a boolean"
         ))),
         None => Ok(false),
@@ -2327,7 +2349,7 @@ fn optional_i64(arguments: &Value, name: &str) -> Result<Option<i64>, ToolError>
     match arguments.get(name) {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_i64().map(Some).ok_or_else(|| {
-            ToolError::Invalid(format!(
+            ToolError::invalid(format!(
                 "optional argument {name} must be an integer (unix millis)"
             ))
         }),
@@ -2357,7 +2379,7 @@ fn optional_authority(arguments: &Value) -> Result<Option<AuthorityLevel>, ToolE
     optional_string(arguments, "authority")?
         .map(|raw| {
             parse_authority(&raw).ok_or_else(|| {
-                ToolError::Invalid(format!(
+                ToolError::invalid(format!(
                     "unknown authority '{raw}' (expected: low | medium | high | canonical)"
                 ))
             })
@@ -2365,12 +2387,16 @@ fn optional_authority(arguments: &Value) -> Result<Option<AuthorityLevel>, ToolE
         .transpose()
 }
 
-// By-value so it works as `map_err(into_tool_error)`.
+// By-value so it works as `map_err(into_tool_error)`. Carries the classified [`ErrorCode`]
+// through, so the MCP `structuredContent.code` matches what the CLI reports for the same failure.
 #[allow(clippy::needless_pass_by_value)]
 fn into_tool_error(error: OpError) -> ToolError {
+    let code = error.code();
     match error {
-        OpError::Invalid(message) => ToolError::Invalid(message),
-        OpError::Rejected(message) | OpError::Conflict(message) => ToolError::Rejected(message),
+        OpError::Invalid { message, .. } => ToolError::Invalid { code, message },
+        OpError::Rejected { message, .. } | OpError::Conflict(message) => {
+            ToolError::Rejected { code, message }
+        }
     }
 }
 
@@ -3260,6 +3286,9 @@ fn tool_error_output_schema(tool: &str) -> Value {
     object_schema(
         json!({
             "status": { "enum": ["invalid", "rejected", "failed"] },
+            // The machine-readable cause (stable kebab-case; see docs/interfaces.md). Advertised
+            // as the closed enum of every code this build can emit, so agents can branch safely.
+            "code": { "enum": ErrorCode::ALL.iter().map(|code| code.as_str()).collect::<Vec<_>>() },
             "tool": { "const": tool },
             "rejection_reason": nullable_string_schema(),
             "error_reason": { "type": "string" },
@@ -3275,7 +3304,7 @@ fn tool_error_output_schema(tool: &str) -> Value {
             "authority_raw": { "type": "string" },
             "source": { "type": "string" },
         }),
-        &["status", "tool", "rejection_reason", "error_reason"],
+        &["status", "code", "tool", "rejection_reason", "error_reason"],
     )
 }
 
@@ -4414,6 +4443,9 @@ mod tests {
         let result = call_tool_result(&path, "assert", database("postgres", "low"));
         assert_eq!(result["isError"], true);
         assert_eq!(result["structuredContent"]["status"], "rejected");
+        // The classified cause rides beside the status — a below-floor assert names the
+        // predicate-policy gate, not just "rejected".
+        assert_eq!(result["structuredContent"]["code"], "below-authority-floor");
         assert_eq!(result["structuredContent"]["authority"], "low");
         assert!(
             result["structuredContent"]["rejection_reason"]

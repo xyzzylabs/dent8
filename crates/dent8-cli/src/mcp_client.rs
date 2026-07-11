@@ -15,6 +15,7 @@ use std::os::unix::net::UnixStream;
 use serde_json::{Value, json};
 
 use crate::ops::OpError;
+use crate::status::ErrorCode;
 
 /// Route one write tool call through the daemon and map its reply to the same
 /// `Result<String, OpError>` a local `op_*` produces, so the CLI renders it identically. The
@@ -294,7 +295,7 @@ fn map_tool_reply(reply: &Value) -> Result<String, OpError> {
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or("daemon error");
-        return Err(OpError::Invalid(format!("daemon: {message}")));
+        return Err(OpError::invalid(format!("daemon: {message}")));
     }
     let result = reply.get("result");
     let text = result
@@ -311,18 +312,30 @@ fn map_tool_reply(reply: &Value) -> Result<String, OpError> {
     if !is_error {
         return Ok(text);
     }
-    let status = result
-        .and_then(|result| result.get("structuredContent"))
+    let structured = result.and_then(|result| result.get("structuredContent"));
+    let status = structured
         .and_then(|structured| structured.get("status"))
         .and_then(Value::as_str)
         .unwrap_or("rejected");
+    // Lift the machine-readable cause out of the reply so a daemon-routed write carries the
+    // same `code` a local one would; an unknown token (a newer daemon) degrades to the generic.
+    let code = structured
+        .and_then(|structured| structured.get("code"))
+        .and_then(Value::as_str)
+        .and_then(ErrorCode::from_wire);
     match status {
         // `invalid` = a malformed request; `failed` = a store-load/scan failure the daemon hits
         // *before* the write commits (`run_write_tool` degrades post-commit read errors to a
         // best-effort empty receipt, so `failed` never marks a committed write). Both are the
-        // couldn't-run class the local `op_*` classifies as `OpError::Invalid` (exit 2).
-        "invalid" | "failed" => Err(OpError::Invalid(text)),
-        _ => Err(OpError::Rejected(text)),
+        // couldn't-run class the local `op_*` classifies as `OpError::invalid` (exit 2).
+        "invalid" | "failed" => Err(OpError::invalid_as(
+            code.unwrap_or(ErrorCode::InvalidArgument),
+            text,
+        )),
+        _ => Err(OpError::rejected_as(
+            code.unwrap_or(ErrorCode::Rejected),
+            text,
+        )),
     }
 }
 
@@ -396,7 +409,7 @@ mod tests {
             },
         });
         assert!(
-            matches!(map_tool_reply(&reply), Err(OpError::Rejected(text)) if text.contains("insufficient"))
+            matches!(map_tool_reply(&reply), Err(OpError::Rejected { message: text, .. }) if text.contains("insufficient"))
         );
     }
 
@@ -409,7 +422,10 @@ mod tests {
                 "structuredContent": { "status": "invalid" },
             },
         });
-        assert!(matches!(map_tool_reply(&reply), Err(OpError::Invalid(_))));
+        assert!(matches!(
+            map_tool_reply(&reply),
+            Err(OpError::Invalid { .. })
+        ));
     }
 
     #[test]
@@ -417,7 +433,7 @@ mod tests {
         let reply =
             json!({ "error": { "code": -32601, "message": "tool 'assert' is not available" } });
         assert!(
-            matches!(map_tool_reply(&reply), Err(OpError::Invalid(text)) if text.contains("daemon:"))
+            matches!(map_tool_reply(&reply), Err(OpError::Invalid { message: text, .. }) if text.contains("daemon:"))
         );
     }
 
@@ -432,7 +448,10 @@ mod tests {
                 "structuredContent": { "status": "failed" },
             },
         });
-        assert!(matches!(map_tool_reply(&reply), Err(OpError::Invalid(_))));
+        assert!(matches!(
+            map_tool_reply(&reply),
+            Err(OpError::Invalid { .. })
+        ));
     }
 
     #[test]
@@ -441,7 +460,10 @@ mod tests {
         let reply = json!({
             "result": { "isError": true, "content": [{ "type": "text", "text": "REJECTED: x" }] },
         });
-        assert!(matches!(map_tool_reply(&reply), Err(OpError::Rejected(_))));
+        assert!(matches!(
+            map_tool_reply(&reply),
+            Err(OpError::Rejected { .. })
+        ));
     }
 
     #[test]

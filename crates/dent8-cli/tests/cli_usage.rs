@@ -2043,6 +2043,9 @@ fn write_commands_emit_machine_readable_json() {
     });
     assert_eq!(rejected["schema_version"], 1);
     assert_eq!(rejected["status"], "rejected");
+    // The machine-readable cause: a low-authority supersession classifies from the typed
+    // firewall error, so an agent branches on the token instead of parsing the prose.
+    assert_eq!(rejected["code"], "insufficient-authority");
     assert_eq!(rejected["tool"], "supersede");
     assert_eq!(rejected["accepted"], false);
     assert_eq!(rejected["value"]["text"], "coffee");

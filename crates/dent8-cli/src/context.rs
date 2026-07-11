@@ -141,7 +141,7 @@ fn asserting_source(
 /// with stale/not-yet-valid facts either counted out or annotated in (`--include-stale`).
 /// Sorted by subject then predicate so regenerating the pack diffs cleanly.
 pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextOutcome, OpError> {
-    let store = load_store(path).map_err(OpError::Invalid)?;
+    let store = load_store(path).map_err(OpError::invalid)?;
     let now = now_millis();
     let mut facts = Vec::new();
     let mut omitted_stale = 0usize;
@@ -160,7 +160,7 @@ pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextO
         // must not re-hash the whole log N times.
         let Some(receipt) = store
             .latest_freshness(&subject, &predicate, now)
-            .map_err(|error| OpError::Rejected(format!("context failed: {error}")))?
+            .map_err(|error| OpError::rejected(format!("context failed: {error}")))?
         else {
             continue;
         };
@@ -245,9 +245,9 @@ fn record_pack_retrievals(
         })
         .collect();
     let defaults = crate::identity::IdentityContext::from_env()
-        .map_err(OpError::Invalid)?
+        .map_err(OpError::invalid)?
         .write_defaults()
-        .map_err(OpError::Invalid)?;
+        .map_err(OpError::invalid)?;
     let (authority, source) = defaults.map_or_else(
         || {
             (

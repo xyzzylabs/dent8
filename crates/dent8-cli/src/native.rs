@@ -544,8 +544,8 @@ fn reconcile_reference(
         }
         Err(error) => {
             let status = match error {
-                OpError::Invalid(_) => ReconcileStatus::Invalid,
-                OpError::Rejected(_) | OpError::Conflict(_) => ReconcileStatus::Missing,
+                OpError::Invalid { .. } => ReconcileStatus::Invalid,
+                OpError::Rejected { .. } | OpError::Conflict(_) => ReconcileStatus::Missing,
             };
             let message = error.message().to_string();
             NativeReconcileReference {
