@@ -11,7 +11,7 @@ one non-stale source of truth they all share.
 second of wall time for `init` → `assert` → `explain`). Timed check:
 `./examples/on-ramp/demo.sh`. The sections below expand install, multi-agent wiring, and hooks.
 
-Every command below was run against the real `dent8` v0.6.1 binary; the output blocks are
+Every command below was run against the real `dent8` v0.7.0 binary; the output blocks are
 trimmed but verbatim.
 
 ## 0. Sixty-second path (binary already installed)
@@ -35,23 +35,23 @@ Optional smoke: `dent8 doctor --source source:owner --write-check`.
 The stock binary needs no services — it uses a local file log by default. MSRV is Rust
 **1.94**.
 
-**Release binaries (recommended, v0.6.1+).** The [releases page][releases] ships prebuilt
+**Release binaries (recommended, v0.7.0+).** The [releases page][releases] ships prebuilt
 archives for five targets, each with a `.sha256` sidecar (built with `postgres,sqlite`):
 
-- `dent8-v0.6.1-aarch64-apple-darwin.tar.gz`
-- `dent8-v0.6.1-x86_64-apple-darwin.tar.gz`
-- `dent8-v0.6.1-aarch64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.6.1-x86_64-pc-windows-msvc.zip`
+- `dent8-v0.7.0-aarch64-apple-darwin.tar.gz`
+- `dent8-v0.7.0-x86_64-apple-darwin.tar.gz`
+- `dent8-v0.7.0-aarch64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.7.0-x86_64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.7.0-x86_64-pc-windows-msvc.zip`
 
 Download, verify, and install one target (Linux x86_64 shown):
 
 ```sh
-BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.6.1
-curl -LO "$BASE/dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz"
-curl -LO "$BASE/dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz.sha256"
-sha256sum -c dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar xzf dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz
+BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.7.0
+curl -LO "$BASE/dent8-v0.7.0-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "$BASE/dent8-v0.7.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum -c dent8-v0.7.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf dent8-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
 chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 ```
 
@@ -216,12 +216,18 @@ and (b).
 Every adapter reduces to two moves — **context in** (inject the believed facts before the model
 runs) and **capture out** (flush proposed facts through the firewall after) — plus, where the
 tool speaks it, the **MCP** server for live tool-mediated access. The matrix below maps common
-tools to their adapter; only the Claude Code row is verified end-to-end in this repo, the rest
-are documented per each vendor's docs.
+tools to their adapter. The **dent8 side of every bundled profile is verified in this repo**:
+the sample MCP configs (Claude Code, Cursor, grok-build, Gemini, Cascade, hecate) are validated
+against the real server contract in tests, and the release-acceptance script initializes the
+Codex profile and runs `doctor --all-agents --write-check` — a real signed write through every
+bundled profile's generated config. Claude Code is additionally dogfooded end to end (this
+repo's own hooks). What is *not* exercised here is each **vendor's** half — whether their
+hook/rules engine fires as their docs describe — so treat that side of the non-Claude rows as
+documented per vendor.
 
 | Agent / framework | Context in | Capture out | MCP | Adapter |
 | --- | --- | --- | --- | --- |
-| Claude Code *(verified)* | `SessionStart` → `dent8 context` | `SessionEnd` → `dent8 capture` | yes | [`.claude/settings.json`](../.claude/settings.json), [`examples/agent-hooks/claude-code/`](../examples/agent-hooks/claude-code/) |
+| Claude Code *(dogfooded)* | `SessionStart` → `dent8 context` | `SessionEnd` → `dent8 capture` | yes | [`.claude/settings.json`](../.claude/settings.json), [`examples/agent-hooks/claude-code/`](../examples/agent-hooks/claude-code/) |
 | Cursor | `.cursor/rules/*.mdc` block (or AGENTS.md) | `stop` hook → `dent8 capture` | yes | [`examples/agent-hooks/cursor/`](../examples/agent-hooks/cursor/) |
 | Codex CLI | `AGENTS.md` block | `notify` wrapper (coarse) | `mcp_servers` TOML | [`examples/codex/`](../examples/codex/), [mcp-clients](mcp-clients.md) |
 | Windsurf / Cline / Zed | `AGENTS.md` or native rules block | manual / wrapper | yes | [`examples/agent-hooks/generic/`](../examples/agent-hooks/generic/), [mcp-clients](mcp-clients.md) |
@@ -229,10 +235,8 @@ are documented per each vendor's docs.
 | Any MCP client | (via MCP tools) | (via MCP tools) | yes | [`docs/mcp-clients.md`](mcp-clients.md) |
 | Any shell framework | `pre-session.sh` (`dent8 context`) | `post-session.sh` (`dent8 capture`) | — | [`examples/agent-hooks/generic/`](../examples/agent-hooks/generic/) |
 
-Claude Code is verified end-to-end (this repo dogfoods it); every other row is documented per
-that vendor's docs and not exercised here. The sub-sections below detail the load-bearing
-patterns — Claude Code hooks (a), the universal `dent8 context` pipe (b), CI capture (c), and
-the MCP server (d).
+The sub-sections below detail the load-bearing patterns — Claude Code hooks (a), the
+universal `dent8 context` pipe (b), CI capture (c), and the MCP server (d).
 
 **(a) Claude Code hooks.** This repo ships its own wiring in
 [`.claude/settings.json`](../.claude/settings.json). The two load-bearing hooks are
