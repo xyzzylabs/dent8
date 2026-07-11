@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-11
+
 ### BREAKING
 - **The `dent8` package name now means the library; the CLI package is `dent8-cli`.** `cargo add
   dent8` gets the new **facade crate** (`crates/dent8`): curated re-exports of the event model +
