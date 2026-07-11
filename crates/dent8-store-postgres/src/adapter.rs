@@ -49,6 +49,20 @@ const APPEND_LOCK_KEY: i64 = 0x0064_656e_7438_0001;
 /// instances starting at once — must be serialized.
 const MIGRATE_LOCK_KEY: i64 = 0x0064_656e_7438_0002;
 
+/// **Session**-scoped advisory-lock key for the cross-process write lease: held across a
+/// whole CLI decide+commit cycle (not one transaction, which is why it cannot reuse the
+/// transaction-scoped [`APPEND_LOCK_KEY`]). Advisory-lock keyspaces are per-database, so
+/// this only ever contends with other dent8 writers on the same database.
+const WRITE_LEASE_LOCK_KEY: i64 = 0x0064_656e_7438_0003;
+
+/// The held cross-process write lease (see [`PostgresEventStore::acquire_write_lease`]).
+/// Dropping it closes the dedicated connection, which ends the session and releases the
+/// session advisory lock server-side — including when the holding process crashes.
+#[derive(Debug)]
+pub struct WriteLease {
+    _conn: PgConnection,
+}
+
 /// A v0 Postgres-backed event store over the `dent8_event_log` table (migration 002).
 #[derive(Clone, Debug)]
 pub struct PostgresEventStore {
@@ -71,6 +85,39 @@ impl PostgresEventStore {
     #[must_use]
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// Acquire the **cross-process write lease** for the database at `url`: a session
+    /// advisory lock ([`WRITE_LEASE_LOCK_KEY`]) taken on a dedicated connection and held
+    /// until the returned guard drops.
+    ///
+    /// Why it exists: the CLI's write cycle is optimistic — decide against a snapshot, then
+    /// commit. The transaction-scoped append lock keeps that *safe* (a stale commit is
+    /// rejected by re-arbitration and retried), but under sustained same-fact contention it
+    /// livelocks: the decide step re-reads a growing log, so a slow writer's snapshot is
+    /// perpetually stale by commit time. Holding this lease across one whole decide+commit
+    /// cycle turns the herd into a fair queue — the Postgres analogue of the `SQLite`
+    /// adapter's sidecar-database lease. Waiting is bounded by `timeout` (`lock_timeout` on
+    /// the dedicated session); expiry maps to the retryable [`StoreError::Conflict`].
+    pub async fn acquire_write_lease(
+        url: &str,
+        timeout: std::time::Duration,
+    ) -> Result<WriteLease, StoreError> {
+        let mut conn = <PgConnection as sqlx::Connection>::connect(url)
+            .await
+            .map_err(unavailable)?;
+        // `SET` cannot take a bind parameter; the value is a plain integer, not user input.
+        let timeout_ms = timeout.as_millis().min(u128::from(i32::MAX as u32));
+        sqlx::query(&format!("SET lock_timeout = {timeout_ms}"))
+            .execute(&mut conn)
+            .await
+            .map_err(unavailable)?;
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(WRITE_LEASE_LOCK_KEY)
+            .execute(&mut conn)
+            .await
+            .map_err(lease_contention)?;
+        Ok(WriteLease { _conn: conn })
     }
 
     /// Create the event-log table and the materialized projection/edge tables if they do
@@ -600,6 +647,18 @@ fn unavailable(error: sqlx::Error) -> StoreError {
     StoreError::Unavailable(error.to_string())
 }
 
+/// Classify a write-lease acquisition failure: a `lock_timeout` expiry (SQLSTATE `55P03`,
+/// `lock_not_available`) means another writer holds the lease — retryable contention, not an
+/// outage. Everything else is a real availability problem.
+fn lease_contention(error: sqlx::Error) -> StoreError {
+    if let sqlx::Error::Database(db) = &error
+        && db.code().as_deref() == Some("55P03")
+    {
+        return StoreError::Conflict(format!("postgres write-lease contention (retryable): {db}"));
+    }
+    unavailable(error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::PostgresEventStore;
@@ -759,6 +818,33 @@ mod tests {
             valid_from: None,
             valid_to: None,
         }
+    }
+
+    #[tokio::test]
+    async fn write_lease_is_exclusive_until_dropped() {
+        let Some(url) = database_url() else {
+            eprintln!("skipping: DATABASE_URL unset");
+            return;
+        };
+        let _guard = SERIAL.lock().await;
+
+        let held = PostgresEventStore::acquire_write_lease(&url, std::time::Duration::from_secs(5))
+            .await
+            .expect("first acquire");
+        // While held, a contender times out as a *retryable* conflict, not an outage.
+        let contender =
+            PostgresEventStore::acquire_write_lease(&url, std::time::Duration::from_millis(100))
+                .await;
+        assert!(
+            matches!(contender, Err(StoreError::Conflict(_))),
+            "expected retryable conflict while the lease is held, got {contender:?}"
+        );
+        drop(held);
+        // Dropping the guard ends the session, releasing the advisory lock server-side; the
+        // contender's bounded wait absorbs the disconnect latency.
+        PostgresEventStore::acquire_write_lease(&url, std::time::Duration::from_secs(5))
+            .await
+            .expect("reacquire after drop");
     }
 
     #[tokio::test]

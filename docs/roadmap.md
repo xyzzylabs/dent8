@@ -46,14 +46,14 @@ evidence of users, not on more features.
    and measure the false-positive rate — the complement of the adversarial corpus. Blocked
    only on trace data, which dogfooding and early users produce. *(Invariant: the firewall
    does not tax legitimate revision.)*
-3. **Concurrency load testing and tuning.** ✅ SQLite: `scripts/load-test.sh` (N parallel
-   writers; a distinct-fact throughput phase plus a deliberate same-fact supersession herd)
-   found and fixed three real defects — BUSY-at-connect classified fatal, stale-snapshot
-   commits reported terminal instead of retried, and optimistic-retry livelock under
-   sustained contention, fixed with a cross-process write lease (see
-   [storage.md](storage.md)). *(Invariant held: every write eventually admitted, exactly one
-   believed value, `verify` green.)* Remaining: the same harness against Postgres, and its
-   session-advisory-lock lease.
+3. **Concurrency load testing and tuning.** ✅ Both backends: `scripts/load-test.sh` (N
+   parallel writers; a distinct-fact throughput phase plus a deliberate same-fact
+   supersession herd) found and fixed three real defects — BUSY-at-connect classified
+   fatal, stale-snapshot commits reported terminal instead of retried, and optimistic-retry
+   livelock under sustained contention, fixed with a cross-process write lease per backend
+   (SQLite sidecar `BEGIN IMMEDIATE`; Postgres session advisory lock — see
+   [storage.md](storage.md)). *(Invariant held on both: every write eventually admitted,
+   exactly one believed value, `verify` green.)*
 4. **MCP `resources/subscribe`.** Push fact-change notifications (superseded, contested,
    retracted) to long-running agents instead of polling; pairs with the local daemon.
    *(Invariant: an agent's injected context cannot silently go stale between reads.)*

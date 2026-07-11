@@ -514,45 +514,72 @@ pub(crate) fn with_write_retry(
     )))
 }
 
-/// Acquire the sqlite backend's cross-process write lease when the active store is a
-/// `sqlite://` URL, `None` for every other store: the file dev store never produces a durable
-/// write conflict (the retry loop runs `op` once), and Postgres serializes each *commit* with
-/// an advisory lock but not the decide+commit cycle (a session-advisory-lock lease there is a
-/// documented follow-up). Waiting is bounded by the lease's busy timeout; a timeout surfaces
-/// as a retryable conflict message.
-#[cfg(feature = "sqlite")]
-fn acquire_backend_write_lease() -> Result<Option<dent8_store_sqlite::WriteLease>, String> {
-    let Some(url) = crate::store_url() else {
-        return Ok(None);
-    };
-    let lowered = url.to_ascii_lowercase();
-    if !lowered.starts_with("sqlite:") {
-        return Ok(None);
-    }
-    // An in-memory database is per-process: the single-connection pool already serializes
-    // its writers, and a `-lease` sidecar would be a stray file.
-    if lowered.contains(":memory:") || lowered.contains("mode=memory") {
-        return Ok(None);
-    }
-    let runtime = crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
-    runtime
-        .block_on(dent8_store_sqlite::SqliteEventStore::acquire_write_lease(
-            &url,
-            std::time::Duration::from_mins(1),
-        ))
-        .map(Some)
-        .map_err(|error| format!("write lease: {error}"))
+/// The held backend write lease, whichever backend produced it. Pure RAII — the payload is
+/// never read; dropping it releases the backend's lock.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+#[allow(dead_code)] // the payloads exist for their Drop impls
+enum BackendWriteLease {
+    #[cfg(feature = "sqlite")]
+    Sqlite(dent8_store_sqlite::WriteLease),
+    #[cfg(feature = "postgres")]
+    Postgres(dent8_store_postgres::WriteLease),
 }
 
-/// No backend in this build has a lease; the type is non-`Copy` so the shared
-/// `drop(lease)` in `with_write_retry` stays meaningful, and the `Result` mirrors the
-/// sqlite variant's signature.
-#[cfg(not(feature = "sqlite"))]
-struct NoLease;
+/// Placeholder when no leasing backend is compiled in; non-`Copy` so the shared lease scope
+/// in `with_write_retry` stays meaningful.
+#[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+struct BackendWriteLease;
 
-#[cfg(not(feature = "sqlite"))]
-#[allow(clippy::unnecessary_wraps)]
-fn acquire_backend_write_lease() -> Result<Option<NoLease>, String> {
+/// Bound on how long one writer waits for another's decide+commit cycle before reporting
+/// retryable contention. Generous on purpose: a queue draining at tens of writes/second
+/// clears hundreds of queued writers within it.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+const WRITE_LEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+
+/// Acquire the active backend's cross-process write lease: a sidecar-database `BEGIN
+/// IMMEDIATE` for `sqlite://` stores, a session advisory lock for `postgres://` stores,
+/// `None` for stores that need none (the file dev store never produces a durable write
+/// conflict, and an in-memory database is per-process — its single-connection pool already
+/// serializes writers, and a `-lease` sidecar would be a stray file). Waiting is bounded by
+/// the lease timeout; expiry surfaces as a retryable conflict message.
+#[allow(clippy::unnecessary_wraps)] // the Err path exists only in leasing-backend builds
+fn acquire_backend_write_lease() -> Result<Option<BackendWriteLease>, String> {
+    #[cfg(any(feature = "sqlite", feature = "postgres"))]
+    if let Some(url) = crate::store_url() {
+        // The scheme is everything before the first `:` (RFC 3986), case-insensitive —
+        // matching `connect_backend`'s dispatch.
+        let lowered = url.to_ascii_lowercase();
+        let scheme = lowered.split_once(':').map_or("", |(scheme, _)| scheme);
+        #[cfg(feature = "sqlite")]
+        if scheme == "sqlite" {
+            if lowered.contains(":memory:") || lowered.contains("mode=memory") {
+                return Ok(None);
+            }
+            let runtime =
+                crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
+            return runtime
+                .block_on(dent8_store_sqlite::SqliteEventStore::acquire_write_lease(
+                    &url,
+                    WRITE_LEASE_TIMEOUT,
+                ))
+                .map(|lease| Some(BackendWriteLease::Sqlite(lease)))
+                .map_err(|error| format!("write lease: {error}"));
+        }
+        #[cfg(feature = "postgres")]
+        if scheme == "postgres" || scheme == "postgresql" {
+            let runtime =
+                crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
+            return runtime
+                .block_on(
+                    dent8_store_postgres::PostgresEventStore::acquire_write_lease(
+                        &url,
+                        WRITE_LEASE_TIMEOUT,
+                    ),
+                )
+                .map(|lease| Some(BackendWriteLease::Postgres(lease)))
+                .map_err(|error| format!("write lease: {error}"));
+        }
+    }
     Ok(None)
 }
 

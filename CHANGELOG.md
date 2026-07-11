@@ -21,22 +21,26 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   an advertised `outputSchema`. At least one policy knob is required — the identity policy is
   the plain fold (`explain`).
 - **`scripts/load-test.sh` — the concurrency harness** (roadmap: load testing and tuning):
-  N parallel writers against one shared SQLite store, two phases — distinct facts
-  (throughput + event-id uniqueness) and a deliberate same-fact supersession herd (every
-  write eventually admitted, exactly one believed value, `verify` green over the full log).
-  The harness found every concurrency fix below.
-- **Cross-process write lease for `sqlite://` stores**
-  (`SqliteEventStore::acquire_write_lease`): each write attempt now holds a `BEGIN
-  IMMEDIATE` on a `<db>-lease` sidecar database across the whole decide+commit cycle.
-  Optimistic retry alone is safe but **livelocks** under sustained same-fact contention —
-  the decide step re-reads a growing log, so a slow writer's snapshot is perpetually stale
-  by commit time; the lease turns the herd into a fair queue. A crashed holder releases
-  automatically (SQLite file locks die with the process), waits are bounded, and a timeout
-  is a retryable conflict. Before: 16 writers × 50 contended supersessions exhausted the
-  retry budget; after: all 800 admitted, none exhausted. The sidecar holds no data and may
-  be deleted when no writer is running. In-memory stores skip the lease (single-process by
-  construction); a Postgres session-advisory-lock lease is a documented follow-up
-  ([docs/storage.md](docs/storage.md)).
+  N parallel writers against one shared store, two phases — distinct facts (throughput +
+  event-id uniqueness) and a deliberate same-fact supersession herd (every write eventually
+  admitted, exactly one believed value, `verify` green over the full log). Defaults to a
+  temporary SQLite store; point `DENT8_STORE_URL` at a throwaway Postgres (with `PSQL`
+  overridable for dockerized databases) to run the Postgres leg. The harness found every
+  concurrency fix below.
+- **Cross-process write lease for `sqlite://` and `postgres://` stores**
+  (`SqliteEventStore::acquire_write_lease`, `PostgresEventStore::acquire_write_lease`):
+  each write attempt now holds a backend lease across the whole decide+commit cycle — a
+  `BEGIN IMMEDIATE` on a `<db>-lease` sidecar database for SQLite, a session advisory lock
+  on a dedicated connection for Postgres. Optimistic retry alone is safe but **livelocks**
+  under sustained same-fact contention — the decide step re-reads a growing log, so a slow
+  writer's snapshot is perpetually stale by commit time; the lease turns the herd into a
+  fair queue. A crashed holder releases automatically (SQLite file locks and Postgres
+  sessions die with the process), waits are bounded, and a timeout is a retryable conflict
+  (SQLSTATE `55P03` on Postgres). Before: 16 writers × 50 contended supersessions exhausted
+  the retry budget; after: all 800 admitted on both backends, none exhausted. The SQLite
+  sidecar holds no data and may be deleted when no writer is running; in-memory stores skip
+  the lease (single-process by construction). See the new write-concurrency section in
+  [docs/storage.md](docs/storage.md).
 
 ### Fixed
 - **`SQLITE_BUSY` at connect/migrate is a retryable conflict now**: concurrent

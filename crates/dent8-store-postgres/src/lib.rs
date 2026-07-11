@@ -13,7 +13,7 @@ pub const ID_ALLOCATOR_SCHEMA_SQL: &str =
 #[cfg(feature = "adapter")]
 mod adapter;
 #[cfg(feature = "adapter")]
-pub use adapter::PostgresEventStore;
+pub use adapter::{PostgresEventStore, WriteLease};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Migration {

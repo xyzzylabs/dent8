@@ -11,11 +11,15 @@
 # retry path absorbs conflicts); the end state believes exactly one value; `verify` is
 # green over the whole log.
 #
-#   scripts/load-test.sh [WRITERS] [WRITES_PER_WRITER]     # default 8 x 25, SQLite
+#   scripts/load-test.sh [WRITERS] [WRITES_PER_WRITER]     # default 8 x 25, temp SQLite
 #   DENT8_BIN=target/release/dent8 scripts/load-test.sh 16 50
 #
-# Uses the embedded SQLite backend (the stock build's shared-store path). For Postgres,
-# point DENT8_STORE_URL at a database before running and skip the init below.
+# Postgres: point DENT8_STORE_URL at a THROWAWAY database (the harness drops the dent8
+# tables up front so runs are repeatable) and run a binary built with --features postgres.
+# Invariant checks need a psql; override PSQL when it is not on PATH, e.g. for docker:
+#   PSQL='docker exec -i dent8-load-pg psql -U postgres -d dent8' \
+#   DENT8_STORE_URL=postgres://postgres:dent8@localhost:5433/dent8 \
+#   DENT8_BIN=target/release/dent8 scripts/load-test.sh
 set -euo pipefail
 
 WRITERS="${1:-8}"
@@ -24,11 +28,38 @@ BIN="${DENT8_BIN:-dent8}"
 
 WORK="$(mktemp -d -t dent8-load-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
-DB="$WORK/load.db"
-export DENT8_STORE_URL="sqlite://$DB"
+
+if [ -n "${DENT8_STORE_URL:-}" ]; then
+  case "$DENT8_STORE_URL" in
+    postgres:*|postgresql:*) BACKEND=postgres ;;
+    sqlite:*) BACKEND=sqlite; DB="${DENT8_STORE_URL#sqlite://}" ;;
+    *) echo "unsupported DENT8_STORE_URL for this harness: $DENT8_STORE_URL"; exit 1 ;;
+  esac
+else
+  BACKEND=sqlite
+  DB="$WORK/load.db"
+  export DENT8_STORE_URL="sqlite://$DB"
+fi
 export DENT8_AUTHORITY="$WORK/authority.json"
 unset DENT8_LOG DENT8_TRUST DENT8_GRANT DENT8_IDENTITY_KEY DENT8_REQUIRE_IDENTITY \
   DENT8_REQUIRE_AUTHORITY DENT8_DAEMON_SOCKET 2>/dev/null || true
+
+# Backend-appropriate SQL for the invariant checks. $PSQL is intentionally word-split so a
+# multi-word command (docker exec …) works; URLs with shell metacharacters are out of scope
+# for a test harness.
+count_sql() {
+  if [ "$BACKEND" = postgres ]; then
+    ${PSQL:-psql "$DENT8_STORE_URL"} -tAc "$1"
+  else
+    sqlite3 "$DB" "$1"
+  fi
+}
+
+if [ "$BACKEND" = postgres ]; then
+  # Start from nothing: the adapter self-migrates on first connect, and phase A's count
+  # invariant assumes an empty log. Tables are left behind after the run for inspection.
+  count_sql "DROP TABLE IF EXISTS dent8_event_log, dent8_claim_projection, dent8_claim_edge, dent8_id_allocator CASCADE;" >/dev/null
+fi
 
 echo "# dent8 load test: $WRITERS writers x $WRITES writes, backend $DENT8_STORE_URL"
 "$BIN" --version
@@ -52,7 +83,6 @@ ELAPSED=$(( $(date +%s) - START ))
 TOTAL=$((WRITERS * WRITES))
 echo "phase A: $TOTAL writes in ${ELAPSED}s ($(( ELAPSED > 0 ? TOTAL / ELAPSED : TOTAL )) writes/s)"
 
-count_sql() { sqlite3 "$DB" "$1"; }
 EVENTS=$(count_sql "SELECT COUNT(*) FROM dent8_event_log;")
 DISTINCT=$(count_sql "SELECT COUNT(DISTINCT event_id) FROM dent8_event_log;")
 [ "$EVENTS" = "$TOTAL" ] || { echo "FAIL: expected $TOTAL events, store has $EVENTS"; exit 1; }

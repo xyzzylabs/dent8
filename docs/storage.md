@@ -73,20 +73,22 @@ durably. Two layers keep that safe *and* live:
    re-arbitration*, classified retryable, and the op re-runs from a fresh snapshot
    (`with_write_retry`, capped attempts, decorrelated-jitter backoff). Nothing stale can
    land; `verify` stays green under any interleaving.
-2. **Liveness — the write lease (SQLite).** Optimistic retry alone livelocks under
-   sustained same-fact contention: the decide step re-reads a growing log, so a slow
-   writer's snapshot is perpetually stale by commit time. For `sqlite://` stores each
-   attempt therefore holds a **cross-process write lease** — a `BEGIN IMMEDIATE` on a
-   `<db>-lease` sidecar database — across the whole decide+commit cycle, turning the herd
-   into a fair queue. A crashed holder releases automatically (SQLite file locks die with
-   the process); acquisition waits are bounded and time out as a retryable conflict. The
-   sidecar holds no data and may be deleted when no writer is running. Postgres serializes
-   each *commit* with an advisory lock; a session-advisory-lock lease across its
-   decide+commit cycle is a documented follow-up.
+2. **Liveness — the write lease.** Optimistic retry alone livelocks under sustained
+   same-fact contention: the decide step re-reads a growing log, so a slow writer's
+   snapshot is perpetually stale by commit time. Each attempt therefore holds a
+   **cross-process write lease** across the whole decide+commit cycle, turning the herd
+   into a fair queue. For `sqlite://` stores the lease is a `BEGIN IMMEDIATE` on a
+   `<db>-lease` sidecar database (the sidecar holds no data and may be deleted when no
+   writer is running); for `postgres://` stores it is a **session advisory lock** on a
+   dedicated connection (`pg_advisory_lock`, per-database keyspace). Either way a crashed
+   holder releases automatically — SQLite file locks and Postgres sessions die with the
+   process — and acquisition waits are bounded, timing out as a retryable conflict
+   (`lock_timeout` → SQLSTATE `55P03` on Postgres).
 
-`scripts/load-test.sh` exercises both layers: parallel writers on distinct facts
-(throughput + id uniqueness) and a deliberate same-fact herd (every write eventually
-admitted, exactly one believed value, `verify` green).
+`scripts/load-test.sh` exercises both layers on either backend: parallel writers on
+distinct facts (throughput + id uniqueness) and a deliberate same-fact herd (every write
+eventually admitted, exactly one believed value, `verify` green). Point `DENT8_STORE_URL`
+at a throwaway Postgres to run the Postgres leg; the default is a temporary SQLite store.
 
 ## Tables / record shape
 
