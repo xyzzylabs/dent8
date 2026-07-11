@@ -50,8 +50,8 @@ The belief surface maps 1:1 onto the CLI: `assert_fact` (Python keyword), `super
 whole grammar — unix millis, `"now"`, `"-7d"`, RFC 3339, or a bare UTC date.
 
 For LLM tool-calling agents, prefer the MCP server (`dent8 mcp serve`) — see
-[examples/langchain](../../examples/langchain/) and
-[examples/vercel-ai-sdk](../../examples/vercel-ai-sdk/). This SDK is for
+[examples/langchain](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain) and
+[examples/vercel-ai-sdk](https://github.com/xyzzylabs/dent8/tree/main/examples/vercel-ai-sdk). This SDK is for
 *programmatic* access from Python code.
 
 ## Test

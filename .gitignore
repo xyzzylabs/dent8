@@ -38,3 +38,7 @@ __pycache__/
 # Editor and OS noise.
 .DS_Store
 *.swp
+
+# Python SDK build artifacts (sdks/python)
+dist/
+*.egg-info/
