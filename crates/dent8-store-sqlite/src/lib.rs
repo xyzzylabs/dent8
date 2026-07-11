@@ -69,6 +69,14 @@ UPDATE dent8_id_allocator
  WHERE name = 'event';
 ";
 
+/// The held cross-process write lease (see [`SqliteEventStore::acquire_write_lease`]).
+/// The `BEGIN IMMEDIATE` write lock on the sidecar database is released when this drops
+/// (the connection closes and the transaction dies with it).
+#[derive(Debug)]
+pub struct WriteLease {
+    _conn: sqlx::sqlite::SqliteConnection,
+}
+
 /// A v0 `SQLite`-backed event store. The pool is capped at **one connection**: that serializes
 /// writers *within* a process (cross-process serialization is `BEGIN IMMEDIATE` + `busy_timeout`
 /// in [`Self::append_many`]), and keeps an in-`:memory:` database alive for the pool's lifetime.
@@ -95,7 +103,7 @@ impl SqliteEventStore {
             .max_connections(1)
             .connect_with(options)
             .await
-            .map_err(unavailable)?;
+            .map_err(map_busy)?;
         Ok(Self { pool })
     }
 
@@ -107,12 +115,45 @@ impl SqliteEventStore {
         Self { pool }
     }
 
-    /// Create the event-log table + indexes if they do not exist (idempotent).
+    /// Acquire the **cross-process write lease** for the store at `url`: a `BEGIN IMMEDIATE`
+    /// held on a sidecar `<db>-lease` database until the returned guard drops.
+    ///
+    /// Why it exists: the CLI's write cycle is optimistic — decide against a snapshot, then
+    /// commit. Per-statement locking keeps that *safe* (a stale commit is rejected and
+    /// retried), but under sustained same-fact contention it livelocks: the decide step
+    /// re-reads a growing log, so a slow writer's snapshot is perpetually stale by commit
+    /// time. Holding this lease across one whole decide+commit cycle turns the herd into a
+    /// fair queue. A crashed holder releases automatically (`SQLite` file locks die with the
+    /// process); waiting is bounded by `timeout`, and a timeout maps to the retryable
+    /// [`StoreError::Conflict`].
+    pub async fn acquire_write_lease(
+        url: &str,
+        timeout: std::time::Duration,
+    ) -> Result<WriteLease, StoreError> {
+        // Sidecar path: the database path plus `-lease`, dropping any query string so
+        // `sqlite://db.sqlite?mode=rwc` leases `db.sqlite-lease`, not a `rwc-lease` mode.
+        let base = url.split('?').next().unwrap_or(url);
+        let options = SqliteConnectOptions::from_str(&format!("{base}-lease"))
+            .map_err(|error| StoreError::Unavailable(error.to_string()))?
+            .create_if_missing(true)
+            .busy_timeout(timeout);
+        let mut conn = <sqlx::sqlite::SqliteConnection as sqlx::Connection>::connect_with(&options)
+            .await
+            .map_err(map_busy)?;
+        sqlx::raw_sql("BEGIN IMMEDIATE")
+            .execute(&mut conn)
+            .await
+            .map_err(map_busy)?;
+        Ok(WriteLease { _conn: conn })
+    }
+
+    /// Create the event-log table + indexes if they do not exist (idempotent). Concurrent
+    /// first-connects race this DDL for the write lock, so BUSY here is a retryable conflict.
     pub async fn migrate(&self) -> Result<(), StoreError> {
         sqlx::raw_sql(SCHEMA_SQL)
             .execute(&self.pool)
             .await
-            .map_err(unavailable)?;
+            .map_err(map_busy)?;
         Ok(())
     }
 
@@ -546,6 +587,31 @@ mod tests {
         assert_eq!(store.reserve_event_ids(2).await.unwrap(), 0);
         assert_eq!(store.reserve_event_ids(1).await.unwrap(), 2);
         assert_eq!(store.reserve_event_ids(3).await.unwrap(), 3);
+    }
+
+    #[tokio::test]
+    async fn write_lease_is_exclusive_until_dropped() {
+        let dir = std::env::temp_dir().join(format!("dent8-lease-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let url = format!("sqlite://{}", dir.join("store.db").display());
+
+        let held = SqliteEventStore::acquire_write_lease(&url, std::time::Duration::from_secs(5))
+            .await
+            .unwrap();
+        // While held, a contender times out as a *retryable* conflict, not a hard failure.
+        let contender =
+            SqliteEventStore::acquire_write_lease(&url, std::time::Duration::from_millis(50)).await;
+        assert!(
+            matches!(contender, Err(StoreError::Conflict(_))),
+            "expected retryable conflict while the lease is held, got {contender:?}"
+        );
+        drop(held);
+        // Dropping the guard releases the sidecar lock (the busy timeout absorbs the
+        // connection's asynchronous close).
+        SqliteEventStore::acquire_write_lease(&url, std::time::Duration::from_millis(500))
+            .await
+            .unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

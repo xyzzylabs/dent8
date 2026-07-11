@@ -62,6 +62,32 @@ These are backend-independent invariants (mechanized per
   concurrent writers cannot silently leave two fresh believed facts unless the conflict
   is explicitly contested.
 
+## Write concurrency (the CLI/MCP decide+commit cycle)
+
+A CLI/MCP write is **optimistic**: decide against a snapshot (load → replay → arbitrate),
+then commit through the backend's serialized append transaction, which re-arbitrates
+durably. Two layers keep that safe *and* live:
+
+1. **Safety — the backend.** The append transaction is the arbiter of record. A commit
+   whose snapshot went stale (a concurrent writer landed first) is *rejected by
+   re-arbitration*, classified retryable, and the op re-runs from a fresh snapshot
+   (`with_write_retry`, capped attempts, decorrelated-jitter backoff). Nothing stale can
+   land; `verify` stays green under any interleaving.
+2. **Liveness — the write lease (SQLite).** Optimistic retry alone livelocks under
+   sustained same-fact contention: the decide step re-reads a growing log, so a slow
+   writer's snapshot is perpetually stale by commit time. For `sqlite://` stores each
+   attempt therefore holds a **cross-process write lease** — a `BEGIN IMMEDIATE` on a
+   `<db>-lease` sidecar database — across the whole decide+commit cycle, turning the herd
+   into a fair queue. A crashed holder releases automatically (SQLite file locks die with
+   the process); acquisition waits are bounded and time out as a retryable conflict. The
+   sidecar holds no data and may be deleted when no writer is running. Postgres serializes
+   each *commit* with an advisory lock; a session-advisory-lock lease across its
+   decide+commit cycle is a documented follow-up.
+
+`scripts/load-test.sh` exercises both layers: parallel writers on distinct facts
+(throughput + id uniqueness) and a deliberate same-fact herd (every write eventually
+admitted, exactly one believed value, `verify` green).
+
 ## Tables / record shape
 
 The log decomposes into four record kinds (named generically; the Postgres DDL

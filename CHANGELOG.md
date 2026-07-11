@@ -20,6 +20,38 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   available to read-only daemon connections), with the diff mirrored in `structuredContent` and
   an advertised `outputSchema`. At least one policy knob is required — the identity policy is
   the plain fold (`explain`).
+- **`scripts/load-test.sh` — the concurrency harness** (roadmap: load testing and tuning):
+  N parallel writers against one shared SQLite store, two phases — distinct facts
+  (throughput + event-id uniqueness) and a deliberate same-fact supersession herd (every
+  write eventually admitted, exactly one believed value, `verify` green over the full log).
+  The harness found every concurrency fix below.
+- **Cross-process write lease for `sqlite://` stores**
+  (`SqliteEventStore::acquire_write_lease`): each write attempt now holds a `BEGIN
+  IMMEDIATE` on a `<db>-lease` sidecar database across the whole decide+commit cycle.
+  Optimistic retry alone is safe but **livelocks** under sustained same-fact contention —
+  the decide step re-reads a growing log, so a slow writer's snapshot is perpetually stale
+  by commit time; the lease turns the herd into a fair queue. A crashed holder releases
+  automatically (SQLite file locks die with the process), waits are bounded, and a timeout
+  is a retryable conflict. Before: 16 writers × 50 contended supersessions exhausted the
+  retry budget; after: all 800 admitted, none exhausted. The sidecar holds no data and may
+  be deleted when no writer is running. In-memory stores skip the lease (single-process by
+  construction); a Postgres session-advisory-lock lease is a documented follow-up
+  ([docs/storage.md](docs/storage.md)).
+
+### Fixed
+- **`SQLITE_BUSY` at connect/migrate is a retryable conflict now**: concurrent
+  first-connects race the schema DDL for the write lock; that BUSY was classified
+  `Unavailable` (fatal) and crashed parallel writers on a fresh store. `connect_backend`
+  also flattened errors to text, destroying the retryable class — it now returns the typed
+  `StoreError`, and the write path routes `Conflict` into the retry loop.
+- **A stale-snapshot commit is retried, not reported as terminal**: when a concurrent
+  writer lands between an op's decide snapshot and its durable append, the backend's
+  re-arbitration correctly rejects the commit (e.g. `cannot mutate terminal fact state
+  Superseded`) — but that rejection surfaced as a non-retryable failure and crashed the
+  writer. It is now classified as a write conflict: the op re-decides from a fresh snapshot
+  and the write lands, or is *genuinely* rejected against current state.
+- **Write-conflict retry widened**: 32 attempts (was 16), exponential backoff capped at
+  256 ms (was 128 ms), still decorrelated per-process jitter.
 
 ## [0.6.1] - 2026-07-11
 

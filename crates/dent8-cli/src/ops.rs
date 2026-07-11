@@ -155,6 +155,17 @@ impl OpError {
 /// `Other` covers both an I/O failure and a durable firewall rejection (e.g. a same-subject
 /// race the in-memory snapshot admitted but the transaction rejected), so the message says
 /// "could not commit" rather than implying the write was admitted-then-lost.
+/// Map an id-reservation failure: backend contention (`Conflict`) re-enters the CLI's
+/// write-retry loop; anything else rejects the write.
+fn reserve_error_to_op(error: WriteError) -> OpError {
+    match error {
+        WriteError::Conflict(message) => OpError::Conflict(message),
+        WriteError::Other(message) => {
+            OpError::rejected(format!("could not reserve event ids: {message}"))
+        }
+    }
+}
+
 pub(crate) fn write_error_to_op(error: WriteError) -> OpError {
     match error {
         WriteError::Conflict(message) => OpError::Conflict(message),
@@ -461,17 +472,35 @@ fn record_survived_challenge(
 }
 
 /// Run a write operation, retrying on a concurrent-writer conflict. Each attempt re-runs the
-/// whole `op_*` (fresh snapshot → fresh/reserved `event:{n}` id range → re-arbitrate → append).
-/// Between attempts it backs off with per-process jitter to **de-synchronize a thundering herd**.
-/// A success or any non-conflict failure returns immediately. Without an async backend, no
-/// durable write conflict is produced, so this runs `op` exactly once.
+/// whole `op_*` (fresh snapshot → fresh/reserved `event:{n}` id range → re-arbitrate → append)
+/// while holding the backend's **cross-process write lease** when it has one: optimistic
+/// retry alone is safe but livelocks under sustained same-fact contention, because the decide
+/// step re-reads a growing log and a slow writer's snapshot is perpetually stale by commit
+/// time — the lease turns the herd into a fair queue. Between attempts it backs off with
+/// per-process jitter to **de-synchronize a thundering herd** (the retry loop remains for
+/// non-lease racers and lease-acquisition timeouts). A success or any non-conflict failure
+/// returns immediately. Without an async backend, no durable write conflict is produced, so
+/// this runs `op` exactly once.
 pub(crate) fn with_write_retry(
     mut op: impl FnMut() -> Result<String, OpError>,
 ) -> Result<String, OpError> {
-    const MAX_ATTEMPTS: u32 = 16;
+    const MAX_ATTEMPTS: u32 = 32;
     let mut last = String::new();
     for attempt in 0..MAX_ATTEMPTS {
-        match op() {
+        let settled = {
+            let _lease = match acquire_backend_write_lease() {
+                Ok(lease) => lease,
+                Err(message) => {
+                    last = message;
+                    back_off(attempt);
+                    continue;
+                }
+            };
+            op()
+            // The lease releases here — before any backoff, so a sleeping loser cannot
+            // starve the very writers the backoff is yielding to.
+        };
+        match settled {
             Err(OpError::Conflict(message)) => {
                 last = message;
                 back_off(attempt);
@@ -485,6 +514,48 @@ pub(crate) fn with_write_retry(
     )))
 }
 
+/// Acquire the sqlite backend's cross-process write lease when the active store is a
+/// `sqlite://` URL, `None` for every other store: the file dev store never produces a durable
+/// write conflict (the retry loop runs `op` once), and Postgres serializes each *commit* with
+/// an advisory lock but not the decide+commit cycle (a session-advisory-lock lease there is a
+/// documented follow-up). Waiting is bounded by the lease's busy timeout; a timeout surfaces
+/// as a retryable conflict message.
+#[cfg(feature = "sqlite")]
+fn acquire_backend_write_lease() -> Result<Option<dent8_store_sqlite::WriteLease>, String> {
+    let Some(url) = crate::store_url() else {
+        return Ok(None);
+    };
+    let lowered = url.to_ascii_lowercase();
+    if !lowered.starts_with("sqlite:") {
+        return Ok(None);
+    }
+    // An in-memory database is per-process: the single-connection pool already serializes
+    // its writers, and a `-lease` sidecar would be a stray file.
+    if lowered.contains(":memory:") || lowered.contains("mode=memory") {
+        return Ok(None);
+    }
+    let runtime = crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
+    runtime
+        .block_on(dent8_store_sqlite::SqliteEventStore::acquire_write_lease(
+            &url,
+            std::time::Duration::from_mins(1),
+        ))
+        .map(Some)
+        .map_err(|error| format!("write lease: {error}"))
+}
+
+/// No backend in this build has a lease; the type is non-`Copy` so the shared
+/// `drop(lease)` in `with_write_retry` stays meaningful, and the `Result` mirrors the
+/// sqlite variant's signature.
+#[cfg(not(feature = "sqlite"))]
+struct NoLease;
+
+#[cfg(not(feature = "sqlite"))]
+#[allow(clippy::unnecessary_wraps)]
+fn acquire_backend_write_lease() -> Result<Option<NoLease>, String> {
+    Ok(None)
+}
+
 /// Capped exponential backoff with **decorrelated** per-process jitter for the write-conflict
 /// retry. The jitter mixes the process id *and the attempt* through `SplitMix64` and takes an
 /// **odd** modulus (`2·exp+1`) — not a power of two — so two processes whose ids happen to be
@@ -492,7 +563,7 @@ pub(crate) fn with_write_retry(
 /// a plain `pid % (1<<n)` would have). No RNG dependency: the process id is the per-process
 /// entropy, re-mixed each attempt.
 pub(crate) fn back_off(attempt: u32) {
-    let exp_ms = 1u64 << attempt.min(7); // 1, 2, 4, … capped at 128 ms
+    let exp_ms = 1u64 << attempt.min(8); // 1, 2, 4, … capped at 256 ms
     let mut z = u64::from(std::process::id())
         .wrapping_add(u64::from(attempt).wrapping_mul(0x9E37_79B9_7F4A_7C15));
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -524,8 +595,7 @@ pub(crate) fn op_assert(
     let now = now_millis();
     // A fresh fact per assertion (keyed by sequence); the registry's uniqueness governs
     // whether a second *fresh* fact for the same subject+predicate is admissible.
-    let seq = reserve_event_seq(&store, 1)
-        .map_err(|error| OpError::rejected(format!("could not reserve event id: {error}")))?;
+    let seq = reserve_event_seq(&store, 1).map_err(reserve_error_to_op)?;
     let mut event = build_event(
         &format!("event:{seq}"),
         &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
@@ -639,8 +709,7 @@ pub(crate) fn op_derive(
         )));
     }
     let now = now_millis();
-    let seq = reserve_event_seq(&store, 1)
-        .map_err(|error| OpError::rejected(format!("could not reserve event id: {error}")))?;
+    let seq = reserve_event_seq(&store, 1).map_err(reserve_error_to_op)?;
     let mut event = build_event(
         &format!("event:{seq}"),
         &format!("fact:{subject_kind}:{subject_key}:{predicate}:{seq}"),
@@ -1172,8 +1241,7 @@ pub(crate) fn op_supersede(
         ));
     }
 
-    let seq = reserve_event_seq(&store, 1 + incumbents.len())
-        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
+    let seq = reserve_event_seq(&store, 1 + incumbents.len()).map_err(reserve_error_to_op)?;
     let (mut events, replacement_fact_id) = build_revision(
         seq,
         &incumbents,
@@ -1374,8 +1442,7 @@ pub(crate) fn op_retract(
             )));
         }
     };
-    let seq = reserve_event_seq(&store, incumbents.len())
-        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
+    let seq = reserve_event_seq(&store, incumbents.len()).map_err(reserve_error_to_op)?;
     let mut events = build_retractions(
         seq,
         &incumbents,
@@ -1588,8 +1655,7 @@ pub(crate) fn op_record_retrievals(
     }
     let mut store = load_store(path).map_err(OpError::invalid)?;
     let now = now_millis();
-    let seq = reserve_event_seq(&store, retrieved.len())
-        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
+    let seq = reserve_event_seq(&store, retrieved.len()).map_err(reserve_error_to_op)?;
     let mut events = Vec::with_capacity(retrieved.len());
     for (index, fact) in retrieved.iter().enumerate() {
         let event = build_event(
@@ -1655,8 +1721,7 @@ pub(crate) fn build_per_incumbent(
         )));
     }
     let now = now_millis();
-    let seq = reserve_event_seq(&store, incumbents.len())
-        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
+    let seq = reserve_event_seq(&store, incumbents.len()).map_err(reserve_error_to_op)?;
     let mut events = Vec::with_capacity(incumbents.len());
     for (index, incumbent) in incumbents.iter().enumerate() {
         let event = build_event(
@@ -1826,8 +1891,7 @@ pub(crate) fn op_contradict(
             "nothing to contradict: no believed {subject_kind}:{subject_key} {predicate}"
         )));
     };
-    let seq = reserve_event_seq(&store, 2)
-        .map_err(|error| OpError::rejected(format!("could not reserve event ids: {error}")))?;
+    let seq = reserve_event_seq(&store, 2).map_err(reserve_error_to_op)?;
     let (mut events, opposing_fact_id) = build_contradiction(
         seq,
         incumbent.fact_id.as_str(),

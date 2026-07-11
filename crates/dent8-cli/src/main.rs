@@ -3216,7 +3216,9 @@ fn load_raw_events(path: &str) -> Result<Vec<FactEvent>, String> {
 fn backend_scan_raw(url: &str) -> Result<Vec<FactEvent>, String> {
     use dent8_store::EventFilter;
     store_runtime()?.block_on(async {
-        let store = connect_backend(url).await?;
+        let store = connect_backend(url)
+            .await
+            .map_err(|error| error.to_string())?;
         store
             .scan_events(&EventFilter::default())
             .await
@@ -3489,7 +3491,9 @@ fn verify_log(path: &str) -> Result<String, String> {
 fn backend_verify(url: &str) -> Result<String, String> {
     use dent8_store::EventFilter;
     store_runtime()?.block_on(async {
-        let store = connect_backend(url).await?;
+        let store = connect_backend(url)
+            .await
+            .map_err(|error| error.to_string())?;
         if !store
             .verify_chain()
             .await
@@ -3823,23 +3827,32 @@ fn next_seq(store: &InMemoryEventStore) -> usize {
 /// Reserve the first numeric suffix for `count` new `event:{n}` ids. File-backed dev logs derive
 /// it from the trusted snapshot; async backends reserve it from the database so concurrent
 /// writers do not sign the same event id. Reserved async ids are unique, not gap-free.
-pub(crate) fn reserve_event_seq(store: &InMemoryEventStore, count: usize) -> Result<usize, String> {
+/// Returns [`WriteError`] so a **retryable** backend contention during reservation
+/// (`WriteError::Conflict`, e.g. `SQLite`'s `SQLITE_BUSY`) re-enters the CLI's write-retry
+/// loop instead of aborting the write.
+pub(crate) fn reserve_event_seq(
+    store: &InMemoryEventStore,
+    count: usize,
+) -> Result<usize, WriteError> {
     if count == 0 {
-        return Err("cannot reserve zero event ids".to_string());
+        return Err(WriteError::Other(
+            "cannot reserve zero event ids".to_string(),
+        ));
     }
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
         return backend_reserve_event_ids(&url, count).and_then(|seq| {
-            usize::try_from(seq).map_err(|_| format!("reserved event id {seq} exceeds usize"))
+            usize::try_from(seq)
+                .map_err(|_| WriteError::Other(format!("reserved event id {seq} exceeds usize")))
         });
     }
     #[cfg(not(feature = "async-store"))]
     if store_url().is_some() {
-        return Err(
+        return Err(WriteError::Other(
             "DENT8_STORE_URL is set but this build has no async backend — \
              rebuild with `--features postgres` (or another backend)"
                 .to_string(),
-        );
+        ));
     }
     Ok(next_seq(store))
 }
@@ -4003,7 +4016,7 @@ fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(
 /// run in a repo with a SQLite/Postgres backend uses that backend instead of forking a parallel
 /// `memory.jsonl` inside `.dent8/`. A set-but-empty (or whitespace-only) value counts as
 /// **unset** at each layer; the value is trimmed so a quoted/padded entry still dispatches.
-fn store_url() -> Option<String> {
+pub(crate) fn store_url() -> Option<String> {
     if let Some(url) = std::env::var("DENT8_STORE_URL")
         .ok()
         .map(|value| value.trim().to_string())
@@ -4027,7 +4040,7 @@ fn store_url() -> Option<String> {
 /// storage call is fine for a single-operation CLI process, and the single thread is why
 /// [`dent8_store::AsyncEventStore`] can be `?Send`.
 #[cfg(feature = "async-store")]
-fn store_runtime() -> Result<tokio::runtime::Runtime, String> {
+pub(crate) fn store_runtime() -> Result<tokio::runtime::Runtime, String> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -4043,7 +4056,14 @@ fn store_runtime() -> Result<tokio::runtime::Runtime, String> {
 /// backend" error below — hence `unused_async` is allowed (the awaits live in the cfg'd arms).
 #[cfg(feature = "async-store")]
 #[allow(clippy::unused_async)]
-async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventStore>, String> {
+/// Connect + self-migrate the backend named by the URL scheme. Returns the typed
+/// [`dent8_store::StoreError`] so a **retryable** connect/migrate failure (e.g. `SQLite`'s
+/// `SQLITE_BUSY` when concurrent processes race the first-connect DDL or the write lock)
+/// stays classified as [`StoreError::Conflict`] all the way into the CLI's write-retry loop
+/// instead of being flattened to a terminal string.
+async fn connect_backend(
+    url: &str,
+) -> Result<Box<dyn dent8_store::AsyncEventStore>, dent8_store::StoreError> {
     // The scheme is everything before the first `:` (RFC 3986) and is case-insensitive, so
     // match on the lowercased scheme — but pass the *original* url to the driver (case is
     // significant in credentials/host/path).
@@ -4055,30 +4075,22 @@ async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventSto
         #[cfg(feature = "postgres")]
         "postgres" | "postgresql" => {
             use dent8_store_postgres::PostgresEventStore;
-            let store = PostgresEventStore::connect(url)
-                .await
-                .map_err(|error| error.to_string())?;
-            dent8_store::AsyncEventStore::migrate(&store)
-                .await
-                .map_err(|error| error.to_string())?;
+            let store = PostgresEventStore::connect(url).await?;
+            dent8_store::AsyncEventStore::migrate(&store).await?;
             Ok(Box::new(store))
         }
         #[cfg(feature = "sqlite")]
         "sqlite" => {
             use dent8_store_sqlite::SqliteEventStore;
-            let store = SqliteEventStore::connect(url)
-                .await
-                .map_err(|error| error.to_string())?;
-            dent8_store::AsyncEventStore::migrate(&store)
-                .await
-                .map_err(|error| error.to_string())?;
+            let store = SqliteEventStore::connect(url).await?;
+            dent8_store::AsyncEventStore::migrate(&store).await?;
             Ok(Box::new(store))
         }
-        _ => Err(format!(
+        _ => Err(dent8_store::StoreError::Unavailable(format!(
             "unsupported store URL `{url}`: no matching backend in this build \
              (postgres:// needs `--features postgres`; sqlite:// is in default builds or \
              needs `--features sqlite` when defaults are disabled)"
-        )),
+        ))),
     }
 }
 
@@ -4089,7 +4101,9 @@ async fn connect_backend(url: &str) -> Result<Box<dyn dent8_store::AsyncEventSto
 fn backend_load(url: &str) -> Result<InMemoryEventStore, String> {
     use dent8_store::EventFilter;
     store_runtime()?.block_on(async {
-        let store = connect_backend(url).await?;
+        let store = connect_backend(url)
+            .await
+            .map_err(|error| error.to_string())?;
         let events = store
             .scan_events(&EventFilter::default())
             .await
@@ -4117,7 +4131,10 @@ fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
     use dent8_store::StoreError;
     let owned: Vec<FactEvent> = events.iter().map(|&event| event.clone()).collect();
     store_runtime().map_err(WriteError::Other)?.block_on(async {
-        let store = connect_backend(url).await.map_err(WriteError::Other)?;
+        let store = connect_backend(url).await.map_err(|error| match error {
+            StoreError::Conflict(message) => WriteError::Conflict(message),
+            other => WriteError::Other(other.to_string()),
+        })?;
         store
             .append_many(owned)
             .await
@@ -4125,6 +4142,22 @@ fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
                 // A duplicate id or long-held write lock can be retried by re-running the op
                 // against a fresh snapshot and reserving a fresh id range.
                 StoreError::Conflict(message) => WriteError::Conflict(message),
+                // A durable-arbitration rejection here means the decide snapshot went stale
+                // between decide and commit: these exact events already passed the *same*
+                // arbitration against the in-memory snapshot moments ago, so a disagreement
+                // implies a concurrent writer landed first (the incumbent turned terminal, a
+                // unique predicate gained a fresh fact, ...). Retrying re-runs the whole op
+                // against a fresh snapshot and re-decides honestly — a genuinely inadmissible
+                // write fails at the in-memory stage on the retry with its real firewall
+                // error; a merely-stale one commits correctly.
+                error @ (StoreError::Rejected(_)
+                | StoreError::LaunderedAuthority { .. }
+                | StoreError::UnbackedSupersession(_)
+                | StoreError::BelowAuthorityFloor { .. }
+                | StoreError::UniquenessViolation { .. }
+                | StoreError::TtlCeilingExceeded { .. }) => WriteError::Conflict(format!(
+                    "durable arbitration disagreed with the decide snapshot (stale): {error}"
+                )),
                 other => WriteError::Other(other.to_string()),
             })?;
         Ok(())
@@ -4132,15 +4165,19 @@ fn backend_append(url: &str, events: &[&FactEvent]) -> Result<(), WriteError> {
 }
 
 #[cfg(feature = "async-store")]
-fn backend_reserve_event_ids(url: &str, count: usize) -> Result<u64, String> {
-    let count = u32::try_from(count)
-        .map_err(|_| format!("cannot reserve {count} event ids in one operation"))?;
-    store_runtime()?.block_on(async {
-        let store = connect_backend(url).await?;
-        store
-            .reserve_event_ids(count)
-            .await
-            .map_err(|error| error.to_string())
+fn backend_reserve_event_ids(url: &str, count: usize) -> Result<u64, WriteError> {
+    use dent8_store::StoreError;
+    // Classify backend contention as the retryable kind so the write-retry loop absorbs it.
+    let classify = |error: StoreError| match error {
+        StoreError::Conflict(message) => WriteError::Conflict(message),
+        other => WriteError::Other(other.to_string()),
+    };
+    let count = u32::try_from(count).map_err(|_| {
+        WriteError::Other(format!("cannot reserve {count} event ids in one operation"))
+    })?;
+    store_runtime().map_err(WriteError::Other)?.block_on(async {
+        let store = connect_backend(url).await.map_err(classify)?;
+        store.reserve_event_ids(count).await.map_err(classify)
     })
 }
 
