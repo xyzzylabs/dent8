@@ -9,6 +9,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- **`dent8 whatif` — policy-counterfactual replay** (the rank-2 novelty direction in
+  [research/novelty.md](docs/research/novelty.md), now surfaced): re-fold the same immutable log
+  under a swapped epistemic trust policy — `--distrust <source>` (repeatable),
+  `--authority-floor <level>`, `--confidence-floor <millis>` — and see what *would* be believed,
+  with a per-fact structural diff (appeared / disappeared / lifecycle / value / supersession /
+  evidence changes) against the real fold. Read-only, deterministic, zero model invocations;
+  freshness is deliberately not a policy knob. Also an MCP tool (`whatif`, same arguments,
+  available to read-only daemon connections), with the diff mirrored in `structuredContent` and
+  an advertised `outputSchema`. At least one policy knob is required — the identity policy is
+  the plain fold (`explain`).
+
 ## [0.6.1] - 2026-07-11
 
 ### Added

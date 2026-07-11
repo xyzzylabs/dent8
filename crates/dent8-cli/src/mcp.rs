@@ -24,9 +24,9 @@ use dent8_store::{EventFilter, EventStore, IntegrityReceipt};
 use serde_json::{Value, json};
 
 use crate::ops::{
-    AuditFactRef, OpError, op_assert, op_conflicts, op_contradict, op_derive, op_expire,
-    op_explain, op_explain_receipt, op_record_retrievals, op_reinforce, op_replay, op_retract,
-    op_supersede, with_write_retry,
+    AuditFactRef, OpError, format_whatif, op_assert, op_conflicts, op_contradict, op_derive,
+    op_expire, op_explain, op_explain_receipt, op_record_retrievals, op_reinforce, op_replay,
+    op_retract, op_supersede, op_whatif, whatif_json, with_write_retry,
 };
 use crate::{
     InitAgent, WriteIdentity, authority_registry_path, authority_required, display_value,
@@ -46,6 +46,8 @@ dent8 is a memory integrity firewall for durable agent facts. Before relying on 
 call snapshot (or runtime_status/list_facts for narrower checks), then explain as needed. Record stable facts with assert using truthful source and authority. \
 When the connection has a signed source grant, write tools may omit source and authority. \
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
+Use whatif to preview what would be believed under a different trust policy (distrust a source, \
+raise the authority floor) without changing anything. \
 Use native_scan/native_reconcile to audit provider-native memory/rules files when available. \
 Treat rejected writes as safety signals; do not silently overwrite.";
 
@@ -1403,8 +1405,59 @@ fn dispatch_tool(
             };
             Ok(ToolOutput::new(text, structured))
         }
+        "whatif" => {
+            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
+            let policy = arg_whatif_policy(arguments)?;
+            let outcome =
+                op_whatif(path, &kind, &key, &predicate, &policy).map_err(into_tool_error)?;
+            Ok(ToolOutput::new(
+                format_whatif(&outcome),
+                whatif_json(&outcome),
+            ))
+        }
         other => Err(ToolError::Unknown(format!("unknown tool: {other}"))),
     }
+}
+
+/// Build the counterfactual [`dent8_core::EpistemicPolicy`] from `whatif` tool arguments,
+/// mirroring the CLI's `--distrust` / `--authority-floor` / `--confidence-floor` exactly. An
+/// identity policy is invalid — a whatif with no knob is the plain fold (use `explain`).
+fn arg_whatif_policy(arguments: &Value) -> Result<dent8_core::EpistemicPolicy, ToolError> {
+    let mut policy = dent8_core::EpistemicPolicy::identity();
+    if let Some(sources) = arguments.get("distrust") {
+        let list = sources.as_array().ok_or_else(|| {
+            ToolError::invalid("argument distrust must be an array of source ids")
+        })?;
+        for entry in list {
+            let source = entry.as_str().ok_or_else(|| {
+                ToolError::invalid("argument distrust must be an array of source ids")
+            })?;
+            policy.distrusted_sources.insert(
+                dent8_core::SourceId::new(source)
+                    .map_err(|error| ToolError::invalid(format!("invalid source: {error}")))?,
+            );
+        }
+    }
+    if let Some(floor) = arguments.get("authority_floor") {
+        let name = floor
+            .as_str()
+            .ok_or_else(|| ToolError::invalid("argument authority_floor must be a string"))?;
+        policy.authority_floor = parse_authority(name)
+            .ok_or_else(|| ToolError::invalid(format!("invalid authority_floor: {name:?}")))?;
+    }
+    if let Some(floor) = optional_i64(arguments, "confidence_floor")? {
+        let millis = u16::try_from(floor)
+            .map_err(|_| ToolError::invalid("confidence_floor must be 0-1000"))?;
+        policy.confidence_floor = dent8_core::Confidence::from_millis(millis)
+            .map_err(|error| ToolError::invalid(format!("invalid confidence_floor: {error}")))?;
+    }
+    if policy.is_identity() {
+        return Err(ToolError::invalid(
+            "whatif needs at least one policy knob (distrust, authority_floor, or \
+             confidence_floor); without one it is the plain fold — use explain",
+        ));
+    }
+    Ok(policy)
 }
 
 fn runtime_status(path: &str) -> ToolOutput {
@@ -2458,6 +2511,29 @@ fn tool_list() -> Vec<Value> {
         "basis_predicate": { "type": "string", "description": "basis fact's predicate" },
     });
     let derive_props = merge(&valued_vt, &basis);
+    // Counterfactual policy knobs (`whatif`): mirrors the CLI's --distrust /
+    // --authority-floor / --confidence-floor. At least one is required at dispatch time.
+    let whatif_props = merge(
+        &subject,
+        &json!({
+            "distrust": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "source ids whose events are treated as never having happened"
+            },
+            "authority_floor": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "canonical"],
+                "description": "only admit belief-affecting events at or above this authority"
+            },
+            "confidence_floor": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000,
+                "description": "only admit belief-affecting events at or above this confidence (millis)"
+            },
+        }),
+    );
     let read = ["subject", "predicate"];
     let valued_req = ["subject", "predicate", "value"];
     let derive_req = ["subject", "predicate", "value", "basis", "basis_predicate"];
@@ -2559,6 +2635,12 @@ fn tool_list() -> Vec<Value> {
             &read_props,
             &read,
         ),
+        tool(
+            "whatif",
+            "Re-fold the subject+predicate log under a counterfactual trust policy (distrust sources, raise the authority/confidence floor) and diff what would be believed against the real fold. Read-only and deterministic; at least one policy knob is required.",
+            &whatif_props,
+            &read,
+        ),
     ]
 }
 
@@ -2591,6 +2673,7 @@ fn output_schema_for(name: &str) -> Value {
         "derive" => with_tool_error_schema(name, write_output_schema(name, &["accepted"])),
         "contradict" => with_tool_error_schema(name, write_output_schema(name, &["contested"])),
         "explain" | "replay" => with_tool_error_schema(name, read_output_schema(name)),
+        "whatif" => with_tool_error_schema(name, whatif_output_schema()),
         _ => with_tool_error_schema(name, generic_output_schema(name)),
     }
 }
@@ -3269,6 +3352,62 @@ fn read_output_schema(tool: &str) -> Value {
             "receipt": receipt_output_schema(),
         }),
         &["status", "tool", "subject", "predicate"],
+    )
+}
+
+fn whatif_output_schema() -> Value {
+    let believed_fact = object_schema(
+        json!({
+            "fact_id": { "type": "string" },
+            "value": {
+                "anyOf": [fact_value_output_schema(), { "type": "null" }]
+            },
+            "lifecycle": { "type": "string" },
+            "authority": authority_schema(),
+        }),
+        &["fact_id", "value", "lifecycle", "authority"],
+    );
+    object_schema(
+        json!({
+            "status": { "const": "ok" },
+            "tool": { "const": "whatif" },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "policy": object_schema(
+                json!({
+                    "distrusted_sources": { "type": "array", "items": { "type": "string" } },
+                    "authority_floor": authority_schema(),
+                    "confidence_floor": { "type": "integer", "minimum": 0 },
+                }),
+                &["distrusted_sources", "authority_floor", "confidence_floor"],
+            ),
+            "changed": { "type": "boolean" },
+            "base": { "type": "array", "items": believed_fact.clone() },
+            "counterfactual": { "type": "array", "items": believed_fact },
+            "diffs": {
+                "type": "array",
+                "items": object_schema(
+                    json!({
+                        "fact_id": { "type": "string" },
+                        // Polymorphic by `kind` (appeared/disappeared/changed); kept open so a
+                        // finer diff field is a free, non-breaking addition.
+                        "diff": { "type": "object" },
+                    }),
+                    &["fact_id", "diff"],
+                ),
+            },
+        }),
+        &[
+            "status",
+            "tool",
+            "subject",
+            "predicate",
+            "policy",
+            "changed",
+            "base",
+            "counterfactual",
+            "diffs",
+        ],
     )
 }
 
@@ -4528,7 +4667,8 @@ mod tests {
                 "expire",
                 "derive",
                 "explain",
-                "replay"
+                "replay",
+                "whatif"
             ]
         );
         let list_facts = tools
@@ -4623,6 +4763,15 @@ mod tests {
         });
         assert_tool_output_matches_schema(&path, "explain", read_args.clone());
         assert_tool_output_matches_schema(&path, "replay", read_args);
+        assert_tool_output_matches_schema(
+            &path,
+            "whatif",
+            json!({
+                "subject": "repo:p",
+                "predicate": "database",
+                "distrust": ["src"],
+            }),
+        );
         assert_tool_output_matches_schema(&path, "supersede", database("mysql", "high"));
 
         let (_guard, path) = temp_log();
@@ -4738,6 +4887,64 @@ mod tests {
             rejected["structuredContent"]["schema_version"],
             json!(crate::SCHEMA_VERSION)
         );
+    }
+
+    #[test]
+    fn whatif_refolds_under_a_counterfactual_policy() {
+        let (_guard, path) = temp_log();
+        // A trusted fact, then an equal-authority supersession from a scraped source —
+        // admitted for real. The counterfactual asks: what if that source were distrusted?
+        assert!(!call_tool(&path, "assert", database("postgres", "high")).0);
+        let supersede = json!({
+            "subject": "repo:p", "predicate": "database",
+            "value": "mysql", "authority": "high", "source": "web:scrape",
+        });
+        assert!(!call_tool(&path, "supersede", supersede).0);
+
+        let result = call_tool_result(
+            &path,
+            "whatif",
+            json!({
+                "subject": "repo:p",
+                "predicate": "database",
+                "distrust": ["web:scrape"],
+            }),
+        );
+        assert_eq!(result["isError"], false, "{result}");
+        let structured = &result["structuredContent"];
+        assert_eq!(structured["status"], "ok");
+        assert_eq!(structured["tool"], "whatif");
+        assert_eq!(structured["changed"], true);
+        // Really believed now: the scraped mysql. Under the policy: postgres again.
+        assert_eq!(structured["base"][0]["value"]["text"], "mysql");
+        assert_eq!(structured["counterfactual"][0]["value"]["text"], "postgres");
+        assert!(
+            !structured["diffs"].as_array().unwrap().is_empty(),
+            "{structured}"
+        );
+        // The real fold is untouched — whatif is read-only.
+        let explain = call_tool_result(
+            &path,
+            "explain",
+            json!({ "subject": "repo:p", "predicate": "database" }),
+        );
+        assert_eq!(
+            explain["structuredContent"]["current_value"]["text"],
+            "mysql"
+        );
+    }
+
+    #[test]
+    fn whatif_without_a_policy_knob_is_invalid() {
+        let (_guard, path) = temp_log();
+        let result = call_tool_result(
+            &path,
+            "whatif",
+            json!({ "subject": "repo:p", "predicate": "database" }),
+        );
+        assert_eq!(result["isError"], true);
+        assert_eq!(result["structuredContent"]["status"], "invalid");
+        assert_eq!(result["structuredContent"]["code"], "invalid-argument");
     }
 
     #[test]

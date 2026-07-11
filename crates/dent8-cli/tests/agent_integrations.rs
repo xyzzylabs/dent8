@@ -26,6 +26,7 @@ const MCP_TOOLS: &[&str] = &[
     "derive",
     "explain",
     "replay",
+    "whatif",
 ];
 
 #[test]

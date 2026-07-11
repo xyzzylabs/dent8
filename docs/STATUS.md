@@ -201,6 +201,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   authority + source) and
   the current state — *why* the fact is what it is. `--as-of`/`--valid-at` time-travel like
   `explain`. Supports `--output json`.
+- **`dent8 whatif <subject> <predicate> [--distrust SOURCE]... [--authority-floor LEVEL]
+  [--confidence-floor MILLIS]`** — **policy-counterfactual replay**
+  ([research/novelty.md](research/novelty.md) rank 2): re-folds the same immutable log under a
+  swapped epistemic trust policy — "what would we believe if this source were distrusted / the
+  authority floor were raised?" — and reports the believed set under the real fold vs the
+  counterfactual, plus a per-fact structural diff (appeared / disappeared / lifecycle / value /
+  supersession changes). Read-only, deterministic, zero model invocations; at least one policy
+  knob is required. Also an MCP tool (`whatif`, same arguments). Supports `--output json`.
 - **`dent8 facts list [--kind KIND] [--key KEY] [--predicate PREDICATE]
   [--include-diagnostics]`** — lists distinct fact streams known to dent8 as
   `dent8://{kind}/{key}/{predicate}` resources for human browsing, each **flagged with its

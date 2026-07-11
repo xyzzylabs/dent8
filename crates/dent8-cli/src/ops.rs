@@ -7,14 +7,14 @@
 
 use dent8_core::{
     ActorId, Authority, AuthorityLevel, ChallengeKind, ChallengeRejection, Confidence,
-    ContradictionBasis, Evidence, EvidenceId, EvidenceKind, FactEvent, FactEventId, FactEventKind,
-    FactId, FactLifecycle, FactValue, Predicate, Provenance, RetractionReason, Subject,
-    SupersessionReason, TimestampMillis, Ttl,
+    ContradictionBasis, EpistemicPolicy, Evidence, EvidenceId, EvidenceKind, FactEvent,
+    FactEventId, FactEventKind, FactId, FactLifecycle, FactValue, Predicate, Provenance,
+    RetractionReason, Subject, SupersessionReason, TimestampMillis, Ttl,
 };
 use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt,
-    PredicateRegistry, StoreError, apply_policy_defaults, enforce_policy, replay_fact,
-    replay_subject,
+    PredicateRegistry, StateDiff, StoreError, apply_policy_defaults, diff_states, enforce_policy,
+    replay_fact, replay_subject, replay_subject_with_policy,
 };
 
 use std::str::FromStr;
@@ -2626,6 +2626,320 @@ pub(crate) fn cmd_conflicts(output: CliOutput) -> i32 {
             0
         }
         (Ok(conflicts), CliOutput::Json) => print_json_stdout(&conflicts_json(&conflicts)),
+        (Err(error), CliOutput::Text) => present(Err(error)),
+        (Err(error), CliOutput::Json) => {
+            let code = match error {
+                OpError::Invalid { .. } => 2,
+                OpError::Rejected { .. } | OpError::Conflict(_) => 1,
+            };
+            print_json_stdout_with_code(&op_error_json(&error), code)
+        }
+    }
+}
+
+// ---- Policy-counterfactual replay (`dent8 whatif`) ------------------------------------
+//
+// Re-fold the same immutable log under a swapped [`EpistemicPolicy`] — "distrust source X",
+// "raise the authority floor" — and report what would be believed, with a structural diff
+// against the real fold. Read-only, deterministic, zero model invocations (the rank-2
+// novelty direction in docs/research/novelty.md, surfaced). Freshness is deliberately NOT a
+// policy knob: it stays a read-time axis so valid-time staleness never entangles with the
+// event-driven lifecycle.
+
+/// One believed fact in a fold, summarized for the whatif report.
+pub(crate) struct WhatifFact {
+    pub(crate) fact_id: FactId,
+    pub(crate) value: Option<FactValue>,
+    pub(crate) lifecycle: FactLifecycle,
+    pub(crate) authority: AuthorityLevel,
+}
+
+/// The whatif result: the believed set under the identity fold (`base`) and under the
+/// counterfactual policy (`counterfactual`), plus every per-fact structural diff.
+pub(crate) struct WhatifOutcome {
+    pub(crate) subject_kind: String,
+    pub(crate) subject_key: String,
+    pub(crate) predicate: String,
+    pub(crate) policy: EpistemicPolicy,
+    pub(crate) base: Vec<WhatifFact>,
+    pub(crate) counterfactual: Vec<WhatifFact>,
+    /// Non-`Unchanged` diffs, keyed by fact id, base-then-counterfactual.
+    pub(crate) diffs: Vec<(FactId, StateDiff)>,
+}
+
+impl WhatifOutcome {
+    /// Whether the policy changes anything believed about this subject+predicate.
+    pub(crate) fn changed(&self) -> bool {
+        !self.diffs.is_empty()
+    }
+}
+
+fn whatif_fact(state: &dent8_core::FactState) -> WhatifFact {
+    WhatifFact {
+        fact_id: state.fact_id.clone(),
+        value: Some(state.value.clone()),
+        lifecycle: state.lifecycle,
+        authority: state.authority.level,
+    }
+}
+
+/// Re-fold one subject+predicate stream under `policy` and diff it against the real fold.
+pub(crate) fn op_whatif(
+    path: &str,
+    subject_kind: &str,
+    subject_key: &str,
+    predicate: &str,
+    policy: &EpistemicPolicy,
+) -> Result<WhatifOutcome, OpError> {
+    let subject = Subject::new(subject_kind, subject_key)
+        .map_err(|error| OpError::invalid(format!("invalid subject: {error}")))?;
+    let predicate_parsed = Predicate::new(predicate)
+        .map_err(|error| OpError::invalid(format!("invalid predicate: {error}")))?;
+    let store = load_store(path).map_err(OpError::invalid)?;
+    let filter = EventFilter {
+        subject: Some(subject),
+        predicate: Some(predicate_parsed),
+        ..EventFilter::default()
+    };
+    let events = store
+        .scan_events(&filter)
+        .map_err(|error| OpError::invalid(error.to_string()))?;
+
+    let replay_error = |error: dent8_store::ReplayError| {
+        OpError::rejected_as(
+            ErrorCode::ReplayFailed,
+            format!("REJECTED: replay failed: {error}"),
+        )
+    };
+    let base = replay_subject(&events).map_err(replay_error)?;
+    let counterfactual = replay_subject_with_policy(&events, policy).map_err(replay_error)?;
+
+    // Diff every fact stream present in either fold; report only real differences.
+    let mut fact_ids: Vec<FactId> = base.facts.keys().cloned().collect();
+    for id in counterfactual.facts.keys() {
+        if !base.facts.contains_key(id) {
+            fact_ids.push(id.clone());
+        }
+    }
+    let diffs = fact_ids
+        .into_iter()
+        .filter_map(|id| {
+            let diff = diff_states(base.get(&id), counterfactual.get(&id));
+            (diff != StateDiff::Unchanged).then_some((id, diff))
+        })
+        .collect();
+
+    Ok(WhatifOutcome {
+        subject_kind: subject_kind.to_string(),
+        subject_key: subject_key.to_string(),
+        predicate: predicate.to_string(),
+        policy: policy.clone(),
+        base: base.believed().map(whatif_fact).collect(),
+        counterfactual: counterfactual.believed().map(whatif_fact).collect(),
+        diffs,
+    })
+}
+
+fn whatif_policy_summary(policy: &EpistemicPolicy) -> String {
+    let mut knobs = Vec::new();
+    for source in &policy.distrusted_sources {
+        knobs.push(format!("distrust {}", source.as_str()));
+    }
+    if policy.authority_floor > AuthorityLevel::Unknown {
+        knobs.push(format!("authority floor {}", policy.authority_floor));
+    }
+    if policy.confidence_floor > Confidence::ZERO {
+        knobs.push(format!(
+            "confidence floor {}",
+            policy.confidence_floor.as_millis()
+        ));
+    }
+    knobs.join(", ")
+}
+
+fn whatif_believed_line(believed: &[WhatifFact]) -> String {
+    if believed.is_empty() {
+        return "(nothing believed)".to_string();
+    }
+    believed
+        .iter()
+        .map(|fact| {
+            format!(
+                "{} ({:?}, authority={})",
+                fact.value
+                    .as_ref()
+                    .map_or_else(|| "(no value)".to_string(), display_value),
+                fact.lifecycle,
+                fact.authority
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+pub(crate) fn format_whatif(outcome: &WhatifOutcome) -> String {
+    let mut report = format!(
+        "whatif {}:{} {}\n  policy: {}\n  now:          {}\n  under policy: {}",
+        outcome.subject_kind,
+        outcome.subject_key,
+        outcome.predicate,
+        whatif_policy_summary(&outcome.policy),
+        whatif_believed_line(&outcome.base),
+        whatif_believed_line(&outcome.counterfactual),
+    );
+    if outcome.diffs.is_empty() {
+        report.push_str("\n  diff: unchanged — this policy does not alter what is believed");
+    } else {
+        use std::fmt::Write as _;
+        for (fact_id, diff) in &outcome.diffs {
+            let _ = write!(
+                report,
+                "\n  diff {}: {}",
+                fact_id.as_str(),
+                whatif_diff_line(diff)
+            );
+        }
+    }
+    report
+}
+
+fn whatif_diff_line(diff: &StateDiff) -> String {
+    match diff {
+        StateDiff::Unchanged => "unchanged".to_string(),
+        StateDiff::Appeared => "appears under this policy".to_string(),
+        StateDiff::Disappeared => {
+            "disappears under this policy (e.g. its asserting source is distrusted)".to_string()
+        }
+        StateDiff::Changed {
+            lifecycle,
+            value,
+            superseded_by,
+            contradicted_by,
+            evidence_count,
+        } => {
+            let mut parts = Vec::new();
+            if let Some((base, cf)) = lifecycle {
+                parts.push(format!("lifecycle {base:?} -> {cf:?}"));
+            }
+            if let Some((base, cf)) = value {
+                parts.push(format!(
+                    "value {} -> {}",
+                    display_value(base),
+                    display_value(cf)
+                ));
+            }
+            if let Some((base, cf)) = superseded_by {
+                parts.push(format!(
+                    "superseded_by {} -> {}",
+                    base.as_ref().map_or("(none)", |id| id.as_str()),
+                    cf.as_ref().map_or("(none)", |id| id.as_str())
+                ));
+            }
+            if let Some((base, cf)) = contradicted_by {
+                parts.push(format!("contradicted_by {} -> {}", base.len(), cf.len()));
+            }
+            if let Some((base, cf)) = evidence_count {
+                parts.push(format!("evidence {base} -> {cf}"));
+            }
+            parts.join(", ")
+        }
+    }
+}
+
+fn whatif_fact_json(fact: &WhatifFact) -> serde_json::Value {
+    serde_json::json!({
+        "fact_id": fact.fact_id.as_str(),
+        "value": fact.value.as_ref().map(fact_value_json),
+        "lifecycle": format!("{:?}", fact.lifecycle),
+        "authority": fact.authority.name(),
+    })
+}
+
+fn whatif_diff_json(diff: &StateDiff) -> serde_json::Value {
+    match diff {
+        StateDiff::Unchanged => serde_json::json!({ "kind": "unchanged" }),
+        StateDiff::Appeared => serde_json::json!({ "kind": "appeared" }),
+        StateDiff::Disappeared => serde_json::json!({ "kind": "disappeared" }),
+        StateDiff::Changed {
+            lifecycle,
+            value,
+            superseded_by,
+            contradicted_by,
+            evidence_count,
+        } => serde_json::json!({
+            "kind": "changed",
+            "lifecycle": lifecycle.map(|(base, cf)| serde_json::json!({
+                "base": format!("{base:?}"), "counterfactual": format!("{cf:?}"),
+            })),
+            "value": value.as_ref().map(|(base, cf)| serde_json::json!({
+                "base": fact_value_json(base), "counterfactual": fact_value_json(cf),
+            })),
+            "superseded_by": superseded_by.as_ref().map(|(base, cf)| serde_json::json!({
+                "base": base.as_ref().map(dent8_core::FactId::as_str),
+                "counterfactual": cf.as_ref().map(dent8_core::FactId::as_str),
+            })),
+            "contradicted_by": contradicted_by.as_ref().map(|(base, cf)| serde_json::json!({
+                "base": base.iter().map(dent8_core::FactId::as_str).collect::<Vec<_>>(),
+                "counterfactual": cf.iter().map(dent8_core::FactId::as_str).collect::<Vec<_>>(),
+            })),
+            "evidence_count": evidence_count.map(|(base, cf)| serde_json::json!({
+                "base": base, "counterfactual": cf,
+            })),
+        }),
+    }
+}
+
+pub(crate) fn whatif_json(outcome: &WhatifOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "status": Status::Ok.as_str(),
+        "tool": "whatif",
+        "subject": {
+            "kind": outcome.subject_kind,
+            "key": outcome.subject_key,
+        },
+        "predicate": outcome.predicate,
+        "policy": {
+            "distrusted_sources": outcome.policy.distrusted_sources.iter()
+                .map(dent8_core::SourceId::as_str).collect::<Vec<_>>(),
+            "authority_floor": outcome.policy.authority_floor.name(),
+            "confidence_floor": outcome.policy.confidence_floor.as_millis(),
+        },
+        "changed": outcome.changed(),
+        "base": outcome.base.iter().map(whatif_fact_json).collect::<Vec<_>>(),
+        "counterfactual": outcome.counterfactual.iter().map(whatif_fact_json).collect::<Vec<_>>(),
+        "diffs": outcome.diffs.iter().map(|(fact_id, diff)| serde_json::json!({
+            "fact_id": fact_id.as_str(),
+            "diff": whatif_diff_json(diff),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub(crate) fn cmd_whatif(args: &crate::WhatifArgs, output: CliOutput) -> i32 {
+    let policy = match crate::whatif_policy(args) {
+        Ok(policy) => policy,
+        Err(message) => {
+            let error = OpError::invalid(message);
+            return match output {
+                CliOutput::Text => present(Err(error)),
+                CliOutput::Json => print_json_stdout_with_code(&op_error_json(&error), 2),
+            };
+        }
+    };
+    match (
+        op_whatif(
+            &log_path(),
+            &args.subject.kind,
+            &args.subject.key,
+            &args.predicate,
+            &policy,
+        ),
+        output,
+    ) {
+        (Ok(outcome), CliOutput::Text) => {
+            println!("{}", format_whatif(&outcome));
+            0
+        }
+        (Ok(outcome), CliOutput::Json) => print_json_stdout(&whatif_json(&outcome)),
         (Err(error), CliOutput::Text) => present(Err(error)),
         (Err(error), CliOutput::Json) => {
             let code = match error {

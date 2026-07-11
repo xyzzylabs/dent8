@@ -82,11 +82,16 @@ facts flip `Active`↔`Contested`↔`Superseded`, which contradiction edges and 
 appear/disappear), with **zero model invocations.** This is the ATMS
 assumption-environment idea, made concrete and deterministic.
 
-**Status: prototyped and tested.** Implemented in `crates/dent8-core/src/policy.rs`
+**Status: built and surfaced.** Implemented in `crates/dent8-core/src/policy.rs`
 (`EpistemicPolicy` with three trust knobs — `distrusted_sources`, `authority_floor`,
 `confidence_floor`) and `crates/dent8-store/src/lib.rs` (`replay_fact_with_policy`,
-`StateDiff`, `diff_states`). The headline counterfactual is tested: distrusting a
-superseding source keeps the fact `Active`, and the diff reports the flip.
+`StateDiff`, `diff_states`), and **runnable as `dent8 whatif <subject> <predicate>
+[--distrust SOURCE]... [--authority-floor L] [--confidence-floor N]` and the MCP `whatif`
+tool** — the believed set under the real fold vs the counterfactual plus per-fact
+structural diffs, over every fact stream of the subject+predicate (the over-a-subject
+replay surface this section previously listed as remaining). The headline counterfactual
+is tested end-to-end on both surfaces: distrusting a superseding source flips belief back
+to the incumbent, and the diff reports it.
 Design refinements vs the original sketch: (1) the *as-of freshness clock* is **not** a
 policy knob — freshness is a separate read-time predicate (`FactState::is_expired_at`)
 so valid-time staleness is never conflated with the event-driven lifecycle; (2) the

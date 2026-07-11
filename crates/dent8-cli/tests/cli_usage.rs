@@ -1831,6 +1831,115 @@ fn doctor_optional_write_check_is_a_skip_not_a_warning() {
 }
 
 #[test]
+fn whatif_refolds_under_a_counterfactual_policy() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // A trusted fact, then an equal-authority supersession from a rumor source — admitted.
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "person:alice",
+                "favorite_drink",
+                "tea",
+                "--authority",
+                "high",
+                "--source",
+                "user:alice",
+            ],
+            &envs,
+        ),
+        "assert tea",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "supersede",
+                "person:alice",
+                "favorite_drink",
+                "coffee",
+                "--authority",
+                "high",
+                "--source",
+                "note:rumor",
+            ],
+            &envs,
+        ),
+        "supersede coffee",
+    );
+
+    // Counterfactual: what would we believe if the rumor source were distrusted?
+    let whatif = run_dent8(
+        &[
+            "--output",
+            "json",
+            "whatif",
+            "person:alice",
+            "favorite_drink",
+            "--distrust",
+            "note:rumor",
+        ],
+        &envs,
+    );
+    assert_success(&whatif, "whatif --output json");
+    let whatif = stdout_json(&whatif);
+    assert_eq!(whatif["schema_version"], 1);
+    assert_eq!(whatif["status"], "ok");
+    assert_eq!(whatif["tool"], "whatif");
+    assert_eq!(whatif["changed"], true);
+    assert_eq!(whatif["policy"]["distrusted_sources"][0], "note:rumor");
+    assert_eq!(whatif["base"][0]["value"]["text"], "coffee");
+    assert_eq!(whatif["counterfactual"][0]["value"]["text"], "tea");
+    assert!(
+        !whatif["diffs"].as_array().expect("diffs").is_empty(),
+        "{whatif}"
+    );
+
+    // Text mode reads as a report; the real fold is untouched (read-only).
+    let text = run_dent8(
+        &[
+            "whatif",
+            "person:alice",
+            "favorite_drink",
+            "--distrust",
+            "note:rumor",
+        ],
+        &envs,
+    );
+    assert_success(&text, "whatif text");
+    assert!(stdout(&text).contains("under policy"), "{}", stdout(&text));
+    let explain = run_dent8(
+        &[
+            "--output",
+            "json",
+            "explain",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_eq!(stdout_json(&explain)["value"]["text"], "coffee");
+
+    // No policy knob -> invalid, with the machine-readable code.
+    let vacuous = run_dent8(
+        &[
+            "--output",
+            "json",
+            "whatif",
+            "person:alice",
+            "favorite_drink",
+        ],
+        &envs,
+    );
+    assert_eq!(vacuous.status.code(), Some(2));
+    let vacuous = stdout_json(&vacuous);
+    assert_eq!(vacuous["status"], "invalid");
+    assert_eq!(vacuous["code"], "invalid-argument");
+}
+
+#[test]
 fn replay_and_conflicts_emit_machine_readable_json() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();

@@ -17,6 +17,7 @@ Initial command groups:
 - `dent8 retract <subject> <predicate> [--authority <level>] [--source <source>]`
 - `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <time>] [--valid-to <time>] [--ttl <duration>]`
 - `dent8 replay <subject> <predicate> [--as-of <time>] [--valid-at <time>]`
+- `dent8 whatif <subject> <predicate> [--distrust <source>]... [--authority-floor <level>] [--confidence-floor <millis>]`
 - `dent8 explain <subject> <predicate> [--as-of <time>] [--valid-at <time>]`
 - `dent8 snapshot [--include-diagnostics]`
 - `dent8 conflicts`
@@ -48,12 +49,12 @@ instant) — [ADR 0016](decisions/0016-valid-time-and-time-travel-reads.md).
 Human-facing output supports `--color auto|always|never`; structured adapter surfaces
 should keep using plain data fields rather than ANSI formatting.
 
-Several of these are already backed by library functions in `dent8-store` and need
-only a CLI/store wiring: subject-level replay
-(`replay_entity` → `SubjectProjection` with `lineage_issues`), `conflicts`
-(`SubjectProjection::contested`), and freshness (`FactState::is_expired_at`).
-Counterfactual replay (`replay_fact_with_policy` / `replay_entity_with_policy` +
-`diff_states`) is available for a future `explain --distrust`-style surface.
+`dent8 whatif` is **policy-counterfactual replay**: it re-folds the same immutable log under
+a swapped epistemic trust policy (`--distrust <source>`, `--authority-floor`,
+`--confidence-floor` — at least one required) and reports the believed set under the real
+fold vs the counterfactual, plus a per-fact structural diff. Read-only and deterministic
+(`replay_subject_with_policy` + `diff_states` in `dent8-store`); freshness is deliberately
+not a policy knob.
 
 ## MCP
 
@@ -81,6 +82,7 @@ Current v0 MCP tools:
 - `derive`
 - `explain`
 - `replay`
+- `whatif`
 
 `runtime_status` is read-only and reports the live server binary, cwd, selected store
 URL/path, event count, authority registry, signed identity, and witness configuration.

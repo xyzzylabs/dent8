@@ -75,6 +75,8 @@ fn run(raw_args: impl IntoIterator<Item = String>) -> i32 {
     }
 }
 
+// One dispatch arm per top-level command; grows with the command surface, not in complexity.
+#[allow(clippy::too_many_lines)]
 fn run_cli(cli: Cli) -> i32 {
     set_color(cli.color);
     if let Some(command) = cli.command.as_ref()
@@ -141,6 +143,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Contradict(args)) => ops::cmd_contradict(&args, cli.output),
         Some(CliCommand::Explain(args)) => ops::cmd_explain(&args, cli.output),
         Some(CliCommand::Replay(args)) => ops::cmd_replay(&args, cli.output),
+        Some(CliCommand::Whatif(args)) => ops::cmd_whatif(&args, cli.output),
         Some(CliCommand::Context(args)) => context::cmd_context(&args, cli.output),
         Some(CliCommand::Capture(args)) => capture::cmd_capture(&args, cli.output),
         Some(CliCommand::Facts(args)) => match args.command {
@@ -269,6 +272,8 @@ enum CliCommand {
     Explain(ReadFactArgs),
     /// Replay the full event history for a fact.
     Replay(ReadFactArgs),
+    /// Re-fold the log under a counterfactual trust policy and diff what would be believed.
+    Whatif(WhatifArgs),
     /// Emit the currently-believed facts as an agent context pack (markdown by default).
     Context(ContextArgs),
     /// Capture structured fact proposals (JSON lines) through the firewall.
@@ -346,6 +351,7 @@ impl CliCommand {
             Self::Expire(_) => "expire",
             Self::Explain(_) => "explain",
             Self::Replay(_) => "replay",
+            Self::Whatif(_) => "whatif",
             Self::Context(_) => "context",
             Self::Capture(_) => "capture",
             Self::Facts(_) => "facts",
@@ -460,6 +466,50 @@ struct ReadFactArgs {
     /// Evaluate freshness/validity at this instant (unix millis) instead of now.
     #[arg(long = "valid-at", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_at: Option<i64>,
+}
+
+#[derive(Args, Debug)]
+pub(crate) struct WhatifArgs {
+    /// Fact subject, written as <kind>:<key> (for example person:alice).
+    pub(crate) subject: CliSubject,
+    /// Predicate within the subject's fact stream.
+    #[arg(value_parser = parse_predicate)]
+    pub(crate) predicate: String,
+    /// Treat this source's events as if they never happened (repeatable).
+    #[arg(long = "distrust", value_name = "SOURCE", value_parser = parse_source)]
+    pub(crate) distrust: Vec<String>,
+    /// Only admit belief-affecting events at or above this authority.
+    #[arg(long = "authority-floor", value_enum)]
+    pub(crate) authority_floor: Option<CliAuthority>,
+    /// Only admit belief-affecting events at or above this confidence (millis, 0-1000).
+    #[arg(long = "confidence-floor", value_name = "MILLIS")]
+    pub(crate) confidence_floor: Option<u16>,
+}
+
+/// Build the counterfactual policy from the flags; at least one knob is required (an
+/// identity-policy whatif is vacuously the plain fold — point the caller at `explain`).
+pub(crate) fn whatif_policy(args: &WhatifArgs) -> Result<dent8_core::EpistemicPolicy, String> {
+    let mut policy = dent8_core::EpistemicPolicy::identity();
+    for source in &args.distrust {
+        policy
+            .distrusted_sources
+            .insert(SourceId::new(source).map_err(|error| format!("invalid source: {error}"))?);
+    }
+    if let Some(floor) = args.authority_floor {
+        policy.authority_floor = floor.level();
+    }
+    if let Some(floor) = args.confidence_floor {
+        policy.confidence_floor = dent8_core::Confidence::from_millis(floor)
+            .map_err(|error| format!("invalid confidence floor: {error}"))?;
+    }
+    if policy.is_identity() {
+        return Err(
+            "whatif needs at least one policy knob (--distrust, --authority-floor, or \
+             --confidence-floor); without one it is the plain fold — use `dent8 explain`"
+                .to_string(),
+        );
+    }
+    Ok(policy)
 }
 
 #[derive(Args, Debug)]
