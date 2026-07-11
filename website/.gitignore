@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.astro/
+# synced from ../docs at build time — never committed
+src/content/docs/
+public/favicon.svg
+src/assets/

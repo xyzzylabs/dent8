@@ -1,0 +1,40 @@
+---
+title: dent8
+description: A memory firewall for coding agents — refuse the writes that quietly corrupt agent memory.
+template: splash
+hero:
+  tagline: A memory firewall for coding agents. Every write is arbitrated against what is already believed — a low-authority source can't overwrite a trusted fact, a retracted source taints its derivatives, and every belief is replayable.
+  image:
+    alt: The dent8 mark — a crenellated octagon holding one fact.
+    file: ../../assets/logo.svg
+  actions:
+    - text: Get started
+      link: /dent8/getting-started/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/xyzzylabs/dent8
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="First fact in two minutes" icon="rocket">
+    `cargo install dent8-cli` (or `pip install dent8` / `npm i dent8`), then
+    `dent8 init` and assert through the firewall. No services.
+  </Card>
+  <Card title="The 30-second proof" icon="approve-check">
+    `dent8 eval` runs a 47-case adversarial corpus against the real firewall and
+    against modeled Mem0/Zep semantics: five attack axes blocked vs zero.
+  </Card>
+  <Card title="Ask what-if" icon="magnifier">
+    `dent8 whatif` re-folds the same log under a different trust policy —
+    "what would we believe if this source were distrusted?" — deterministically,
+    with a structural diff.
+  </Card>
+  <Card title="Provenance all the way down" icon="seti:lock">
+    Authority-weighted arbitration, signed source identity, a hash chain, and an
+    optional off-host witness. `dent8 replay` shows exactly why a fact is believed.
+  </Card>
+</CardGrid>
