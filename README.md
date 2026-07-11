@@ -245,7 +245,9 @@ library-only vs. design-only. In brief, runnable today:
 
 - The full belief lifecycle — `assert` / `supersede` / `retract` / `contradict` / `reinforce`
   / `expire` / `derive` / `explain` / `replay` — plus the operator surfaces `facts list`,
-  `snapshot`, `verify`, `conflicts`, `eval`, and `export`.
+  `snapshot`, `verify`, `conflicts`, `eval`, and `export`, and **`whatif`**
+  policy-counterfactual replay (re-fold the same log under a different trust policy and diff
+  what would be believed — deterministic, zero model calls).
 - The session capture/inject loop: `dent8 context` emits the currently-believed facts as a
   markdown (or JSON) context pack for session-start injection, `dent8 capture` flushes
   structured fact proposals from a session back through the firewall, and
@@ -253,9 +255,14 @@ library-only vs. design-only. In brief, runnable today:
   ([docs/context-capture.md](docs/context-capture.md)).
 - Three backends behind one contract: a local **file** dev log (default), embedded **SQLite**,
   and a DB-verified transactional **Postgres** adapter (`--features postgres`) — selected by
-  `DENT8_STORE_URL`.
-- **Signed identity** with grant history + revocation, the **witness** transparency log, and an
-  MCP server (`dent8 mcp serve`) — all in the stock binary.
+  `DENT8_STORE_URL`, and **load-tested under contention** (cross-process write leases keep
+  parallel writers fair; `scripts/load-test.sh` reproduces it on either backend).
+- **Signed identity** with grant history + revocation — source keys live in a `0600` file or
+  the **OS keychain** (`keychain:<account>` on macOS/Linux/Windows) — the **witness**
+  transparency log, and an MCP server (`dent8 mcp serve`) — all in the stock binary.
+- MCP **`resources/subscribe`**: agents get `notifications/resources/updated` pushed when a
+  fact stream they depend on changes (from any process sharing the store), instead of
+  re-polling `explain`.
 - MCP `runtime_status` diagnostics and one-shot `snapshot` output so agents can see the live
   binary, store, identity, authority, witness configuration, facts, verify status, and
   conflicts before trusting a long-running server.

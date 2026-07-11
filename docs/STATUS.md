@@ -783,12 +783,20 @@ subject+predicate.
   touched unique predicates inside the append transaction, so two stale concurrent writers
   cannot silently land duplicate fresh beliefs. **Integrity is unconditional** — every committed
   log is a contiguous, corruption-free chain, and a writer that hits residual backend
-  contention gets a clean retry/rejection, never a partial or corrupt write. Authz
-  (source→authority ceilings)
-  is built (`dent8 authority`, above), authn is a runnable feature-gated boundary layer
-  (`dent8 identity`, above), and the witness *primitive* is runnable (`dent8 witness`, above).
-  The remaining product gap is operating those controls: source-key provisioning/rotation,
-  hardware/secret-store-backed keys, and the *operated* witness service.
+  contention gets a clean retry/rejection, never a partial or corrupt write. **Load-tested:**
+  `scripts/load-test.sh` drives N parallel CLI writers (a distinct-fact throughput phase plus
+  a deliberate same-fact supersession herd) against SQLite or Postgres; each decide+commit
+  attempt holds a **cross-process write lease** (SQLite: `BEGIN IMMEDIATE` on a `<db>-lease`
+  sidecar; Postgres: a session advisory lock) so sustained same-fact contention queues fairly
+  instead of livelocking — validated on both backends (every write eventually admitted,
+  exactly one believed value, `verify` green; see the write-concurrency section of
+  [storage.md](storage.md)). Authz (source→authority ceilings)
+  is built (`dent8 authority`, above), authn is a runnable boundary layer
+  (`dent8 identity`, above) with **OS-keychain-backed source keys** — `keychain:<account>`
+  accepted wherever a key path is, on macOS (Keychain), Linux (Secret Service via
+  `secret-tool`), and Windows (Credential Manager) — and the witness *primitive* is runnable
+  (`dent8 witness`, above). The remaining product gap is operating those controls: team key
+  distribution/rotation and the *operated* witness service.
 - **`Retrieved` / `UsedInDecision` close the read-audit loop on both CLI and MCP.** The
   loop is runnable: `dent8 context --record-retrieval` emits `fact.retrieved` for every
   fact it packs; a `dent8 capture` proposal with `"op": "used_in_decision"` records
@@ -800,8 +808,11 @@ subject+predicate.
   in replay/explain; the agent-report half (`used_in_decision`) remains a capture proposal
   (agents already use that queue for session-end reporting).
 - The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
-  surface as tools, `resources/list`/`resources/read`, and JSON-RPC batches, above) is a hand-rolled
-  stdio JSON-RPC loop; `resources/subscribe` and prompts are not implemented.
+  surface as tools, `resources/list`/`resources/read`, **`resources/subscribe` with
+  `notifications/resources/updated` pushed on both transports** (own writes immediately,
+  cross-process writes within a poll tick; `dent8 mcp proxy` pumps frames bidirectionally),
+  and JSON-RPC batches, above) is a hand-rolled stdio JSON-RPC loop; prompts are not
+  implemented.
 - **Desktop debugger/control plane** — accepted as a future product surface in
   [ADR 0020](decisions/0020-desktop-debugger-control-plane.md), but design-only today. It
   should visualize agents, authority, grants, accepted/rejected writes, conflicts, native
