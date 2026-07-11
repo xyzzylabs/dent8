@@ -9,15 +9,15 @@ The CLI is the first operator and developer surface.
 Initial command groups:
 
 - `dent8 schema postgres`
-- `dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
+- `dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>] [--valid-from <time>] [--valid-to <time>] [--ttl <duration>]`
 - `dent8 reinforce <subject> <predicate> [--authority <level>] [--source <source>]`
-- `dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
-- `dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
+- `dent8 contradict <subject> <predicate> <opposing-value> [--authority <level>] [--source <source>] [--valid-from <time>] [--valid-to <time>] [--ttl <duration>]`
+- `dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>] [--valid-from <time>] [--valid-to <time>] [--ttl <duration>]`
 - `dent8 expire <subject> <predicate> [--authority <level>] [--source <source>]`
 - `dent8 retract <subject> <predicate> [--authority <level>] [--source <source>]`
-- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <ms>] [--valid-to <ms>] [--ttl <duration>]`
-- `dent8 replay <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
-- `dent8 explain <subject> <predicate> [--as-of <ms>] [--valid-at <ms>]`
+- `dent8 derive <subject> <predicate> <value> --basis <subject> <predicate> [--authority <level>] [--source <source>] [--valid-from <time>] [--valid-to <time>] [--ttl <duration>]`
+- `dent8 replay <subject> <predicate> [--as-of <time>] [--valid-at <time>]`
+- `dent8 explain <subject> <predicate> [--as-of <time>] [--valid-at <time>]`
 - `dent8 snapshot [--include-diagnostics]`
 - `dent8 conflicts`
 - `dent8 completions <bash|elvish|fish|powershell|zsh>`
@@ -32,6 +32,13 @@ source grant.
 fact's retention freshness. It is bounded by the predicate's retention ceiling — a `--ttl`
 beyond the effective ceiling (a per-predicate override, else the 90-day global default) is
 **rejected, not clamped**. Omitting it leaves the predicate's default TTL (or non-expiring).
+
+Every `<time>` flag (`--valid-from`/`--valid-to`, `--as-of`/`--valid-at`, `--expires-at`)
+accepts raw unix milliseconds (the machine form — what the MCP tools take), `now`, a
+±duration offset from now (`-7d`, `+12h`), RFC 3339 with an offset
+(`2026-07-11T12:00:00Z`), or a bare UTC date/datetime (`2026-07-11`, `2026-07-11T12:00`).
+Bare forms are **UTC**, not local time, so the same command names the same instant on every
+machine.
 
 The CLI should show integrity metadata by default: lifecycle, freshness (TTL *and* asserted
 `valid_to`), authority, evidence count, contradiction count, survived-challenge count,

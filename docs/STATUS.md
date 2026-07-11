@@ -119,7 +119,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `doctor --all-agents --output json` includes an `agents[]` array with each profile's
   `ok` / `failed` / `skipped` status and nested report.
 - **`dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>]
-  [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts a
+  [--valid-from TIME] [--valid-to TIME]`** — asserts a
   fact through the firewall + registry, **persisted to a JSON-lines event log** and
   composing across separate invocations. A below-floor or non-unique write is rejected and
   **never reaches the log**. `--valid-from`/`--valid-to` stamp the fact's asserted validity
@@ -131,7 +131,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   normal authority-ceiling and signed-identity checks run. Authenticated daemon connections
   use the same defaults from their proven connection identity.
 - **`dent8 supersede <subject> <predicate> <new-value> [--authority <level>] [--source <source>]
-  [--valid-from MILLIS] [--valid-to MILLIS]`** — revises
+  [--valid-from TIME] [--valid-to TIME]`** — revises
   the believed fact via the sanctioned supersession path: it asserts a replacement (stamped
   with the validity interval when given) and
   marks **every** believed incumbent superseded by it, persisted as one write. The base
@@ -166,7 +166,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   staleness, and is **authority-gated** like retraction ([ADR 0011](decisions/0011-authority-gated-expiration.md)):
   a lower-authority source cannot expire a higher-authority incumbent.
 - **`dent8 derive <subject> <predicate> <value> --basis <basis-subject> <basis-predicate>
-  [--authority <level>] [--source <source>] [--valid-from MILLIS] [--valid-to MILLIS]`** — asserts
+  [--authority <level>] [--source <source>] [--valid-from TIME] [--valid-to TIME]`** — asserts
   a fact **derived from** another (named by subject, resolved to
   its believed fact id), recording a `DerivedFrom` dependency edge (ADR 0010). If the source
   is later retracted/expired, `verify` flags this derivative as **tainted** — the
@@ -182,7 +182,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   malformed input is `invalid`; on the read side `verify` is `ok`/`integrity_issues`,
   runtime/snapshot probes may report `degraded`, and `explain`/`conflicts` surface
   `contested`.
-- **`dent8 explain <subject> <predicate> [--as-of MILLIS] [--valid-at MILLIS]`** — replays
+- **`dent8 explain <subject> <predicate> [--as-of TIME] [--valid-at TIME]`** — replays
   the persisted log and prints the
   believed (or, if removed, the terminal) fact's integrity receipt. **Freshness-aware (T4):**
   a still-`Active` fact past its TTL *or its asserted `valid_to`* is headline-flagged
@@ -195,7 +195,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `assert`/`supersede`/`retract` across processes (and the same receipt backs the MCP
   `explain` tool and `resources/read`). Supports `--output json` for the current-state
   receipt.
-- **`dent8 replay <subject> <predicate> [--as-of MILLIS] [--valid-at MILLIS]`** — prints
+- **`dent8 replay <subject> <predicate> [--as-of TIME] [--valid-at TIME]`** — prints
   the full ordered event history
   (every assertion, supersession, retraction, contradiction, and survived challenge, with
   authority + source) and

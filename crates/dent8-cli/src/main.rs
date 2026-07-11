@@ -386,13 +386,13 @@ struct ValueWriteArgs {
     /// Provenance source for this write. Defaults to the active signed grant's source when `DENT8_GRANT` is set.
     #[arg(long, short = 's', value_parser = parse_source)]
     source: Option<String>,
-    /// Valid-time lower bound (unix millis): when the fact starts to hold. Also anchors
+    /// Valid-time lower bound (unix millis, RFC 3339, a UTC date, now, or a ±duration): when the fact starts to hold. Also anchors
     /// TTL freshness. Applies to the assertion this write creates.
-    #[arg(long = "valid-from", value_name = "MILLIS")]
+    #[arg(long = "valid-from", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_from: Option<i64>,
-    /// Valid-time upper bound (unix millis): when the fact stops holding (ADR 0016).
+    /// Valid-time upper bound (unix millis, RFC 3339, a UTC date, now, or a ±duration): when the fact stops holding (ADR 0016).
     /// Past it the fact reads as stale, like an elapsed TTL.
-    #[arg(long = "valid-to", value_name = "MILLIS")]
+    #[arg(long = "valid-to", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_to: Option<i64>,
     /// Retention TTL as a human duration (e.g. 90d, 12h, 30m, 45s). The fact reads as stale
     /// once its freshness window elapses. A value beyond the predicate's retention ceiling is
@@ -434,11 +434,11 @@ struct DeriveWriteArgs {
     /// Provenance source for this write. Defaults to the active signed grant's source when `DENT8_GRANT` is set.
     #[arg(long, short = 's', value_parser = parse_source)]
     source: Option<String>,
-    /// Valid-time lower bound (unix millis) for the derived assertion (ADR 0016).
-    #[arg(long = "valid-from", value_name = "MILLIS")]
+    /// Valid-time lower bound (unix millis, RFC 3339, a UTC date, now, or a ±duration) for the derived assertion (ADR 0016).
+    #[arg(long = "valid-from", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_from: Option<i64>,
-    /// Valid-time upper bound (unix millis) for the derived assertion (ADR 0016).
-    #[arg(long = "valid-to", value_name = "MILLIS")]
+    /// Valid-time upper bound (unix millis, RFC 3339, a UTC date, now, or a ±duration) for the derived assertion (ADR 0016).
+    #[arg(long = "valid-to", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_to: Option<i64>,
     /// Retention TTL as a human duration (e.g. 90d, 12h). Rejected if beyond the predicate's
     /// retention ceiling. Omitted leaves the predicate default (or non-expiring).
@@ -455,10 +455,10 @@ struct ReadFactArgs {
     predicate: String,
     /// Read the log as it stood at this instant (unix millis): fold only events recorded
     /// at or before it (transaction-time travel, ADR 0016).
-    #[arg(long = "as-of", value_name = "MILLIS")]
+    #[arg(long = "as-of", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     as_of: Option<i64>,
     /// Evaluate freshness/validity at this instant (unix millis) instead of now.
-    #[arg(long = "valid-at", value_name = "MILLIS")]
+    #[arg(long = "valid-at", value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_at: Option<i64>,
 }
 
@@ -622,8 +622,14 @@ struct InitArgs {
     /// Signed identity subject scope: "*" or exact <kind>:<key>.
     #[arg(long, default_value = "*", value_name = "SCOPE")]
     identity_scope: String,
-    /// Optional signed identity expiration as Unix milliseconds.
-    #[arg(long, value_name = "MILLIS")]
+    /// Optional signed identity expiration (unix millis, RFC 3339, or a UTC date).
+    #[arg(
+        long = "identity-expires-at",
+        visible_alias = "identity-expires-at-ms",
+        value_name = "TIME",
+        value_parser = parse_time_millis,
+        allow_hyphen_values = true
+    )]
     identity_expires_at_ms: Option<i64>,
     /// Add witness verification paths to the generated env file.
     #[arg(long)]
@@ -710,8 +716,14 @@ struct AgentAddArgs {
     /// Signed identity subject scope: "*" or exact <kind>:<key>.
     #[arg(long, default_value = "*", value_name = "SCOPE")]
     identity_scope: String,
-    /// Optional signed identity expiration as Unix milliseconds.
-    #[arg(long, value_name = "MILLIS")]
+    /// Optional signed identity expiration (unix millis, RFC 3339, or a UTC date).
+    #[arg(
+        long = "identity-expires-at",
+        visible_alias = "identity-expires-at-ms",
+        value_name = "TIME",
+        value_parser = parse_time_millis,
+        allow_hyphen_values = true
+    )]
     identity_expires_at_ms: Option<i64>,
     /// MCP config file to patch.
     #[arg(long, visible_alias = "config", value_name = "PATH")]
@@ -1013,8 +1025,14 @@ struct IdentityBootstrapArgs {
     /// Subject scope: "*" or exact <kind>:<key>.
     #[arg(long, default_value = "*", value_name = "SCOPE")]
     scope: String,
-    /// Optional expiration as Unix milliseconds.
-    #[arg(long, value_name = "MILLIS")]
+    /// Optional expiration (unix millis, RFC 3339, or a UTC date).
+    #[arg(
+        long = "expires-at",
+        visible_alias = "expires-at-ms",
+        value_name = "TIME",
+        value_parser = parse_time_millis,
+        allow_hyphen_values = true
+    )]
     expires_at_ms: Option<i64>,
 }
 
@@ -1061,8 +1079,14 @@ struct IdentityRotateSourceArgs {
     /// Replacement grant subject scope. Defaults to the current grant's scope.
     #[arg(long, value_name = "SCOPE")]
     scope: Option<String>,
-    /// Replacement grant expiration as Unix milliseconds. Defaults to the current grant's expiration.
-    #[arg(long, value_name = "MILLIS")]
+    /// Replacement grant expiration (unix millis, RFC 3339, or a UTC date). Defaults to the current grant's expiration.
+    #[arg(
+        long = "expires-at",
+        visible_alias = "expires-at-ms",
+        value_name = "TIME",
+        value_parser = parse_time_millis,
+        allow_hyphen_values = true
+    )]
     expires_at_ms: Option<i64>,
 }
 
@@ -1138,8 +1162,14 @@ struct IdentityGrantIssueArgs {
     /// Optional subject scope: "*" or exact <kind>:<key>.
     #[arg(long, value_name = "SCOPE")]
     scope: Option<String>,
-    /// Optional expiration as Unix milliseconds.
-    #[arg(long, value_name = "MILLIS")]
+    /// Optional expiration (unix millis, RFC 3339, or a UTC date).
+    #[arg(
+        long = "expires-at",
+        visible_alias = "expires-at-ms",
+        value_name = "TIME",
+        value_parser = parse_time_millis,
+        allow_hyphen_values = true
+    )]
     expires_at_ms: Option<i64>,
 }
 
@@ -1199,11 +1229,11 @@ pub(crate) struct NativeReconcileArgs {
     /// Project root to scan. Defaults to the parent of --dir when --dir is .dent8, else cwd.
     #[arg(long, value_name = "ROOT")]
     root: Option<String>,
-    /// Replay the dent8 store as-of this Unix millisecond timestamp.
-    #[arg(long, value_name = "MILLIS")]
+    /// Replay the dent8 store as of this time (unix millis, RFC 3339, a UTC date, now, or a ±duration).
+    #[arg(long, value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     as_of: Option<i64>,
-    /// Evaluate fact freshness/validity at this Unix millisecond timestamp.
-    #[arg(long, value_name = "MILLIS")]
+    /// Evaluate fact freshness/validity at this time (unix millis, RFC 3339, a UTC date, now, or a ±duration).
+    #[arg(long, value_name = "TIME", value_parser = parse_time_millis, allow_hyphen_values = true)]
     valid_at: Option<i64>,
 }
 
@@ -1560,6 +1590,61 @@ fn parse_duration_ms(raw: &str) -> Result<u64, String> {
     amount
         .checked_mul(unit_ms)
         .ok_or_else(|| format!("duration '{raw}' is too large"))
+}
+
+/// Parse a wall-clock instant for the temporal flags (`--valid-from`/`--valid-to`,
+/// `--as-of`/`--valid-at`, `--expires-at`) into unix milliseconds. Accepts, in order:
+///
+/// - raw unix milliseconds (`1798761600000`) — the machine form; what MCP takes;
+/// - `now`;
+/// - a signed duration offset from now (`-7d`, `+12h` — units as in `--ttl`);
+/// - RFC 3339 with an offset (`2026-07-11T12:00:00Z`, `2026-07-11T14:00:00+02:00`);
+/// - a bare datetime (`2026-07-11T12:00`, seconds optional) — read as **UTC**;
+/// - a bare date (`2026-07-11`) — **UTC midnight**.
+///
+/// Bare forms are UTC, not local time, so the same command means the same instant on every
+/// machine — determinism over convenience, matching the store's own UTC-millis clock.
+fn parse_time_millis(raw: &str) -> Result<i64, String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err("time must not be empty (e.g. 2026-07-11, -7d, or unix millis)".to_string());
+    }
+    if let Ok(millis) = value.parse::<i64>() {
+        return Ok(millis);
+    }
+    if value == "now" {
+        return Ok(now_millis().as_unix_millis());
+    }
+    if let Some(offset) = value.strip_prefix('+').or_else(|| value.strip_prefix('-')) {
+        let duration = i64::try_from(parse_duration_ms(offset)?)
+            .map_err(|_| format!("offset '{raw}' is too large"))?;
+        let now = now_millis().as_unix_millis();
+        return if value.starts_with('-') {
+            now.checked_sub(duration)
+        } else {
+            now.checked_add(duration)
+        }
+        .ok_or_else(|| format!("offset '{raw}' is out of range"));
+    }
+    if let Ok(timestamp) = value.parse::<jiff::Timestamp>() {
+        return Ok(timestamp.as_millisecond());
+    }
+    if let Ok(datetime) = value.parse::<jiff::civil::DateTime>() {
+        return datetime
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .map(|zoned| zoned.timestamp().as_millisecond())
+            .map_err(|error| format!("invalid time '{raw}': {error}"));
+    }
+    if let Ok(date) = value.parse::<jiff::civil::Date>() {
+        return date
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .map(|zoned| zoned.timestamp().as_millisecond())
+            .map_err(|error| format!("invalid time '{raw}': {error}"));
+    }
+    Err(format!(
+        "invalid time '{raw}': use unix millis, now, a ±duration offset (-7d, +12h), \
+         RFC 3339 (2026-07-11T12:00:00Z), or a UTC date/datetime (2026-07-11, 2026-07-11T12:00)"
+    ))
 }
 
 fn run_identity(command: &IdentityCommand, output: CliOutput) -> i32 {
@@ -4139,6 +4224,51 @@ mod tests {
         assert!(parse_duration_ms("d").is_err());
         assert!(parse_duration_ms("10y").is_err());
         assert!(parse_duration_ms("abc").is_err());
+    }
+
+    #[test]
+    fn parse_time_millis_accepts_every_documented_form() {
+        // Raw millis pass through untouched (the machine form MCP also takes).
+        assert_eq!(parse_time_millis("1798675200000"), Ok(1_798_675_200_000));
+        assert_eq!(parse_time_millis("0"), Ok(0));
+        assert_eq!(parse_time_millis("-1"), Ok(-1));
+        // A bare date is UTC midnight — deterministic on every machine, not local time.
+        assert_eq!(parse_time_millis("2026-12-31"), Ok(1_798_675_200_000));
+        // A bare datetime is UTC; seconds optional.
+        assert_eq!(parse_time_millis("2026-12-31T12:00"), Ok(1_798_718_400_000));
+        assert_eq!(
+            parse_time_millis("2026-12-31T12:00:00"),
+            Ok(1_798_718_400_000)
+        );
+        // RFC 3339 with an offset names the same instant regardless of the offset used.
+        assert_eq!(
+            parse_time_millis("2026-12-31T12:00:00Z"),
+            Ok(1_798_718_400_000)
+        );
+        assert_eq!(
+            parse_time_millis("2026-12-31T14:00:00+02:00"),
+            Ok(1_798_718_400_000)
+        );
+        // `now` and ± offsets are relative to the wall clock.
+        let now = now_millis().as_unix_millis();
+        let parsed_now = parse_time_millis("now").expect("now");
+        assert!((parsed_now - now).abs() < 60_000, "{parsed_now} vs {now}");
+        let week_ago = parse_time_millis("-7d").expect("-7d");
+        assert!((now - week_ago - 7 * 86_400_000).abs() < 60_000);
+        let in_12h = parse_time_millis("+12h").expect("+12h");
+        assert!((in_12h - now - 12 * 3_600_000).abs() < 60_000);
+    }
+
+    #[test]
+    fn parse_time_millis_rejects_bad_input() {
+        assert!(parse_time_millis("").is_err());
+        assert!(parse_time_millis("tomorrow").is_err());
+        assert!(parse_time_millis("2026-13-01").is_err()); // no month 13
+        assert!(parse_time_millis("12:00").is_err()); // a time needs a date
+        assert!(parse_time_millis("-7x").is_err()); // unknown duration unit
+        // The error teaches the grammar.
+        let error = parse_time_millis("someday").unwrap_err();
+        assert!(error.contains("RFC 3339"), "{error}");
     }
 
     #[test]

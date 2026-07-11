@@ -10,6 +10,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Human timestamps on every temporal flag.** `--valid-from`/`--valid-to`, `--as-of`/
+  `--valid-at`, and the identity expirations now accept `now`, a ±duration offset from now
+  (`-7d`, `+12h` — the `--ttl` units), RFC 3339 with an offset (`2026-07-11T12:00:00Z`), and
+  bare UTC dates/datetimes (`2026-12-31`, `2026-12-31T12:00`), while raw unix milliseconds keep
+  working (and remain the MCP tools' form). Bare forms are **UTC**, not local time, so the same
+  command names the same instant on every machine. The identity expiration flags are renamed
+  `--expires-at` / `--identity-expires-at` (`--expires-at-ms` / `--identity-expires-at-ms`
+  remain as aliases). Parsing uses `jiff` (std-only, no tzdb).
 - **Machine-readable error `code` on every error payload.** Each `--output json` error object
   and every MCP tool error's `structuredContent` now carries a stable kebab-case `code` naming
   the *cause* beside the existing `status`: firewall refusals classify from the typed error

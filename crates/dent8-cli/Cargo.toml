@@ -44,6 +44,7 @@ hex = { version = "0.4" }
 # Opt-in: the `dent8 export` analytical lane (Parquet for DuckDB). Off by default so the stock
 # binary stays free of the arrow/parquet columnar stack.
 dent8-export = { path = "../dent8-export", version = "0.5.0", optional = true }
+jiff = { version = "0.2.32", default-features = false, features = ["std"] }
 
 [features]
 default = ["sqlite"]
