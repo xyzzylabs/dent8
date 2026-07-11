@@ -11,7 +11,7 @@ one non-stale source of truth they all share.
 second of wall time for `init` → `assert` → `explain`). Timed check:
 `./examples/on-ramp/demo.sh`. The sections below expand install, multi-agent wiring, and hooks.
 
-Every command below was run against the real `dent8` v0.6.0 binary; the output blocks are
+Every command below was run against the real `dent8` v0.6.1 binary; the output blocks are
 trimmed but verbatim.
 
 ## 0. Sixty-second path (binary already installed)
@@ -35,23 +35,23 @@ Optional smoke: `dent8 doctor --source source:owner --write-check`.
 The stock binary needs no services — it uses a local file log by default. MSRV is Rust
 **1.94**.
 
-**Release binaries (recommended, v0.6.0+).** The [releases page][releases] ships prebuilt
+**Release binaries (recommended, v0.6.1+).** The [releases page][releases] ships prebuilt
 archives for five targets, each with a `.sha256` sidecar (built with `postgres,sqlite`):
 
-- `dent8-v0.6.0-aarch64-apple-darwin.tar.gz`
-- `dent8-v0.6.0-x86_64-apple-darwin.tar.gz`
-- `dent8-v0.6.0-aarch64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.6.0-x86_64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.6.0-x86_64-pc-windows-msvc.zip`
+- `dent8-v0.6.1-aarch64-apple-darwin.tar.gz`
+- `dent8-v0.6.1-x86_64-apple-darwin.tar.gz`
+- `dent8-v0.6.1-aarch64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.6.1-x86_64-pc-windows-msvc.zip`
 
 Download, verify, and install one target (Linux x86_64 shown):
 
 ```sh
-BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.6.0
-curl -LO "$BASE/dent8-v0.6.0-x86_64-unknown-linux-gnu.tar.gz"
-curl -LO "$BASE/dent8-v0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
-sha256sum -c dent8-v0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar xzf dent8-v0.6.0-x86_64-unknown-linux-gnu.tar.gz
+BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.6.1
+curl -LO "$BASE/dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "$BASE/dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum -c dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf dent8-v0.6.1-x86_64-unknown-linux-gnu.tar.gz
 chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 ```
 

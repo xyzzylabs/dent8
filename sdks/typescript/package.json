@@ -1,6 +1,6 @@
 {
   "name": "dent8",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "A memory firewall for coding agents — thin TypeScript SDK over the dent8 CLI's JSON contract.",
   "keywords": [
     "agent",

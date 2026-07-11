@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-11
+
 ### Added
 - **TypeScript SDK** ([`sdks/typescript`](sdks/typescript/), npm name `dent8`): the mirror of
   the Python SDK — zero runtime dependencies, every call shells out to the binary with
