@@ -174,17 +174,23 @@ The adapter design is tracked in
 
 ## MCP Resources
 
-MCP resources provide context such as files, database schemas, or application-specific information identified by URI. For dent8, resources are a good fit for read-only explain and replay artifacts.
+MCP resources provide context identified by URI. dent8 exposes **one resource per fact
+stream** at `dent8://{kind}/{key}/{predicate}` (segments percent-encoded):
+
+- `resources/list` enumerates every stream in the log, with its freshness marked;
+- `resources/read` returns the stream's integrity receipt (and, for a write-capable
+  connection, records a `fact.retrieved` audit event by default — the same read-audit loop
+  as `dent8 context --record-retrieval`);
+- `resources/subscribe` / `resources/unsubscribe` register for
+  **`notifications/resources/updated`** pushes when a subscribed stream gains events. A
+  write through the same connection notifies immediately; a write from any other process
+  sharing the store is picked up within a short poll tick — so a long-running agent stops
+  re-polling `explain` and reacts when a fact it depends on is superseded, contested, or
+  retracted. Subscribing to a not-yet-asserted stream is allowed and notifies on its first
+  write. Both the stdio server and the local daemon (through `dent8 mcp proxy`, which pumps
+  frames bidirectionally) deliver notifications.
 
 Source: [MCP resources specification](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
-
-Possible resources:
-
-- `dent8://facts/{fact_id}`
-- `dent8://subjects/{subject_type}/{subject_key}`
-- `dent8://replays/{replay_id}`
-- `dent8://conflicts`
-- `dent8://schema/postgres`
 
 ## HTTP API
 

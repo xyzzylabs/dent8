@@ -11,6 +11,10 @@
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
 //!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt and,
 //!   for a write-capable connection, records a `fact.retrieved` audit event by default);
+//! - `resources/subscribe` / `resources/unsubscribe` with
+//!   `notifications/resources/updated` pushed when a subscribed fact stream gains events —
+//!   immediately after a write through this connection, and within a poll tick for writes
+//!   from any other process sharing the store (so long-running agents stop polling);
 //! - **JSON-RPC 2.0 batches** — a top-level array of requests yields an array of responses
 //!   (notifications omitted), per the spec.
 //!
@@ -48,14 +52,196 @@ When the connection has a signed source grant, write tools may omit source and a
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
 Use whatif to preview what would be believed under a different trust policy (distrust a source, \
 raise the authority floor) without changing anything. \
+Subscribe to a dent8:// resource (resources/subscribe) to be pushed \
+notifications/resources/updated when that fact stream changes, instead of re-polling. \
 Use native_scan/native_reconcile to audit provider-native memory/rules files when available. \
 Treat rejected writes as safety signals; do not silently overwrite.";
+
+/// How often a transport's notifier re-checks the store for changes made by *other*
+/// processes. Writes through the same connection kick the notifier immediately, so this
+/// bounds only cross-process notification latency (against a whole-log re-scan per tick —
+/// cheap at dev scale, and it runs only while subscriptions exist).
+const RESOURCE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Per-connection `resources/subscribe` state, shared between the request loop (which
+/// subscribes/unsubscribes) and the transport's notifier (which polls the store and emits
+/// `notifications/resources/updated`).
+#[derive(Default)]
+pub(crate) struct SubscriptionState {
+    inner: std::sync::Mutex<SubscriptionInner>,
+}
+
+#[derive(Default)]
+struct SubscriptionInner {
+    /// Subscribed `dent8://` uris.
+    uris: std::collections::BTreeSet<String>,
+    /// Log events already accounted for — the notification baseline. `None` until the first
+    /// subscribe pins it at the then-current head, so only *subsequent* changes notify.
+    seen_events: Option<usize>,
+}
+
+impl SubscriptionState {
+    /// Record a subscription. `head` is the store's current event count, computed by the
+    /// caller *before* inserting so a concurrent append lands after the baseline (a
+    /// duplicate notification at worst, never a missed one).
+    fn subscribe(&self, uri: String, head: usize) {
+        let mut inner = self.lock();
+        inner.seen_events.get_or_insert(head);
+        inner.uris.insert(uri);
+    }
+
+    /// Drop a subscription (idempotent). When the last one goes, the baseline resets so a
+    /// later subscribe re-pins at its own then-current head.
+    fn unsubscribe(&self, uri: &str) {
+        let mut inner = self.lock();
+        inner.uris.remove(uri);
+        if inner.uris.is_empty() {
+            inner.seen_events = None;
+        }
+    }
+
+    /// Diff the store against the baseline and return one
+    /// `notifications/resources/updated` frame per subscribed fact stream that gained
+    /// events. Errors reading the store (e.g. transient lock contention) skip the tick
+    /// rather than kill the notifier. The store read happens outside the lock.
+    fn poll(&self, path: &str) -> Vec<Value> {
+        let (uris, seen) = {
+            let inner = self.lock();
+            if inner.uris.is_empty() {
+                return Vec::new();
+            }
+            (inner.uris.clone(), inner.seen_events)
+        };
+        let events = match load_store(path).and_then(|store| {
+            store
+                .scan_events(&EventFilter::default())
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(events) => events,
+            Err(error) => {
+                eprintln!("mcp: resource notifier skipped a tick: {error}");
+                return Vec::new();
+            }
+        };
+        let head = events.len();
+        let mut inner = self.lock();
+        let baseline = match seen {
+            // A shrunken log means the store was replaced/rotated: re-baseline silently.
+            Some(seen) if seen <= head => seen,
+            _ => {
+                inner.seen_events = Some(head);
+                return Vec::new();
+            }
+        };
+        inner.seen_events = Some(head);
+        drop(inner);
+        let changed: std::collections::BTreeSet<String> = events[baseline..]
+            .iter()
+            .map(|event| {
+                resource_uri(
+                    event.subject.kind(),
+                    event.subject.key(),
+                    event.predicate.as_str(),
+                )
+            })
+            .collect();
+        changed
+            .into_iter()
+            .filter(|uri| uris.contains(uri))
+            .map(|uri| resource_updated_notification(&uri))
+            .collect()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, SubscriptionInner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// The server→client push frame for a changed subscribed resource.
+fn resource_updated_notification(uri: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": { "uri": uri },
+    })
+}
+
+/// The store's current event count — the subscribe-time notification baseline.
+fn store_head(path: &str) -> Result<usize, String> {
+    let store = load_store(path)?;
+    let events = store
+        .scan_events(&EventFilter::default())
+        .map_err(|error| error.to_string())?;
+    Ok(events.len())
+}
+
+/// True when this frame (a single request or a batch) contains a write tool call — the
+/// serve loops kick their notifier right after such a frame so own-write notifications do
+/// not wait out a poll tick.
+fn contains_write_tool_call(message: &Value) -> bool {
+    let is_write_call = |request: &Value| {
+        request.get("method").and_then(Value::as_str) == Some("tools/call")
+            && request
+                .get("params")
+                .and_then(|params| params.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(is_write_tool)
+    };
+    message.as_array().map_or_else(
+        || is_write_call(message),
+        |batch| batch.iter().any(is_write_call),
+    )
+}
+
+/// Serialize + write one JSON-RPC frame under the shared stdout lock (responses from the
+/// request loop and notifications from the notifier thread interleave without tearing).
+fn write_stdout_frame(stdout: &std::sync::Mutex<std::io::Stdout>, frame: &Value) -> bool {
+    let serialized = serde_json::to_string(frame).unwrap_or_else(|_| "{}".to_string());
+    let mut guard = stdout
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    writeln!(guard, "{serialized}").is_ok() && guard.flush().is_ok()
+}
+
+/// The stdio notifier: waits for a kick (a write through this server) or a poll tick, then
+/// pushes `notifications/resources/updated` frames for subscribed streams that changed.
+/// Exits when the request loop ends (kick sender dropped) or stdout breaks.
+fn stdio_notifier_loop(
+    kick: &std::sync::mpsc::Receiver<()>,
+    subscriptions: &SubscriptionState,
+    path: &str,
+    stdout: &std::sync::Mutex<std::io::Stdout>,
+) {
+    loop {
+        match kick.recv_timeout(RESOURCE_POLL_INTERVAL) {
+            // Coalesce a burst of writes into one poll.
+            Ok(()) => while kick.try_recv().is_ok() {},
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+        for frame in subscriptions.poll(path) {
+            if !write_stdout_frame(stdout, &frame) {
+                return;
+            }
+        }
+    }
+}
 
 /// Run the stdio server loop until EOF. Returns a process exit code.
 pub fn serve() -> i32 {
     let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
+    let stdout = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
     let path = log_path();
+    let subscriptions = std::sync::Arc::new(SubscriptionState::default());
+    let (kick, kick_rx) = std::sync::mpsc::channel::<()>();
+    {
+        let stdout = std::sync::Arc::clone(&stdout);
+        let subscriptions = std::sync::Arc::clone(&subscriptions);
+        let path = path.clone();
+        std::thread::spawn(move || stdio_notifier_loop(&kick_rx, &subscriptions, &path, &stdout));
+    }
     for line in stdin.lock().lines() {
         let line = match line {
             Ok(line) => line,
@@ -67,19 +253,32 @@ pub fn serve() -> i32 {
         if line.trim().is_empty() {
             continue;
         }
-        let response = match serde_json::from_str::<Value>(&line) {
-            Ok(request) => dispatch(&request, &path, &WriteIdentity::Env),
-            Err(error) => Some(error_response(
-                &Value::Null,
-                -32700,
-                &format!("parse error: {error}"),
-            )),
+        let (response, wrote) = match serde_json::from_str::<Value>(&line) {
+            Ok(request) => (
+                dispatch_with_subscriptions(
+                    &request,
+                    &path,
+                    &WriteIdentity::Env,
+                    Some(&subscriptions),
+                ),
+                contains_write_tool_call(&request),
+            ),
+            Err(error) => (
+                Some(error_response(
+                    &Value::Null,
+                    -32700,
+                    &format!("parse error: {error}"),
+                )),
+                false,
+            ),
         };
-        if let Some(response) = response {
-            let serialized = serde_json::to_string(&response).unwrap_or_else(|_| "{}".to_string());
-            if writeln!(stdout, "{serialized}").is_err() || stdout.flush().is_err() {
-                return 1;
-            }
+        if let Some(response) = response
+            && !write_stdout_frame(&stdout, &response)
+        {
+            return 1;
+        }
+        if wrote {
+            let _ = kick.send(());
         }
     }
     0
@@ -207,11 +406,10 @@ const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
 
 /// One accepted connection: refuse a cross-user peer, then read newline-delimited JSON-RPC
 /// and reply, running each (blocking) [`dispatch`] on the blocking pool so its throwaway
-/// current-thread runtime does not nest inside this async worker.
+/// current-thread runtime does not nest inside this async worker. Responses and
+/// subscription notifications both funnel through one writer task, so frames never tear.
 #[cfg(all(unix, feature = "async-store"))]
 async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, daemon_uid: u32) {
-    use tokio::io::AsyncBufReadExt;
-
     match stream.peer_cred() {
         Ok(cred) if cred.uid() == daemon_uid => {}
         Ok(cred) => {
@@ -224,6 +422,83 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
         }
     }
 
+    let (read_half, write_half) = stream.into_split();
+    let (frames, frame_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let writer = tokio::spawn(write_frames(write_half, frame_rx));
+
+    let subscriptions = std::sync::Arc::new(SubscriptionState::default());
+    let kick = std::sync::Arc::new(tokio::sync::Notify::new());
+    let notifier = tokio::spawn(daemon_notifier_loop(
+        std::sync::Arc::clone(&subscriptions),
+        store_path.clone(),
+        frames.clone(),
+        std::sync::Arc::clone(&kick),
+    ));
+
+    connection_request_loop(read_half, &frames, &subscriptions, &kick, &store_path).await;
+
+    // Connection over: stop the notifier, release the last senders so the writer drains
+    // pending frames and exits, then reap it.
+    notifier.abort();
+    drop(frames);
+    let _ = writer.await;
+}
+
+/// The single writer for one daemon connection: every outbound frame — request responses
+/// and notifier pushes — arrives on the channel and is written whole.
+#[cfg(all(unix, feature = "async-store"))]
+async fn write_frames(
+    mut write_half: tokio::net::unix::OwnedWriteHalf,
+    mut frames: tokio::sync::mpsc::UnboundedReceiver<Value>,
+) {
+    while let Some(frame) = frames.recv().await {
+        if !write_line(&mut write_half, &frame).await {
+            return;
+        }
+    }
+}
+
+/// The daemon-side notifier for one connection: on a kick (a write through this
+/// connection) or a poll tick, diff the store and push `notifications/resources/updated`
+/// frames. The poll re-reads the store (blocking I/O, plus its own throwaway runtime for
+/// async backends), so it runs on the blocking pool exactly like `dispatch`.
+#[cfg(all(unix, feature = "async-store"))]
+async fn daemon_notifier_loop(
+    subscriptions: std::sync::Arc<SubscriptionState>,
+    store_path: String,
+    frames: tokio::sync::mpsc::UnboundedSender<Value>,
+    kick: std::sync::Arc<tokio::sync::Notify>,
+) {
+    loop {
+        // Wake on whichever comes first; a timeout is just the poll tick.
+        let _ = tokio::time::timeout(RESOURCE_POLL_INTERVAL, kick.notified()).await;
+        let subscriptions = std::sync::Arc::clone(&subscriptions);
+        let path = store_path.clone();
+        let Ok(notifications) =
+            tokio::task::spawn_blocking(move || subscriptions.poll(&path)).await
+        else {
+            return;
+        };
+        for frame in notifications {
+            if frames.send(frame).is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// The per-connection request loop (see [`serve_connection`] for the surrounding tasks).
+/// Returning ends the connection.
+#[cfg(all(unix, feature = "async-store"))]
+async fn connection_request_loop(
+    read_half: tokio::net::unix::OwnedReadHalf,
+    frames: &tokio::sync::mpsc::UnboundedSender<Value>,
+    subscriptions: &std::sync::Arc<SubscriptionState>,
+    kick: &tokio::sync::Notify,
+    store_path: &str,
+) {
+    use tokio::io::AsyncBufReadExt;
+
     // The daemon's own signed identity, resolved once per connection from process env. A
     // connection authenticates *as this same-user source* (ADR 0018): the session challenge
     // proves the connecting party holds the key the daemon will attest its writes with. `None`
@@ -233,7 +508,6 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
         .map(std::sync::Arc::new);
     let mut session = HandshakeState::Fresh;
 
-    let (read_half, mut write_half) = stream.into_split();
     let mut reader = tokio::io::BufReader::new(read_half);
     loop {
         // Cap a single request frame: `read_line` accumulates into one `String`, so an unbounded
@@ -253,7 +527,7 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
         };
         if bytes as u64 == MAX_FRAME_BYTES && !line.ends_with('\n') {
             let response = error_response(&Value::Null, -32700, "request frame too large");
-            let _ = write_line(&mut write_half, &response).await;
+            let _ = frames.send(response);
             return;
         }
         if line.trim().is_empty() {
@@ -264,7 +538,7 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
             Err(error) => {
                 let response =
                     error_response(&Value::Null, -32700, &format!("parse error: {error}"));
-                if !write_line(&mut write_half, &response).await {
+                if frames.send(response).is_err() {
                     return;
                 }
                 continue;
@@ -284,7 +558,7 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
                 crate::now_millis(),
             )
             .await;
-            if !write_line(&mut write_half, &response).await {
+            if frames.send(response).is_err() {
                 return;
             }
             continue;
@@ -295,9 +569,16 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
         // (reads only — the gate in `handle` refuses writes).
         let write_identity = session.write_identity();
 
-        let store_path = store_path.clone();
+        let store_path_owned = store_path.to_string();
+        let wrote = contains_write_tool_call(&request);
+        let dispatch_subscriptions = std::sync::Arc::clone(subscriptions);
         let response = match tokio::task::spawn_blocking(move || {
-            dispatch(&request, &store_path, &write_identity)
+            dispatch_with_subscriptions(
+                &request,
+                &store_path_owned,
+                &write_identity,
+                Some(&dispatch_subscriptions),
+            )
         })
         .await
         {
@@ -307,11 +588,14 @@ async fn serve_connection(stream: tokio::net::UnixStream, store_path: String, da
                 return;
             }
         };
-        let Some(response) = response else {
-            continue;
-        };
-        if !write_line(&mut write_half, &response).await {
+        if let Some(response) = response
+            && frames.send(response).is_err()
+        {
             return;
+        }
+        // Kick after the response is queued so the update notification follows it.
+        if wrote {
+            kick.notify_one();
         }
     }
 }
@@ -661,10 +945,24 @@ fn access_for(identity: &WriteIdentity) -> Access {
 /// Dispatch one parsed JSON-RPC message: a single request object, or a **batch** (a
 /// non-empty array of requests → an array of responses, omitting notifications; an empty
 /// array is an invalid request). Returns `None` when there is nothing to send (a lone
-/// notification, or a batch of only notifications).
+/// notification, or a batch of only notifications). This arity has no subscription state —
+/// `resources/subscribe` reports unsupported; the serve loops use
+/// [`dispatch_with_subscriptions`]. Only the test suite still exercises the bare arity.
+#[cfg(test)]
 fn dispatch(message: &Value, path: &str, identity: &WriteIdentity) -> Option<Value> {
+    dispatch_with_subscriptions(message, path, identity, None)
+}
+
+/// [`dispatch`] with the connection's live subscription state attached (the serve loops'
+/// entry point — subscriptions are per-connection, so they cannot live in module state).
+fn dispatch_with_subscriptions(
+    message: &Value,
+    path: &str,
+    identity: &WriteIdentity,
+    subscriptions: Option<&SubscriptionState>,
+) -> Option<Value> {
     let Some(batch) = message.as_array() else {
-        return handle(message, path, identity);
+        return handle(message, path, identity, subscriptions);
     };
     if batch.is_empty() {
         return Some(error_response(
@@ -675,7 +973,7 @@ fn dispatch(message: &Value, path: &str, identity: &WriteIdentity) -> Option<Val
     }
     let responses: Vec<Value> = batch
         .iter()
-        .filter_map(|item| handle(item, path, identity))
+        .filter_map(|item| handle(item, path, identity, subscriptions))
         .collect();
     // A batch containing only notifications gets no reply (JSON-RPC 2.0).
     if responses.is_empty() {
@@ -687,7 +985,12 @@ fn dispatch(message: &Value, path: &str, identity: &WriteIdentity) -> Option<Val
 
 /// Handle one JSON-RPC request object. Returns the response value, or `None` for a
 /// notification (a request with no `id`, e.g. `notifications/initialized`).
-fn handle(request: &Value, path: &str, identity: &WriteIdentity) -> Option<Value> {
+fn handle(
+    request: &Value,
+    path: &str,
+    identity: &WriteIdentity,
+    subscriptions: Option<&SubscriptionState>,
+) -> Option<Value> {
     // Each message (or batch element) must be a single JSON-RPC object; batches are unwrapped
     // one level up in `dispatch`, so a nested array here is itself an invalid request.
     if !request.is_object() {
@@ -728,7 +1031,9 @@ fn handle(request: &Value, path: &str, identity: &WriteIdentity) -> Option<Value
                 "protocolVersion": negotiated_protocol_version(request.get("params")),
                 "capabilities": {
                     "tools": { "listChanged": false },
-                    "resources": {},
+                    // Subscriptions need a notifier wired to this connection's transport;
+                    // advertise them only where one exists.
+                    "resources": { "subscribe": subscriptions.is_some(), "listChanged": false },
                 },
                 "instructions": SERVER_INSTRUCTIONS,
                 "serverInfo": { "name": "dent8", "version": env!("CARGO_PKG_VERSION") },
@@ -763,6 +1068,17 @@ fn handle(request: &Value, path: &str, identity: &WriteIdentity) -> Option<Value
             request.get("params"),
             path,
             identity,
+        )),
+        "resources/subscribe" => Some(handle_resources_subscribe(
+            &id,
+            request.get("params"),
+            path,
+            subscriptions,
+        )),
+        "resources/unsubscribe" => Some(handle_resources_unsubscribe(
+            &id,
+            request.get("params"),
+            subscriptions,
         )),
         _ => Some(error_response(
             &id,
@@ -986,6 +1302,59 @@ fn handle_resources_read(
             "contents": [{ "uri": uri, "mimeType": "text/plain", "text": text }],
         }),
     )
+}
+
+/// `resources/subscribe`: register for `notifications/resources/updated` on one fact
+/// stream. The uri must be well-formed, but the stream need not exist yet — subscribing to
+/// a not-yet-asserted fact notifies on its first write (useful for "tell me when this
+/// decision lands"). The baseline is the store head at subscribe time, so only subsequent
+/// changes notify.
+fn handle_resources_subscribe(
+    id: &Value,
+    params: Option<&Value>,
+    path: &str,
+    subscriptions: Option<&SubscriptionState>,
+) -> Value {
+    let Some(subscriptions) = subscriptions else {
+        return error_response(
+            id,
+            -32601,
+            "resources/subscribe is not available over this transport",
+        );
+    };
+    let Some(uri) = params.and_then(|p| p.get("uri")).and_then(Value::as_str) else {
+        return error_response(id, -32602, "missing params.uri");
+    };
+    if parse_resource_uri(uri).is_none() {
+        return error_response(id, -32602, &format!("not a dent8 resource uri: {uri}"));
+    }
+    let head = match store_head(path) {
+        Ok(head) => head,
+        Err(error) => return error_response(id, -32603, &error),
+    };
+    subscriptions.subscribe(uri.to_string(), head);
+    result_response(id, &json!({}))
+}
+
+/// `resources/unsubscribe`: stop notifications for one uri. Idempotent — unsubscribing a
+/// uri that was never subscribed still succeeds.
+fn handle_resources_unsubscribe(
+    id: &Value,
+    params: Option<&Value>,
+    subscriptions: Option<&SubscriptionState>,
+) -> Value {
+    let Some(subscriptions) = subscriptions else {
+        return error_response(
+            id,
+            -32601,
+            "resources/unsubscribe is not available over this transport",
+        );
+    };
+    let Some(uri) = params.and_then(|p| p.get("uri")).and_then(Value::as_str) else {
+        return error_response(id, -32602, "missing params.uri");
+    };
+    subscriptions.unsubscribe(uri);
+    result_response(id, &json!({}))
 }
 
 /// Append one `fact.retrieved` for the resource that was just returned. Identity resolves
@@ -3696,10 +4065,18 @@ mod tests {
     // (Full access). These shims pin that default so those tests read unchanged; the read-only
     // daemon tests call `raw_dispatch`/`raw_handle` with `WriteIdentity::Unauthenticated`.
     fn handle(request: &Value, path: &str) -> Option<Value> {
-        raw_handle(request, path, &WriteIdentity::Env)
+        raw_handle(request, path, &WriteIdentity::Env, None)
     }
     fn dispatch(message: &Value, path: &str) -> Option<Value> {
         raw_dispatch(message, path, &WriteIdentity::Env)
+    }
+    /// The serve-loop arity: a live [`super::SubscriptionState`] attached.
+    fn handle_subscribing(
+        request: &Value,
+        path: &str,
+        subscriptions: &super::SubscriptionState,
+    ) -> Option<Value> {
+        raw_handle(request, path, &WriteIdentity::Env, Some(subscriptions))
     }
 
     fn temp_log() -> (tempdir::Guard, String) {
@@ -3789,6 +4166,116 @@ mod tests {
     fn an_empty_batch_is_an_invalid_request() {
         let response = dispatch(&json!([]), "/tmp/unused.jsonl").expect("response");
         assert_eq!(response["error"]["code"], -32600);
+    }
+
+    #[test]
+    fn initialize_advertises_subscribe_only_where_a_notifier_exists() {
+        let request = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} });
+        // The bare arity has no notifier wired to a transport: not advertised.
+        let bare = handle(&request, "/tmp/unused.jsonl").expect("response");
+        assert_eq!(
+            bare["result"]["capabilities"]["resources"]["subscribe"],
+            false
+        );
+        // The serve loops attach per-connection state: advertised.
+        let subscriptions = super::SubscriptionState::default();
+        let served =
+            handle_subscribing(&request, "/tmp/unused.jsonl", &subscriptions).expect("response");
+        assert_eq!(
+            served["result"]["capabilities"]["resources"]["subscribe"],
+            true
+        );
+    }
+
+    #[test]
+    fn subscribe_notifies_on_the_subscribed_stream_only() {
+        let (_guard, path) = temp_log();
+        let subscriptions = super::SubscriptionState::default();
+        // Seed the stream, then subscribe: the baseline is the head at subscribe time.
+        let (err, _) = call_tool(&path, "assert", database("postgres", "high"));
+        assert!(!err);
+        let subscribe = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "resources/subscribe",
+            "params": { "uri": "dent8://repo/p/database" },
+        });
+        let response = handle_subscribing(&subscribe, &path, &subscriptions).expect("response");
+        assert!(
+            response.get("error").is_none(),
+            "subscribe failed: {response}"
+        );
+        // Nothing since the baseline: quiet.
+        assert!(subscriptions.poll(&path).is_empty());
+        // A write to a different stream: still quiet.
+        let (err, _) = call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo:p", "predicate": "language", "value": "rust",
+                "authority": "high", "source": "src",
+            }),
+        );
+        assert!(!err);
+        assert!(subscriptions.poll(&path).is_empty());
+        // A supersession of the subscribed stream: exactly one notification.
+        let (err, _) = call_tool(&path, "supersede", database("mysql", "high"));
+        assert!(!err);
+        let notifications = subscriptions.poll(&path);
+        assert_eq!(notifications.len(), 1, "{notifications:?}");
+        assert_eq!(
+            notifications[0]["method"],
+            "notifications/resources/updated"
+        );
+        assert_eq!(notifications[0]["params"]["uri"], "dent8://repo/p/database");
+        // Drained: the next poll is quiet again.
+        assert!(subscriptions.poll(&path).is_empty());
+        // After unsubscribe, further changes stay silent.
+        let unsubscribe = json!({
+            "jsonrpc": "2.0", "id": 3, "method": "resources/unsubscribe",
+            "params": { "uri": "dent8://repo/p/database" },
+        });
+        handle_subscribing(&unsubscribe, &path, &subscriptions).expect("response");
+        let (err, _) = call_tool(&path, "supersede", database("sqlite", "high"));
+        assert!(!err);
+        assert!(subscriptions.poll(&path).is_empty());
+    }
+
+    #[test]
+    fn subscribing_to_a_not_yet_asserted_stream_notifies_on_its_first_write() {
+        let (_guard, path) = temp_log();
+        let subscriptions = super::SubscriptionState::default();
+        let subscribe = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "resources/subscribe",
+            "params": { "uri": "dent8://repo/p/database" },
+        });
+        let response = handle_subscribing(&subscribe, &path, &subscriptions).expect("response");
+        assert!(
+            response.get("error").is_none(),
+            "subscribe failed: {response}"
+        );
+        let (err, _) = call_tool(&path, "assert", database("postgres", "high"));
+        assert!(!err);
+        let notifications = subscriptions.poll(&path);
+        assert_eq!(notifications.len(), 1, "{notifications:?}");
+        assert_eq!(notifications[0]["params"]["uri"], "dent8://repo/p/database");
+    }
+
+    #[test]
+    fn subscribe_rejects_a_malformed_uri_and_reports_unsupported_without_a_notifier() {
+        let (_guard, path) = temp_log();
+        let subscriptions = super::SubscriptionState::default();
+        let malformed = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "resources/subscribe",
+            "params": { "uri": "https://example.com/not-dent8" },
+        });
+        let response = handle_subscribing(&malformed, &path, &subscriptions).expect("response");
+        assert_eq!(response["error"]["code"], -32602);
+        // Without a transport notifier (the bare arity), subscribe is honestly unsupported.
+        let wellformed = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "resources/subscribe",
+            "params": { "uri": "dent8://repo/p/database" },
+        });
+        let response = handle(&wellformed, &path).expect("response");
+        assert_eq!(response["error"]["code"], -32601);
     }
 
     #[test]
@@ -3887,6 +4374,7 @@ mod tests {
             }),
             &path,
             &WriteIdentity::Unauthenticated,
+            None,
         )
         .expect("response");
         assert!(
@@ -4514,7 +5002,7 @@ mod tests {
                 "subject": "repo:p", "predicate": "database", "value": "postgres"
             }},
         });
-        let accepted = raw_handle(&write, &path, &identity).expect("accepted response");
+        let accepted = raw_handle(&write, &path, &identity, None).expect("accepted response");
         assert_eq!(
             accepted["result"]["isError"],
             Value::Bool(false),
@@ -4537,7 +5025,7 @@ mod tests {
                 "source": "source:other"
             }},
         });
-        let rejected = raw_handle(&laundered, &path, &identity).expect("rejected response");
+        let rejected = raw_handle(&laundered, &path, &identity, None).expect("rejected response");
         assert_eq!(
             rejected["result"]["isError"],
             Value::Bool(true),
@@ -5189,7 +5677,7 @@ mod tests {
             }},
         });
         assert_eq!(
-            raw_handle(&seed, &path, &WriteIdentity::Env).expect("seed")["result"]["isError"],
+            raw_handle(&seed, &path, &WriteIdentity::Env, None).expect("seed")["result"]["isError"],
             Value::Bool(false),
         );
 

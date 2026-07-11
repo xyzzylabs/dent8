@@ -33,8 +33,9 @@ serde_json = "1"
 toml_edit = "0.22"
 # Async backend bridge used by SQLite by default and by opt-in backends such as Postgres.
 # This lets the CLI/MCP run against a backend selected by DENT8_STORE_URL. `net`/`io-util`
-# also back the local `dent8 mcp serve --daemon` Unix-socket transport (ADR 0018).
-tokio = { version = "1", features = ["rt", "net", "time", "io-util"], optional = true }
+# also back the local `dent8 mcp serve --daemon` Unix-socket transport (ADR 0018), and
+# `sync` its per-connection frame channel + resource-subscription notifier.
+tokio = { version = "1", features = ["rt", "net", "time", "io-util", "sync"], optional = true }
 # Always compiled: Ed25519 source identity and the witness transparency log are stock parts of
 # the CLI — the secure onboarding and integrity story should not require a custom build. These
 # add ~0.7 MiB to the binary (identity ~0.4, witness ~0.3) and are shared between the two.

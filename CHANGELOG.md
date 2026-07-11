@@ -10,6 +10,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **MCP `resources/subscribe`** (roadmap: fact-change push): subscribe to a
+  `dent8://{kind}/{key}/{predicate}` fact stream and the server pushes
+  `notifications/resources/updated` when it gains events — immediately after a write
+  through the same connection, and within a ~2s poll tick for writes from **any other
+  process sharing the store** (another agent, the CLI, a daemon peer), so long-running
+  agents stop re-polling `explain`. Subscribing to a not-yet-asserted stream is allowed and
+  notifies on its first write. Works on both transports: the stdio server (notifier thread;
+  responses and pushes interleave under one stdout lock) and the local daemon (per-connection
+  notifier + single writer task). `dent8 mcp proxy` now pumps frames **bidirectionally**
+  (previously strict request/response), so daemon clients receive pushes through it too.
+  `initialize` advertises `resources.subscribe: true` only where a notifier is actually
+  wired.
 - **`dent8 whatif` — policy-counterfactual replay** (the rank-2 novelty direction in
   [research/novelty.md](docs/research/novelty.md), now surfaced): re-fold the same immutable log
   under a swapped epistemic trust policy — `--distrust <source>` (repeatable),

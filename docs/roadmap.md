@@ -54,9 +54,12 @@ evidence of users, not on more features.
    (SQLite sidecar `BEGIN IMMEDIATE`; Postgres session advisory lock — see
    [storage.md](storage.md)). *(Invariant held on both: every write eventually admitted,
    exactly one believed value, `verify` green.)*
-4. **MCP `resources/subscribe`.** Push fact-change notifications (superseded, contested,
-   retracted) to long-running agents instead of polling; pairs with the local daemon.
-   *(Invariant: an agent's injected context cannot silently go stale between reads.)*
+4. **MCP `resources/subscribe`.** ✅ Both transports: subscribe to a
+   `dent8://{kind}/{key}/{predicate}` stream and receive `notifications/resources/updated`
+   when it changes — immediately for writes through the same connection, within a poll tick
+   for writes from any other process sharing the store. The daemon pushes per connection and
+   `dent8 mcp proxy` pumps frames bidirectionally, so daemon clients get pushes too.
+   *(Invariant held: an agent's injected context cannot silently go stale between reads.)*
 5. **Identity productization.** OS keychain / secret-store-backed source keys instead of
    `0600` files, and a team key-distribution story. *(Invariant: stealing a source identity
    requires more than a same-user file read — the threat model's top residual.)*
