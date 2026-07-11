@@ -37,7 +37,11 @@ order:
    printed by `dent8 eval`). Real agent-trace replay remains optional stretch work.
    *(Invariant: the 0/5-vs-5/5 result generalizes beyond self-authored fixtures.)*
 5. **Python/TS reachability.** An HTTP API or thin SDKs so non-Rust agents can reach the
-   store. *(No new invariant; widens who the firewall protects.)*
+   store. *(No new invariant; widens who the firewall protects.)* Python half ✅:
+   [`sdks/python`](../sdks/python/) wraps the CLI's JSON machine contract
+   (`schema_version` + `status` + error `code`s) with typed exceptions, tested against the
+   real binary in CI; LLM tool-calling goes through MCP
+   ([examples/langchain](../examples/langchain/)). The TS SDK remains.
 
 Explicitly **frozen until the wedge has users**: operated-witness hosting, the desktop
 debugger/control plane, and any training-substrate direction.

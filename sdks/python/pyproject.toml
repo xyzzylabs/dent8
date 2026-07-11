@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dent8"
+version = "0.6.0"
+description = "A memory firewall for coding agents — thin Python SDK over the dent8 CLI's JSON contract."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0 OR MIT"
+authors = [{ name = "xyzzylabs" }]
+keywords = ["agent", "memory", "provenance", "firewall", "mcp"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://github.com/xyzzylabs/dent8"
+Changelog = "https://github.com/xyzzylabs/dent8/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dent8"]

@@ -9,6 +9,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- **Python SDK** ([`sdks/python`](sdks/python/), PyPI name `dent8`): a deliberately thin,
+  zero-dependency wrapper over the CLI's JSON machine contract — every call shells out with
+  `--output json`, returns the payload as a `dict`, and raises `Dent8Rejected` / `Dent8Invalid`
+  carrying the stable `status` + `code` (`insufficient-authority`, `below-authority-floor`, …)
+  so callers branch on codes, never prose. The belief surface maps 1:1 (`assert_fact`,
+  `supersede`, `contradict`, `retract`, `reinforce`, `expire`, `derive(basis=…)`, `explain`,
+  `replay`, `facts`, `verify`, `conflicts`); store discovery, daemon routing, grant defaults,
+  and the human time grammar are inherited from the CLI. Tested against the real binary in CI
+  (`python-sdk` job). Roadmap item 5, Python half; the TS SDK remains.
+
 ## [0.6.0] - 2026-07-11
 
 ### BREAKING
