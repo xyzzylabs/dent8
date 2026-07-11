@@ -12,8 +12,8 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-dent8-core = { path = "../dent8-core", version = "0.6.1" }
-dent8-store = { path = "../dent8-store", version = "0.6.1" }
+dent8-core = { path = "../dent8-core", version = "0.7.0" }
+dent8-store = { path = "../dent8-store", version = "0.7.0" }
 
 [features]
 # The async backend trait (`AsyncEventStore`), for adapters like dent8-store-postgres /

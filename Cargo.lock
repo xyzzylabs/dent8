@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "dent8"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "dent8-core",
  "dent8-store",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-cli"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -735,7 +735,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-core"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -747,7 +747,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-evals"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "dent8-core",
  "dent8-store",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-export"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "bytes",
@@ -766,7 +766,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-store"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "dent8-core",
@@ -776,7 +776,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-store-postgres"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "dent8-core",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "dent8-store-sqlite"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "async-trait",
  "dent8-core",

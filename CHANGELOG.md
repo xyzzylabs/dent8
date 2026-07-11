@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-11
+
 ### Added
 - **OS-keychain-backed identity keys** (roadmap: identity productization; macOS in this
   release): `keychain:<account>` is accepted wherever a signing-key path is —
