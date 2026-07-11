@@ -1991,7 +1991,9 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 
 /// The scheme marking a keychain-backed key reference.
 const KEYCHAIN_SCHEME: &str = "keychain:";
-/// The keychain service every dent8 key item lives under.
+/// The keychain service every dent8 key item lives under (named only by the macOS
+/// implementations; the stubs on other platforms make no keychain calls).
+#[cfg(target_os = "macos")]
 const KEYCHAIN_SERVICE: &str = "dent8";
 #[cfg(not(target_os = "macos"))]
 const KEYCHAIN_UNSUPPORTED: &str =
