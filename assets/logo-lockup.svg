@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 100" role="img" aria-labelledby="t d">
+  <title id="t">dent8</title>
+  <desc id="d">The dent8 mark — a crenellated octagon with a round knockout — beside the dent8 wordmark.</desc>
+  <style>
+    .m { fill: #1a1a1a; }
+    .w { fill: #1a1a1a; font: 500 58px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    @media (prefers-color-scheme: dark) { .m, .w { fill: #e8e6e3; } }
+  </style>
+  <path class="m" fill-rule="evenodd" transform="translate(50,50)" d="M -16.8,-40.7 L -10,-40.7 L -10,-31 L -3.4,-31 L -3.4,-40.7 L 3.4,-40.7 L 3.4,-31 L 10,-31 L 10,-40.7 L 16.8,-40.7 L 40.7,-16.8 L 40.7,16.8 L 16.8,40.7 L -16.8,40.7 L -40.7,16.8 L -40.7,-16.8 Z M 8.5,2 A 8.5 8.5 0 1 0 -8.5,2 A 8.5 8.5 0 1 0 8.5,2 Z"/>
+  <text class="w" x="114" y="70">dent8</text>
+</svg>

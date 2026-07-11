@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/xyzzylabs/dent8/main/assets/logo.svg" width="88" alt="dent8 — a crenellated octagon holding one fact">
+</p>
+
 # dent8
 
 **A memory firewall for coding agents.** dent8 sits between your agent and its long-term
