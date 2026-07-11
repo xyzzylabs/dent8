@@ -8248,6 +8248,45 @@ fn identity_lifecycle_commands_emit_machine_readable_json() {
 }
 
 #[test]
+fn identity_keygen_rejects_malformed_keychain_references() {
+    // Validation runs before any OS keychain is touched, so these behave identically on
+    // every platform (the happy path needs a real macOS keychain and stays out of CI).
+    let empty = run_dent8(
+        &[
+            "identity",
+            "agent-keygen",
+            "source:me",
+            "--out",
+            "keychain:",
+        ],
+        &[],
+    );
+    assert!(!empty.status.success(), "empty account must fail");
+    assert!(
+        stderr(&empty).contains("needs an account name"),
+        "{}",
+        stderr(&empty)
+    );
+
+    let invalid = run_dent8(
+        &[
+            "identity",
+            "agent-keygen",
+            "source:me",
+            "--out",
+            "keychain:bad account",
+        ],
+        &[],
+    );
+    assert!(!invalid.status.success(), "invalid account must fail");
+    assert!(
+        stderr(&invalid).contains("may only contain"),
+        "{}",
+        stderr(&invalid)
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)]
 fn identity_artifact_commands_emit_machine_readable_json() {
     let temp = TempDir::new();

@@ -778,6 +778,18 @@ fn preflight_bootstrap_plan(plan: &BootstrapPlan) -> Result<(), String> {
 }
 
 pub(super) fn keygen_outcome(out: &str, label: &str) -> Result<KeygenOutput, String> {
+    // `--out keychain:<account>`: the private key goes into the OS keychain (no file, no
+    // `.pub` sibling — the public key is reported and derivable from the private item).
+    if let Some(account) = super::keychain_account(out) {
+        let signing = generate_signing_key()?;
+        super::keychain_write_new(account, &hex::encode(signing.to_bytes()))?;
+        return Ok(KeygenOutput {
+            label: label.to_string(),
+            private_key_path: PathBuf::from(format!("keychain:{account}")),
+            public_key_path: None,
+            public_key_hex: hex::encode(signing.verifying_key().to_bytes()),
+        });
+    }
     let out = Path::new(out);
     if out.exists() {
         return Err(format!(
@@ -797,7 +809,8 @@ pub(super) fn keygen_outcome(out: &str, label: &str) -> Result<KeygenOutput, Str
     Ok(KeygenOutput {
         label: label.to_string(),
         private_key_path: out.to_path_buf(),
-        public_key_path: public,
+        public_key_path: Some(public),
+        public_key_hex: hex::encode(signing.verifying_key().to_bytes()),
     })
 }
 
@@ -1023,6 +1036,16 @@ fn ensure_public_key_for_key(
 
 fn write_key_pair(private_path: &Path, signing: &SigningKey) -> Result<(), String> {
     let private = path_string(private_path);
+    // Bundle flows (bootstrap / rotate) lay out key *files* in a directory; a keychain ref
+    // reaching here would silently create a literal `keychain:…` file instead.
+    if super::keychain_account(&private).is_some() {
+        return Err(
+            "bootstrap/rotate write key files into the bundle directory and do not support \
+             keychain: references yet; `identity agent-keygen`/`issuer-keygen` accept \
+             --out keychain:<account>"
+                .to_string(),
+        );
+    }
     write_secret(&private, &hex::encode(signing.to_bytes()))?;
     let public_path = public_key_path(private_path);
     let public_key = hex::encode(signing.verifying_key().to_bytes());

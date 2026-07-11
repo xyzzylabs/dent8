@@ -10,6 +10,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **OS-keychain-backed identity keys** (roadmap: identity productization; macOS in this
+  release): `keychain:<account>` is accepted wherever a signing-key path is —
+  `DENT8_IDENTITY_KEY`, keygen `--out`, `grant-issue --issuer-key` / `--public-key`,
+  `trust-add` — naming a generic-password item under keychain service `dent8` instead of a
+  `0600` file. `identity agent-keygen --out keychain:<account>` generates straight into the
+  keychain (no file ever exists, the public key is printed and derivable from the private
+  item, and an existing item is refused, same as files). This narrows the threat model's
+  top residual: the key is encrypted at rest, locks with the session, and never lands in a
+  dotfile a backup or homedir sync would sweep. The secret passes to `/usr/bin/security`
+  over stdin, never argv. Windows Credential Manager / Linux secret-service are the
+  documented follow-up, with a clear error meanwhile.
 - **MCP `resources/subscribe`** (roadmap: fact-change push): subscribe to a
   `dent8://{kind}/{key}/{predicate}` fact stream and the server pushes
   `notifications/resources/updated` when it gains events — immediately after a write

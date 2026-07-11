@@ -229,18 +229,34 @@ impl RotateSourceOutput {
 #[derive(Clone, Debug)]
 struct KeygenOutput {
     label: String,
+    /// A file path, or the `keychain:<account>` reference for a keychain-backed key.
     private_key_path: PathBuf,
-    public_key_path: PathBuf,
+    /// The `.pub` sibling for file keys; `None` for keychain keys (no public artifact —
+    /// derive it from the private item, e.g. `grant-issue --public-key keychain:<account>`).
+    public_key_path: Option<PathBuf>,
+    /// The hex public key, printed directly when there is no `.pub` file.
+    public_key_hex: String,
 }
 
 impl KeygenOutput {
     fn message(&self) -> String {
-        format!(
-            "wrote {} signing key to {}\nwrote public key to {}",
-            self.label,
-            self.private_key_path.display(),
-            self.public_key_path.display()
-        )
+        match &self.public_key_path {
+            Some(public) => format!(
+                "wrote {} signing key to {}\nwrote public key to {}",
+                self.label,
+                self.private_key_path.display(),
+                public.display()
+            ),
+            None => format!(
+                "stored {} signing key in the OS keychain as {}\npublic key: {}\nuse {} \
+                 wherever a key path is accepted (DENT8_IDENTITY_KEY, --issuer-key, \
+                 --public-key, …)",
+                self.label,
+                self.private_key_path.display(),
+                self.public_key_hex,
+                self.private_key_path.display(),
+            ),
+        }
     }
 }
 
@@ -436,7 +452,8 @@ pub(crate) struct IdentityContext {
     trust_explicit: bool,
     /// Signed-grant path (`DENT8_GRANT`), if set to a non-empty value.
     grant_path: Option<String>,
-    /// Source signing-key path (`DENT8_IDENTITY_KEY`), if set to a non-empty value.
+    /// Source signing-key reference (`DENT8_IDENTITY_KEY`) — a file path or a
+    /// `keychain:<account>` item — if set to a non-empty value.
     identity_key_path: Option<String>,
     /// Explicit active-grants path (`DENT8_ACTIVE_GRANTS`); when unset it is derived as the
     /// sibling of the trust registry (see [`IdentityContext::active_grants_path`]).
@@ -871,7 +888,9 @@ fn identity_keygen_json(
         "tool": tool,
         "source": source,
         "private_key_path": path_string(&output.private_key_path),
-        "public_key_path": path_string(&output.public_key_path),
+        // `null` for a keychain-backed key (no `.pub` artifact); the hex is authoritative.
+        "public_key_path": output.public_key_path.as_ref().map(|path| path_string(path)),
+        "public_key": output.public_key_hex,
         "message": output.message(),
         "requested": {
             "out": out,
@@ -1935,16 +1954,146 @@ fn write_json<T: Serialize>(path: &str, value: &T) -> Result<(), String> {
 }
 
 fn read_public_key_hex(path: &str) -> Result<String, String> {
+    // A keychain-backed key has no `.pub` artifact: derive the public key from the private
+    // item (only the same OS user can read it, and deriving is how the pair is defined).
+    if keychain_account(path).is_some() {
+        let signing = load_signing_key(path)?;
+        return Ok(hex::encode(signing.verifying_key().to_bytes()));
+    }
     let text = read_hex_file(path)?;
     verifying_key_from_hex(&text)?;
     Ok(text)
 }
 
 fn load_signing_key(path: &str) -> Result<SigningKey, String> {
+    if let Some(account) = keychain_account(path) {
+        let text = keychain_read(account)?;
+        let bytes = decode_fixed::<32>(&text, "signing key")?;
+        return Ok(SigningKey::from_bytes(&bytes));
+    }
     check_secret_permissions(path)?;
     let text = read_hex_file(path)?;
     let bytes = decode_fixed::<32>(&text, "signing key")?;
     Ok(SigningKey::from_bytes(&bytes))
+}
+
+// ---- Keychain-backed keys ------------------------------------------------------------------
+//
+// `keychain:<account>` is accepted anywhere a signing-key path is accepted
+// (`DENT8_IDENTITY_KEY`, `--out`, `--issuer-key`, `--public-key`, …) and names a generic
+// password item in the OS keychain under service `dent8` instead of a `0600` file. This
+// addresses the threat model's top residual — a same-user *file* read exfiltrating the key
+// from a dotfile, a backup, or a synced home directory: the keychain is encrypted at rest,
+// locks with the session, and never lands in a file a backup tool would sweep. macOS-only in
+// this release (Credential Manager / secret-service are the documented follow-up); the read
+// and write go through `/usr/bin/security`, with the secret passed over stdin (`security -i`)
+// so it never appears in an argv another same-user process could glimpse via `ps`.
+
+/// The scheme marking a keychain-backed key reference.
+const KEYCHAIN_SCHEME: &str = "keychain:";
+/// The keychain service every dent8 key item lives under.
+const KEYCHAIN_SERVICE: &str = "dent8";
+#[cfg(not(target_os = "macos"))]
+const KEYCHAIN_UNSUPPORTED: &str =
+    "keychain-backed identity keys are macOS-only in this release; use a 0600 key file path";
+
+/// `Some(account)` when `value` is a `keychain:<account>` reference rather than a file path.
+pub(crate) fn keychain_account(value: &str) -> Option<&str> {
+    value.strip_prefix(KEYCHAIN_SCHEME)
+}
+
+/// Keychain account names stay in a shell-safe subset: the `security -i` command line is
+/// whitespace-tokenized, so an unrestricted account string could smuggle extra arguments.
+fn validated_keychain_account(account: &str) -> Result<&str, String> {
+    if account.is_empty() {
+        return Err("keychain: reference needs an account name, e.g. keychain:agent".to_string());
+    }
+    if !account
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | ':'))
+    {
+        return Err(format!(
+            "keychain account '{account}' may only contain ASCII letters, digits, and . _ - :"
+        ));
+    }
+    Ok(account)
+}
+
+/// Read the hex secret for `account` from the keychain.
+#[cfg(target_os = "macos")]
+fn keychain_read(account: &str) -> Result<String, String> {
+    let account = validated_keychain_account(account)?;
+    let output = std::process::Command::new("/usr/bin/security")
+        .args([
+            "find-generic-password",
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-a",
+            account,
+            "-w",
+        ])
+        .output()
+        .map_err(|error| format!("cannot run /usr/bin/security: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "no keychain item for account '{account}' (service {KEYCHAIN_SERVICE}); create one \
+             with `dent8 identity agent-keygen <source> --out keychain:{account}`"
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_ascii_lowercase())
+}
+
+/// Store a new hex secret for `account`, refusing to overwrite an existing item (the same
+/// contract as file keygen). The secret goes over stdin, never argv.
+#[cfg(target_os = "macos")]
+pub(crate) fn keychain_write_new(account: &str, hex_secret: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let account = validated_keychain_account(account)?;
+    if keychain_read(account).is_ok() {
+        return Err(format!(
+            "keychain:{account} already exists; refusing to overwrite a signing key"
+        ));
+    }
+    let mut child = std::process::Command::new("/usr/bin/security")
+        .arg("-i")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot run /usr/bin/security: {error}"))?;
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(
+            format!("add-generic-password -s {KEYCHAIN_SERVICE} -a {account} -w {hex_secret}\n")
+                .as_bytes(),
+        )
+        .map_err(|error| format!("cannot write to /usr/bin/security: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("/usr/bin/security failed: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "keychain write for account '{account}' failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn keychain_read(account: &str) -> Result<String, String> {
+    validated_keychain_account(account)?;
+    Err(KEYCHAIN_UNSUPPORTED.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn keychain_write_new(account: &str, _hex_secret: &str) -> Result<(), String> {
+    validated_keychain_account(account)?;
+    Err(KEYCHAIN_UNSUPPORTED.to_string())
 }
 
 fn verifying_key_from_hex(value: &str) -> Result<VerifyingKey, String> {
