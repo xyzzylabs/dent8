@@ -1,6 +1,7 @@
 [package]
 name = "dent8"
 description = "A memory firewall for coding agents — the library facade (event model, firewall, stores)."
+homepage = "https://xyzzylabs.github.io/dent8/"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

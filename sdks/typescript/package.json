@@ -15,7 +15,7 @@
     "url": "git+https://github.com/xyzzylabs/dent8.git",
     "directory": "sdks/typescript"
   },
-  "homepage": "https://github.com/xyzzylabs/dent8",
+  "homepage": "https://xyzzylabs.github.io/dent8/",
   "type": "module",
   "exports": {
     ".": {

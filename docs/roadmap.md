@@ -9,43 +9,58 @@ This roadmap is dependency-ordered: each item unlocks the next, and each is
 annotated with the integrity invariant it makes real. It supersedes the older
 MVP checklist.
 
-## Near-term focus (v0.4)
-
 The wedge is **multiple coding agents (and a human) sharing one verified fact base about
-one repository** ([project-brief.md](project-brief.md) §MVP User). Five items, in priority
-order:
+one repository** ([project-brief.md](project-brief.md) §MVP User).
 
-1. **Close the capture+inject loop.** ✅ `dent8 context` context-pack export plus the
-   `dent8 capture` session hook are built, and both surfaces emit the read-audit events —
-   `context --record-retrieval` records `Retrieved`, a `used_in_decision` capture proposal
-   records `UsedInDecision`, and MCP `resources/read` auto-records `Retrieved` (purpose
-   `mcp:resources/read`; opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`). *(Invariant:
-   unexplained context retrieval becomes explainable.)*
-2. **Default authority profile for the repo wedge.** ✅ Human > CI > agent ships as
-   `dent8 authority defaults`, and grant issuer/scope are enforced at the write boundary
-   (scope restricts write subjects; a registered issuer's own grant caps what it can
-   delegate — no self-escalation). *(Invariant: authority is
-   typed and policy-visible, not configured from scratch per repo.)*
-3. **On-ramp.** ✅ MSRV is current stable (1.94), README / Getting Started lead with a value-first
-   first-fact path, `dent8 init` prints assert → explain next, and
-   [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh) times init → assert → explain under
-   the 2-minute budget (typically under a second with a binary on `PATH`). *(No invariant —
-   adoption friction is its own failure mode.)*
-4. **External evaluation.** ✅ Literature-adapted adversarial corpus (47 cases, honest
-   block/detect/out-of-model tally) plus an integrity-axis comparison against **modeled**
-   Mem0 mutate-in-place and Zep/Graphiti recency semantics (`dent8_evals::comparison`,
-   printed by `dent8 eval`). Real agent-trace replay remains optional stretch work.
-   *(Invariant: the 0/5-vs-5/5 result generalizes beyond self-authored fixtures.)*
-5. **Python/TS reachability.** An HTTP API or thin SDKs so non-Rust agents can reach the
-   store. *(No new invariant; widens who the firewall protects.)* ✅ Both halves shipped:
-   [`sdks/python`](../sdks/python/) (PyPI `dent8`) and [`sdks/typescript`](../sdks/typescript/)
-   (npm `dent8`) wrap the CLI's JSON machine contract (`schema_version` + `status` + error
-   `code`s) with typed exceptions, each tested against the real binary in CI; LLM tool-calling
-   goes through MCP ([examples/langchain](../examples/langchain/)). Releases publish tokenless
-   via Trusted Publishing on tag.
+## Shipped: the v0.4–v0.6 near-term list
+
+All five items of the previous near-term list landed by v0.6.1:
+
+1. **Capture+inject loop** ✅ — `dent8 context` / `dent8 capture` with read-audit events on
+   every retrieval surface, including MCP `resources/read`. *(Invariant: unexplained context
+   retrieval becomes explainable.)*
+2. **Default authority profile** ✅ — human > CI > agent via `dent8 authority defaults`;
+   grant issuer/scope enforced at the write boundary (no self-escalation). *(Invariant:
+   authority is typed and policy-visible.)*
+3. **On-ramp** ✅ — value-first README/Getting Started; init → assert → explain timed under
+   the 2-minute budget by [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh).
+4. **External evaluation** ✅ — the 47-case literature-adapted corpus with an honest
+   block/detect/out-of-model tally, plus the modeled Mem0/Zep integrity-axis comparison in
+   `dent8 eval`. *(Invariant: the result generalizes beyond self-authored fixtures.)*
+5. **Python/TS reachability** ✅ — thin SDKs over the CLI's JSON machine contract on PyPI and
+   npm ([`sdks/`](../sdks/)), tested against the real binary in CI, released tokenless via
+   Trusted Publishing. Bonus beyond the list: **`dent8 whatif`** surfaced policy-counterfactual
+   replay (novelty rank 2), and the docs now live at
+   [xyzzylabs.github.io/dent8](https://xyzzylabs.github.io/dent8/).
+
+## Near-term focus (post-v0.6)
+
+Priority order. The first item gates the rest — the frozen directions below unfreeze on
+evidence of users, not on more features.
+
+1. **Launch and the feedback loop.** Announce (the release is announceable: 2-minute on-ramp,
+   honest evals, three registries, docs site), then treat the first weeks of issues and
+   questions as the roadmap's primary input. *(No invariant — an unused firewall protects
+   nothing.)*
+2. **Legitimate-traffic evaluation.** Replay real captured agent sessions through the firewall
+   and measure the false-positive rate — the complement of the adversarial corpus. Blocked
+   only on trace data, which dogfooding and early users produce. *(Invariant: the firewall
+   does not tax legitimate revision.)*
+3. **Concurrency load testing and tuning.** The async adapters (id-range reservation,
+   serialized appends, in-transaction uniqueness re-checks) have correct-by-construction
+   tests but no operational load profile. A reproducible harness: N concurrent writers on
+   SQLite/Postgres, asserting no lost writes and no duplicate ids under stress. *(Invariant:
+   arbitration holds under contention, not just under test.)*
+4. **MCP `resources/subscribe`.** Push fact-change notifications (superseded, contested,
+   retracted) to long-running agents instead of polling; pairs with the local daemon.
+   *(Invariant: an agent's injected context cannot silently go stale between reads.)*
+5. **Identity productization.** OS keychain / secret-store-backed source keys instead of
+   `0600` files, and a team key-distribution story. *(Invariant: stealing a source identity
+   requires more than a same-user file read — the threat model's top residual.)*
 
 Explicitly **frozen until the wedge has users**: operated-witness hosting, the desktop
-debugger/control plane, and any training-substrate direction.
+debugger/control plane (its runway is built — the `snapshot` aggregate, the TS SDK, and
+`whatif` are exactly its data layer), and any training-substrate direction.
 
 ## Where the code actually is
 
@@ -91,9 +106,10 @@ What remains to make it a hardened multi-user product:
   `event:{n}` id ranges from the database before signing (unique, not gap-free) and serialize
   appends, with an in-transaction final projection check for touched unique predicates;
   remaining work is operational load testing and tuning.
-- **Richer protocol/product surfaces.** The v0 MCP server is useful today; official `rmcp`,
-  richer transports, `resources/subscribe`, prompts, HTTP, SDKs, and a TypeScript/Tauri
-  desktop debugger/control plane are later ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
+- **Richer protocol/product surfaces.** The v0 MCP server is useful today, and the thin
+  Python/TS SDKs shipped ([`sdks/`](../sdks/)); official `rmcp`, richer transports,
+  `resources/subscribe`, prompts, HTTP, and a TypeScript/Tauri desktop debugger/control
+  plane are later ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
 - **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
   fixtures, the adversarial corpus, and **`cargo-fuzz` targets** (the
   deserialize→fold→canonicalize path and `CanonicalJson` idempotency, in [`fuzz/`](../fuzz/),
@@ -316,19 +332,21 @@ DONE: signed source identity primitive + secure init path
 ONGOING: evals/formal hardening, mainly fuzzing + append/projection model checking
 ```
 
-The dependency chain that originally blocked the MVP is now complete. The next dependency
-chain is product hardening: identity operations -> operated witness -> stable daemon/API
-contracts (started with `snapshot`) -> desktop debugger/control plane -> SDKs and production
-deployment packaging.
+The dependency chain that originally blocked the MVP is now complete, and the SDK link has
+shipped. The next dependency chain is product hardening: identity operations -> operated
+witness -> stable daemon/API contracts (started with `snapshot`) -> desktop
+debugger/control plane and production deployment packaging.
 
 ## Later
 
 Postgres multi-tenant partitioning ·
-ATMS-style assumption-environment replay for the debugger ·
-predicate-level volatility policy · HTTP API · **client SDKs** (`pip install dent8` /
-`npm i dent8` with first-class in-process framework adapters — LangChain, LlamaIndex, Vercel AI
-SDK; MCP is the integration path *today*, see [examples/langchain](../examples/langchain/) and
-[examples/vercel-ai-sdk](../examples/vercel-ai-sdk/)) ·
+ATMS-style assumption-environment replay for the debugger (the core shipped as
+`dent8 whatif`; the interactive debugger view remains) ·
+predicate-level volatility policy · HTTP API · **first-class in-process framework adapters**
+(LangChain, LlamaIndex, Vercel AI SDK) layered on the shipped `pip install dent8` /
+`npm i dent8` SDKs; MCP is the integration path *today*, see
+[examples/langchain](../examples/langchain/) and
+[examples/vercel-ai-sdk](../examples/vercel-ai-sdk/) ·
 a TypeScript/Tauri desktop debugger/control plane for agents, receipts, native-memory audits,
 witness status, and replay timelines ·
 adapters for existing memory providers · a managed/hosted witness service (publication

@@ -20,6 +20,23 @@ const base = "/dent8";
 // docs/paper is a working draft outline, not user documentation.
 const EXCLUDE = new Set(["paper"]);
 
+// Sidebar labels for pages whose H1 is too wordy for a nav column; everything else uses
+// its title. Keyed by slug.
+const SIDEBAR_LABELS = new Map([
+  ["status", "Implementation status"],
+  ["belief-revision", "Belief revision"],
+  ["context-capture", "Context & capture"],
+  ["formal-verification", "Formal verification"],
+  ["dogfooding-notes", "Dogfooding notes"],
+  ["dogfood", "Dogfood workflow"],
+  ["native-memory", "Native memory"],
+  ["mcp-clients", "MCP clients"],
+  ["agent-adapters", "Agent adapters"],
+  ["content-check", "Content-check hook"],
+  ["witness", "Witness runbook"],
+  ["upgrading-to-v0-3", "Upgrading to v0.3"],
+]);
+
 function walk(dir, prefix = "") {
   const entries = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -81,8 +98,11 @@ for (const file of files) {
     return `${bang}[${label}](${href})`;
   });
 
-  const front = `---\ntitle: "${title.replaceAll('"', '\\"')}"\n---\n\n`;
-  const dest = join(outDir, slugOf(file) + ".md");
+  const slug = slugOf(file);
+  const label = SIDEBAR_LABELS.get(slug);
+  const sidebar = label ? `sidebar:\n  label: "${label}"\n` : "";
+  const front = `---\ntitle: "${title.replaceAll('"', '\\"')}"\n${sidebar}---\n\n`;
+  const dest = join(outDir, slug + ".md");
   mkdirSync(dirname(dest), { recursive: true });
   writeFileSync(dest, front + text);
 }

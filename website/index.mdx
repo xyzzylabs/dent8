@@ -3,7 +3,7 @@ title: dent8
 description: A memory firewall for coding agents — refuse the writes that quietly corrupt agent memory.
 template: splash
 hero:
-  tagline: A memory firewall for coding agents. Every write is arbitrated against what is already believed — a low-authority source can't overwrite a trusted fact, a retracted source taints its derivatives, and every belief is replayable.
+  tagline: Every write to agent memory is arbitrated against what is already believed — a low-authority source can't overwrite a trusted fact, a retracted source taints its derivatives, and every belief is replayable.
   image:
     alt: The dent8 mark — a crenellated octagon holding one fact.
     file: ../../assets/logo.svg
@@ -17,12 +17,12 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import { Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
 <CardGrid stagger>
   <Card title="First fact in two minutes" icon="rocket">
-    `cargo install dent8-cli` (or `pip install dent8` / `npm i dent8`), then
-    `dent8 init` and assert through the firewall. No services.
+    One binary, no services. `dent8 init` in any repo, assert through the
+    firewall, and read the receipt back with `dent8 explain`.
   </Card>
   <Card title="The 30-second proof" icon="approve-check">
     `dent8 eval` runs a 47-case adversarial corpus against the real firewall and
@@ -30,11 +30,72 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   </Card>
   <Card title="Ask what-if" icon="magnifier">
     `dent8 whatif` re-folds the same log under a different trust policy —
-    "what would we believe if this source were distrusted?" — deterministically,
-    with a structural diff.
+    deterministically, with a structural diff and zero model invocations.
   </Card>
   <Card title="Provenance all the way down" icon="seti:lock">
     Authority-weighted arbitration, signed source identity, a hash chain, and an
     optional off-host witness. `dent8 replay` shows exactly why a fact is believed.
   </Card>
 </CardGrid>
+
+## Install
+
+<Tabs>
+  <TabItem label="cargo">
+    ```sh
+    cargo install dent8-cli --locked
+    ```
+  </TabItem>
+  <TabItem label="pip">
+    ```sh
+    pip install dent8           # thin SDK over the same binary
+    cargo install dent8-cli --locked
+    ```
+  </TabItem>
+  <TabItem label="npm">
+    ```sh
+    npm install dent8           # thin SDK over the same binary
+    cargo install dent8-cli --locked
+    ```
+  </TabItem>
+  <TabItem label="binaries">
+    Prebuilt archives for five targets on the
+    [releases page](https://github.com/xyzzylabs/dent8/releases).
+  </TabItem>
+</Tabs>
+
+## Watch it refuse a write
+
+```sh
+$ dent8 assert repo:myproj deploy_target production --authority high --source source:owner
+ACCEPTED  repo:myproj deploy_target = "production"  (authority=high)
+  seq=0  hash=6b172441a866…
+
+$ dent8 supersede repo:myproj deploy_target staging --authority low --source web:scrape
+REJECTED: firewall rejected the write: insufficient authority: low may not
+  override or remove an incumbent of high
+  the incumbent recorded the survived challenge (fact.challenge_rejected)
+
+$ dent8 whatif repo:myproj deploy_target --distrust source:owner
+  policy: distrust source:owner
+  now:          "production" (Active, authority=high)
+  under policy: (nothing believed)
+```
+
+The rejection is recorded on the fact itself as a survived challenge, the audit trail is a
+hash chain, and `whatif` answers counterfactuals without changing anything.
+
+## Five for five against peer memory models
+
+| attack | firewall | recency-only (Zep) | mutate-in-place (Mem0) |
+|---|---|---|---|
+| low-authority memory injection (MINJA) | blocked | compromised | compromised |
+| authority laundering | blocked | compromised | compromised |
+| canonical contradiction | blocked | compromised | compromised |
+| Sybil corroboration | blocked | compromised | compromised |
+| poisoned-source retraction | blocked | compromised | compromised |
+
+All three models admit legitimate revision; only the firewall refuses the attacks. Every
+number is reproducible with `dent8 eval`, and the per-class tally is reported honestly —
+including what is detect-only or out of model. Details in
+[Evaluation strategy](/dent8/evals/).

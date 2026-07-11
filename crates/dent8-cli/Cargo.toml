@@ -1,6 +1,7 @@
 [package]
 name = "dent8-cli"
 description = "The dent8 memory-firewall CLI and MCP server (installs the `dent8` binary)."
+homepage = "https://xyzzylabs.github.io/dent8/"
 edition.workspace = true
 license.workspace = true
 readme.workspace = true

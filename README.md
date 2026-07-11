@@ -10,8 +10,9 @@ trusted fact, a stale value resurrecting itself, a poisoned source tainting ever
 derived from it. Every fact it keeps carries where it came from, and you can replay exactly
 *why* the agent believes it.
 
-**New here?** First fact in **under 2 minutes** once `dent8` is installed — see
-[Getting Started](docs/getting-started.md) or the path below. Timed acceptance:
+**New here?** First fact in **under 2 minutes** once `dent8` is installed — see the
+**[documentation site](https://xyzzylabs.github.io/dent8/)** or
+[Getting Started](docs/getting-started.md), or take the path below. Timed acceptance:
 `./examples/on-ramp/demo.sh`.
 
 ![dent8 firewall walkthrough: a trusted fact is asserted, a low-authority override is rejected by the firewall, and explain replays the auditable receipt over a verified hash chain.](https://raw.githubusercontent.com/xyzzylabs/dent8/main/demo.gif)

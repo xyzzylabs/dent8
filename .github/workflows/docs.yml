@@ -29,6 +29,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       # Requires Pages enabled once in the repo settings (Source: GitHub Actions) — the
       # default workflow token cannot create the Pages site itself.
       - uses: actions/configure-pages@v5

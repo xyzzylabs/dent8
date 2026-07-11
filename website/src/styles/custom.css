@@ -1,0 +1,35 @@
+/* dent8 theme: monochrome brand + a bronze accent (matches the "firewall" seriousness
+   without the default violet). Values follow Starlight's accent scale contract. */
+:root {
+  --sl-color-accent-low: #f7e6cb;
+  --sl-color-accent: #a35a00;
+  --sl-color-accent-high: #6b3a00;
+}
+:root[data-theme="dark"] {
+  --sl-color-accent-low: #3d2600;
+  --sl-color-accent: #c97a1a;
+  --sl-color-accent-high: #f2c078;
+}
+
+/* Tighter, more editorial hero. */
+.hero h1 {
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  letter-spacing: -0.02em;
+}
+.hero .tagline {
+  max-width: 42rem;
+}
+.hero img {
+  max-width: 14rem;
+}
+
+/* Code blocks read as terminals: slightly larger radius, calmer border. */
+.expressive-code .frame {
+  border-radius: 0.6rem;
+}
+
+/* The landing page's stat table shouldn't stretch edge to edge awkwardly. */
+.sl-markdown-content table {
+  display: table;
+  width: 100%;
+}

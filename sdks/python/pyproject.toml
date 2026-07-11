@@ -20,6 +20,7 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/xyzzylabs/dent8"
+Documentation = "https://xyzzylabs.github.io/dent8/"
 Changelog = "https://github.com/xyzzylabs/dent8/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]

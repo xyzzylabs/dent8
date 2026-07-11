@@ -13,6 +13,8 @@ export default defineConfig({
       description: "A memory firewall for coding agents.",
       logo: { src: "./src/assets/logo.svg", alt: "dent8" },
       favicon: "/favicon.svg",
+      customCss: ["./src/styles/custom.css"],
+      lastUpdated: true,
       social: [
         { icon: "github", label: "GitHub", href: "https://github.com/xyzzylabs/dent8" },
       ],
