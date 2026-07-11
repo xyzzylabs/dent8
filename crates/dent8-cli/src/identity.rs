@@ -1980,24 +1980,28 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 // ---- Keychain-backed keys ------------------------------------------------------------------
 //
 // `keychain:<account>` is accepted anywhere a signing-key path is accepted
-// (`DENT8_IDENTITY_KEY`, `--out`, `--issuer-key`, `--public-key`, …) and names a generic
-// password item in the OS keychain under service `dent8` instead of a `0600` file. This
-// addresses the threat model's top residual — a same-user *file* read exfiltrating the key
-// from a dotfile, a backup, or a synced home directory: the keychain is encrypted at rest,
-// locks with the session, and never lands in a file a backup tool would sweep. macOS-only in
-// this release (Credential Manager / secret-service are the documented follow-up); the read
-// and write go through `/usr/bin/security`, with the secret passed over stdin (`security -i`)
-// so it never appears in an argv another same-user process could glimpse via `ps`.
+// (`DENT8_IDENTITY_KEY`, `--out`, `--issuer-key`, `--public-key`, …) and names an item in
+// the OS keychain under service `dent8` instead of a `0600` file. This addresses the threat
+// model's top residual — a same-user *file* read exfiltrating the key from a dotfile, a
+// backup, or a synced home directory: the keychain is encrypted at rest, locks with the
+// session, and never lands in a file a backup tool would sweep.
+//
+// Backends: **macOS** via `/usr/bin/security` (the secret passes over stdin through
+// `security -i`, never argv, so `ps` cannot glimpse it); **Linux** via `secret-tool`
+// (libsecret → any Secret Service implementation: GNOME Keyring, KWallet 5.97+…), which
+// reads the secret from stdin natively. Windows Credential Manager is the documented
+// follow-up; other platforms get a clear error.
 
 /// The scheme marking a keychain-backed key reference.
 const KEYCHAIN_SCHEME: &str = "keychain:";
-/// The keychain service every dent8 key item lives under (named only by the macOS
-/// implementations; the stubs on other platforms make no keychain calls).
-#[cfg(target_os = "macos")]
+/// The keychain service every dent8 key item lives under (named only by the platform
+/// implementations; the stub on unsupported platforms makes no keychain calls).
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 const KEYCHAIN_SERVICE: &str = "dent8";
-#[cfg(not(target_os = "macos"))]
-const KEYCHAIN_UNSUPPORTED: &str =
-    "keychain-backed identity keys are macOS-only in this release; use a 0600 key file path";
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+const KEYCHAIN_UNSUPPORTED: &str = "keychain-backed identity keys are supported on macOS \
+     (Keychain) and Linux (Secret Service via secret-tool) in this release; use a 0600 key \
+     file path on this platform";
 
 /// `Some(account)` when `value` is a `keychain:<account>` reference rather than a file path.
 pub(crate) fn keychain_account(value: &str) -> Option<&str> {
@@ -2086,13 +2090,89 @@ pub(crate) fn keychain_write_new(account: &str, hex_secret: &str) -> Result<(), 
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Read the hex secret for `account` from the Secret Service (GNOME Keyring, `KWallet`, …)
+/// via `secret-tool lookup`.
+#[cfg(target_os = "linux")]
+fn keychain_read(account: &str) -> Result<String, String> {
+    let account = validated_keychain_account(account)?;
+    let output = std::process::Command::new("secret-tool")
+        .args(["lookup", "service", KEYCHAIN_SERVICE, "account", account])
+        .output()
+        .map_err(|error| secret_tool_unavailable(&error))?;
+    if !output.status.success() {
+        return Err(format!(
+            "no keychain item for account '{account}' (service {KEYCHAIN_SERVICE}); create one \
+             with `dent8 identity agent-keygen <source> --out keychain:{account}`"
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_ascii_lowercase())
+}
+
+/// Store a new hex secret for `account` via `secret-tool store`, refusing to overwrite an
+/// existing item (the same contract as file keygen). `secret-tool` reads the secret from
+/// stdin when it is not a terminal, so the secret never appears in an argv.
+#[cfg(target_os = "linux")]
+pub(crate) fn keychain_write_new(account: &str, hex_secret: &str) -> Result<(), String> {
+    use std::io::Write as _;
+    let account = validated_keychain_account(account)?;
+    if keychain_read(account).is_ok() {
+        return Err(format!(
+            "keychain:{account} already exists; refusing to overwrite a signing key"
+        ));
+    }
+    let mut child = std::process::Command::new("secret-tool")
+        .args([
+            "store",
+            &format!("--label=dent8 {account}"),
+            "service",
+            KEYCHAIN_SERVICE,
+            "account",
+            account,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| secret_tool_unavailable(&error))?;
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(hex_secret.as_bytes())
+        .map_err(|error| format!("cannot write to secret-tool: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("secret-tool failed: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "keychain write for account '{account}' failed: {} (is a Secret Service — GNOME \
+             Keyring, KWallet — running and unlocked?)",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn secret_tool_unavailable(error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        "keychain: references on Linux need `secret-tool` (package libsecret-tools on \
+         Debian/Ubuntu, libsecret on Fedora/Arch) — install it or use a 0600 key file path"
+            .to_string()
+    } else {
+        format!("cannot run secret-tool: {error}")
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn keychain_read(account: &str) -> Result<String, String> {
     validated_keychain_account(account)?;
     Err(KEYCHAIN_UNSUPPORTED.to_string())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub(crate) fn keychain_write_new(account: &str, _hex_secret: &str) -> Result<(), String> {
     validated_keychain_account(account)?;
     Err(KEYCHAIN_UNSUPPORTED.to_string())

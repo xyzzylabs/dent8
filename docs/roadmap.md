@@ -60,13 +60,14 @@ evidence of users, not on more features.
    for writes from any other process sharing the store. The daemon pushes per connection and
    `dent8 mcp proxy` pumps frames bidirectionally, so daemon clients get pushes too.
    *(Invariant held: an agent's injected context cannot silently go stale between reads.)*
-5. **Identity productization.** ✅ macOS: `keychain:<account>` is accepted wherever a key
-   path is (`DENT8_IDENTITY_KEY`, keygen `--out`, `--issuer-key`, `--public-key`) — the key
-   lives in the OS keychain (service `dent8`), the public key derives from the private item,
-   and keygen refuses to overwrite, same as files. *(Invariant held: stealing a source
-   identity now takes more than a same-user file read — no dotfile, backup, or synced-home
-   copy exists.)* Remaining: Windows Credential Manager / Linux secret-service backends, and
-   a team key-distribution story.
+5. **Identity productization.** ✅ macOS + Linux: `keychain:<account>` is accepted wherever
+   a key path is (`DENT8_IDENTITY_KEY`, keygen `--out`, `--issuer-key`, `--public-key`) —
+   the key lives in the OS keychain (macOS Keychain, or any Linux Secret Service — GNOME
+   Keyring/KWallet — via `secret-tool`), the public key derives from the private item, and
+   keygen refuses to overwrite, same as files. *(Invariant held: stealing a source identity
+   now takes more than a same-user file read — no dotfile, backup, or synced-home copy
+   exists.)* Remaining: a Windows Credential Manager backend, and a team key-distribution
+   story.
 
 Explicitly **frozen until the wedge has users**: operated-witness hosting, the desktop
 debugger/control plane (its runway is built — the `snapshot` aggregate, the TS SDK, and

@@ -154,12 +154,12 @@ Recommended hardening order:
   writes or direct adapter calls bypass this boundary; and a shared MCP server can only prove
   the single identity whose key it holds. **Keychain-backed keys narrow the file-read
   residual**: `keychain:<account>` is accepted wherever a key path is (`DENT8_IDENTITY_KEY`,
-  `--out`, `--issuer-key`, `--public-key`), storing the key as an OS keychain item (macOS in
-  this release) instead of a `0600` file — encrypted at rest, locked with the session, never
-  swept into dotfile backups or synced home directories. A same-user process can still ask
-  the unlocked keychain, so OS-user separation remains the stronger boundary. Stronger
-  deployments need separate OS users, hardware/secret-store-backed keys, external signers,
-  and key rotation. Authority arbitration
+  `--out`, `--issuer-key`, `--public-key`), storing the key as an OS keychain item (macOS
+  Keychain, or Linux Secret Service — GNOME Keyring/KWallet via `secret-tool`) instead of a
+  `0600` file — encrypted at rest, locked with the session, never swept into dotfile backups
+  or synced home directories. A same-user process can still ask the unlocked keychain, so
+  OS-user separation remains the stronger boundary. Stronger deployments need separate OS
+  users, hardware/secret-store-backed keys, external signers, and key rotation. Authority arbitration
   plus the ceiling/identity chiefly defends against *low*-privilege injection (the MINJA
   case); a compromised high-authority actor remains out of scope.
 - **The firewall cannot judge truth — and does not judge content itself.** It governs
