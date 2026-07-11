@@ -1189,6 +1189,12 @@ pub(crate) fn is_executable_file(path: &std::path::Path) -> bool {
     }
 }
 
+// On non-Unix there are no mode bits to restrict; the `Result` exists for signature parity
+// with the Unix path.
+#[cfg_attr(
+    not(unix),
+    allow(clippy::unnecessary_wraps, clippy::missing_const_for_fn)
+)]
 pub(crate) fn restrict_executable_owner_only(path: &std::path::Path) -> Result<(), String> {
     #[cfg(unix)]
     {

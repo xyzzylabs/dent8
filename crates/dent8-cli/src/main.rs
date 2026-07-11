@@ -1166,7 +1166,7 @@ struct IdentityBackfillGrantLogArgs {
 #[derive(Args, Debug)]
 struct IdentityKeygenArgs {
     /// Private signing-key path to create (public key written to <out>.pub), or
-    /// keychain:<account> to store the key in the OS keychain instead (macOS/Linux).
+    /// keychain:<account> to store the key in the OS keychain instead (macOS/Linux/Windows).
     #[arg(long, value_name = "PATH")]
     out: String,
 }
@@ -1177,7 +1177,7 @@ struct IdentityAgentKeygenArgs {
     #[arg(value_parser = parse_source)]
     source: String,
     /// Private signing-key path to create (public key written to <out>.pub), or
-    /// keychain:<account> to store the key in the OS keychain instead (macOS/Linux).
+    /// keychain:<account> to store the key in the OS keychain instead (macOS/Linux/Windows).
     #[arg(long, value_name = "PATH")]
     out: String,
 }
@@ -1197,7 +1197,7 @@ struct IdentityGrantIssueArgs {
     #[arg(value_parser = parse_source)]
     source: String,
     /// Source/agent public-key file, or keychain:<account> to derive the public key from
-    /// a keychain-stored private key (macOS/Linux).
+    /// a keychain-stored private key (macOS/Linux/Windows).
     #[arg(long, value_name = "SOURCE_PUBKEY")]
     public_key: String,
     /// Maximum authority this source key may assert.
@@ -1206,7 +1206,7 @@ struct IdentityGrantIssueArgs {
     /// Issuer name. Must match a trusted issuer name on verification.
     #[arg(long)]
     issuer: String,
-    /// Issuer private signing-key path, or keychain:<account> (macOS/Linux).
+    /// Issuer private signing-key path, or keychain:<account> (macOS/Linux/Windows).
     #[arg(long, value_name = "ISSUER_KEY")]
     issuer_key: String,
     /// Grant JSON path to create.

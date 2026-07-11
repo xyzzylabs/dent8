@@ -10,13 +10,19 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
-- **Linux backend for keychain-backed identity keys**: `keychain:<account>` now also works
-  on Linux, through `secret-tool` (libsecret) against any Secret Service implementation —
-  GNOME Keyring, KWallet 5.97+. Same contract as the macOS backend shipped in 0.7.0: the
-  secret passes over stdin (never argv), keygen refuses to overwrite an existing item, and
-  the public key derives from the private item. Needs `secret-tool` on `PATH`
-  (`libsecret-tools` on Debian/Ubuntu) and a running, unlocked Secret Service; missing
-  pieces produce pointed errors. Windows Credential Manager remains the follow-up.
+- **Linux and Windows backends for keychain-backed identity keys** — `keychain:<account>`
+  now works on all three platforms, same contract as the macOS backend shipped in 0.7.0
+  (keygen refuses to overwrite an existing item; the public key derives from the private
+  item):
+  - **Linux**: through `secret-tool` (libsecret) against any Secret Service implementation
+    — GNOME Keyring, KWallet 5.97+ — with the secret passed over stdin, never argv. Needs
+    `secret-tool` on `PATH` (`libsecret-tools` on Debian/Ubuntu) and a running, unlocked
+    Secret Service; missing pieces produce pointed errors.
+  - **Windows**: through the Credential Manager. Windows is the one platform with no
+    preinstalled CLI able to read a secret back, so this backend uses the `keyring` crate
+    (windows-native only, a Windows-only dependency — macOS/Linux stay subprocess-based and
+    dependency-free). A `windows-keychain` CI job lints the CLI for the platform and runs a
+    real Credential Manager round trip.
 
 ## [0.7.0] - 2026-07-11
 

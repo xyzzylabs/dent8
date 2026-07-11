@@ -155,9 +155,9 @@ Recommended hardening order:
   the single identity whose key it holds. **Keychain-backed keys narrow the file-read
   residual**: `keychain:<account>` is accepted wherever a key path is (`DENT8_IDENTITY_KEY`,
   `--out`, `--issuer-key`, `--public-key`), storing the key as an OS keychain item (macOS
-  Keychain, or Linux Secret Service — GNOME Keyring/KWallet via `secret-tool`) instead of a
-  `0600` file — encrypted at rest, locked with the session, never swept into dotfile backups
-  or synced home directories. A same-user process can still ask the unlocked keychain, so
+  Keychain; Linux Secret Service — GNOME Keyring/KWallet via `secret-tool`; Windows
+  Credential Manager) instead of a `0600` file — encrypted at rest, locked with the session,
+  never swept into dotfile backups or synced home directories. A same-user process can still ask the unlocked keychain, so
   OS-user separation remains the stronger boundary. Stronger deployments need separate OS
   users, hardware/secret-store-backed keys, external signers, and key rotation. Authority arbitration
   plus the ceiling/identity chiefly defends against *low*-privilege injection (the MINJA

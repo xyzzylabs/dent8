@@ -1989,19 +1989,21 @@ fn load_signing_key(path: &str) -> Result<SigningKey, String> {
 // Backends: **macOS** via `/usr/bin/security` (the secret passes over stdin through
 // `security -i`, never argv, so `ps` cannot glimpse it); **Linux** via `secret-tool`
 // (libsecret → any Secret Service implementation: GNOME Keyring, KWallet 5.97+…), which
-// reads the secret from stdin natively. Windows Credential Manager is the documented
-// follow-up; other platforms get a clear error.
+// reads the secret from stdin natively; **Windows** via the Credential Manager (the one
+// platform with no preinstalled CLI able to read a secret back, so it uses the `keyring`
+// crate's windows-native backend — a Windows-only dependency). Other platforms get a
+// clear error.
 
 /// The scheme marking a keychain-backed key reference.
 const KEYCHAIN_SCHEME: &str = "keychain:";
 /// The keychain service every dent8 key item lives under (named only by the platform
 /// implementations; the stub on unsupported platforms makes no keychain calls).
-#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
 const KEYCHAIN_SERVICE: &str = "dent8";
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 const KEYCHAIN_UNSUPPORTED: &str = "keychain-backed identity keys are supported on macOS \
-     (Keychain) and Linux (Secret Service via secret-tool) in this release; use a 0600 key \
-     file path on this platform";
+     (Keychain), Linux (Secret Service via secret-tool), and Windows (Credential Manager) \
+     in this release; use a 0600 key file path on this platform";
 
 /// `Some(account)` when `value` is a `keychain:<account>` reference rather than a file path.
 pub(crate) fn keychain_account(value: &str) -> Option<&str> {
@@ -2166,16 +2168,71 @@ fn secret_tool_unavailable(error: &std::io::Error) -> String {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// Read the hex secret for `account` from the Windows Credential Manager.
+#[cfg(windows)]
+fn keychain_read(account: &str) -> Result<String, String> {
+    let account = validated_keychain_account(account)?;
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .map_err(|error| format!("credential manager: {error}"))?;
+    match entry.get_password() {
+        Ok(secret) => Ok(secret.trim().to_ascii_lowercase()),
+        Err(keyring::Error::NoEntry) => Err(format!(
+            "no keychain item for account '{account}' (service {KEYCHAIN_SERVICE}); create one \
+             with `dent8 identity agent-keygen <source> --out keychain:{account}`"
+        )),
+        Err(error) => Err(format!("credential manager read failed: {error}")),
+    }
+}
+
+/// Store a new hex secret for `account` in the Windows Credential Manager, refusing to
+/// overwrite an existing item (the same contract as file keygen).
+#[cfg(windows)]
+pub(crate) fn keychain_write_new(account: &str, hex_secret: &str) -> Result<(), String> {
+    let account = validated_keychain_account(account)?;
+    if keychain_read(account).is_ok() {
+        return Err(format!(
+            "keychain:{account} already exists; refusing to overwrite a signing key"
+        ));
+    }
+    let entry = keyring::Entry::new(KEYCHAIN_SERVICE, account)
+        .map_err(|error| format!("credential manager: {error}"))?;
+    entry
+        .set_password(hex_secret)
+        .map_err(|error| format!("keychain write for account '{account}' failed: {error}"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn keychain_read(account: &str) -> Result<String, String> {
     validated_keychain_account(account)?;
     Err(KEYCHAIN_UNSUPPORTED.to_string())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 pub(crate) fn keychain_write_new(account: &str, _hex_secret: &str) -> Result<(), String> {
     validated_keychain_account(account)?;
     Err(KEYCHAIN_UNSUPPORTED.to_string())
+}
+
+/// The real-credential-manager round trip, runnable only where a live keychain exists
+/// headlessly (the Windows CI runner). Uses a suffixed account and deletes it after.
+#[cfg(all(test, windows))]
+mod windows_keychain_tests {
+    #[test]
+    fn credential_manager_round_trip() {
+        let account = format!("dent8-test-{}", std::process::id());
+        super::keychain_write_new(&account, "deadbeef").expect("store");
+        assert_eq!(
+            super::keychain_read(&account).expect("read back"),
+            "deadbeef"
+        );
+        // The file-keygen overwrite contract holds.
+        let duplicate = super::keychain_write_new(&account, "cafef00d");
+        assert!(duplicate.is_err(), "duplicate must refuse: {duplicate:?}");
+        keyring::Entry::new(super::KEYCHAIN_SERVICE, &account)
+            .expect("entry")
+            .delete_credential()
+            .expect("cleanup");
+    }
 }
 
 fn verifying_key_from_hex(value: &str) -> Result<VerifyingKey, String> {
@@ -2225,6 +2282,16 @@ fn write_secret(path: &str, hex_secret: &str) -> Result<(), String> {
     }
 }
 
+// On non-Unix there is no mode-bits check to perform, so the parameter and the `Result`
+// exist only for signature parity with the Unix path.
+#[cfg_attr(
+    not(unix),
+    allow(
+        unused_variables,
+        clippy::unnecessary_wraps,
+        clippy::missing_const_for_fn
+    )
+)]
 fn check_secret_permissions(path: &str) -> Result<(), String> {
     #[cfg(unix)]
     {

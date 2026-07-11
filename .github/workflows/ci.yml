@@ -132,6 +132,26 @@ jobs:
       - name: Test Postgres adapter
         run: cargo test -p dent8-store-postgres --features adapter
 
+  # The Windows keychain backend (`keychain:<account>` → Credential Manager) is the one
+  # platform-specific piece with no other coverage: release builds compile Windows but never
+  # lint or test it. Clippy the CLI for the platform and run the real Credential Manager
+  # round trip (the runner's credential store works headlessly). `--no-default-features`
+  # skips the bundled-sqlite C build; the always-on identity module is what matters here.
+  windows-keychain:
+    name: Windows keychain (Credential Manager)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy CLI for Windows
+        run: cargo clippy -p dent8-cli --all-targets --no-default-features -- -D warnings
+      - name: Credential Manager round trip
+        run: cargo test -p dent8-cli --no-default-features --bin dent8 keychain
+
   # Build the operational Docker image (Postgres + SQLite + witness) and smoke it. This is
   # what examples/witness-operated/ composes; keeping it green here means the packaged
   # witness split is always buildable.
