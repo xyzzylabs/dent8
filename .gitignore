@@ -42,3 +42,6 @@ __pycache__/
 # Python SDK build artifacts (sdks/python)
 dist/
 *.egg-info/
+
+# TypeScript SDK build artifacts (sdks/typescript)
+node_modules/

@@ -1,0 +1,41 @@
+{
+  "name": "dent8",
+  "version": "0.6.0",
+  "description": "A memory firewall for coding agents — thin TypeScript SDK over the dent8 CLI's JSON contract.",
+  "keywords": [
+    "agent",
+    "memory",
+    "provenance",
+    "firewall",
+    "mcp"
+  ],
+  "license": "(Apache-2.0 OR MIT)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xyzzylabs/dent8.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://github.com/xyzzylabs/dent8",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test tests/client.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^5.5"
+  }
+}

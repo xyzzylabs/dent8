@@ -99,3 +99,55 @@ jobs:
         shell: bash
         run: |
           gh release upload "${GITHUB_REF_NAME}" "dist/${ARCHIVE}" "dist/${ARCHIVE}.sha256" --clobber
+
+  # Tokenless SDK publishes via Trusted Publishing (OIDC): PyPI and npm each verify the
+  # short-lived identity token this workflow mints per-run — no standing credential in
+  # GitHub secrets or on any machine. Requires the matching trusted-publisher entry in the
+  # registry UI (PyPI: project dent8 -> Publishing; npm: package dent8 -> Settings), naming
+  # this repo, this workflow file, and the environment below. Tag-guarded so the
+  # workflow_dispatch build smoke never publishes.
+  pypi:
+    name: publish dent8 to PyPI (trusted publishing)
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        working-directory: sdks/python
+        run: |
+          python -m pip install -q build
+          python -m build
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdks/python/dist
+
+  npm:
+    name: publish dent8 to npm (trusted publishing)
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      # Node 24 ships an npm new enough for OIDC trusted publishing (provenance included).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+      - name: Build and publish
+        working-directory: sdks/typescript
+        run: |
+          npm ci
+          npm run build
+          npm publish

@@ -154,6 +154,24 @@ jobs:
       - name: Run the SDK tests
         run: DENT8_BIN="$PWD/target/debug/dent8" python -m pytest -q sdks/python/tests
 
+  node-sdk:
+    name: TypeScript SDK against the real binary
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the dent8 binary
+        run: cargo build -p dent8-cli
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install, build, and test the SDK
+        working-directory: sdks/typescript
+        run: |
+          npm ci
+          DENT8_BIN="$GITHUB_WORKSPACE/target/debug/dent8" npm test
+
   docker:
     name: docker image build + smoke
     runs-on: ubuntu-latest

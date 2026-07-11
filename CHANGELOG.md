@@ -10,6 +10,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **TypeScript SDK** ([`sdks/typescript`](sdks/typescript/), npm name `dent8`): the mirror of
+  the Python SDK — zero runtime dependencies, every call shells out to the binary with
+  `--output json`, errors throw `Dent8Rejected` / `Dent8Invalid` carrying the stable `status` +
+  `code`. Same 1:1 belief surface (`assertFact`, `supersede`, …, `derive({ basis })`, `verify`
+  returning findings as a result), same inherited store discovery / daemon routing / grant
+  defaults / human time grammar. Tested with `node:test` against the real binary in CI
+  (`node-sdk` job).
+- **Tokenless SDK releases via Trusted Publishing:** `release.yml` gains `pypi` and `npm` jobs
+  that publish the SDKs on every version tag using per-run OIDC identity — no standing
+  credentials anywhere. Each registry side needs its one-time trusted-publisher entry (repo
+  `xyzzylabs/dent8`, workflow `release.yml`, environments `pypi` / `npm`).
 - **Python SDK** ([`sdks/python`](sdks/python/), PyPI name `dent8`): a deliberately thin,
   zero-dependency wrapper over the CLI's JSON machine contract — every call shells out with
   `--output json`, returns the payload as a `dict`, and raises `Dent8Rejected` / `Dent8Invalid`
