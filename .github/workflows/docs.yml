@@ -29,6 +29,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      # Enables Pages (source: GitHub Actions) on first run, so no manual repo setting.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
