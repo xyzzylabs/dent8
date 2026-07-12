@@ -197,8 +197,41 @@ fn dispatch_api(request: &Request, store_path: &str) -> (u16, Value) {
         }
         "/api/native" => native_request(request, store_path),
         "/api/witness" => (200, witness_status()),
+        "/api/memory" => memory_status(store_path),
         _ => (404, error_json("no such endpoint")),
     }
+}
+
+/// The enriched belief base for the Memory view: every currently-tracked fact stream with
+/// its believed value, authority, lifecycle, and freshness — resolved in **one** store load
+/// via the chain-check-free freshness resolver (like `facts list`), so the human landing
+/// view shows values without N per-fact `explain` round-trips. Diagnostic streams
+/// (write-check probes) are hidden, matching `facts list`.
+fn memory_status(store_path: &str) -> (u16, Value) {
+    let store = match crate::load_store(store_path) {
+        Ok(store) => store,
+        Err(error) => return (503, error_json(&error)),
+    };
+    let now = crate::now_millis();
+    let mut facts = Vec::new();
+    for (subject, predicate) in store.subjects() {
+        if crate::ops::is_diagnostic_fact_stream(subject.kind(), subject.key(), predicate.as_str())
+        {
+            continue;
+        }
+        if let Ok(Some(receipt)) = store.latest_freshness(&subject, &predicate, now) {
+            facts.push(crate::receipt_fields_json(&receipt));
+        }
+    }
+    (
+        200,
+        json!({
+            "status": "ok",
+            "tool": "ui memory",
+            "count": facts.len(),
+            "facts": facts,
+        }),
+    )
 }
 
 /// Witness coverage + tamper/rollback status — the same read-only `witness::doctor_status()`

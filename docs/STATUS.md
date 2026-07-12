@@ -813,20 +813,20 @@ subject+predicate.
   cross-process writes within a poll tick; `dent8 mcp proxy` pumps frames bidirectionally),
   and JSON-RPC batches, above) is a hand-rolled stdio JSON-RPC loop; prompts are not
   implemented.
-- **Desktop debugger/control plane** — the **view layer is runnable**: `dent8 ui` serves a
-  local read-only debugger from the stock binary ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)
-  steps 2+3) — runtime health (store/identity/authority/witness/env), the fact table with
-  live freshness badges, per-fact integrity receipts + replay timelines, contested facts,
-  and an interactive what-if panel. Read-only by construction (every endpoint is a GET over
-  the same `op_*`/snapshot path as CLI/MCP; 127.0.0.1-bound; non-localhost `Host` refused;
-  values HTML-escaped so agent-supplied text cannot execute) — plus the activity feed
-  (recent events, newest first), the doctor panel (OK/WARN/FAIL/SKIP groups), the native
-  scan/reconcile audit panel, and the witness panel (coverage, signed-head verification,
-  unwitnessed tail, and any TAMPER/ROLLBACK finding — the full `witness doctor` detail, not
-  just the runtime summary line). That completes the ADR's read/audit-first shape.
-  Remaining from the ADR: the Tauri desktop shell (step 4) and write actions over the
-  signed identity path (step 5). It must not become a separate write path or memory
-  provider.
+- **Desktop debugger/control plane** — the **app is runnable**: `dent8 ui` serves a local,
+  human-first read-only memory dashboard from the stock binary
+  ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md) steps 2+3), organised around
+  the belief base — four views: **Memory** (headline verdict + stat tiles + believed facts
+  as value-first cards with freshness bars and contested pairs inline; click for the
+  integrity receipt + replay drawer), **Activity** (event feed), **What-if** (counterfactual
+  re-fold), and **Health** (a status-page rollup folding doctor OK/WARN/FAIL/SKIP, witness
+  coverage + TAMPER/ROLLBACK, native scan/reconcile, and raw runtime detail behind one
+  banner). Light/dark, deep-linkable tabs, click-to-pause poll. Read-only by construction
+  (every endpoint is a GET over the same `op_*`/snapshot path as CLI/MCP; 127.0.0.1-bound;
+  non-localhost `Host` refused; values HTML-escaped so agent-supplied text cannot execute).
+  That completes the ADR's read/audit-first shape. Remaining from the ADR: the Tauri desktop
+  shell (step 4) and write actions over the signed identity path (step 5). It must not
+  become a separate write path or memory provider.
 - **A *hosted* / operated witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now

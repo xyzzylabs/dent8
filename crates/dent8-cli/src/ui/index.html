@@ -3,633 +3,602 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>dent8 — control plane</title>
+<title>dent8 — memory</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-50 -50 100 100'%3E%3Cpath fill='%23a35a00' fill-rule='evenodd' d='M -16.8,-40.7 L -10,-40.7 L -10,-31 L -3.4,-31 L -3.4,-40.7 L 3.4,-40.7 L 3.4,-31 L 10,-31 L 10,-40.7 L 16.8,-40.7 L 40.7,-16.8 L 40.7,16.8 L 16.8,40.7 L -16.8,40.7 L -40.7,16.8 L -40.7,-16.8 Z M 8.5,2 A 8.5 8.5 0 1 0 -8.5,2 A 8.5 8.5 0 1 0 8.5,2 Z'/%3E%3C/svg%3E">
 <style>
 :root {
-  --bg: #faf8f5; --panel: #ffffff; --ink: #1a1a1a; --muted: #6b6459;
-  --line: #e8e2d9; --accent: #a35a00; --accent-soft: #f4e8d8;
-  --ok: #1a7f37; --ok-soft: #e6f4ea; --warn: #9a6700; --warn-soft: #fff3d6;
-  --bad: #b42318; --bad-soft: #fde8e6; --info: #175cd3; --info-soft: #e8f0fd;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --bg: #f7f4ef; --panel: #fffdfa; --panel-2: #f2ece3; --ink: #1c1917;
+  --muted: #7c7267; --faint: #a8a094; --line: #e9e1d6; --line-2: #ddd3c5;
+  --accent: #a85a12; --accent-ink: #8a4a0e; --accent-soft: #f3e4d1;
+  --ok: #1a7f37; --ok-soft: #e5f3e9; --warn: #9a6700; --warn-soft: #fbefd2;
+  --bad: #b42318; --bad-soft: #fbe6e4; --info: #1a5fd0; --info-soft: #e6eefc;
+  --shadow: 0 1px 2px rgba(60,40,20,.04), 0 4px 16px rgba(60,40,20,.05);
+  --shadow-lift: 0 2px 6px rgba(60,40,20,.08), 0 12px 32px rgba(60,40,20,.10);
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #161412; --panel: #1f1c19; --ink: #e8e6e3; --muted: #9b9288;
-    --line: #33302b; --accent: #c97a1a; --accent-soft: #322718;
-    --ok: #4ac26b; --ok-soft: #12261a; --warn: #e3b341; --warn-soft: #2b2412;
-    --bad: #f0857a; --bad-soft: #301715; --info: #6ca4f8; --info-soft: #14203a;
+    --bg: #14110e; --panel: #1e1a16; --panel-2: #17130f; --ink: #ece7e0; --muted: #9a9086;
+    --faint: #6d6459; --line: #302a23; --line-2: #3c342b;
+    --accent: #d98a2b; --accent-ink: #e59b3f; --accent-soft: #322414;
+    --ok: #4cc46d; --ok-soft: #10241a; --warn: #e0b13f; --warn-soft: #2a2210;
+    --bad: #f2857a; --bad-soft: #2e1613; --info: #6ba4f8; --info-soft: #131f38;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.28);
+    --shadow-lift: 0 2px 6px rgba(0,0,0,.4), 0 14px 34px rgba(0,0,0,.4);
   }
 }
+:root[data-theme="light"] {
+  --bg: #f7f4ef; --panel: #fffdfa; --panel-2: #f2ece3; --ink: #1c1917; --muted: #7c7267;
+  --faint: #a8a094; --line: #e9e1d6; --line-2: #ddd3c5; --accent: #a85a12;
+  --accent-soft: #f3e4d1; --ok: #1a7f37; --ok-soft: #e5f3e9; --warn: #9a6700;
+  --warn-soft: #fbefd2; --bad: #b42318; --bad-soft: #fbe6e4; --info: #1a5fd0; --info-soft: #e6eefc;
+}
+:root[data-theme="dark"] {
+  --bg: #14110e; --panel: #1e1a16; --panel-2: #17130f; --ink: #ece7e0; --muted: #9a9086;
+  --faint: #6d6459; --line: #302a23; --line-2: #3c342b; --accent: #d98a2b;
+  --accent-soft: #322414; --ok: #4cc46d; --ok-soft: #10241a; --warn: #e0b13f;
+  --warn-soft: #2a2210; --bad: #f2857a; --bad-soft: #2e1613; --info: #6ba4f8; --info-soft: #131f38;
+}
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
-  margin: 0; background: var(--bg); color: var(--ink);
-  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+  font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
 }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+/* ---- top bar ---- */
 header {
-  display: flex; align-items: center; gap: 12px; padding: 12px 20px;
-  border-bottom: 1px solid var(--line); background: var(--panel);
-  position: sticky; top: 0; z-index: 5;
+  position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 20px;
+  padding: 0 24px; height: 56px; background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(12px); border-bottom: 1px solid var(--line);
 }
-header svg { flex: none; }
-header .name { font-weight: 650; font-size: 15px; }
-header .store { color: var(--muted); font-family: var(--mono); font-size: 12px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.spacer { flex: 1; min-width: 8px; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 16px;
+  letter-spacing: -.01em; flex: none; }
+nav { display: flex; gap: 2px; overflow-x: auto; flex: 1; }
+nav button {
+  border: none; background: none; color: var(--muted); font: inherit; font-weight: 550;
+  padding: 7px 14px; cursor: pointer; border-radius: 8px; white-space: nowrap; position: relative;
+  transition: color .12s, background .12s;
+}
+nav button:hover { color: var(--ink); background: var(--panel-2); }
+nav button.active { color: var(--accent-ink); }
+nav button.active::after {
+  content: ""; position: absolute; left: 14px; right: 14px; bottom: -1px; height: 2px;
+  background: var(--accent); border-radius: 2px;
+}
+nav button .count { color: var(--faint); font-weight: 500; margin-left: 5px; font-variant-numeric: tabular-nums; }
+.topright { display: flex; align-items: center; gap: 8px; flex: none; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.pulse { animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 .pill {
-  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
-  border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 11px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
 }
-.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .pill.ok { color: var(--ok); background: var(--ok-soft); }
 .pill.warn { color: var(--warn); background: var(--warn-soft); }
 .pill.bad { color: var(--bad); background: var(--bad-soft); }
-nav { display: flex; gap: 4px; padding: 8px 20px 0; border-bottom: 1px solid var(--line);
-  overflow-x: auto; }
-nav button {
-  border: none; background: none; color: var(--muted); font: inherit; font-weight: 600;
-  padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
-  white-space: nowrap;
+.iconbtn { border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 14px; line-height: 1;
+  display: grid; place-items: center; transition: color .12s, border-color .12s; }
+.iconbtn:hover { color: var(--ink); border-color: var(--line-2); }
+
+main { max-width: 1080px; margin: 0 auto; padding: 28px 24px 80px; }
+
+/* ---- hero verdict ---- */
+.hero { margin-bottom: 22px; }
+.verdict { display: flex; align-items: center; gap: 12px; font-size: 27px; font-weight: 640;
+  letter-spacing: -.02em; margin: 2px 0 4px; }
+.verdict .vdot { width: 13px; height: 13px; border-radius: 50%; flex: none; }
+.verdict.ok .vdot { background: var(--ok); box-shadow: 0 0 0 5px var(--ok-soft); }
+.verdict.warn .vdot { background: var(--warn); box-shadow: 0 0 0 5px var(--warn-soft); }
+.verdict.bad .vdot { background: var(--bad); box-shadow: 0 0 0 5px var(--bad-soft); }
+.subline { color: var(--faint); font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+
+.tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0 26px; }
+@media (max-width: 620px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 13px;
+  padding: 15px 17px; box-shadow: var(--shadow); }
+.tile .n { font-size: 29px; font-weight: 680; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.tile .n.ok { color: var(--ok); } .tile .n.warn { color: var(--warn); } .tile .n.bad { color: var(--bad); }
+.tile .l { color: var(--muted); font-size: 12px; font-weight: 550; margin-top: 3px; }
+
+/* ---- section + toolbar ---- */
+.section-head { display: flex; align-items: baseline; gap: 12px; margin: 0 0 12px; }
+.section-head h2 { margin: 0; font-size: 14px; font-weight: 640; letter-spacing: -.01em; }
+.section-head .hint { color: var(--faint); font-size: 12.5px; }
+input[type=text], select {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 12px; font: inherit; min-width: 0;
 }
-nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
-nav button .count { color: var(--muted); font-weight: 500; margin-left: 4px; }
-main { padding: 20px; max-width: 1200px; margin: 0 auto; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
-.card {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+input[type=text]:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+button.action { background: var(--accent); color: #fff; border: none; border-radius: 9px;
+  padding: 8px 16px; font: inherit; font-weight: 600; cursor: pointer; transition: filter .12s; }
+button.action:hover { filter: brightness(1.06); }
+button.ghost { background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 9px; padding: 8px 15px; font: inherit; font-weight: 600; cursor: pointer; }
+button.ghost:hover { border-color: var(--line-2); }
+
+/* ---- fact cards ---- */
+.filterbar { margin-bottom: 14px; }
+.filterbar input { width: 100%; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 13px; }
+.fact {
+  position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 15px 17px 15px 19px; box-shadow: var(--shadow); cursor: pointer; overflow: hidden;
+  transition: transform .12s, box-shadow .12s, border-color .12s;
 }
-.card .k { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .04em; }
-.card .v { font-size: 22px; font-weight: 650; margin-top: 2px; }
-.card .v.small { font-size: 14px; font-family: var(--mono); word-break: break-all; }
-section.panel {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  margin-top: 16px; overflow: hidden;
-}
-section.panel h2 {
-  margin: 0; padding: 12px 16px; font-size: 13px; text-transform: uppercase;
-  letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--line);
-}
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--line); }
-th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-tbody tr:last-child td { border-bottom: none; }
-tbody tr.row { cursor: pointer; }
-tbody tr.row:hover { background: var(--accent-soft); }
-.mono { font-family: var(--mono); font-size: 13px; }
-.badge {
-  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
-}
+.fact::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--fresh); }
+.fact:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); border-color: var(--line-2); }
+.fact .label { color: var(--muted); font-size: 11px; font-weight: 650; text-transform: uppercase;
+  letter-spacing: .05em; font-family: var(--mono); }
+.fact .value { font-size: 20px; font-weight: 620; letter-spacing: -.01em; margin: 5px 0 10px;
+  overflow-wrap: anywhere; line-height: 1.25; }
+.fact .value.muted { color: var(--muted); font-weight: 500; font-style: italic; }
+.fact .meta { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.fact.contested { --fresh: var(--bad); }
+.fact.contested .value { font-size: 15px; font-weight: 600; }
+.rival { display: flex; align-items: center; gap: 7px; padding: 4px 0; }
+.rival .rv { font-family: var(--mono); font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+
+.chip { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: 11.5px;
+  font-weight: 650; font-family: var(--mono); }
+.chip.canonical { color: var(--bad); background: var(--bad-soft); }
+.chip.high { color: var(--accent-ink); background: var(--accent-soft); }
+.chip.medium { color: var(--info); background: var(--info-soft); }
+.chip.low { color: var(--muted); background: var(--panel-2); }
+.badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 640; }
 .badge.fresh { color: var(--ok); background: var(--ok-soft); }
 .badge.stale { color: var(--warn); background: var(--warn-soft); }
 .badge.not_yet_valid { color: var(--info); background: var(--info-soft); }
-.badge.no_longer_believed, .badge.gone { color: var(--muted); background: var(--line); }
+.badge.no_longer_believed, .badge.gone { color: var(--muted); background: var(--panel-2); }
 .badge.contested { color: var(--bad); background: var(--bad-soft); }
-.chip {
-  display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 11.5px;
-  font-weight: 650; font-family: var(--mono);
-}
-.chip.canonical { color: var(--bad); background: var(--bad-soft); }
-.chip.high { color: var(--accent); background: var(--accent-soft); }
-.chip.medium { color: var(--info); background: var(--info-soft); }
-.chip.low { color: var(--muted); background: var(--line); }
-.empty { padding: 28px 16px; color: var(--muted); text-align: center; }
-input[type=text], select {
-  background: var(--bg); color: var(--ink); border: 1px solid var(--line);
-  border-radius: 7px; padding: 7px 10px; font: inherit; min-width: 0;
-}
-input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
-button.action {
-  background: var(--accent); color: #fff; border: none; border-radius: 7px;
-  padding: 8px 16px; font: inherit; font-weight: 650; cursor: pointer;
-}
-button.action:disabled { opacity: .5; cursor: default; }
-.toolbar { display: flex; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line);
-  flex-wrap: wrap; align-items: center; }
-.toolbar input[type=text] { flex: 1; min-width: 180px; }
-#drawer {
-  position: fixed; inset: 0 0 0 auto; width: min(560px, 96vw); background: var(--panel);
-  border-left: 1px solid var(--line); box-shadow: -12px 0 40px rgba(0,0,0,.18);
-  transform: translateX(100%); transition: transform .18s ease; z-index: 10;
-  display: flex; flex-direction: column;
-}
-#drawer.open { transform: none; }
-#drawer .head { display: flex; align-items: center; gap: 10px; padding: 14px 18px;
-  border-bottom: 1px solid var(--line); }
-#drawer .head .title { font-weight: 650; font-family: var(--mono); font-size: 14px;
-  overflow-wrap: anywhere; }
-#drawer .body { overflow-y: auto; padding: 16px 18px; }
-#drawer button.close { margin-left: auto; background: none; border: none; color: var(--muted);
-  font-size: 20px; cursor: pointer; line-height: 1; }
-dl.receipt { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; }
-dl.receipt dt { color: var(--muted); font-size: 12.5px; }
-dl.receipt dd { margin: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+
+.empty { padding: 44px 20px; color: var(--faint); text-align: center; background: var(--panel);
+  border: 1px dashed var(--line-2); border-radius: 14px; }
+.empty code { background: var(--panel-2); padding: 2px 7px; border-radius: 6px; font-size: 12.5px; }
+.error { color: var(--bad); background: var(--bad-soft); border-radius: 11px; padding: 12px 15px;
+  font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; margin: 8px 0; }
+
+/* ---- timeline ---- */
+.feed { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+  padding: 8px 20px; box-shadow: var(--shadow); }
 .timeline { list-style: none; margin: 0; padding: 0; }
-.timeline li { position: relative; padding: 0 0 14px 22px; border-left: 2px solid var(--line);
-  margin-left: 6px; }
-.timeline li:last-child { padding-bottom: 2px; }
-.timeline li::before {
-  content: ""; position: absolute; left: -6px; top: 4px; width: 10px; height: 10px;
-  border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
-}
-.timeline .kind { font-weight: 650; font-family: var(--mono); font-size: 12.5px; }
-.timeline .meta { color: var(--muted); font-size: 12px; }
-.timeline .val { font-family: var(--mono); font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
-@media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
-.colhead { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--muted); margin-bottom: 6px; }
-.belief { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-.belief .val { font-family: var(--mono); overflow-wrap: anywhere; }
-.difflist { padding: 0 16px 16px; }
-.difflist .item { font-family: var(--mono); font-size: 12.5px; padding: 6px 0;
-  border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
-.error { color: var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 10px 14px;
-  margin: 12px 16px; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
-footer { color: var(--muted); font-size: 12px; text-align: center; padding: 22px; }
-footer a { color: var(--accent); }
+.timeline li { position: relative; padding: 13px 0 13px 24px; border-left: 2px solid var(--line);
+  margin-left: 5px; }
+.timeline li:last-child { border-left-color: transparent; }
+.timeline li::before { content: ""; position: absolute; left: -6px; top: 17px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--accent); border: 2px solid var(--panel); }
+.timeline .kind { font-weight: 640; font-family: var(--mono); font-size: 13px; }
+.timeline .meta { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.timeline .tval { font-family: var(--mono); font-size: 13px; margin-top: 3px; overflow-wrap: anywhere; color: var(--accent-ink); }
+
+/* ---- what-if ---- */
+.wi-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+.wi-controls select, .wi-controls input { flex: 1; min-width: 160px; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 640px) { .split { grid-template-columns: 1fr; } }
+.col .colhead { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--muted); margin-bottom: 8px; }
+.belief { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px 14px; margin-bottom: 9px; box-shadow: var(--shadow); }
+.belief .bv { font-family: var(--mono); font-size: 15px; font-weight: 600; overflow-wrap: anywhere; margin-top: 4px; }
+.belief .bid { color: var(--faint); font-family: var(--mono); font-size: 11px; margin-top: 4px; }
+.diffs { margin-top: 18px; }
+.diffs .item { font-family: var(--mono); font-size: 12.5px; padding: 7px 0; border-bottom: 1px dashed var(--line);
+  overflow-wrap: anywhere; }
+
+/* ---- health ---- */
+.banner { display: flex; align-items: center; gap: 14px; border-radius: 14px; padding: 18px 20px;
+  margin-bottom: 20px; font-size: 18px; font-weight: 620; letter-spacing: -.01em; }
+.banner.ok { background: var(--ok-soft); color: var(--ok); }
+.banner.warn { background: var(--warn-soft); color: var(--warn); }
+.banner.bad { background: var(--bad-soft); color: var(--bad); }
+.banner .bdot { width: 12px; height: 12px; border-radius: 50%; background: currentColor; flex: none; }
+.statuscards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 13px; margin-bottom: 20px; }
+@media (max-width: 700px) { .statuscards { grid-template-columns: 1fr; } }
+.scard { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); }
+.scard .st { display: flex; align-items: center; gap: 8px; font-weight: 620; font-size: 15px; }
+.scard .sd { color: var(--muted); font-size: 12.5px; margin-top: 7px; overflow-wrap: anywhere; }
+details.fold { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  margin-bottom: 11px; box-shadow: var(--shadow); overflow: hidden; }
+details.fold > summary { cursor: pointer; padding: 13px 18px; font-weight: 600; list-style: none;
+  display: flex; align-items: center; gap: 8px; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: "›"; color: var(--faint); font-size: 18px; transition: transform .15s; }
+details.fold[open] > summary::before { transform: rotate(90deg); }
+details.fold .foldbody { padding: 0 18px 14px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+tbody tr:last-child td { border-bottom: none; }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 5px 16px; }
+.kv dt { color: var(--muted); font-size: 12.5px; } .kv dd { margin: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.summary-chips .chip { margin: 0 6px 6px 0; }
+
+/* ---- drawer ---- */
+#scrim { position: fixed; inset: 0; background: rgba(30,20,10,.28); opacity: 0; pointer-events: none;
+  transition: opacity .18s; z-index: 29; }
+#scrim.open { opacity: 1; pointer-events: auto; }
+#drawer { position: fixed; inset: 0 0 0 auto; width: min(540px, 96vw); background: var(--panel);
+  border-left: 1px solid var(--line); box-shadow: -14px 0 44px rgba(40,25,10,.2); z-index: 30;
+  transform: translateX(100%); transition: transform .2s cubic-bezier(.4,0,.2,1); display: flex; flex-direction: column; }
+#drawer.open { transform: none; }
+#drawer .dhead { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+#drawer .dhead .dtitle { font-weight: 650; font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
+#drawer .dclose { margin-left: auto; background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; line-height: 1; }
+#drawer .dbody { overflow-y: auto; padding: 18px 20px; }
+.receipt-value { font-size: 22px; font-weight: 640; margin: 8px 0 14px; overflow-wrap: anywhere; }
+footer { color: var(--faint); font-size: 12px; text-align: center; padding: 26px; }
+footer a { color: var(--accent-ink); text-decoration: none; }
+footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
+<h2 class="sr-only">dent8 read-only memory control plane — believed facts, activity, counterfactual replay, and health.</h2>
 <header>
-  <svg width="26" height="26" viewBox="-50 -50 100 100" aria-hidden="true">
-    <path fill="var(--accent)" fill-rule="evenodd" d="M -16.8,-40.7 L -10,-40.7 L -10,-31 L -3.4,-31 L -3.4,-40.7 L 3.4,-40.7 L 3.4,-31 L 10,-31 L 10,-40.7 L 16.8,-40.7 L 40.7,-16.8 L 40.7,16.8 L 16.8,40.7 L -16.8,40.7 L -40.7,16.8 L -40.7,-16.8 Z M 8.5,2 A 8.5 8.5 0 1 0 -8.5,2 A 8.5 8.5 0 1 0 8.5,2 Z"/>
-  </svg>
-  <span class="name">dent8</span>
-  <span class="store" id="store-path" title=""></span>
-  <span class="spacer"></span>
-  <span class="pill ok" id="live-pill">live</span>
-  <span class="pill" id="verify-pill"></span>
+  <span class="brand">
+    <svg width="24" height="24" viewBox="-50 -50 100 100" aria-hidden="true">
+      <path fill="var(--accent)" fill-rule="evenodd" d="M -16.8,-40.7 L -10,-40.7 L -10,-31 L -3.4,-31 L -3.4,-40.7 L 3.4,-40.7 L 3.4,-31 L 10,-31 L 10,-40.7 L 16.8,-40.7 L 40.7,-16.8 L 40.7,16.8 L 16.8,40.7 L -16.8,40.7 L -40.7,16.8 L -40.7,-16.8 Z M 8.5,2 A 8.5 8.5 0 1 0 -8.5,2 A 8.5 8.5 0 1 0 8.5,2 Z"/>
+    </svg>
+    dent8
+  </span>
+  <nav>
+    <button data-tab="memory" class="active">Memory<span class="count" id="c-memory"></span></button>
+    <button data-tab="activity">Activity</button>
+    <button data-tab="whatif">What-if</button>
+    <button data-tab="health">Health</button>
+  </nav>
+  <span class="topright">
+    <span class="pill ok" id="live-pill"><span class="dot pulse"></span>live</span>
+    <button class="iconbtn" id="theme-btn" title="Toggle light / dark" aria-label="Toggle theme">◐</button>
+  </span>
 </header>
-<nav>
-  <button data-tab="overview" class="active">Overview</button>
-  <button data-tab="facts">Facts<span class="count" id="facts-count"></span></button>
-  <button data-tab="activity">Activity</button>
-  <button data-tab="conflicts">Conflicts<span class="count" id="conflicts-count"></span></button>
-  <button data-tab="whatif">What-if</button>
-  <button data-tab="doctor">Doctor</button>
-  <button data-tab="witness">Witness</button>
-  <button data-tab="native">Native</button>
-</nav>
+
 <main>
-  <div id="tab-overview"></div>
-  <div id="tab-facts" hidden></div>
+  <div id="tab-memory"></div>
   <div id="tab-activity" hidden></div>
-  <div id="tab-conflicts" hidden></div>
   <div id="tab-whatif" hidden></div>
-  <div id="tab-doctor" hidden></div>
-  <div id="tab-witness" hidden></div>
-  <div id="tab-native" hidden></div>
+  <div id="tab-health" hidden></div>
 </main>
-<div id="drawer" role="dialog" aria-label="Fact detail">
-  <div class="head">
-    <span class="title" id="drawer-title"></span>
-    <button class="close" id="drawer-close" aria-label="Close">×</button>
-  </div>
-  <div class="body" id="drawer-body"></div>
+
+<div id="scrim"></div>
+<div id="drawer" role="dialog" aria-label="Fact detail" aria-modal="true">
+  <div class="dhead"><span class="dtitle" id="d-title"></span><button class="dclose" id="d-close" aria-label="Close">×</button></div>
+  <div class="dbody" id="d-body"></div>
 </div>
-<footer>
-  read-only control plane · every payload comes from the same firewall path as the CLI ·
-  <a href="https://xyzzylabs.github.io/dent8/" rel="noreferrer">docs</a>
-</footer>
+
+<footer>read-only control plane · every value comes from the same firewall path as the CLI · <a href="https://xyzzylabs.github.io/dent8/" rel="noreferrer">docs</a></footer>
+
 <script>
 "use strict";
-const $ = (sel) => document.querySelector(sel);
-const esc = (raw) => String(raw ?? "").replace(/[&<>"']/g,
-  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const chip = (level) => `<span class="chip ${esc(level)}">${esc(level)}</span>`;
-const badge = (freshness) => `<span class="badge ${esc(freshness)}">${esc(String(freshness).replaceAll("_", " "))}</span>`;
-const when = (millis) => Number.isFinite(millis) ? new Date(millis).toLocaleString() : "—";
-
-let snapshot = null;
-let currentTab = "overview";
-let pollTimer = null;
+const $ = (s) => document.querySelector(s);
+const esc = (r) => String(r ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const chip = (a) => `<span class="chip ${esc(a)}">${esc(a)}</span>`;
+const badge = (f) => `<span class="badge ${esc(f)}">${esc(String(f).replaceAll("_", " "))}</span>`;
+const when = (ms) => Number.isFinite(ms) ? new Date(ms).toLocaleString() : "—";
+const ago = (ms) => {
+  if (!Number.isFinite(ms)) return "";
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+};
+function freshnessOf(f) {
+  if (f.lifecycle === "Contested") return "contested";
+  if (f.not_yet_valid) return "not_yet_valid";
+  if (f.fresh === false) return "stale";
+  return "fresh";
+}
+const FRESH_COLOR = { fresh: "var(--ok)", stale: "var(--warn)", not_yet_valid: "var(--info)", contested: "var(--bad)", gone: "var(--faint)" };
 
 async function getJSON(url) {
-  const response = await fetch(url, { cache: "no-store" });
-  const body = await response.json().catch(() => ({ error: `bad response (${response.status})` }));
-  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-  return body;
+  const r = await fetch(url, { cache: "no-store" });
+  const b = await r.json().catch(() => ({ error: `bad response (${r.status})` }));
+  if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+  return b;
 }
+function setPill(id, html, cls) { const el = $(id); el.innerHTML = html; el.className = `pill ${cls}`; }
 
-function setPill(id, text, cls) {
-  const el = $(id);
-  el.textContent = text;
-  el.className = `pill ${cls}`;
-}
+let snapshot = null, memory = null, currentTab = "memory", polling = true, pollTimer = null;
 
 async function refresh() {
   try {
-    snapshot = await getJSON("/api/snapshot");
-    setPill("#live-pill", "live", "ok");
-    const verified = snapshot.verify && snapshot.verify.ok;
-    setPill("#verify-pill", verified ? "integrity verified" : "integrity FAILED", verified ? "ok" : "bad");
-    const store = (snapshot.runtime_status && snapshot.runtime_status.store) || {};
-    const storeText = store.url || store.path || store.backend || "";
-    $("#store-path").textContent = storeText;
-    $("#store-path").title = storeText;
-    $("#facts-count").textContent = snapshot.facts ? ` ${snapshot.facts.count}` : "";
-    $("#conflicts-count").textContent = snapshot.conflicts ? ` ${snapshot.conflicts.count}` : "";
+    const [snap, mem] = await Promise.all([getJSON("/api/snapshot"), getJSON("/api/memory")]);
+    snapshot = snap; memory = mem;
+    if (polling) setPill("#live-pill", `<span class="dot pulse"></span>live`, "ok");
+    $("#c-memory").textContent = mem.count != null ? ` ${mem.count}` : "";
     render();
-  } catch (error) {
-    setPill("#live-pill", "offline", "bad");
+  } catch (e) {
+    setPill("#live-pill", `<span class="dot"></span>offline`, "bad");
   }
 }
-
 function render() {
   if (!snapshot) return;
-  if (currentTab === "overview") renderOverview();
-  if (currentTab === "facts") renderFacts();
-  if (currentTab === "activity") renderActivity();
-  if (currentTab === "conflicts") renderConflicts();
-  if (currentTab === "whatif") renderWhatif();
-  if (currentTab === "doctor") renderDoctor();
-  if (currentTab === "witness") renderWitness();
-  if (currentTab === "native") renderNative();
+  ({ memory: renderMemory, activity: renderActivity, whatif: renderWhatif, health: renderHealth })[currentTab]();
 }
 
-function kvRows(object) {
-  return Object.entries(object || {})
-    .filter(([, v]) => v !== null && typeof v !== "object")
-    .map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`)
-    .join("");
-}
-
-function renderOverview() {
-  const s = snapshot;
-  const runtime = s.runtime_status || {};
-  const cards = [
-    ["status", s.summary ? s.summary.runtime_status : "—"],
-    ["facts", s.summary ? s.summary.facts : "—"],
-    ["conflicts", s.summary ? s.summary.conflicts : "—"],
-    ["integrity", s.summary && s.summary.integrity_verified ? "verified" : "FAILED"],
-  ].map(([k, v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("");
-  const sections = ["store", "identity", "authority", "witness", "env", "server"]
-    .filter((name) => runtime[name] && typeof runtime[name] === "object")
-    .map((name) => `
-      <section class="panel"><h2>${esc(name)}</h2>
-        <table><tbody>${kvRows(runtime[name]) || `<tr><td class="empty">—</td></tr>`}</tbody></table>
-      </section>`).join("");
-  const findings = (s.verify && (s.verify.findings || [])).map((f) =>
-    `<div class="error">${esc(typeof f === "string" ? f : JSON.stringify(f))}</div>`).join("");
-  const advisories = (s.verify && (s.verify.advisories || [])).map((a) =>
-    `<div class="error" style="color:var(--warn);background:var(--warn-soft)">${esc(typeof a === "string" ? a : JSON.stringify(a))}</div>`).join("");
-  $("#tab-overview").innerHTML = `<div class="cards">${cards}</div>${findings}${advisories}${sections}`;
-}
-
-function factsList() {
-  return (snapshot.facts && snapshot.facts.facts) || [];
-}
-
-function renderFacts() {
-  const filter = (window.factFilter || "").toLowerCase();
-  const rows = factsList()
-    .filter((f) => {
-      const hay = `${f.subject.kind}:${f.subject.key} ${f.predicate} ${f.freshness}`.toLowerCase();
-      return hay.includes(filter);
-    })
-    .map((f) => `
-      <tr class="row" data-subject="${esc(`${f.subject.kind}:${f.subject.key}`)}" data-predicate="${esc(f.predicate)}">
-        <td class="mono">${esc(f.subject.kind)}:${esc(f.subject.key)}</td>
-        <td class="mono">${esc(f.predicate)}</td>
-        <td>${badge(f.freshness)}</td>
-      </tr>`).join("");
-  $("#tab-facts").innerHTML = `
-    <section class="panel">
-      <div class="toolbar">
-        <input type="text" id="fact-filter" placeholder="filter facts… (subject, predicate, freshness)" value="${esc(window.factFilter || "")}">
-        <span style="color:var(--muted);font-size:12px">click a row for the receipt + replay</span>
-      </div>
-      <table>
-        <thead><tr><th>subject</th><th>predicate</th><th>freshness</th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="3" class="empty">no facts yet — <span class="mono">dent8 assert &lt;kind&gt;:&lt;key&gt; &lt;predicate&gt; &lt;value&gt;</span></td></tr>`}</tbody>
-      </table>
-    </section>`;
-  $("#fact-filter").addEventListener("input", (event) => {
-    window.factFilter = event.target.value;
-    renderFacts();
-    $("#fact-filter").focus();
-    $("#fact-filter").setSelectionRange(event.target.value.length, event.target.value.length);
+/* ---- Memory ---- */
+let memFilter = "";
+function conflictsBySubject() {
+  const map = {};
+  ((snapshot.conflicts && snapshot.conflicts.conflicts) || []).forEach((c) => {
+    map[`${c.subject.kind}:${c.subject.key}|${c.predicate}`] = c.rivals || [];
   });
-  document.querySelectorAll("#tab-facts tr.row").forEach((row) =>
-    row.addEventListener("click", () => openDrawer(row.dataset.subject, row.dataset.predicate)));
+  return map;
+}
+function renderMemory() {
+  const facts = (memory && memory.facts) || [];
+  const conflicts = (snapshot.conflicts && snapshot.conflicts.count) || 0;
+  const stale = facts.filter((f) => f.fresh === false && f.lifecycle === "Active").length;
+  const verified = snapshot.verify && snapshot.verify.ok;
+  let vClass = "ok", vText = "Everything verified";
+  if (!verified) { vClass = "bad"; vText = "Integrity check failed"; }
+  else if (conflicts > 0) { vClass = "warn"; vText = `${conflicts} fact${conflicts > 1 ? "s" : ""} contested`; }
+  else if (stale > 0) { vClass = "warn"; vText = `${stale} fact${stale > 1 ? "s" : ""} stale`; }
+  else if (!facts.length) { vClass = "ok"; vText = "No facts yet"; }
+  const store = (snapshot.runtime_status && snapshot.runtime_status.store) || {};
+
+  const tiles = [
+    ["facts", facts.length, ""],
+    ["contested", conflicts, conflicts ? "warn" : ""],
+    ["stale", stale, stale ? "warn" : ""],
+    ["integrity", verified ? "verified" : "failed", verified ? "ok" : "bad"],
+  ].map(([l, n, c]) => `<div class="tile"><div class="n ${c}">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("");
+
+  const rivals = conflictsBySubject();
+  const filter = memFilter.toLowerCase();
+  const cards = facts
+    .filter((f) => `${f.subject.kind}:${f.subject.key} ${f.predicate} ${f.value && f.value.text}`.toLowerCase().includes(filter))
+    .map((f) => {
+      const subject = `${f.subject.kind}:${f.subject.key}`;
+      const fr = freshnessOf(f);
+      const contested = f.lifecycle === "Contested";
+      let inner;
+      if (contested) {
+        const rv = rivals[`${subject}|${f.predicate}`] || [{ value: f.value, authority: f.authority, lifecycle: f.lifecycle }];
+        inner = `<div style="margin:6px 0 9px">${rv.map((r) =>
+          `<div class="rival"><span class="rv">${esc(r.value && r.value.display)}</span> ${chip(r.authority)}</div>`).join("")}</div>
+          <div class="meta">${badge("contested")}</div>`;
+      } else {
+        inner = `<div class="value">${esc(f.value && f.value.display)}</div>
+          <div class="meta">${chip(f.authority)} ${badge(fr)}</div>`;
+      }
+      return `<div class="fact ${contested ? "contested" : ""}" style="--fresh:${FRESH_COLOR[fr]}"
+        data-subject="${esc(subject)}" data-predicate="${esc(f.predicate)}">
+        <div class="label">${esc(subject)} · ${esc(f.predicate)}</div>${inner}</div>`;
+    }).join("");
+
+  $("#tab-memory").innerHTML = `
+    <div class="hero">
+      <div class="verdict ${vClass}"><span class="vdot"></span>${esc(vText)}</div>
+      <div class="subline">${esc(store.url || store.path || store.file_log_path || "")}</div>
+    </div>
+    <div class="tiles">${tiles}</div>
+    ${facts.length ? `
+      <div class="filterbar"><input type="text" id="mem-filter" placeholder="Filter facts…" value="${esc(memFilter)}"></div>
+      <div class="cards">${cards || `<div class="empty">no facts match “${esc(memFilter)}”</div>`}</div>`
+      : `<div class="empty">No facts yet. Assert one:<br><br><code>dent8 assert repo:myproj deploy_target production --authority high --source source:owner</code></div>`}`;
+
+  const fi = $("#mem-filter");
+  if (fi) {
+    fi.addEventListener("input", (e) => { memFilter = e.target.value; renderMemory();
+      const n = $("#mem-filter"); n.focus(); n.setSelectionRange(memFilter.length, memFilter.length); });
+  }
+  document.querySelectorAll("#tab-memory .fact").forEach((c) =>
+    c.addEventListener("click", () => openDrawer(c.dataset.subject, c.dataset.predicate)));
 }
 
-function renderConflicts() {
-  const conflicts = (snapshot.conflicts && snapshot.conflicts.conflicts) || [];
-  const cards = conflicts.map((c) => {
-    const subject = `${c.subject.kind}:${c.subject.key}`;
-    const rivals = (c.rivals || []).map((r) => `
-      <div class="belief">
-        <div>${chip(r.authority)} <span class="badge ${r.lifecycle === "Contested" ? "contested" : "fresh"}">${esc(r.lifecycle)}</span></div>
-        <div class="val">${esc(r.value && r.value.display)}</div>
-        <div class="mono" style="color:var(--muted);font-size:11.5px">${esc(r.fact_id)}</div>
-      </div>`).join("");
-    return `
-      <section class="panel">
-        <h2><span class="mono" style="text-transform:none;letter-spacing:0">${esc(subject)} ${esc(c.predicate)}</span> — ${(c.rivals || []).length} rival values, kept as data</h2>
-        <div class="grid2" style="align-items:start">${rivals}</div>
-      </section>`;
-  }).join("");
-  $("#tab-conflicts").innerHTML = cards ||
-    `<section class="panel"><div class="empty">no contested facts — disagreement is kept as a contested pair here, never silently resolved</div></section>`;
+/* ---- Activity ---- */
+let activityBusy = false;
+async function renderActivity() {
+  const t = $("#tab-activity");
+  if (!t.dataset.init) { t.innerHTML = `<div class="section-head"><h2>Activity</h2><span class="hint">every event across the log, newest first</span></div><div id="feed-holder"><div class="empty">loading…</div></div>`; t.dataset.init = "1"; }
+  if (activityBusy) return; activityBusy = true;
+  try {
+    const r = await getJSON("/api/activity?limit=100");
+    const items = (r.events || []).map((e) => `
+      <li>
+        <div class="kind">${esc(e.kind)} ${chip(e.authority)}</div>
+        <div class="meta"><span class="mono">${esc(e.subject.kind)}:${esc(e.subject.key)} ${esc(e.predicate)}</span> · ${esc(e.source)} · ${esc(ago(e.recorded_at))}</div>
+        ${e.value ? `<div class="tval">${esc(e.value.display)}</div>` : ""}
+      </li>`).join("");
+    $("#feed-holder").innerHTML = items
+      ? `<div class="feed"><ul class="timeline">${items}</ul></div>`
+      : `<div class="empty">no events yet</div>`;
+  } catch (e) { $("#feed-holder").innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  finally { activityBusy = false; }
 }
 
-function beliefCard(entry) {
-  return `<div class="belief">
-    <div>${chip(entry.authority)} <span class="badge ${esc(entry.lifecycle === "Contested" ? "contested" : "fresh")}">${esc(entry.lifecycle)}</span></div>
-    <div class="val">${esc(entry.value && entry.value.display)}</div>
-    <div class="mono" style="color:var(--muted);font-size:11.5px">${esc(entry.fact_id)}</div>
-  </div>`;
+/* ---- What-if ---- */
+function beliefCard(e) {
+  return `<div class="belief"><div>${chip(e.authority)} <span class="badge ${e.lifecycle === "Contested" ? "contested" : "fresh"}">${esc(e.lifecycle)}</span></div>
+    <div class="bv">${esc(e.value && e.value.display)}</div><div class="bid">${esc(e.fact_id)}</div></div>`;
 }
-
 function renderWhatif() {
-  if ($("#whatif-form")) return; // keep form state across polls
-  const options = factsList().map((f) =>
-    `<option value="${esc(`${f.subject.kind}:${f.subject.key}`)}|${esc(f.predicate)}">${esc(`${f.subject.kind}:${f.subject.key}`)} ${esc(f.predicate)}</option>`).join("");
+  if ($("#wi-fact")) return;
+  const opts = ((memory && memory.facts) || []).map((f) =>
+    `<option value="${esc(f.subject.kind)}:${esc(f.subject.key)}|${esc(f.predicate)}">${esc(f.subject.kind)}:${esc(f.subject.key)} ${esc(f.predicate)}</option>`).join("");
   $("#tab-whatif").innerHTML = `
-    <section class="panel"><h2>re-fold the log under a different trust policy</h2>
-      <div class="toolbar" id="whatif-form">
-        <select id="wi-fact">${options || `<option value="">no facts yet</option>`}</select>
-        <input type="text" id="wi-distrust" placeholder="distrust sources (comma separated), e.g. web:scrape">
-        <select id="wi-floor">
-          <option value="">no authority floor</option>
-          <option value="low">floor: low</option>
-          <option value="medium">floor: medium</option>
-          <option value="high">floor: high</option>
-          <option value="canonical">floor: canonical</option>
-        </select>
-        <button class="action" id="wi-run">Run counterfactual</button>
-      </div>
-      <div id="wi-result"></div>
-    </section>`;
+    <div class="section-head"><h2>What-if</h2><span class="hint">re-fold the same log under a different trust policy — deterministic, no model calls</span></div>
+    <div class="wi-controls">
+      <select id="wi-fact">${opts || `<option value="">no facts yet</option>`}</select>
+      <input type="text" id="wi-distrust" placeholder="distrust sources, comma-sep (e.g. web:scrape)">
+      <select id="wi-floor"><option value="">no authority floor</option><option value="low">floor: low</option><option value="medium">floor: medium</option><option value="high">floor: high</option><option value="canonical">floor: canonical</option></select>
+      <button class="action" id="wi-run">Run</button>
+    </div>
+    <div id="wi-out"><div class="empty">pick a fact and a policy, then run to see what would be believed</div></div>`;
   $("#wi-run").addEventListener("click", runWhatif);
 }
-
 async function runWhatif() {
-  const pick = $("#wi-fact").value;
-  if (!pick) return;
+  const pick = $("#wi-fact").value; if (!pick) return;
   const [subject, predicate] = pick.split("|");
-  const params = new URLSearchParams({ subject, predicate });
-  $("#wi-distrust").value.split(",").map((s) => s.trim()).filter(Boolean)
-    .forEach((source) => params.append("distrust", source));
-  if ($("#wi-floor").value) params.set("authority_floor", $("#wi-floor").value);
-  const target = $("#wi-result");
-  target.innerHTML = `<div class="empty">re-folding…</div>`;
+  const p = new URLSearchParams({ subject, predicate });
+  $("#wi-distrust").value.split(",").map((s) => s.trim()).filter(Boolean).forEach((s) => p.append("distrust", s));
+  if ($("#wi-floor").value) p.set("authority_floor", $("#wi-floor").value);
+  const out = $("#wi-out"); out.innerHTML = `<div class="empty">re-folding…</div>`;
   try {
-    const result = await getJSON(`/api/whatif?${params}`);
-    const base = (result.base || []).map(beliefCard).join("") || `<div class="empty">nothing believed</div>`;
-    const counterfactual = (result.counterfactual || []).map(beliefCard).join("") || `<div class="empty">nothing believed</div>`;
-    const diffs = (result.diffs || []).map((d) =>
-      `<div class="item">${esc(d.fact_id)} — ${esc(JSON.stringify(d.diff))}</div>`).join("");
-    target.innerHTML = `
-      <div class="grid2">
-        <div><div class="colhead">now</div>${base}</div>
-        <div><div class="colhead">under policy${result.changed ? "" : " (unchanged)"}</div>${counterfactual}</div>
-      </div>
-      ${diffs ? `<div class="difflist"><div class="colhead">per-fact diff</div>${diffs}</div>` : ""}`;
-  } catch (error) {
-    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
-  }
+    const r = await getJSON(`/api/whatif?${p}`);
+    const base = (r.base || []).map(beliefCard).join("") || `<div class="empty">nothing believed</div>`;
+    const cf = (r.counterfactual || []).map(beliefCard).join("") || `<div class="empty">nothing believed</div>`;
+    const diffs = (r.diffs || []).map((d) => `<div class="item">${esc(d.fact_id)} — ${esc(JSON.stringify(d.diff))}</div>`).join("");
+    out.innerHTML = `<div class="split"><div class="col"><div class="colhead">now</div>${base}</div>
+      <div class="col"><div class="colhead">under policy${r.changed ? "" : " (unchanged)"}</div>${cf}</div></div>
+      ${diffs ? `<div class="diffs"><div class="colhead">per-fact diff</div>${diffs}</div>` : ""}`;
+  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-let activityLoading = false;
-async function renderActivity() {
-  const target = $("#tab-activity");
-  if (activityLoading) return;
-  activityLoading = true;
-  if (!target.innerHTML) target.innerHTML = `<section class="panel"><div class="empty">loading activity…</div></section>`;
+/* ---- Health ---- */
+async function renderHealth() {
+  const t = $("#tab-health");
+  if (t.dataset.loaded === "1") return; t.dataset.loaded = "1";
+  t.innerHTML = `<div class="empty">running checks…</div>`;
   try {
-    const result = await getJSON("/api/activity?limit=80");
-    const events = (result.events || []).map((event) => `
-      <li>
-        <div class="kind">${esc(event.kind)} ${chip(event.authority)}</div>
-        <div class="meta">
-          <span class="mono">${esc(event.subject.kind)}:${esc(event.subject.key)} ${esc(event.predicate)}</span>
-          · ${esc(event.source)} · ${esc(when(event.recorded_at))}
-        </div>
-        ${event.value ? `<div class="val">${esc(event.value.display)}</div>` : ""}
-      </li>`).join("");
-    target.innerHTML = `
-      <section class="panel"><h2>recent events — newest first (${esc(result.total_events)} total; rejected supersessions appear as fact.challenge_rejected on their incumbents)</h2>
-        <div style="padding:16px">
-          <ul class="timeline">${events || ""}</ul>
-          ${events ? "" : `<div class="empty">no events yet</div>`}
-        </div>
-      </section>`;
-  } catch (error) {
-    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
-  } finally {
-    activityLoading = false;
-  }
+    const [doctor, witness] = await Promise.all([getJSON("/api/doctor"), getJSON("/api/witness")]);
+    const rt = snapshot.runtime_status || {};
+    const verified = snapshot.verify && snapshot.verify.ok;
+    const store = rt.store || {};
+    const dsum = doctor.summary || {};
+    const worstBad = !verified || dsum.fail > 0 || !witness.ok;
+    const worstWarn = dsum.warn > 0 || (witness.configured && !witness.ok);
+    let bCls = "ok", bTxt = "Everything looks healthy";
+    if (worstBad) { bCls = "bad"; bTxt = "Attention needed"; }
+    else if (worstWarn) { bCls = "warn"; bTxt = `${dsum.warn || 0} warning${dsum.warn === 1 ? "" : "s"}`; }
+
+    const witnessDesc = !witness.configured ? "not configured (optional)"
+      : witness.ok ? "coverage verified" : "TAMPER / ROLLBACK — check detail";
+    const cards = [
+      ["integrity", verified, verified ? "chain verified" : "chain FAILED", `${store.event_count ?? "?"} events`],
+      ["witness", witness.ok, witnessDesc, ""],
+      ["doctor", dsum.fail === 0, `${dsum.ok || 0} ok · ${dsum.warn || 0} warn · ${dsum.fail || 0} fail`, `${dsum.skip || 0} skipped`],
+    ].map(([t2, good, d, sub]) => `<div class="scard">
+      <div class="st"><span class="dot" style="background:${good ? "var(--ok)" : "var(--warn)"}"></span>${esc(t2)}</div>
+      <div class="sd">${esc(d)}${sub ? ` · ${esc(sub)}` : ""}</div></div>`).join("");
+
+    const doctorRows = ["fail", "warn", "ok", "skip"].flatMap((lvl) =>
+      ((doctor.sections && doctor.sections[lvl]) || []).map((c) =>
+        `<tr><td style="width:64px"><span class="badge ${lvl === "ok" ? "fresh" : lvl === "fail" ? "contested" : lvl === "warn" ? "stale" : "gone"}">${lvl}</span></td>
+         <td class="mono" style="color:var(--muted)">${esc(c.message)}</td></tr>`)).join("");
+    const witnessRows = ["fail", "warn", "ok"].flatMap((lvl) =>
+      ((witness.sections && witness.sections[lvl]) || []).map((l) =>
+        `<tr><td style="width:64px"><span class="badge ${lvl === "ok" ? "fresh" : lvl === "fail" ? "contested" : "stale"}">${lvl}</span></td>
+         <td class="mono" style="color:var(--muted)">${esc(l.message)}</td></tr>`)).join("");
+    const sysRows = ["store", "identity", "authority", "witness", "env"]
+      .filter((k) => rt[k] && typeof rt[k] === "object")
+      .map((k) => `<details class="fold"><summary>${esc(k)}</summary><div class="foldbody"><dl class="kv">${
+        Object.entries(rt[k]).filter(([, v]) => v !== null && typeof v !== "object")
+          .map(([kk, vv]) => `<dt>${esc(kk)}</dt><dd>${esc(vv)}</dd>`).join("")}</dl></div></details>`).join("");
+
+    t.innerHTML = `
+      <div class="banner ${bCls}"><span class="bdot"></span>${esc(bTxt)}</div>
+      <div class="statuscards">${cards}</div>
+      <details class="fold" open><summary>Doctor checks</summary><div class="foldbody"><table><tbody>${doctorRows || `<tr><td class="mono">no checks</td></tr>`}</tbody></table></div></details>
+      <details class="fold"><summary>Witness coverage</summary><div class="foldbody"><table><tbody>${witnessRows}</tbody></table></div></details>
+      <details class="fold"><summary>Native memory audit</summary><div class="foldbody" id="native-fold">${nativeControls()}</div></details>
+      <details class="fold"><summary>System details</summary><div class="foldbody">${sysRows}</div></details>`;
+    wireNative();
+  } catch (e) { t.innerHTML = `<div class="error">${esc(e.message)}</div>`; t.dataset.loaded = ""; }
 }
-
-const DOCTOR_LEVELS = [["fail", "bad"], ["warn", "warn"], ["ok", "ok"], ["skip", ""]];
-async function renderDoctor() {
-  const target = $("#tab-doctor");
-  if (target.dataset.loaded === "1") return; // re-run via the button, not the poll
-  target.dataset.loaded = "1";
-  target.innerHTML = `<section class="panel"><div class="empty">running doctor…</div></section>`;
-  try {
-    const result = await getJSON("/api/doctor");
-    const summary = result.summary || {};
-    const cards = DOCTOR_LEVELS.map(([level, cls]) => `
-      <div class="card"><div class="k">${esc(level)}</div>
-        <div class="v" style="color:var(--${cls || "muted"})">${esc(summary[level] ?? 0)}</div></div>`).join("");
-    const sections = DOCTOR_LEVELS.map(([level]) => {
-      const checks = (result.sections && result.sections[level]) || [];
-      if (!checks.length) return "";
-      const rows = checks.map((check) => `
-        <tr><td style="width:70px"><span class="badge ${level === "ok" ? "fresh" : level === "fail" ? "contested" : level === "warn" ? "stale" : "gone"}">${esc(level)}</span></td>
-        <td class="mono">${esc(check.name || check.check || "")}</td>
-        <td class="mono" style="color:var(--muted)">${esc(check.message || check.detail || "")}</td></tr>`).join("");
-      return `<section class="panel"><h2>${esc(level)} (${checks.length})</h2><table><tbody>${rows}</tbody></table></section>`;
-    }).join("");
-    target.innerHTML = `
-      <div class="toolbar" style="border:none;padding:0 0 12px">
-        <span class="pill ${result.ok ? "ok" : "bad"}">${result.ok ? "doctor: healthy" : "doctor: failing"}</span>
-        <span class="spacer"></span>
-        <button class="action" id="doctor-rerun">Re-run</button>
-      </div>
-      <div class="cards">${cards}</div>${sections}`;
-    $("#doctor-rerun").addEventListener("click", () => {
-      target.dataset.loaded = "";
-      renderDoctor();
-    });
-  } catch (error) {
-    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
-    target.dataset.loaded = "";
-  }
+const AGENTS = ["claude-code", "codex", "cursor", "grok-build", "gemini", "cascade", "hecate"];
+function nativeControls() {
+  return `<div class="wi-controls"><select id="nat-agent">${AGENTS.map((a) => `<option>${a}</option>`).join("")}</select>
+    <button class="ghost" id="nat-scan">Scan files</button><button class="ghost" id="nat-recon">Reconcile receipts</button></div>
+    <div id="nat-out"><div class="empty">scan lists a profile's native memory files; reconcile verifies their dent8:// references against receipts</div></div>`;
 }
-
-const WITNESS_LEVELS = [["FAIL", "bad", "contested"], ["WARN", "warn", "stale"], ["OK", "ok", "fresh"]];
-async function renderWitness() {
-  const target = $("#tab-witness");
-  if (target.dataset.loaded === "1") return;
-  target.dataset.loaded = "1";
-  target.innerHTML = `<section class="panel"><div class="empty">checking witness coverage…</div></section>`;
-  try {
-    const result = await getJSON("/api/witness");
-    const sections = WITNESS_LEVELS.map(([level, cls, badgeCls]) => {
-      const lines = (result.sections && result.sections[level.toLowerCase()]) || [];
-      if (!lines.length) return "";
-      const rows = lines.map((line) =>
-        `<tr><td style="width:70px"><span class="badge ${badgeCls}">${esc(level.toLowerCase())}</span></td>
-         <td class="mono" style="color:var(--muted)">${esc(line.message)}</td></tr>`).join("");
-      return `<section class="panel"><h2>${esc(level.toLowerCase())} (${lines.length})</h2><table><tbody>${rows}</tbody></table></section>`;
-    }).join("");
-    const pillCls = !result.configured ? "warn" : result.ok ? "ok" : "bad";
-    const pillText = !result.configured ? "witness: not configured (optional)"
-      : result.ok ? "witness: coverage healthy" : "witness: TAMPER/ROLLBACK";
-    target.innerHTML = `
-      <div class="toolbar" style="border:none;padding:0 0 12px">
-        <span class="pill ${pillCls}">${esc(pillText)}</span>
-        <span class="spacer"></span>
-        <button class="action" id="witness-rerun">Re-check</button>
-      </div>
-      ${sections || `<section class="panel"><div class="empty">no witness findings</div></section>`}`;
-    $("#witness-rerun").addEventListener("click", () => { target.dataset.loaded = ""; renderWitness(); });
-  } catch (error) {
-    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
-    target.dataset.loaded = "";
-  }
+function wireNative() {
+  $("#nat-scan").addEventListener("click", () => runNative("scan"));
+  $("#nat-recon").addEventListener("click", () => runNative("reconcile"));
 }
-
-const AGENT_PROFILES = ["claude-code", "codex", "cursor", "grok-build", "gemini", "cascade", "hecate"];
-function renderNative() {
-  if ($("#native-form")) return; // keep form + results across polls
-  const options = AGENT_PROFILES.map((agent) => `<option value="${esc(agent)}">${esc(agent)}</option>`).join("");
-  $("#tab-native").innerHTML = `
-    <section class="panel"><h2>agent-native memory/rules audit (read-only)</h2>
-      <div class="toolbar" id="native-form">
-        <select id="native-agent">${options}</select>
-        <button class="action" id="native-scan">Scan</button>
-        <button class="action" id="native-reconcile">Reconcile receipts</button>
-      </div>
-      <div id="native-result"><div class="empty">scan inventories the profile's native files; reconcile verifies their dent8:// references against current receipts</div></div>
-    </section>`;
-  $("#native-scan").addEventListener("click", () => runNative("scan"));
-  $("#native-reconcile").addEventListener("click", () => runNative("reconcile"));
-}
-
-function guardLine(guard) {
-  if (!guard) return "";
-  const cls = guard.protected ? "fresh" : guard.status === "missing" ? "stale" : "contested";
-  const label = guard.protected ? "guard enforced" : `guard ${esc(guard.status || "unknown")}`;
-  return `<div style="padding:12px 16px"><span class="badge ${cls}">${label}</span>
-    <span class="mono" style="color:var(--muted);font-size:12px;margin-left:8px">${esc(guard.message || "")}</span></div>`;
-}
-
-function summaryChips(summary) {
-  return `<div style="padding:0 16px 8px">${Object.entries(summary || {})
-    .filter(([, v]) => typeof v === "number")
-    .map(([k, v]) => `<span class="chip ${v > 0 && /fail|missing|stale|contested|invalid|without/.test(k) ? "medium" : "low"}" style="margin:0 6px 6px 0;display:inline-block">${esc(k.replaceAll("_", " "))}: ${esc(v)}</span>`)
-    .join("")}</div>`;
-}
-
-const RECON_STATUS = { ok: "fresh", missing: "contested", stale: "stale", contested: "contested",
-  no_longer_believed: "gone", not_yet_valid: "not_yet_valid", invalid: "contested" };
-
+const RECON = { ok: "fresh", missing: "contested", stale: "stale", contested: "contested", no_longer_believed: "gone", not_yet_valid: "not_yet_valid", invalid: "contested" };
 async function runNative(mode) {
-  const agent = $("#native-agent").value;
-  const target = $("#native-result");
-  target.innerHTML = `<div class="empty">${esc(mode)} running for ${esc(agent)}…</div>`;
+  const agent = $("#nat-agent").value, out = $("#nat-out");
+  out.innerHTML = `<div class="empty">${esc(mode)}…</div>`;
   try {
-    const result = await getJSON(`/api/native?${new URLSearchParams({ agent, mode })}`);
+    const r = await getJSON(`/api/native?${new URLSearchParams({ agent, mode })}`);
+    const guard = r.guard ? `<div style="margin-bottom:10px"><span class="badge ${r.guard.protected ? "fresh" : "stale"}">${r.guard.protected ? "guard enforced" : "guard " + esc(r.guard.status)}</span></div>` : "";
+    const chips = `<div class="summary-chips" style="margin-bottom:10px">${Object.entries(r.summary || {}).filter(([, v]) => typeof v === "number")
+      .map(([k, v]) => `<span class="chip ${v > 0 && /fail|missing|stale|contested|invalid|without/.test(k) ? "medium" : "low"}">${esc(k.replaceAll("_", " "))}: ${esc(v)}</span>`).join("")}</div>`;
     let body;
     if (mode === "reconcile") {
-      const refs = (result.references || []).map((r) => `
-        <tr><td style="width:90px"><span class="badge ${RECON_STATUS[r.status] || "gone"}">${esc(r.status)}</span></td>
-          <td class="mono">${esc(r.reference && r.reference.uri)}</td>
-          <td class="mono" style="color:var(--muted)">${esc(r.file && r.file.relative_path)}:${esc(r.reference && r.reference.line)} — ${esc(r.message)}</td></tr>`).join("");
-      body = refs
-        ? `<table><thead><tr><th>status</th><th>reference</th><th>where / why</th></tr></thead><tbody>${refs}</tbody></table>`
-        : `<div class="empty">no dent8:// references in this profile's native files</div>`;
+      const rows = (r.references || []).map((x) => `<tr><td style="width:84px"><span class="badge ${RECON[x.status] || "gone"}">${esc(x.status)}</span></td>
+        <td class="mono">${esc(x.reference && x.reference.uri)}</td><td class="mono" style="color:var(--muted)">${esc(x.file && x.file.relative_path)}:${esc(x.reference && x.reference.line)}</td></tr>`).join("");
+      body = rows ? `<table><thead><tr><th>status</th><th>reference</th><th>where</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">no dent8:// references</div>`;
     } else {
-      const files = (result.files || []).map((f) => `
-        <tr><td class="mono">${esc(f.relative_path)}</td><td class="mono" style="color:var(--muted)">${esc(f.kind)}</td>
-          <td>${f.has_receipt_marker ? `<span class="badge fresh">receipts</span>` : `<span class="badge gone">no markers</span>`}</td>
-          <td class="mono" style="color:var(--muted)">${esc(f.size_bytes)} B</td></tr>`).join("");
-      body = files
-        ? `<table><thead><tr><th>file</th><th>kind</th><th>markers</th><th>size</th></tr></thead><tbody>${files}</tbody></table>`
-        : `<div class="empty">no native memory/rules files found for this profile</div>`;
+      const rows = (r.files || []).map((f) => `<tr><td class="mono">${esc(f.relative_path)}</td><td class="mono" style="color:var(--muted)">${esc(f.kind)}</td>
+        <td>${f.has_receipt_marker ? badge("fresh").replace(">fresh<", ">receipts<") : badge("gone").replace(">gone<", ">no markers<")}</td></tr>`).join("");
+      body = rows ? `<table><thead><tr><th>file</th><th>kind</th><th>markers</th></tr></thead><tbody>${rows}</tbody></table>` : `<div class="empty">no native files for this profile</div>`;
     }
-    target.innerHTML = `${guardLine(result.guard)}${summaryChips(result.summary)}${body}`;
-  } catch (error) {
-    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
-  }
+    out.innerHTML = guard + chips + body;
+  } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
+/* ---- Fact drawer (receipt + replay) ---- */
 async function openDrawer(subject, predicate) {
-  $("#drawer-title").textContent = `${subject} ${predicate}`;
-  $("#drawer-body").innerHTML = `<div class="empty">loading receipt…</div>`;
-  $("#drawer").classList.add("open");
-  const params = new URLSearchParams({ subject, predicate });
+  $("#d-title").textContent = `${subject} ${predicate}`;
+  $("#d-body").innerHTML = `<div class="empty">loading receipt…</div>`;
+  $("#drawer").classList.add("open"); $("#scrim").classList.add("open");
+  const p = new URLSearchParams({ subject, predicate });
   try {
-    const [receipt, replay] = await Promise.all([
-      getJSON(`/api/explain?${params}`),
-      getJSON(`/api/replay?${params}`),
-    ]);
-    const freshBadge = receipt.not_yet_valid ? badge("not_yet_valid")
-      : receipt.fresh ? badge("fresh") : badge("stale");
+    const [rc, rp] = await Promise.all([getJSON(`/api/explain?${p}`), getJSON(`/api/replay?${p}`)]);
+    const fr = rc.not_yet_valid ? "not_yet_valid" : rc.fresh === false ? "stale" : "fresh";
     const rows = [
-      ["value", receipt.value && receipt.value.display],
-      ["authority", null],
-      ["lifecycle", receipt.lifecycle],
-      ["fact id", receipt.fact_id],
-      ["event hash", receipt.event_hash],
-      ["chain verified", receipt.chain_verified],
-      ["corroboration", receipt.corroboration],
-      ["survived challenges", receipt.survived_challenges],
-      ["evidence", receipt.evidence_count],
-      ["valid from", receipt.valid_from == null ? "—" : when(receipt.valid_from)],
-      ["expires at", receipt.expires_at == null ? "never" : when(receipt.expires_at)],
-      ["superseded by", receipt.superseded_by || "—"],
-    ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${k === "authority" ? chip(receipt.authority) : esc(v)}</dd>`).join("");
-    const events = (replay.events || []).map((event) => `
-      <li>
-        <div class="kind">${esc(event.kind)} ${chip(event.authority)}</div>
-        <div class="meta">${esc(event.source)} · ${esc(when(event.recorded_at))}</div>
-        ${event.value ? `<div class="val">${esc(event.value.display)}</div>` : ""}
-      </li>`).join("");
-    $("#drawer-body").innerHTML = `
-      <div style="margin-bottom:12px">${freshBadge} ${receipt.lifecycle === "Contested" ? badge("contested") : ""}</div>
-      <dl class="receipt">${rows}</dl>
-      <h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 10px">replay — ${esc(replay.event_count)} event(s)</h2>
+      ["authority", null], ["lifecycle", rc.lifecycle], ["fact id", rc.fact_id], ["event hash", rc.event_hash],
+      ["chain verified", rc.chain_verified], ["corroboration", rc.corroboration], ["survived challenges", rc.survived_challenges],
+      ["evidence", rc.evidence_count], ["valid from", rc.valid_from == null ? "—" : when(rc.valid_from)],
+      ["expires", rc.expires_at == null ? "never" : when(rc.expires_at)], ["superseded by", rc.superseded_by || "—"],
+    ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${k === "authority" ? chip(rc.authority) : esc(v)}</dd>`).join("");
+    const events = (rp.events || []).map((e) => `<li>
+      <div class="kind">${esc(e.kind)} ${chip(e.authority)}</div>
+      <div class="meta">${esc(e.source)} · ${esc(when(e.recorded_at))}</div>
+      ${e.value ? `<div class="tval">${esc(e.value.display)}</div>` : ""}</li>`).join("");
+    $("#d-body").innerHTML = `
+      <div style="margin-bottom:6px">${rc.lifecycle === "Contested" ? badge("contested") : badge(fr)}</div>
+      <div class="receipt-value">${esc(rc.value && rc.value.display)}</div>
+      <dl class="kv">${rows}</dl>
+      <div class="colhead" style="margin:20px 0 8px">replay · ${esc(rp.event_count)} event(s)</div>
       <ul class="timeline">${events}</ul>`;
-  } catch (error) {
-    $("#drawer-body").innerHTML = `<div class="error">${esc(error.message)}</div>`;
-  }
+  } catch (e) { $("#d-body").innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
+function closeDrawer() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); }
+$("#d-close").addEventListener("click", closeDrawer);
+$("#scrim").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
 
-$("#drawer-close").addEventListener("click", () => $("#drawer").classList.remove("open"));
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") $("#drawer").classList.remove("open");
-});
-const TABS = ["overview", "facts", "activity", "conflicts", "whatif", "doctor", "witness", "native"];
+/* ---- tabs, hash, theme, poll ---- */
+const TABS = ["memory", "activity", "whatif", "health"];
 function selectTab(name, fromHash) {
-  if (!TABS.includes(name)) name = "overview";
+  if (!TABS.includes(name)) name = "memory";
   currentTab = name;
   document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
-  TABS.forEach((tab) => $(`#tab-${tab}`).toggleAttribute("hidden", tab !== name));
-  if (!fromHash && location.hash.slice(1) !== name) location.hash = name; // shareable + back-button
+  TABS.forEach((t) => $(`#tab-${t}`).toggleAttribute("hidden", t !== name));
+  if (!fromHash && location.hash.slice(1) !== name) location.hash = name;
   render();
 }
-document.querySelectorAll("nav button").forEach((button) =>
-  button.addEventListener("click", () => selectTab(button.dataset.tab)));
+document.querySelectorAll("nav button").forEach((b) => b.addEventListener("click", () => selectTab(b.dataset.tab)));
 window.addEventListener("hashchange", () => selectTab(location.hash.slice(1), true));
 
-// Click the live pill to pause/resume the 3s poll (paused shows a static snapshot).
-let polling = true;
+const root = document.documentElement;
+function applyTheme(t) { if (t) root.setAttribute("data-theme", t); }
+try { applyTheme(localStorage.getItem("dent8-theme")); } catch (e) {}
+$("#theme-btn").addEventListener("click", () => {
+  const cur = root.getAttribute("data-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  applyTheme(next); try { localStorage.setItem("dent8-theme", next); } catch (e) {}
+});
+
 $("#live-pill").style.cursor = "pointer";
 $("#live-pill").title = "click to pause auto-refresh";
 $("#live-pill").addEventListener("click", () => {
   polling = !polling;
   if (polling) { refresh(); pollTimer = setInterval(refresh, 3000); }
-  else { clearInterval(pollTimer); setPill("#live-pill", "paused", "warn"); }
+  else { clearInterval(pollTimer); setPill("#live-pill", `<span class="dot"></span>paused`, "warn"); }
 });
 
-selectTab(location.hash.slice(1) || "overview", true);
+selectTab(location.hash.slice(1) || "memory", true);
 refresh();
 pollTimer = setInterval(refresh, 3000);
 </script>

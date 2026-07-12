@@ -70,14 +70,17 @@ evidence of users, not on more features.
    is documented and exercised end to end in [team-identity.md](team-identity.md) — commit
    the public artifacts, keys never travel, revocation is a reviewed PR.
 
-**Unfrozen — the control plane's view layer shipped**: `dent8 ui` serves the read-only
-debugger/control plane from the stock binary (ADR 0020 steps 2+3: a stable localhost
-read/audit API plus the web debugger). Its read/audit-first shape is **complete** —
-overview + runtime health, fact table with receipts and replay timelines, activity feed,
-conflicts, interactive what-if, doctor (OK/WARN/FAIL/SKIP), native scan/reconcile, and
-witness coverage/tamper status. The **Tauri desktop shell** (step 4) and write actions
-(step 5) remain later packaging over this same surface. Still explicitly **frozen until
-the wedge has users**: operated-witness hosting and any training-substrate direction.
+**Unfrozen — the control plane shipped**: `dent8 ui` serves a read-only, human-first memory
+dashboard from the stock binary (ADR 0020 steps 2+3: a stable localhost read/audit API plus
+the web app). Four views organised around the belief base, not the plumbing: **Memory** (a
+headline verdict + stat tiles + the believed facts as cards with values, freshness, and
+contested pairs inline; click for the receipt + replay drawer), **Activity** (the event
+feed), **What-if** (counterfactual re-fold), and **Health** (a status-page rollup that folds
+doctor, witness coverage/tamper, native audit, and raw runtime detail behind one
+healthy/attention banner). Light/dark, deep-linkable tabs, click-to-pause poll. The **Tauri
+desktop shell** (step 4) and write actions (step 5) remain later packaging over this same
+surface. Still explicitly **frozen until the wedge has users**: operated-witness hosting and
+any training-substrate direction.
 
 ## Where the code actually is
 
