@@ -81,6 +81,21 @@ dent8 verify
 For binaries, pinned installs, and feature builds, see [Installation](docs/installation.md).
 From a clone: **`DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.sh`**.
 
+## See your memory
+
+```sh
+dent8 ui        # opens a local, read-only dashboard in your browser
+```
+
+The stock binary serves its own control plane — no install, no services, bound to
+`127.0.0.1`. **Memory** shows the believed facts as cards (the value large, a freshness
+bar down the side, contested facts showing both rival values inline); click one for the
+full integrity receipt and replay timeline. **What-if** re-folds the log under a different
+trust policy and shows now-vs-under-policy. **Health** rolls up integrity, witness
+coverage, doctor, and native-memory audit behind one banner. Light/dark, deep-linkable
+tabs. It is read-only *by construction* — every value comes through the same firewall path
+as the CLI, so the dashboard can never become a write bypass.
+
 ## The fact base, on this repo
 
 dent8 dogfoods itself. The facts every agent (and human) working on dent8 should share —
