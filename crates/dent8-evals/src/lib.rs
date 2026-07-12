@@ -299,6 +299,179 @@ fn sybil_corroboration() -> AttackResult {
     }
 }
 
+// ---- Legitimate-traffic corpus (false-positive rate) ---------------------------------------
+//
+// The complement of the adversarial corpus: designed *benign* revision sequences that a
+// correct firewall must admit **in full**. A false positive is any intended write the
+// firewall wrongly rejects — the measure of whether dent8 taxes legitimate revision (the T-?
+// invariant: "the firewall does not tax legitimate revision"). These are hand-designed
+// scenarios covering the normal ways a shared fact base evolves; real captured agent traces
+// refine the rate post-launch. All events land on one `repo:proj database` stream, exactly
+// the case the question is about — revision of an existing belief.
+
+/// One benign scenario: `events` writes that should all be admitted; `admitted` is how many
+/// the real firewall actually accepted.
+pub struct LegitimateCase {
+    pub name: &'static str,
+    pub family: &'static str,
+    pub note: &'static str,
+    pub events: usize,
+    pub admitted: usize,
+}
+
+impl LegitimateCase {
+    /// Every intended write was admitted — no false positive.
+    #[must_use]
+    pub fn clean(&self) -> bool {
+        self.admitted == self.events
+    }
+    /// Intended writes the firewall wrongly rejected.
+    #[must_use]
+    pub fn false_positives(&self) -> usize {
+        self.events.saturating_sub(self.admitted)
+    }
+}
+
+/// Run every legitimate scenario through the real firewall (rejects are dropped, exactly as
+/// the operational store) and report how many of each scenario's intended writes landed.
+#[must_use]
+pub fn run_legitimate_corpus() -> Vec<LegitimateCase> {
+    fn case(
+        name: &'static str,
+        family: &'static str,
+        note: &'static str,
+        events: &[FactEvent],
+    ) -> LegitimateCase {
+        LegitimateCase {
+            name,
+            family,
+            note,
+            events: events.len(),
+            admitted: adversarial::firewall_admitted(events).len(),
+        }
+    }
+    use AuthorityLevel::{High, Low};
+    vec![
+        // Understanding matures: an equal-authority correction of a believed fact.
+        case(
+            "maturing_understanding",
+            "revision",
+            "equal-authority supersession as understanding matures (beginner -> senior)",
+            &[
+                asserted("event:0", "fact:a0", "postgres", "source:owner", High, 1),
+                asserted("event:1", "fact:a1", "mysql", "source:owner", High, 2),
+                superseded("event:2", "fact:a0", "fact:a1", "source:owner", High, 3),
+            ],
+        ),
+        // A low-confidence guess later confirmed and corrected upward by a trusted source.
+        case(
+            "authority_upgrade_correction",
+            "revision",
+            "a Low-authority guess is legitimately corrected by a High-authority confirmation",
+            &[
+                asserted("event:0", "fact:b0", "sqlite?", "source:agent", Low, 1),
+                asserted("event:1", "fact:b1", "postgres", "source:owner", High, 2),
+                superseded("event:2", "fact:b0", "fact:b1", "source:owner", High, 3),
+            ],
+        ),
+        // Independent corroboration of a believed fact — reinforce without restating.
+        case(
+            "independent_corroboration",
+            "entrenchment",
+            "a second trusted source corroborates a believed fact (reinforce)",
+            &[
+                asserted("event:0", "fact:c0", "postgres", "source:owner", High, 1),
+                reinforced("event:1", "fact:c0", "postgres", "source:reviewer", High, 2),
+            ],
+        ),
+        // A genuine "this is no longer true": an equal-authority retraction.
+        case(
+            "legitimate_retraction",
+            "revision",
+            "the owner retracts a fact that is genuinely no longer true",
+            &[
+                asserted("event:0", "fact:d0", "temp-value", "source:owner", High, 1),
+                retracted("event:1", "fact:d0", "source:owner", High, 2),
+            ],
+        ),
+        // Two sources disagree; the disagreement is kept as data (contested), not a rejection.
+        case(
+            "disagreement_kept_as_data",
+            "contradiction",
+            "a peer contradicts a believed fact — kept as a contested pair, both admitted",
+            &[
+                asserted("event:0", "fact:e0", "redis", "source:owner", High, 1),
+                asserted("event:1", "fact:e1", "memcached", "source:peer", High, 2),
+                contradicted("event:2", "fact:e0", "fact:e1", "source:peer", High, 3),
+            ],
+        ),
+        // A believed fact is corroborated, then legitimately superseded by a newer value.
+        case(
+            "corroborate_then_revise",
+            "revision",
+            "reinforce a fact, then supersede it with a newer equal-authority value",
+            &[
+                asserted("event:0", "fact:f0", "v1", "source:owner", High, 1),
+                reinforced("event:1", "fact:f0", "v1", "source:reviewer", High, 2),
+                asserted("event:2", "fact:f1", "v2", "source:owner", High, 3),
+                superseded("event:3", "fact:f0", "fact:f1", "source:owner", High, 4),
+            ],
+        ),
+        // A chain of legitimate serial updates — the normal life of a maintained fact.
+        case(
+            "serial_revisions",
+            "revision",
+            "successive equal-authority updates (v1 -> v2 -> v3), each admitted",
+            &[
+                asserted("event:0", "fact:g0", "v1", "source:owner", High, 1),
+                asserted("event:1", "fact:g1", "v2", "source:owner", High, 2),
+                superseded("event:2", "fact:g0", "fact:g1", "source:owner", High, 3),
+                asserted("event:3", "fact:g2", "v3", "source:owner", High, 4),
+                superseded("event:4", "fact:g1", "fact:g2", "source:owner", High, 5),
+            ],
+        ),
+    ]
+}
+
+/// The corpus-wide false-positive rate: `(false positives, total benign writes)`.
+#[must_use]
+pub fn legitimate_false_positive_rate() -> (usize, usize) {
+    let cases = run_legitimate_corpus();
+    let total = cases.iter().map(|case| case.events).sum();
+    let false_positives = cases.iter().map(LegitimateCase::false_positives).sum();
+    (false_positives, total)
+}
+
+/// A `dent8 eval` summary table for the legitimate-traffic corpus.
+#[must_use]
+pub fn legitimate_summary_table() -> String {
+    use std::fmt::Write;
+
+    let cases = run_legitimate_corpus();
+    let mut out = String::from("scenario                        writes  admitted  result\n");
+    for case in &cases {
+        let _ = writeln!(
+            out,
+            "{:<32}{:>6}{:>10}  {}",
+            case.name,
+            case.events,
+            case.admitted,
+            if case.clean() {
+                "clean"
+            } else {
+                "FALSE POSITIVE"
+            },
+        );
+    }
+    let (fp, total) = legitimate_false_positive_rate();
+    let _ = writeln!(
+        out,
+        "\n{total} benign writes across {} scenarios: {fp} false positive(s)",
+        cases.len()
+    );
+    out
+}
+
 /// A *positive control*: a legitimate, equal-or-higher-authority supersession must be
 /// **accepted** — the firewall is not a blanket "reject all change" gate. Not part of the
 /// attack corpus; asserted directly in tests.
@@ -627,6 +800,31 @@ mod tests {
         assert!(
             legitimate_supersession_is_accepted(),
             "the firewall wrongly blocked a legitimate equal-authority supersession",
+        );
+    }
+
+    #[test]
+    fn the_legitimate_corpus_has_zero_false_positives() {
+        let cases = super::run_legitimate_corpus();
+        assert!(!cases.is_empty());
+        for case in &cases {
+            assert!(
+                case.clean(),
+                "false positive in '{}': {} of {} benign writes were wrongly rejected — {}",
+                case.name,
+                case.false_positives(),
+                case.events,
+                case.note,
+            );
+        }
+        let (false_positives, total) = super::legitimate_false_positive_rate();
+        assert_eq!(
+            false_positives, 0,
+            "the firewall taxed legitimate revision ({false_positives}/{total} benign writes rejected)"
+        );
+        assert!(
+            total >= 20,
+            "the legitimate corpus should exercise real volume"
         );
     }
 

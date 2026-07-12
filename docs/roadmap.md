@@ -42,10 +42,13 @@ evidence of users, not on more features.
    honest evals, three registries, docs site), then treat the first weeks of issues and
    questions as the roadmap's primary input. *(No invariant — an unused firewall protects
    nothing.)*
-2. **Legitimate-traffic evaluation.** Replay real captured agent sessions through the firewall
-   and measure the false-positive rate — the complement of the adversarial corpus. Blocked
-   only on trace data, which dogfooding and early users produce. *(Invariant: the firewall
-   does not tax legitimate revision.)*
+2. **Legitimate-traffic evaluation.** ◑ The measurement is built: a **designed benign-revision
+   corpus** runs through the real firewall in `dent8 eval` and reports the false-positive rate
+   — currently **0 across 22 benign writes / 7 scenarios** (`run_legitimate_corpus`, gated in
+   the exit code and frozen as a test; see [evals.md](evals.md)). What remains is feeding it
+   **real captured agent sessions** instead of designed ones — still blocked only on trace
+   data, which dogfooding and early users produce. *(Invariant: the firewall does not tax
+   legitimate revision — now measured, not just asserted.)*
 3. **Concurrency load testing and tuning.** ✅ Both backends: `scripts/load-test.sh` (N
    parallel writers; a distinct-fact throughput phase plus a deliberate same-fact
    supersession herd) found and fixed three real defects — BUSY-at-connect classified

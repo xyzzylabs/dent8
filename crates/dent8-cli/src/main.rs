@@ -3667,7 +3667,9 @@ fn cmd_eval(output: CliOutput) -> i32 {
         .count();
     let comparison = dent8_evals::run_comparison();
     let comparison_ok = dent8_evals::comparison_tally_ok(&comparison);
-    let exit_code = i32::from(demonstrated != results.len() || !comparison_ok);
+    let (false_positives, benign_writes) = dent8_evals::legitimate_false_positive_rate();
+    let exit_code =
+        i32::from(demonstrated != results.len() || !comparison_ok || false_positives != 0);
     match output {
         CliOutput::Text => {
             println!(
@@ -3677,6 +3679,13 @@ fn cmd_eval(output: CliOutput) -> i32 {
                 results.len()
             );
             print!("{}", dent8_evals::summary_table());
+            println!(
+                "\nLegitimate-traffic corpus — the complement: does the firewall tax normal \
+                 revision?\n{false_positives} false positive(s) across {benign_writes} benign \
+                 writes ({} scenarios).\n",
+                dent8_evals::run_legitimate_corpus().len()
+            );
+            print!("{}", dent8_evals::legitimate_summary_table());
             println!(
                 "\nExternal integrity comparison (modeled peer semantics — not live APIs):\n\
                  dent8 vs Zep/Graphiti-style recency vs Mem0-style mutate-in-place on the same \
@@ -3690,6 +3699,12 @@ fn cmd_eval(output: CliOutput) -> i32 {
                 eprintln!(
                     "comparison tally regressed (expected dent8 holds all axes; peers fall on \
                      attack axes; all three admit legitimate supersession)"
+                );
+            }
+            if false_positives != 0 {
+                eprintln!(
+                    "legitimate-traffic regression: {false_positives}/{benign_writes} benign \
+                     writes were wrongly rejected — the firewall must not tax legitimate revision"
                 );
             }
             exit_code
@@ -3732,7 +3747,22 @@ fn eval_json(
         })
         .collect::<Vec<_>>();
     let comparison_ok = dent8_evals::comparison_tally_ok(comparison);
-    let status = if demonstrated == results.len() && comparison_ok {
+    let legitimate = dent8_evals::run_legitimate_corpus();
+    let (false_positives, benign_writes) = dent8_evals::legitimate_false_positive_rate();
+    let legitimate_scenarios = legitimate
+        .iter()
+        .map(|case| {
+            serde_json::json!({
+                "name": case.name,
+                "family": case.family,
+                "note": case.note,
+                "writes": case.events,
+                "admitted": case.admitted,
+                "clean": case.clean(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let status = if demonstrated == results.len() && comparison_ok && false_positives == 0 {
         "ok"
     } else {
         "failed"
@@ -3743,6 +3773,12 @@ fn eval_json(
         "scenario_count": results.len(),
         "demonstrated_count": demonstrated,
         "scenarios": scenarios,
+        "legitimate_traffic": {
+            "false_positives": false_positives,
+            "benign_writes": benign_writes,
+            "scenario_count": legitimate.len(),
+            "scenarios": legitimate_scenarios,
+        },
         "comparison": {
             "ok": comparison_ok,
             "axis_count": comparison.len(),

@@ -29,6 +29,32 @@ control (`legitimate_supersession_is_accepted`) confirms the firewall is not a b
 "reject all change" gate — an equal-authority supersession is admitted. Run it as
 `dent8 eval`.
 
+## Legitimate-traffic corpus — false-positive rate (built)
+
+The complement of the adversarial corpus, and the honest counter-question to "5/5 attacks
+blocked": **does the firewall tax legitimate revision?** `run_legitimate_corpus` replays a
+set of designed *benign* revision sequences through the real firewall and counts how many
+intended writes it wrongly rejects — a **false positive**. `dent8 eval` reports the rate and
+gates on it (any false positive is a regression, exit non-zero), alongside the per-scenario
+table.
+
+| scenario | family | what it exercises |
+|---|---|---|
+| `maturing_understanding` | revision | equal-authority supersession as understanding matures (beginner → senior) |
+| `authority_upgrade_correction` | revision | a Low-authority guess legitimately corrected by a High confirmation |
+| `independent_corroboration` | entrenchment | a second trusted source reinforces a believed fact |
+| `legitimate_retraction` | revision | the owner retracts a fact that is genuinely no longer true |
+| `disagreement_kept_as_data` | contradiction | a peer contradicts a fact — kept as a contested pair, both admitted |
+| `corroborate_then_revise` | revision | reinforce, then supersede with a newer equal-authority value |
+| `serial_revisions` | revision | successive updates (v1 → v2 → v3), each admitted |
+
+Current result: **0 false positives across 22 benign writes (7 scenarios)** — the firewall
+admits normal revision in full. These are hand-designed scenarios covering the ordinary ways
+a shared fact base evolves; the roadmap's next step is to replay **real captured agent
+sessions** through the same measurement, which dogfooding and early users produce (the
+harness and metric are ready for that data). Frozen as a test
+(`the_legitimate_corpus_has_zero_false_positives`).
+
 ## Integrity-axis comparison vs Mem0 / Zep (built)
 
 The same attack sequences (plus the legitimate-revision positive control) are also judged

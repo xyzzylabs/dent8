@@ -9,6 +9,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- **Legitimate-traffic corpus + false-positive rate in `dent8 eval`** (roadmap: legitimate-
+  traffic evaluation): the complement of the adversarial corpus. A designed set of benign
+  revision sequences (maturing understanding, authority-upgrade correction, corroboration,
+  legitimate retraction, disagreement-kept-as-data, serial revisions) runs through the real
+  firewall; `dent8 eval` reports how many intended writes it wrongly rejects — currently **0
+  false positives across 22 benign writes (7 scenarios)** — with a per-scenario table, in
+  both text and `--output json` (`legitimate_traffic`), and gates the exit code on it (any
+  false positive is a regression). Frozen as a test. These are designed scenarios; replaying
+  real captured agent sessions through the same metric is the post-launch follow-up, blocked
+  only on trace data.
+
 ## [0.7.2] - 2026-07-12
 
 ### Added
