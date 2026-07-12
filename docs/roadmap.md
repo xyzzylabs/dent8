@@ -70,9 +70,12 @@ evidence of users, not on more features.
    is documented and exercised end to end in [team-identity.md](team-identity.md) — commit
    the public artifacts, keys never travel, revocation is a reviewed PR.
 
-Explicitly **frozen until the wedge has users**: operated-witness hosting, the desktop
-debugger/control plane (its runway is built — the `snapshot` aggregate, the TS SDK, and
-`whatif` are exactly its data layer), and any training-substrate direction.
+**Unfrozen — the control plane's view layer shipped**: `dent8 ui` serves the read-only
+debugger/control plane from the stock binary (ADR 0020 steps 2+3: a stable localhost
+read/audit API plus the web debugger — overview, fact receipts, replay timelines,
+conflicts, interactive what-if). The **Tauri desktop shell** (step 4) and write actions
+(step 5) remain later packaging over this same surface. Still explicitly **frozen until
+the wedge has users**: operated-witness hosting and any training-substrate direction.
 
 ## Where the code actually is
 

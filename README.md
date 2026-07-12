@@ -263,6 +263,11 @@ library-only vs. design-only. In brief, runnable today:
 - MCP **`resources/subscribe`**: agents get `notifications/resources/updated` pushed when a
   fact stream they depend on changes (from any process sharing the store), instead of
   re-polling `explain`.
+- **`dent8 ui`** — a local, read-only debugger/control plane in your browser, served by the
+  stock binary: live fact table with freshness badges, per-fact integrity receipts and
+  replay timelines, contested facts, and an interactive what-if panel. Read-only by
+  construction (every payload comes from the same firewall path as the CLI), bound to
+  127.0.0.1.
 - MCP `runtime_status` diagnostics and one-shot `snapshot` output so agents can see the live
   binary, store, identity, authority, witness configuration, facts, verify status, and
   conflicts before trusting a long-running server.

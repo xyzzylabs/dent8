@@ -43,6 +43,10 @@ mod ops;
 mod setup;
 mod snapshot;
 mod status;
+/// The local read-only debugger/control plane (ADR 0020 steps 2+3), served over tokio —
+/// present in every backend build (the stock binary), absent only with no async backend.
+#[cfg(feature = "async-store")]
+mod ui;
 mod witness;
 
 use status::Status;
@@ -180,7 +184,24 @@ fn run_cli(cli: Cli) -> i32 {
             SchemaCommand::Postgres => cmd_schema_postgres(cli.output),
         },
         Some(CliCommand::Witness(args)) => run_witness(&args.command, cli.output),
+        Some(CliCommand::Ui(args)) => cmd_ui(&args),
     }
+}
+
+/// Route `dent8 ui`: serve the local read-only control plane (ADR 0020). Reads flow through
+/// the same op layer as the CLI; there is no write surface at all.
+#[cfg(feature = "async-store")]
+fn cmd_ui(args: &UiArgs) -> i32 {
+    ui::run_ui(&log_path(), args.port, !args.no_open)
+}
+
+#[cfg(not(feature = "async-store"))]
+fn cmd_ui(_args: &UiArgs) -> i32 {
+    eprintln!(
+        "dent8 ui needs an async-backend build (the stock build qualifies); this binary was \
+         built with --no-default-features"
+    );
+    2
 }
 
 const CLI_AFTER_HELP: &str = "\
@@ -320,17 +341,21 @@ enum CliCommand {
     Schema(SchemaArgs),
     /// Serve dent8 over MCP.
     Mcp(McpArgs),
+    /// Open the local read-only debugger/control plane in your browser.
+    Ui(UiArgs),
 }
 
 impl CliCommand {
     /// Whether this command emits a `--output json` result. Everything does, except commands
     /// that have no single JSON result to emit: `mcp serve`, `mcp proxy`, and `daemon serve`
-    /// stream JSON-RPC frames, and `hook` is a git-hook stdin/stdout filter. A deny-list, not an
-    /// allow-list, so a newly added command is machine-readable by default.
+    /// stream JSON-RPC frames, `ui` serves HTTP until interrupted, and `hook` is a git-hook
+    /// stdin/stdout filter. A deny-list, not an allow-list, so a newly added command is
+    /// machine-readable by default.
     fn supports_json_output(&self) -> bool {
         !matches!(
             self,
             Self::Hook(_)
+                | Self::Ui(_)
                 | Self::Daemon(DaemonArgs {
                     command: DaemonCommand::Serve(_),
                 })
@@ -373,6 +398,7 @@ impl CliCommand {
             Self::Witness(_) => "witness",
             Self::Schema(_) => "schema",
             Self::Mcp(_) => "mcp",
+            Self::Ui(_) => "ui",
         }
     }
 }
@@ -1306,6 +1332,16 @@ enum SchemaCommand {
 struct McpArgs {
     #[command(subcommand)]
     command: McpCommand,
+}
+
+#[derive(Args, Debug)]
+struct UiArgs {
+    /// Port to bind on 127.0.0.1 ("dent" on a phone keypad). Pass 0 for an ephemeral port.
+    #[arg(long, default_value_t = 3368)]
+    port: u16,
+    /// Do not open a browser automatically.
+    #[arg(long)]
+    no_open: bool,
 }
 
 #[derive(Subcommand, Debug)]

@@ -8,6 +8,14 @@ Date: 2026-07-06
 plane over the existing integrity boundary. ADR 0019 is intentionally left for the future
 networked MCP-over-HTTP decision referenced by ADR 0018.
 
+**Update (2026-07-12):** implementation-order steps 2 and 3 shipped as **`dent8 ui`** — a
+localhost read/audit API plus the web debugger, served straight from the stock binary
+(read-only by construction: every endpoint reuses the CLI/MCP `op_*`/snapshot path, so no
+separate write path exists). One deliberate deviation from step 3's letter: the debugger is
+a single embedded HTML file rather than a TypeScript build, keeping the binary
+self-contained with zero toolchain — the Tauri shell (step 4) will wrap this same surface.
+Step 5 (write actions over the signed identity path) remains future work.
+
 ## Context
 
 dent8 is strongest when every write flows through the same firewall path:

@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dent8 — control plane</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-50 -50 100 100'%3E%3Cpath fill='%23a35a00' fill-rule='evenodd' d='M -16.8,-40.7 L -10,-40.7 L -10,-31 L -3.4,-31 L -3.4,-40.7 L 3.4,-40.7 L 3.4,-31 L 10,-31 L 10,-40.7 L 16.8,-40.7 L 40.7,-16.8 L 40.7,16.8 L 16.8,40.7 L -16.8,40.7 L -40.7,16.8 L -40.7,-16.8 Z M 8.5,2 A 8.5 8.5 0 1 0 -8.5,2 A 8.5 8.5 0 1 0 8.5,2 Z'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #faf8f5; --panel: #ffffff; --ink: #1a1a1a; --muted: #6b6459;
+  --line: #e8e2d9; --accent: #a35a00; --accent-soft: #f4e8d8;
+  --ok: #1a7f37; --ok-soft: #e6f4ea; --warn: #9a6700; --warn-soft: #fff3d6;
+  --bad: #b42318; --bad-soft: #fde8e6; --info: #175cd3; --info-soft: #e8f0fd;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161412; --panel: #1f1c19; --ink: #e8e6e3; --muted: #9b9288;
+    --line: #33302b; --accent: #c97a1a; --accent-soft: #322718;
+    --ok: #4ac26b; --ok-soft: #12261a; --warn: #e3b341; --warn-soft: #2b2412;
+    --bad: #f0857a; --bad-soft: #301715; --info: #6ca4f8; --info-soft: #14203a;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+  border-bottom: 1px solid var(--line); background: var(--panel);
+  position: sticky; top: 0; z-index: 5;
+}
+header svg { flex: none; }
+header .name { font-weight: 650; font-size: 15px; }
+header .store { color: var(--muted); font-family: var(--mono); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spacer { flex: 1; min-width: 8px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
+  border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.ok { color: var(--ok); background: var(--ok-soft); }
+.pill.warn { color: var(--warn); background: var(--warn-soft); }
+.pill.bad { color: var(--bad); background: var(--bad-soft); }
+nav { display: flex; gap: 4px; padding: 8px 20px 0; border-bottom: 1px solid var(--line); }
+nav button {
+  border: none; background: none; color: var(--muted); font: inherit; font-weight: 600;
+  padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+nav button .count { color: var(--muted); font-weight: 500; margin-left: 4px; }
+main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+}
+.card .k { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .04em; }
+.card .v { font-size: 22px; font-weight: 650; margin-top: 2px; }
+.card .v.small { font-size: 14px; font-family: var(--mono); word-break: break-all; }
+section.panel {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  margin-top: 16px; overflow: hidden;
+}
+section.panel h2 {
+  margin: 0; padding: 12px 16px; font-size: 13px; text-transform: uppercase;
+  letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--line);
+}
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr.row { cursor: pointer; }
+tbody tr.row:hover { background: var(--accent-soft); }
+.mono { font-family: var(--mono); font-size: 13px; }
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 650;
+}
+.badge.fresh { color: var(--ok); background: var(--ok-soft); }
+.badge.stale { color: var(--warn); background: var(--warn-soft); }
+.badge.not_yet_valid { color: var(--info); background: var(--info-soft); }
+.badge.no_longer_believed, .badge.gone { color: var(--muted); background: var(--line); }
+.badge.contested { color: var(--bad); background: var(--bad-soft); }
+.chip {
+  display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 11.5px;
+  font-weight: 650; font-family: var(--mono);
+}
+.chip.canonical { color: var(--bad); background: var(--bad-soft); }
+.chip.high { color: var(--accent); background: var(--accent-soft); }
+.chip.medium { color: var(--info); background: var(--info-soft); }
+.chip.low { color: var(--muted); background: var(--line); }
+.empty { padding: 28px 16px; color: var(--muted); text-align: center; }
+input[type=text], select {
+  background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 7px; padding: 7px 10px; font: inherit; min-width: 0;
+}
+input[type=text]:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 0; border-color: transparent; }
+button.action {
+  background: var(--accent); color: #fff; border: none; border-radius: 7px;
+  padding: 8px 16px; font: inherit; font-weight: 650; cursor: pointer;
+}
+button.action:disabled { opacity: .5; cursor: default; }
+.toolbar { display: flex; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line);
+  flex-wrap: wrap; align-items: center; }
+.toolbar input[type=text] { flex: 1; min-width: 180px; }
+#drawer {
+  position: fixed; inset: 0 0 0 auto; width: min(560px, 96vw); background: var(--panel);
+  border-left: 1px solid var(--line); box-shadow: -12px 0 40px rgba(0,0,0,.18);
+  transform: translateX(100%); transition: transform .18s ease; z-index: 10;
+  display: flex; flex-direction: column;
+}
+#drawer.open { transform: none; }
+#drawer .head { display: flex; align-items: center; gap: 10px; padding: 14px 18px;
+  border-bottom: 1px solid var(--line); }
+#drawer .head .title { font-weight: 650; font-family: var(--mono); font-size: 14px;
+  overflow-wrap: anywhere; }
+#drawer .body { overflow-y: auto; padding: 16px 18px; }
+#drawer button.close { margin-left: auto; background: none; border: none; color: var(--muted);
+  font-size: 20px; cursor: pointer; line-height: 1; }
+dl.receipt { display: grid; grid-template-columns: max-content 1fr; gap: 5px 14px; margin: 0; }
+dl.receipt dt { color: var(--muted); font-size: 12.5px; }
+dl.receipt dd { margin: 0; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline li { position: relative; padding: 0 0 14px 22px; border-left: 2px solid var(--line);
+  margin-left: 6px; }
+.timeline li:last-child { padding-bottom: 2px; }
+.timeline li::before {
+  content: ""; position: absolute; left: -6px; top: 4px; width: 10px; height: 10px;
+  border-radius: 50%; background: var(--accent); border: 2px solid var(--panel);
+}
+.timeline .kind { font-weight: 650; font-family: var(--mono); font-size: 12.5px; }
+.timeline .meta { color: var(--muted); font-size: 12px; }
+.timeline .val { font-family: var(--mono); font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 16px; }
+@media (max-width: 720px) { .grid2 { grid-template-columns: 1fr; } }
+.colhead { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); margin-bottom: 6px; }
+.belief { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+.belief .val { font-family: var(--mono); overflow-wrap: anywhere; }
+.difflist { padding: 0 16px 16px; }
+.difflist .item { font-family: var(--mono); font-size: 12.5px; padding: 6px 0;
+  border-bottom: 1px dashed var(--line); overflow-wrap: anywhere; }
+.error { color: var(--bad); background: var(--bad-soft); border-radius: 8px; padding: 10px 14px;
+  margin: 12px 16px; font-family: var(--mono); font-size: 12.5px; overflow-wrap: anywhere; }
+footer { color: var(--muted); font-size: 12px; text-align: center; padding: 22px; }
+footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <svg width="26" height="26" viewBox="-50 -50 100 100" aria-hidden="true">
+    <path fill="var(--accent)" fill-rule="evenodd" d="M -16.8,-40.7 L -10,-40.7 L -10,-31 L -3.4,-31 L -3.4,-40.7 L 3.4,-40.7 L 3.4,-31 L 10,-31 L 10,-40.7 L 16.8,-40.7 L 40.7,-16.8 L 40.7,16.8 L 16.8,40.7 L -16.8,40.7 L -40.7,16.8 L -40.7,-16.8 Z M 8.5,2 A 8.5 8.5 0 1 0 -8.5,2 A 8.5 8.5 0 1 0 8.5,2 Z"/>
+  </svg>
+  <span class="name">dent8</span>
+  <span class="store" id="store-path" title=""></span>
+  <span class="spacer"></span>
+  <span class="pill ok" id="live-pill">live</span>
+  <span class="pill" id="verify-pill"></span>
+</header>
+<nav>
+  <button data-tab="overview" class="active">Overview</button>
+  <button data-tab="facts">Facts<span class="count" id="facts-count"></span></button>
+  <button data-tab="conflicts">Conflicts<span class="count" id="conflicts-count"></span></button>
+  <button data-tab="whatif">What-if</button>
+</nav>
+<main>
+  <div id="tab-overview"></div>
+  <div id="tab-facts" hidden></div>
+  <div id="tab-conflicts" hidden></div>
+  <div id="tab-whatif" hidden></div>
+</main>
+<div id="drawer" role="dialog" aria-label="Fact detail">
+  <div class="head">
+    <span class="title" id="drawer-title"></span>
+    <button class="close" id="drawer-close" aria-label="Close">×</button>
+  </div>
+  <div class="body" id="drawer-body"></div>
+</div>
+<footer>
+  read-only control plane · every payload comes from the same firewall path as the CLI ·
+  <a href="https://xyzzylabs.github.io/dent8/" rel="noreferrer">docs</a>
+</footer>
+<script>
+"use strict";
+const $ = (sel) => document.querySelector(sel);
+const esc = (raw) => String(raw ?? "").replace(/[&<>"']/g,
+  (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const chip = (level) => `<span class="chip ${esc(level)}">${esc(level)}</span>`;
+const badge = (freshness) => `<span class="badge ${esc(freshness)}">${esc(String(freshness).replaceAll("_", " "))}</span>`;
+const when = (millis) => Number.isFinite(millis) ? new Date(millis).toLocaleString() : "—";
+
+let snapshot = null;
+let currentTab = "overview";
+let pollTimer = null;
+
+async function getJSON(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  const body = await response.json().catch(() => ({ error: `bad response (${response.status})` }));
+  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+function setPill(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = `pill ${cls}`;
+}
+
+async function refresh() {
+  try {
+    snapshot = await getJSON("/api/snapshot");
+    setPill("#live-pill", "live", "ok");
+    const verified = snapshot.verify && snapshot.verify.ok;
+    setPill("#verify-pill", verified ? "integrity verified" : "integrity FAILED", verified ? "ok" : "bad");
+    const store = (snapshot.runtime_status && snapshot.runtime_status.store) || {};
+    const storeText = store.url || store.path || store.backend || "";
+    $("#store-path").textContent = storeText;
+    $("#store-path").title = storeText;
+    $("#facts-count").textContent = snapshot.facts ? ` ${snapshot.facts.count}` : "";
+    $("#conflicts-count").textContent = snapshot.conflicts ? ` ${snapshot.conflicts.count}` : "";
+    render();
+  } catch (error) {
+    setPill("#live-pill", "offline", "bad");
+  }
+}
+
+function render() {
+  if (!snapshot) return;
+  if (currentTab === "overview") renderOverview();
+  if (currentTab === "facts") renderFacts();
+  if (currentTab === "conflicts") renderConflicts();
+  if (currentTab === "whatif") renderWhatif();
+}
+
+function kvRows(object) {
+  return Object.entries(object || {})
+    .filter(([, v]) => v !== null && typeof v !== "object")
+    .map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`)
+    .join("");
+}
+
+function renderOverview() {
+  const s = snapshot;
+  const runtime = s.runtime_status || {};
+  const cards = [
+    ["status", s.summary ? s.summary.runtime_status : "—"],
+    ["facts", s.summary ? s.summary.facts : "—"],
+    ["conflicts", s.summary ? s.summary.conflicts : "—"],
+    ["integrity", s.summary && s.summary.integrity_verified ? "verified" : "FAILED"],
+  ].map(([k, v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("");
+  const sections = ["store", "identity", "authority", "witness", "env", "server"]
+    .filter((name) => runtime[name] && typeof runtime[name] === "object")
+    .map((name) => `
+      <section class="panel"><h2>${esc(name)}</h2>
+        <table><tbody>${kvRows(runtime[name]) || `<tr><td class="empty">—</td></tr>`}</tbody></table>
+      </section>`).join("");
+  const findings = (s.verify && (s.verify.findings || [])).map((f) =>
+    `<div class="error">${esc(typeof f === "string" ? f : JSON.stringify(f))}</div>`).join("");
+  const advisories = (s.verify && (s.verify.advisories || [])).map((a) =>
+    `<div class="error" style="color:var(--warn);background:var(--warn-soft)">${esc(typeof a === "string" ? a : JSON.stringify(a))}</div>`).join("");
+  $("#tab-overview").innerHTML = `<div class="cards">${cards}</div>${findings}${advisories}${sections}`;
+}
+
+function factsList() {
+  return (snapshot.facts && snapshot.facts.facts) || [];
+}
+
+function renderFacts() {
+  const filter = (window.factFilter || "").toLowerCase();
+  const rows = factsList()
+    .filter((f) => {
+      const hay = `${f.subject.kind}:${f.subject.key} ${f.predicate} ${f.freshness}`.toLowerCase();
+      return hay.includes(filter);
+    })
+    .map((f) => `
+      <tr class="row" data-subject="${esc(`${f.subject.kind}:${f.subject.key}`)}" data-predicate="${esc(f.predicate)}">
+        <td class="mono">${esc(f.subject.kind)}:${esc(f.subject.key)}</td>
+        <td class="mono">${esc(f.predicate)}</td>
+        <td>${badge(f.freshness)}</td>
+      </tr>`).join("");
+  $("#tab-facts").innerHTML = `
+    <section class="panel">
+      <div class="toolbar">
+        <input type="text" id="fact-filter" placeholder="filter facts… (subject, predicate, freshness)" value="${esc(window.factFilter || "")}">
+        <span style="color:var(--muted);font-size:12px">click a row for the receipt + replay</span>
+      </div>
+      <table>
+        <thead><tr><th>subject</th><th>predicate</th><th>freshness</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="3" class="empty">no facts yet — <span class="mono">dent8 assert &lt;kind&gt;:&lt;key&gt; &lt;predicate&gt; &lt;value&gt;</span></td></tr>`}</tbody>
+      </table>
+    </section>`;
+  $("#fact-filter").addEventListener("input", (event) => {
+    window.factFilter = event.target.value;
+    renderFacts();
+    $("#fact-filter").focus();
+    $("#fact-filter").setSelectionRange(event.target.value.length, event.target.value.length);
+  });
+  document.querySelectorAll("#tab-facts tr.row").forEach((row) =>
+    row.addEventListener("click", () => openDrawer(row.dataset.subject, row.dataset.predicate)));
+}
+
+function renderConflicts() {
+  const conflicts = (snapshot.conflicts && snapshot.conflicts.conflicts) || [];
+  const rows = conflicts.map((c) => `
+    <div class="belief" style="margin:12px 16px">
+      <div class="mono">${esc(JSON.stringify(c))}</div>
+    </div>`).join("");
+  $("#tab-conflicts").innerHTML = `
+    <section class="panel"><h2>contested facts</h2>
+      ${rows || `<div class="empty">no contested facts — disagreement would be listed here, kept as data instead of silently resolved</div>`}
+    </section>`;
+}
+
+function beliefCard(entry) {
+  return `<div class="belief">
+    <div>${chip(entry.authority)} <span class="badge ${esc(entry.lifecycle === "Contested" ? "contested" : "fresh")}">${esc(entry.lifecycle)}</span></div>
+    <div class="val">${esc(entry.value && entry.value.display)}</div>
+    <div class="mono" style="color:var(--muted);font-size:11.5px">${esc(entry.fact_id)}</div>
+  </div>`;
+}
+
+function renderWhatif() {
+  if ($("#whatif-form")) return; // keep form state across polls
+  const options = factsList().map((f) =>
+    `<option value="${esc(`${f.subject.kind}:${f.subject.key}`)}|${esc(f.predicate)}">${esc(`${f.subject.kind}:${f.subject.key}`)} ${esc(f.predicate)}</option>`).join("");
+  $("#tab-whatif").innerHTML = `
+    <section class="panel"><h2>re-fold the log under a different trust policy</h2>
+      <div class="toolbar" id="whatif-form">
+        <select id="wi-fact">${options || `<option value="">no facts yet</option>`}</select>
+        <input type="text" id="wi-distrust" placeholder="distrust sources (comma separated), e.g. web:scrape">
+        <select id="wi-floor">
+          <option value="">no authority floor</option>
+          <option value="low">floor: low</option>
+          <option value="medium">floor: medium</option>
+          <option value="high">floor: high</option>
+          <option value="canonical">floor: canonical</option>
+        </select>
+        <button class="action" id="wi-run">Run counterfactual</button>
+      </div>
+      <div id="wi-result"></div>
+    </section>`;
+  $("#wi-run").addEventListener("click", runWhatif);
+}
+
+async function runWhatif() {
+  const pick = $("#wi-fact").value;
+  if (!pick) return;
+  const [subject, predicate] = pick.split("|");
+  const params = new URLSearchParams({ subject, predicate });
+  $("#wi-distrust").value.split(",").map((s) => s.trim()).filter(Boolean)
+    .forEach((source) => params.append("distrust", source));
+  if ($("#wi-floor").value) params.set("authority_floor", $("#wi-floor").value);
+  const target = $("#wi-result");
+  target.innerHTML = `<div class="empty">re-folding…</div>`;
+  try {
+    const result = await getJSON(`/api/whatif?${params}`);
+    const base = (result.base || []).map(beliefCard).join("") || `<div class="empty">nothing believed</div>`;
+    const counterfactual = (result.counterfactual || []).map(beliefCard).join("") || `<div class="empty">nothing believed</div>`;
+    const diffs = (result.diffs || []).map((d) =>
+      `<div class="item">${esc(d.fact_id)} — ${esc(JSON.stringify(d.diff))}</div>`).join("");
+    target.innerHTML = `
+      <div class="grid2">
+        <div><div class="colhead">now</div>${base}</div>
+        <div><div class="colhead">under policy${result.changed ? "" : " (unchanged)"}</div>${counterfactual}</div>
+      </div>
+      ${diffs ? `<div class="difflist"><div class="colhead">per-fact diff</div>${diffs}</div>` : ""}`;
+  } catch (error) {
+    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+  }
+}
+
+async function openDrawer(subject, predicate) {
+  $("#drawer-title").textContent = `${subject} ${predicate}`;
+  $("#drawer-body").innerHTML = `<div class="empty">loading receipt…</div>`;
+  $("#drawer").classList.add("open");
+  const params = new URLSearchParams({ subject, predicate });
+  try {
+    const [receipt, replay] = await Promise.all([
+      getJSON(`/api/explain?${params}`),
+      getJSON(`/api/replay?${params}`),
+    ]);
+    const freshBadge = receipt.not_yet_valid ? badge("not_yet_valid")
+      : receipt.fresh ? badge("fresh") : badge("stale");
+    const rows = [
+      ["value", receipt.value && receipt.value.display],
+      ["authority", null],
+      ["lifecycle", receipt.lifecycle],
+      ["fact id", receipt.fact_id],
+      ["event hash", receipt.event_hash],
+      ["chain verified", receipt.chain_verified],
+      ["corroboration", receipt.corroboration],
+      ["survived challenges", receipt.survived_challenges],
+      ["evidence", receipt.evidence_count],
+      ["valid from", receipt.valid_from == null ? "—" : when(receipt.valid_from)],
+      ["expires at", receipt.expires_at == null ? "never" : when(receipt.expires_at)],
+      ["superseded by", receipt.superseded_by || "—"],
+    ].map(([k, v]) => `<dt>${esc(k)}</dt><dd>${k === "authority" ? chip(receipt.authority) : esc(v)}</dd>`).join("");
+    const events = (replay.events || []).map((event) => `
+      <li>
+        <div class="kind">${esc(event.kind)} ${chip(event.authority)}</div>
+        <div class="meta">${esc(event.source)} · ${esc(when(event.recorded_at))}</div>
+        ${event.value ? `<div class="val">${esc(event.value.display)}</div>` : ""}
+      </li>`).join("");
+    $("#drawer-body").innerHTML = `
+      <div style="margin-bottom:12px">${freshBadge} ${receipt.lifecycle === "Contested" ? badge("contested") : ""}</div>
+      <dl class="receipt">${rows}</dl>
+      <h2 style="font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:18px 0 10px">replay — ${esc(replay.event_count)} event(s)</h2>
+      <ul class="timeline">${events}</ul>`;
+  } catch (error) {
+    $("#drawer-body").innerHTML = `<div class="error">${esc(error.message)}</div>`;
+  }
+}
+
+$("#drawer-close").addEventListener("click", () => $("#drawer").classList.remove("open"));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") $("#drawer").classList.remove("open");
+});
+document.querySelectorAll("nav button").forEach((button) =>
+  button.addEventListener("click", () => {
+    currentTab = button.dataset.tab;
+    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === button));
+    ["overview", "facts", "conflicts", "whatif"].forEach((name) =>
+      $(`#tab-${name}`).toggleAttribute("hidden", name !== currentTab));
+    render();
+  }));
+
+refresh();
+pollTimer = setInterval(refresh, 3000);
+</script>
+</body>
+</html>

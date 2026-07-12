@@ -813,12 +813,16 @@ subject+predicate.
   cross-process writes within a poll tick; `dent8 mcp proxy` pumps frames bidirectionally),
   and JSON-RPC batches, above) is a hand-rolled stdio JSON-RPC loop; prompts are not
   implemented.
-- **Desktop debugger/control plane** — accepted as a future product surface in
-  [ADR 0020](decisions/0020-desktop-debugger-control-plane.md), but design-only today. It
-  should visualize agents, authority, grants, accepted/rejected writes, conflicts, native
-  scan/reconcile findings, witness coverage, doctor health, the current `snapshot`, and
-  explain/replay timelines over the existing daemon/API contracts. It must not become a
-  separate write path or memory provider.
+- **Desktop debugger/control plane** — the **view layer is runnable**: `dent8 ui` serves a
+  local read-only debugger from the stock binary ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)
+  steps 2+3) — runtime health (store/identity/authority/witness/env), the fact table with
+  live freshness badges, per-fact integrity receipts + replay timelines, contested facts,
+  and an interactive what-if panel. Read-only by construction (every endpoint is a GET over
+  the same `op_*`/snapshot path as CLI/MCP; 127.0.0.1-bound; non-localhost `Host` refused;
+  values HTML-escaped so agent-supplied text cannot execute). Remaining from the ADR: the
+  Tauri desktop shell (step 4), native-scan/witness/doctor panels, and write actions over
+  the signed identity path (step 5). It must not become a separate write path or memory
+  provider.
 - **A *hosted* / operated witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now

@@ -9,6 +9,23 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- **`dent8 ui` — the local read-only debugger/control plane** (the first deliverable of
+  [ADR 0020](docs/decisions/0020-desktop-debugger-control-plane.md), unfrozen): one command
+  opens a dashboard in your browser served straight from the stock binary — status cards
+  and runtime health (store, identity, authority, witness, env), the fact table with
+  live freshness badges, a per-fact drawer showing the integrity receipt and the full
+  replay timeline, contested facts, and an interactive **what-if** panel that re-folds the
+  log under a different trust policy and shows now-vs-under-policy with per-fact diffs.
+  Read-only **by construction** — every endpoint is a GET over the same `op_*`/snapshot
+  code the CLI and MCP use, so no separate write path exists (the ADR's hard constraint);
+  the transport is a minimal hand-rolled HTTP responder over tokio (zero new
+  dependencies) that binds 127.0.0.1 only, refuses non-localhost `Host` headers
+  (DNS-rebinding), and answers GET only. Fact values are HTML-escaped everywhere — agent-
+  supplied text can never execute in the operator's browser. Default port 3368 ("dent" on
+  a phone keypad); `--port`/`--no-open` to adjust. The Tauri desktop shell remains the
+  later packaging step and will wrap this same surface.
+
 ## [0.7.1] - 2026-07-12
 
 ### Added
