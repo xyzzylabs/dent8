@@ -45,3 +45,4 @@ dist/
 
 # TypeScript SDK build artifacts (sdks/typescript)
 node_modules/
+announcement-draft.md
