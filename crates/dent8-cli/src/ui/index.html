@@ -162,14 +162,20 @@ footer a { color: var(--accent); }
 <nav>
   <button data-tab="overview" class="active">Overview</button>
   <button data-tab="facts">Facts<span class="count" id="facts-count"></span></button>
+  <button data-tab="activity">Activity</button>
   <button data-tab="conflicts">Conflicts<span class="count" id="conflicts-count"></span></button>
   <button data-tab="whatif">What-if</button>
+  <button data-tab="doctor">Doctor</button>
+  <button data-tab="native">Native</button>
 </nav>
 <main>
   <div id="tab-overview"></div>
   <div id="tab-facts" hidden></div>
+  <div id="tab-activity" hidden></div>
   <div id="tab-conflicts" hidden></div>
   <div id="tab-whatif" hidden></div>
+  <div id="tab-doctor" hidden></div>
+  <div id="tab-native" hidden></div>
 </main>
 <div id="drawer" role="dialog" aria-label="Fact detail">
   <div class="head">
@@ -230,8 +236,11 @@ function render() {
   if (!snapshot) return;
   if (currentTab === "overview") renderOverview();
   if (currentTab === "facts") renderFacts();
+  if (currentTab === "activity") renderActivity();
   if (currentTab === "conflicts") renderConflicts();
   if (currentTab === "whatif") renderWhatif();
+  if (currentTab === "doctor") renderDoctor();
+  if (currentTab === "native") renderNative();
 }
 
 function kvRows(object) {
@@ -371,6 +380,112 @@ async function runWhatif() {
   }
 }
 
+let activityLoading = false;
+async function renderActivity() {
+  const target = $("#tab-activity");
+  if (activityLoading) return;
+  activityLoading = true;
+  if (!target.innerHTML) target.innerHTML = `<section class="panel"><div class="empty">loading activity…</div></section>`;
+  try {
+    const result = await getJSON("/api/activity?limit=80");
+    const events = (result.events || []).map((event) => `
+      <li>
+        <div class="kind">${esc(event.kind)} ${chip(event.authority)}</div>
+        <div class="meta">
+          <span class="mono">${esc(event.subject.kind)}:${esc(event.subject.key)} ${esc(event.predicate)}</span>
+          · ${esc(event.source)} · ${esc(when(event.recorded_at))}
+        </div>
+        ${event.value ? `<div class="val">${esc(event.value.display)}</div>` : ""}
+      </li>`).join("");
+    target.innerHTML = `
+      <section class="panel"><h2>recent events — newest first (${esc(result.total_events)} total; rejected supersessions appear as fact.challenge_rejected on their incumbents)</h2>
+        <div style="padding:16px">
+          <ul class="timeline">${events || ""}</ul>
+          ${events ? "" : `<div class="empty">no events yet</div>`}
+        </div>
+      </section>`;
+  } catch (error) {
+    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+  } finally {
+    activityLoading = false;
+  }
+}
+
+const DOCTOR_LEVELS = [["fail", "bad"], ["warn", "warn"], ["ok", "ok"], ["skip", ""]];
+async function renderDoctor() {
+  const target = $("#tab-doctor");
+  if (target.dataset.loaded === "1") return; // re-run via the button, not the poll
+  target.dataset.loaded = "1";
+  target.innerHTML = `<section class="panel"><div class="empty">running doctor…</div></section>`;
+  try {
+    const result = await getJSON("/api/doctor");
+    const summary = result.summary || {};
+    const cards = DOCTOR_LEVELS.map(([level, cls]) => `
+      <div class="card"><div class="k">${esc(level)}</div>
+        <div class="v" style="color:var(--${cls || "muted"})">${esc(summary[level] ?? 0)}</div></div>`).join("");
+    const sections = DOCTOR_LEVELS.map(([level]) => {
+      const checks = (result.sections && result.sections[level]) || [];
+      if (!checks.length) return "";
+      const rows = checks.map((check) => `
+        <tr><td style="width:70px"><span class="badge ${level === "ok" ? "fresh" : level === "fail" ? "contested" : level === "warn" ? "stale" : "gone"}">${esc(level)}</span></td>
+        <td class="mono">${esc(check.name || check.check || "")}</td>
+        <td class="mono" style="color:var(--muted)">${esc(check.message || check.detail || "")}</td></tr>`).join("");
+      return `<section class="panel"><h2>${esc(level)} (${checks.length})</h2><table><tbody>${rows}</tbody></table></section>`;
+    }).join("");
+    target.innerHTML = `
+      <div class="toolbar" style="border:none;padding:0 0 12px">
+        <span class="pill ${result.ok ? "ok" : "bad"}">${result.ok ? "doctor: healthy" : "doctor: failing"}</span>
+        <span class="spacer"></span>
+        <button class="action" id="doctor-rerun">Re-run</button>
+      </div>
+      <div class="cards">${cards}</div>${sections}`;
+    $("#doctor-rerun").addEventListener("click", () => {
+      target.dataset.loaded = "";
+      renderDoctor();
+    });
+  } catch (error) {
+    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+    target.dataset.loaded = "";
+  }
+}
+
+const AGENT_PROFILES = ["claude-code", "codex", "cursor", "grok-build", "gemini", "cascade", "hecate"];
+function renderNative() {
+  if ($("#native-form")) return; // keep form + results across polls
+  const options = AGENT_PROFILES.map((agent) => `<option value="${esc(agent)}">${esc(agent)}</option>`).join("");
+  $("#tab-native").innerHTML = `
+    <section class="panel"><h2>agent-native memory/rules audit (read-only)</h2>
+      <div class="toolbar" id="native-form">
+        <select id="native-agent">${options}</select>
+        <button class="action" id="native-scan">Scan</button>
+        <button class="action" id="native-reconcile">Reconcile receipts</button>
+      </div>
+      <div id="native-result"><div class="empty">scan inventories the profile's native files; reconcile verifies their dent8:// references against current receipts</div></div>
+    </section>`;
+  $("#native-scan").addEventListener("click", () => runNative("scan"));
+  $("#native-reconcile").addEventListener("click", () => runNative("reconcile"));
+}
+
+async function runNative(mode) {
+  const agent = $("#native-agent").value;
+  const target = $("#native-result");
+  target.innerHTML = `<div class="empty">${esc(mode)} running for ${esc(agent)}…</div>`;
+  try {
+    const result = await getJSON(`/api/native?${new URLSearchParams({ agent, mode })}`);
+    const items = result.files || result.findings || result.references || result.entries || [];
+    const rows = (Array.isArray(items) ? items : []).map((item) => `
+      <div class="belief" style="margin:12px 16px"><div class="mono" style="font-size:12px">${esc(JSON.stringify(item, null, 1))}</div></div>`).join("");
+    const summary = Object.entries(result)
+      .filter(([, v]) => typeof v !== "object")
+      .map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("");
+    target.innerHTML = `
+      <table><tbody>${summary}</tbody></table>
+      ${rows || `<div class="empty">nothing found for this profile</div>`}`;
+  } catch (error) {
+    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+  }
+}
+
 async function openDrawer(subject, predicate) {
   $("#drawer-title").textContent = `${subject} ${predicate}`;
   $("#drawer-body").innerHTML = `<div class="empty">loading receipt…</div>`;
@@ -421,7 +536,7 @@ document.querySelectorAll("nav button").forEach((button) =>
   button.addEventListener("click", () => {
     currentTab = button.dataset.tab;
     document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === button));
-    ["overview", "facts", "conflicts", "whatif"].forEach((name) =>
+    ["overview", "facts", "activity", "conflicts", "whatif", "doctor", "native"].forEach((name) =>
       $(`#tab-${name}`).toggleAttribute("hidden", name !== currentTab));
     render();
   }));

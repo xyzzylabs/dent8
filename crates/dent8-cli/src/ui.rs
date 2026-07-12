@@ -190,7 +190,92 @@ fn dispatch_api(request: &Request, store_path: &str) -> (u16, Value) {
             Ok(body) => (200, body),
             Err((status, body)) => (status, body),
         },
+        "/api/activity" => activity_request(request, store_path),
+        "/api/doctor" => {
+            let report = crate::doctor::doctor_report(&crate::DoctorArgs::read_only());
+            (200, crate::doctor::doctor_report_json(&report))
+        }
+        "/api/native" => native_request(request, store_path),
         _ => (404, error_json("no such endpoint")),
+    }
+}
+
+/// The most recent events across the whole log, newest first — the ADR's "recent
+/// accepted/rejected writes" view (rejected supersessions appear as the
+/// `fact.challenge_rejected` events recorded on their incumbents).
+fn activity_request(request: &Request, store_path: &str) -> (u16, Value) {
+    use dent8_store::EventStore as _;
+    let limit = request
+        .query_first("limit")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(50)
+        .min(500);
+    let store = match crate::load_store(store_path) {
+        Ok(store) => store,
+        Err(error) => return (503, error_json(&error)),
+    };
+    match store.scan_events(&dent8_store::EventFilter::default()) {
+        Ok(events) => {
+            let total = events.len();
+            let recent: Vec<Value> = events
+                .iter()
+                .rev()
+                .take(limit)
+                .map(crate::ops::fact_event_json)
+                .collect();
+            (
+                200,
+                json!({
+                    "status": "ok",
+                    "tool": "ui activity",
+                    "total_events": total,
+                    "events": recent,
+                }),
+            )
+        }
+        Err(error) => (503, error_json(&error.to_string())),
+    }
+}
+
+/// Native memory/rules audit for one agent profile — the same read-only scan/reconcile the
+/// CLI and MCP expose.
+fn native_request(request: &Request, store_path: &str) -> (u16, Value) {
+    use clap::ValueEnum as _;
+    let Some(agent_raw) = request.query_first("agent") else {
+        return (400, error_json("missing ?agent=<profile>"));
+    };
+    let Ok(agent) = crate::InitAgent::from_str(&agent_raw, true) else {
+        return (
+            400,
+            error_json(
+                "unknown agent profile (expected: codex | claude-code | cursor | grok-build \
+                 | gemini | cascade | hecate)",
+            ),
+        );
+    };
+    let dir = request
+        .query_first("dir")
+        .unwrap_or_else(|| ".dent8".to_string());
+    match request
+        .query_first("mode")
+        .unwrap_or_else(|| "scan".to_string())
+        .as_str()
+    {
+        "scan" => match crate::native::scan_from_options(agent, &dir, None) {
+            Ok(scan) => (200, crate::native::native_scan_json(&scan)),
+            Err(error) => (400, error_json(&error)),
+        },
+        "reconcile" => match crate::native::reconcile_from_options(
+            agent,
+            &dir,
+            None,
+            crate::ops::ReadClock::default(),
+            store_path,
+        ) {
+            Ok(reconcile) => (200, crate::native::native_reconcile_json(&reconcile)),
+            Err(error) => (400, error_json(&error)),
+        },
+        _ => (400, error_json("mode must be scan or reconcile")),
     }
 }
 

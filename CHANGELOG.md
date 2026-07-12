@@ -15,9 +15,13 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   opens a dashboard in your browser served straight from the stock binary — status cards
   and runtime health (store, identity, authority, witness, env), the fact table with
   live freshness badges, a per-fact drawer showing the integrity receipt and the full
-  replay timeline, contested facts, and an interactive **what-if** panel that re-folds the
-  log under a different trust policy and shows now-vs-under-policy with per-fact diffs.
-  Read-only **by construction** — every endpoint is a GET over the same `op_*`/snapshot
+  replay timeline, contested facts, an interactive **what-if** panel that re-folds the
+  log under a different trust policy and shows now-vs-under-policy with per-fact diffs, an
+  **activity** feed (recent events across the whole log, newest first; rejected
+  supersessions appear as the `fact.challenge_rejected` events recorded on their
+  incumbents), a **doctor** panel (the read-only checks grouped OK/WARN/FAIL/SKIP, with
+  re-run), and a **native audit** panel (`native scan` / `native reconcile` per agent
+  profile). Read-only **by construction** — every endpoint is a GET over the same `op_*`/snapshot
   code the CLI and MCP use, so no separate write path exists (the ADR's hard constraint);
   the transport is a minimal hand-rolled HTTP responder over tokio (zero new
   dependencies) that binds 127.0.0.1 only, refuses non-localhost `Host` headers

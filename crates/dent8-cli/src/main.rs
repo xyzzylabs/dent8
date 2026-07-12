@@ -977,6 +977,25 @@ struct DoctorArgs {
     repair: bool,
 }
 
+impl DoctorArgs {
+    /// The read-only shape `dent8 ui` runs: no write-check (the UI must never write), no
+    /// repair, no per-agent probes — the plain environment/store/identity/witness checks.
+    #[cfg(feature = "async-store")]
+    pub(crate) fn read_only() -> Self {
+        Self {
+            write_check: false,
+            source: None,
+            agent: None,
+            all_agents: false,
+            dir: ".dent8".to_string(),
+            mcp_config: None,
+            mcp_command: None,
+            mcp_local_bin: false,
+            repair: false,
+        }
+    }
+}
+
 #[derive(Args, Debug)]
 struct DaemonArgs {
     #[command(subcommand)]

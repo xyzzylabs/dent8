@@ -28,7 +28,10 @@ dent8 context
 
 `init` creates `.dent8/` (file log + authority registry with human > CI > agent defaults plus
 your `source:owner` grant). You do **not** need Postgres, identity, or MCP for the first fact.
-Optional smoke: `dent8 doctor --source source:owner --write-check`.
+Optional smoke: `dent8 doctor --source source:owner --write-check`. To *see* the whole
+thing — live fact table, integrity receipts, replay timelines, an interactive what-if —
+run **`dent8 ui`**: a read-only control plane opens in your browser, served straight from
+the binary (localhost-only; every payload comes from the same firewall path as the CLI).
 
 ## 1. Install
 

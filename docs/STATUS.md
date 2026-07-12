@@ -819,10 +819,12 @@ subject+predicate.
   live freshness badges, per-fact integrity receipts + replay timelines, contested facts,
   and an interactive what-if panel. Read-only by construction (every endpoint is a GET over
   the same `op_*`/snapshot path as CLI/MCP; 127.0.0.1-bound; non-localhost `Host` refused;
-  values HTML-escaped so agent-supplied text cannot execute). Remaining from the ADR: the
-  Tauri desktop shell (step 4), native-scan/witness/doctor panels, and write actions over
-  the signed identity path (step 5). It must not become a separate write path or memory
-  provider.
+  values HTML-escaped so agent-supplied text cannot execute) — plus the activity feed
+  (recent events, newest first), the doctor panel (OK/WARN/FAIL/SKIP groups), and the
+  native scan/reconcile audit panel. Remaining from the ADR: the Tauri desktop shell
+  (step 4), a richer witness panel (published heads / unwitnessed tail beyond the runtime
+  status), and write actions over the signed identity path (step 5). It must not become a
+  separate write path or memory provider.
 - **A *hosted* / operated witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now
