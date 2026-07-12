@@ -85,6 +85,14 @@ $ dent8 whatif repo:myproj deploy_target --distrust source:owner
 The rejection is recorded on the fact itself as a survived challenge, the audit trail is a
 hash chain, and `whatif` answers counterfactuals without changing anything.
 
+## See your memory
+
+`dent8 ui` serves a local, read-only dashboard over the same firewall path as the CLI —
+believed facts as cards, contested facts showing both rival values inline, and a full
+integrity receipt behind each one.
+
+![The dent8 ui Memory view — believed facts shown as cards; the contested cache fact shows both rival values inline.](https://raw.githubusercontent.com/xyzzylabs/dent8/main/docs/assets/ui-memory.png)
+
 ## Five for five against peer memory models
 
 | attack | firewall | recency-only (Zep) | mutate-in-place (Mem0) |
