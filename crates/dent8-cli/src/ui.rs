@@ -585,4 +585,162 @@ mod tests {
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("bad%zzescape"), "bad%zzescape");
     }
+
+    // ---- endpoint shape tests ----
+    //
+    // The dashboard reads specific fields off each endpoint (values, authority, freshness,
+    // section groups). These pin those shapes against a real seeded store so a rename in the
+    // underlying `op_*`/receipt JSON is caught here instead of silently breaking the UI.
+
+    use crate::WriteIdentity;
+    use crate::ops::Validity;
+    use dent8_core::AuthorityLevel;
+
+    struct TempStore {
+        dir: std::path::PathBuf,
+    }
+    impl TempStore {
+        fn new() -> Self {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir =
+                std::env::temp_dir().join(format!("dent8-ui-test-{}-{n}", std::process::id()));
+            std::fs::create_dir_all(&dir).expect("create temp dir");
+            Self { dir }
+        }
+        fn log(&self) -> String {
+            self.dir.join("log.jsonl").to_string_lossy().into_owned()
+        }
+    }
+    impl Drop for TempStore {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn seed(path: &str, pred: &str, value: &str, authority: AuthorityLevel) {
+        // `OpError` is intentionally not `Debug` (it carries a user-facing message, not a
+        // dump), so assert on `is_ok()` rather than `.expect()`.
+        let outcome = crate::ops::op_assert(
+            path,
+            "repo",
+            "demo",
+            pred,
+            value,
+            authority,
+            "source:human",
+            Validity {
+                from: None,
+                to: None,
+                ttl: None,
+            },
+            &WriteIdentity::Env,
+        );
+        assert!(outcome.is_ok(), "seed assert failed for repo:demo {pred}");
+    }
+
+    /// Route one GET through the same dispatcher the HTTP layer uses.
+    fn call(path: &str, target: &str) -> (u16, serde_json::Value) {
+        let head = format!("GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+        let request = Request::parse(&head).expect("request parses");
+        super::dispatch_api(&request, path)
+    }
+
+    #[test]
+    fn memory_endpoint_carries_the_fields_the_cards_render() {
+        let store = TempStore::new();
+        seed(&store.log(), "database", "postgres", AuthorityLevel::High);
+        seed(&store.log(), "msrv", "1.94", AuthorityLevel::High);
+        let (status, body) = call(&store.log(), "/api/memory");
+        assert_eq!(status, 200);
+        assert_eq!(body["count"], 2);
+        let facts = body["facts"].as_array().expect("facts array");
+        assert!(facts.iter().all(|f| {
+            f["value"]["display"].is_string()
+                && f["authority"].is_string()
+                && f["fresh"].is_boolean()
+                && f["subject"]["kind"].is_string()
+        }));
+    }
+
+    #[test]
+    fn activity_endpoint_is_newest_first_with_a_total() {
+        let store = TempStore::new();
+        seed(&store.log(), "database", "postgres", AuthorityLevel::High);
+        seed(&store.log(), "msrv", "1.94", AuthorityLevel::High);
+        let (status, body) = call(&store.log(), "/api/activity");
+        assert_eq!(status, 200);
+        assert_eq!(body["total_events"], 2);
+        let events = body["events"].as_array().expect("events");
+        assert_eq!(events.len(), 2);
+        // Newest first: the msrv assert (seeded second) leads.
+        assert_eq!(events[0]["predicate"], "msrv");
+        assert!(events[0]["kind"].is_string() && events[0]["authority"].is_string());
+    }
+
+    #[test]
+    fn explain_and_replay_resolve_a_seeded_fact() {
+        let store = TempStore::new();
+        seed(&store.log(), "database", "postgres", AuthorityLevel::High);
+        let (es, explain) = call(
+            &store.log(),
+            "/api/explain?subject=repo:demo&predicate=database",
+        );
+        assert_eq!(es, 200);
+        assert_eq!(explain["value"]["text"], "postgres");
+        assert_eq!(explain["authority"], "high");
+        let (rs, replay) = call(
+            &store.log(),
+            "/api/replay?subject=repo:demo&predicate=database",
+        );
+        assert_eq!(rs, 200);
+        assert_eq!(replay["event_count"], 1);
+    }
+
+    #[test]
+    fn whatif_requires_a_policy_and_diffs_under_one() {
+        let store = TempStore::new();
+        seed(&store.log(), "database", "postgres", AuthorityLevel::High);
+        // No policy knob → a 400, not a silent identity fold.
+        let (bare, _) = call(
+            &store.log(),
+            "/api/whatif?subject=repo:demo&predicate=database",
+        );
+        assert_eq!(bare, 400);
+        // Distrust the only source → the fact disappears under the policy.
+        let (ok, body) = call(
+            &store.log(),
+            "/api/whatif?subject=repo:demo&predicate=database&distrust=source:human",
+        );
+        assert_eq!(ok, 200);
+        assert_eq!(body["changed"], true);
+    }
+
+    #[test]
+    fn doctor_endpoint_groups_checks_by_level() {
+        let store = TempStore::new();
+        let (status, body) = call(&store.log(), "/api/doctor");
+        assert_eq!(status, 200);
+        assert!(body["sections"]["ok"].is_array());
+        assert!(body["summary"]["ok"].is_number());
+    }
+
+    #[test]
+    fn witness_endpoint_reports_sections() {
+        let store = TempStore::new();
+        let (status, body) = call(&store.log(), "/api/witness");
+        assert_eq!(status, 200);
+        assert_eq!(body["tool"], "ui witness");
+        assert!(body["sections"].is_object() && body["summary"].is_object());
+    }
+
+    #[test]
+    fn unknown_path_and_bad_subject_are_client_errors() {
+        let store = TempStore::new();
+        let (nf, _) = call(&store.log(), "/api/nope");
+        assert_eq!(nf, 404);
+        let (bad, body) = call(&store.log(), "/api/explain?predicate=database");
+        assert_eq!(bad, 400);
+        assert!(body["error"].is_string());
+    }
 }
