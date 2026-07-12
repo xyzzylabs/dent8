@@ -268,9 +268,11 @@ library-only vs. design-only. In brief, runnable today:
   conflicts before trusting a long-running server.
 - Machine-readable `--output json` across the read/write/audit surface, shell completions, and
   Parquet **export** for offline DuckDB analysis (`--features export`).
-- Read-only native memory/rules audit with `dent8 native scan --agent <profile>` and receipt
-  verification with `dent8 native reconcile --agent <profile>`; MCP exposes the same audits as
-  `native_scan` / `native_reconcile`. Native import/export remain future work.
+- Native memory/rules interop: audit with `dent8 native scan --agent <profile>` and receipt
+  verification with `dent8 native reconcile --agent <profile>` (MCP exposes the same audits as
+  `native_scan` / `native_reconcile`), plus `dent8 import <FILE>` to pull durable facts from a
+  native memory/rules file *through the firewall* and `dent8 export --target` to project
+  believed facts back into one.
 
 Run `dent8 --help` for the full command surface. The stock binary needs no services; opt-in
 builds add a Postgres backend (`--features postgres`) and Parquet export (`--features export`).

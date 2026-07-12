@@ -55,7 +55,8 @@ tar xzf dent8-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
 chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 ```
 
-**crates.io.** The published crate is `dent8`:
+**crates.io.** The published CLI crate is `dent8-cli` (the `dent8` crate name is the library
+facade):
 
 ```sh
 cargo install dent8-cli --locked
