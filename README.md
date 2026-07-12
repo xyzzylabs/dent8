@@ -87,6 +87,8 @@ From a clone: **`DENT8="cargo run -q -p dent8-cli --" ./examples/firewall/demo.s
 dent8 ui        # opens a local, read-only dashboard in your browser
 ```
 
+![The dent8 ui Memory view — believed facts shown as cards; the contested cache fact shows both rival values inline.](docs/assets/ui-memory.png)
+
 The stock binary serves its own control plane — no install, no services, bound to
 `127.0.0.1`. **Memory** shows the believed facts as cards (the value large, a freshness
 bar down the side, contested facts showing both rival values inline); click one for the
