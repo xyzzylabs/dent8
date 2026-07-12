@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-07-12
+
 ### Added
 - **`dent8 ui` — a local, human-first memory dashboard** (the first deliverable of
   [ADR 0020](docs/decisions/0020-desktop-debugger-control-plane.md), unfrozen): one command
