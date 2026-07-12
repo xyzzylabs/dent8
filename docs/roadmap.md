@@ -100,11 +100,14 @@ What remains to make it a hardened multi-user product:
 - **Signed identity operations.** The stock CLI now includes the authn primitive:
   `dent8 init --identity` / `dent8 init --agent <profile>` create issuer-signed grants binding
   source ids to source public keys, and every configured write checks source-key possession at
-  the CLI/MCP boundary. Product hardening remains: key distribution, hardware or
-  secret-store-backed keys, and team policy workflows. Signed key rotation/revocation and
-  issuer-signed, hash-chained grant-log history
-  ([ADR 0014](decisions/0014-grant-history-and-revocation.md)) are now shipped
-  (`dent8 identity rotate-source` / `revoke` / `backfill-grant-log`).
+  the CLI/MCP boundary. Secret-store-backed keys shipped (`keychain:<account>` on all three
+  platforms) and key distribution is documented and exercised
+  ([team-identity.md](team-identity.md)); signed key rotation/revocation and issuer-signed,
+  hash-chained grant-log history
+  ([ADR 0014](decisions/0014-grant-history-and-revocation.md)) are shipped too
+  (`dent8 identity rotate-source` / `revoke` / `backfill-grant-log`). What remains is
+  hardware-backed keys (HSM/YubiKey-class) and richer team policy workflows beyond the
+  documented pattern.
 - **Operated witness service.** `dent8 witness` is a runnable signed-tree-head primitive;
   role doctor checks validate writer/signer separation, `publish` idempotently appends heads to
   an external JSONL sequence, and `verify-published` verifies externally saved heads so local
@@ -114,13 +117,15 @@ What remains to make it a hardened multi-user product:
   plus hardened systemd units) with key-rotation and publication-channel guidance; what
   remains is *hosting* it — a managed signer/publication service instead of your own second
   host.
-- **Production ergonomics and heavy-concurrency polish.** The async adapters reserve
+- **Production ergonomics under concurrency — done.** The async adapters reserve
   `event:{n}` id ranges from the database before signing (unique, not gap-free) and serialize
-  appends, with an in-transaction final projection check for touched unique predicates;
-  remaining work is operational load testing and tuning.
+  appends, with an in-transaction final projection check for touched unique predicates; the
+  load testing and tuning landed (cross-process write leases + `scripts/load-test.sh`, item 3
+  above).
 - **Richer protocol/product surfaces.** The v0 MCP server is useful today, and the thin
-  Python/TS SDKs shipped ([`sdks/`](../sdks/)); official `rmcp`, richer transports,
-  `resources/subscribe`, prompts, HTTP, and a TypeScript/Tauri desktop debugger/control
+  Python/TS SDKs shipped ([`sdks/`](../sdks/)), and `resources/subscribe` pushes fact-change
+  notifications on both transports; official `rmcp`, richer transports (HTTP/streamable),
+  prompts, and a TypeScript/Tauri desktop debugger/control
   plane are later ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
 - **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
   fixtures, the adversarial corpus, and **`cargo-fuzz` targets** (the
