@@ -1363,7 +1363,7 @@ fn secret_permissions_line(prefix: &str, path: &str) -> DoctorLine {
 }
 
 pub(crate) fn doctor_status() -> Vec<DoctorLine> {
-    if !witness_configured() {
+    if !is_configured() {
         return vec![DoctorLine::warn(
             "witness: not configured (optional; set DENT8_WITNESS_LOG + DENT8_WITNESS_PUBKEY for signed tree heads)",
         )];
@@ -1445,7 +1445,7 @@ pub(crate) fn doctor_status() -> Vec<DoctorLine> {
     lines
 }
 
-fn witness_configured() -> bool {
+pub(crate) fn is_configured() -> bool {
     std::env::var("DENT8_WITNESS_LOG").is_ok_and(|value| !value.trim().is_empty())
         || std::env::var("DENT8_WITNESS_PUBKEY").is_ok_and(|value| !value.trim().is_empty())
         || std::env::var("DENT8_WITNESS_KEY").is_ok_and(|value| !value.trim().is_empty())

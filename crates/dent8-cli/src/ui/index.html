@@ -166,6 +166,7 @@ footer a { color: var(--accent); }
   <button data-tab="conflicts">Conflicts<span class="count" id="conflicts-count"></span></button>
   <button data-tab="whatif">What-if</button>
   <button data-tab="doctor">Doctor</button>
+  <button data-tab="witness">Witness</button>
   <button data-tab="native">Native</button>
 </nav>
 <main>
@@ -175,6 +176,7 @@ footer a { color: var(--accent); }
   <div id="tab-conflicts" hidden></div>
   <div id="tab-whatif" hidden></div>
   <div id="tab-doctor" hidden></div>
+  <div id="tab-witness" hidden></div>
   <div id="tab-native" hidden></div>
 </main>
 <div id="drawer" role="dialog" aria-label="Fact detail">
@@ -240,6 +242,7 @@ function render() {
   if (currentTab === "conflicts") renderConflicts();
   if (currentTab === "whatif") renderWhatif();
   if (currentTab === "doctor") renderDoctor();
+  if (currentTab === "witness") renderWitness();
   if (currentTab === "native") renderNative();
 }
 
@@ -449,6 +452,39 @@ async function renderDoctor() {
   }
 }
 
+const WITNESS_LEVELS = [["FAIL", "bad", "contested"], ["WARN", "warn", "stale"], ["OK", "ok", "fresh"]];
+async function renderWitness() {
+  const target = $("#tab-witness");
+  if (target.dataset.loaded === "1") return;
+  target.dataset.loaded = "1";
+  target.innerHTML = `<section class="panel"><div class="empty">checking witness coverage…</div></section>`;
+  try {
+    const result = await getJSON("/api/witness");
+    const sections = WITNESS_LEVELS.map(([level, cls, badgeCls]) => {
+      const lines = (result.sections && result.sections[level.toLowerCase()]) || [];
+      if (!lines.length) return "";
+      const rows = lines.map((line) =>
+        `<tr><td style="width:70px"><span class="badge ${badgeCls}">${esc(level.toLowerCase())}</span></td>
+         <td class="mono" style="color:var(--muted)">${esc(line.message)}</td></tr>`).join("");
+      return `<section class="panel"><h2>${esc(level.toLowerCase())} (${lines.length})</h2><table><tbody>${rows}</tbody></table></section>`;
+    }).join("");
+    const pillCls = !result.configured ? "warn" : result.ok ? "ok" : "bad";
+    const pillText = !result.configured ? "witness: not configured (optional)"
+      : result.ok ? "witness: coverage healthy" : "witness: TAMPER/ROLLBACK";
+    target.innerHTML = `
+      <div class="toolbar" style="border:none;padding:0 0 12px">
+        <span class="pill ${pillCls}">${esc(pillText)}</span>
+        <span class="spacer"></span>
+        <button class="action" id="witness-rerun">Re-check</button>
+      </div>
+      ${sections || `<section class="panel"><div class="empty">no witness findings</div></section>`}`;
+    $("#witness-rerun").addEventListener("click", () => { target.dataset.loaded = ""; renderWitness(); });
+  } catch (error) {
+    target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
+    target.dataset.loaded = "";
+  }
+}
+
 const AGENT_PROFILES = ["claude-code", "codex", "cursor", "grok-build", "gemini", "cascade", "hecate"];
 function renderNative() {
   if ($("#native-form")) return; // keep form + results across polls
@@ -536,7 +572,7 @@ document.querySelectorAll("nav button").forEach((button) =>
   button.addEventListener("click", () => {
     currentTab = button.dataset.tab;
     document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === button));
-    ["overview", "facts", "activity", "conflicts", "whatif", "doctor", "native"].forEach((name) =>
+    ["overview", "facts", "activity", "conflicts", "whatif", "doctor", "witness", "native"].forEach((name) =>
       $(`#tab-${name}`).toggleAttribute("hidden", name !== currentTab));
     render();
   }));

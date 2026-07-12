@@ -196,8 +196,37 @@ fn dispatch_api(request: &Request, store_path: &str) -> (u16, Value) {
             (200, crate::doctor::doctor_report_json(&report))
         }
         "/api/native" => native_request(request, store_path),
+        "/api/witness" => (200, witness_status()),
         _ => (404, error_json("no such endpoint")),
     }
+}
+
+/// Witness coverage + tamper/rollback status — the same read-only `witness::doctor_status()`
+/// lines the runtime summary distils to one line, surfaced in full (config, signed-head
+/// count, unwitnessed tail, and any `TAMPER`/`ROLLBACK` finding). An unconfigured witness
+/// (no `DENT8_WITNESS_LOG` / `DENT8_WITNESS_PUBKEY`) is a single WARN, not an error.
+fn witness_status() -> Value {
+    let lines = crate::witness::doctor_status();
+    let mut ok = Vec::new();
+    let mut warn = Vec::new();
+    let mut fail = Vec::new();
+    for line in &lines {
+        let entry = json!({ "level": line.level, "message": line.message });
+        match line.level {
+            "OK" => ok.push(entry),
+            "FAIL" => fail.push(entry),
+            _ => warn.push(entry),
+        }
+    }
+    let configured = crate::witness::is_configured();
+    json!({
+        "status": if fail.is_empty() { "ok" } else { "failed" },
+        "tool": "ui witness",
+        "configured": configured,
+        "ok": fail.is_empty(),
+        "summary": { "ok": ok.len(), "warn": warn.len(), "fail": fail.len() },
+        "sections": { "ok": ok, "warn": warn, "fail": fail },
+    })
 }
 
 /// The most recent events across the whole log, newest first — the ADR's "recent

@@ -72,8 +72,10 @@ evidence of users, not on more features.
 
 **Unfrozen — the control plane's view layer shipped**: `dent8 ui` serves the read-only
 debugger/control plane from the stock binary (ADR 0020 steps 2+3: a stable localhost
-read/audit API plus the web debugger — overview, fact receipts, replay timelines,
-conflicts, interactive what-if). The **Tauri desktop shell** (step 4) and write actions
+read/audit API plus the web debugger). Its read/audit-first shape is **complete** —
+overview + runtime health, fact table with receipts and replay timelines, activity feed,
+conflicts, interactive what-if, doctor (OK/WARN/FAIL/SKIP), native scan/reconcile, and
+witness coverage/tamper status. The **Tauri desktop shell** (step 4) and write actions
 (step 5) remain later packaging over this same surface. Still explicitly **frozen until
 the wedge has users**: operated-witness hosting and any training-substrate direction.
 
