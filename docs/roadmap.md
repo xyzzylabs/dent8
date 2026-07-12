@@ -370,7 +370,7 @@ debugger/control plane and production deployment packaging.
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger (the core shipped as
 `dent8 whatif`; the interactive debugger view remains) ·
-predicate-level volatility policy · HTTP API · **first-class in-process framework adapters**
+HTTP API · **first-class in-process framework adapters**
 (LangChain, LlamaIndex, Vercel AI SDK) layered on the shipped `pip install dent8` /
 `npm i dent8` SDKs; MCP is the integration path *today*, see
 [examples/langchain](../examples/langchain/) and

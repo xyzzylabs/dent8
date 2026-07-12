@@ -10,6 +10,16 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Predicate volatility now bounds claimable freshness** (roadmap: predicate-level
+  volatility policy). The registry's `Volatility` classification was advisory metadata that
+  did nothing; it is now functional. A `Volatile` predicate (e.g. `branch.status`,
+  `dependency.version`) caps a caller-supplied finite TTL at **7 days**
+  (`VOLATILE_RETENTION_CEILING_MS`) — a working belief that changes often cannot be claimed
+  *fresh* for months — while a `Stable` predicate keeps the registry-wide 90-day ceiling.
+  Precedence: an explicit per-predicate `max_ttl` override wins, then volatility, then the
+  global ceiling; the TTL is **rejected, not clamped** (`dent8 assert dependency:serde
+  version 1.0 --ttl 30d` → `TtlCeilingExceeded`, ceiling 7 days). Default TTLs and
+  `Ttl::Never` are unaffected, so no existing fact's expiry changes.
 - **Legitimate-traffic corpus + false-positive rate in `dent8 eval`** (roadmap: legitimate-
   traffic evaluation): the complement of the adversarial corpus. A designed set of benign
   revision sequences (maturing understanding, authority-upgrade correction, corroboration,

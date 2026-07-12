@@ -4,8 +4,9 @@
 //! a coding agent records — `repo.database`, `repo.test_command`, `dependency.version`,
 //! `branch.status`, `user.preference`. The policy lets the firewall enforce
 //! predicate-specific rules the generic core cannot know: a **minimum authority to
-//! *assert* the fact**, a **default freshness** (TTL) so volatile facts expire on their
-//! own, and **uniqueness** (at most one *fresh* believed fact per subject+predicate).
+//! *assert* the fact**, a **default freshness** (TTL), a **volatility** class that bounds
+//! how long a caller may claim a fact stays fresh (a `Volatile` predicate caps at 7 days),
+//! and **uniqueness** (at most one *fresh* believed fact per subject+predicate).
 //!
 //! ## Layering and scope
 //!
@@ -45,12 +46,38 @@ use crate::{EventFilter, EventStore, StoreError, replay_subject};
 /// [`PredicateRegistry::set_max_ttl`], or per predicate via [`PredicatePolicy::max_ttl`].
 pub const DEFAULT_MAX_TTL_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
-/// How often a fact is expected to change — advisory metadata that motivates the
-/// default TTL.
+/// The retention ceiling a `Volatile` predicate imposes on caller-supplied freshness:
+/// **7 days**. A volatile fact is a working belief that changes often (a branch status, a
+/// dependency pin) — one no caller should be able to pin *fresh* for months. This bounds a
+/// caller-supplied finite TTL for a volatile predicate the way the registry-wide
+/// [`DEFAULT_MAX_TTL_MS`] bounds everything else, only tighter. It is overridable per
+/// predicate via [`PredicatePolicy::max_ttl`] (an explicit override wins over volatility).
+pub const VOLATILE_RETENTION_CEILING_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// How often a fact of a given predicate is expected to change. **Functional, not advisory:**
+/// a [`Volatile`](Volatility::Volatile) predicate caps how long a caller may claim its facts
+/// stay fresh (the [`retention_ceiling`](Volatility::retention_ceiling), enforced by
+/// [`enforce_policy`]); a [`Stable`](Volatility::Stable) predicate uses the registry-wide
+/// ceiling. The classification is the predicate's declared nature; the ceiling is what the
+/// firewall does with it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Volatility {
     Stable,
     Volatile,
+}
+
+impl Volatility {
+    /// The retention ceiling this volatility class imposes on a caller-supplied finite TTL:
+    /// `Some(7 days)` for [`Volatile`](Self::Volatile), `None` for [`Stable`](Self::Stable)
+    /// (which defers to the registry-wide ceiling). A per-predicate
+    /// [`PredicatePolicy::max_ttl`] override takes precedence over this.
+    #[must_use]
+    pub fn retention_ceiling(self) -> Option<Ttl> {
+        match self {
+            Self::Volatile => Some(Ttl::DurationMillis(VOLATILE_RETENTION_CEILING_MS)),
+            Self::Stable => None,
+        }
+    }
 }
 
 /// The policy for one kind of project fact.
@@ -65,6 +92,10 @@ pub struct PredicatePolicy {
     pub default_ttl: Ttl,
     /// Whether at most one *fresh* fact about a given subject+predicate may be believed.
     pub unique: bool,
+    /// How often facts of this predicate change. A [`Volatility::Volatile`] predicate caps a
+    /// caller-supplied finite TTL at [`VOLATILE_RETENTION_CEILING_MS`] (unless `max_ttl`
+    /// below overrides it); [`Volatility::Stable`] defers to the registry-wide ceiling. See
+    /// [`enforce_policy`].
     pub volatility: Volatility,
     /// A per-predicate retention ceiling overriding the registry-wide default. `None` (the
     /// common case) falls back to [`PredicateRegistry`]'s global `max_ttl`. Set it to raise or
@@ -277,16 +308,22 @@ where
     }
 
     // Retention ceiling: reject (never clamp) an assertion whose *bounded* TTL reaches
-    // further than the effective ceiling. Registered predicates may raise/tighten it via
-    // their per-predicate override; an unregistered predicate falls back to the registry
-    // global. Runs on assertions only; predicate-default TTLs are all below the ceiling, so
+    // further than the effective ceiling. Precedence, most specific first:
+    //   1. the predicate's explicit `max_ttl` override (an operator's deliberate choice),
+    //   2. its **volatility** ceiling — a `Volatile` predicate caps at 7 days so a working
+    //      belief cannot be claimed fresh for months (the classification made functional),
+    //   3. the registry-wide global ceiling.
+    // Registered predicates only reach (1)/(2); an unregistered predicate falls straight to
+    // (3). Runs on assertions only; predicate-default TTLs are all below every ceiling, so
     // only a caller-supplied finite TTL can trip this. `Ttl::Never` is out of scope (see
-    // `bounded_ttl_ms`), and a `Never` ceiling disables the cap.
+    // `bounded_ttl_ms`), and a `Never` ceiling disables the cap at whichever level sets it.
     if matches!(candidate.kind, FactEventKind::Asserted) {
-        let ceiling = policy
-            .and_then(|policy| policy.max_ttl.as_ref())
-            .unwrap_or(&registry.max_ttl);
-        if let (Some(ceiling_ms), Some(ttl_ms)) = (ceiling_ms(ceiling), bounded_ttl_ms(candidate))
+        let effective_ceiling = policy
+            .and_then(|policy| policy.max_ttl.clone())
+            .or_else(|| policy.and_then(|policy| policy.volatility.retention_ceiling()))
+            .unwrap_or_else(|| registry.max_ttl.clone());
+        if let (Some(ceiling_ms), Some(ttl_ms)) =
+            (ceiling_ms(&effective_ceiling), bounded_ttl_ms(candidate))
             && ttl_ms > ceiling_ms
         {
             return Err(StoreError::TtlCeilingExceeded {
@@ -1003,6 +1040,96 @@ mod tests {
             NOW,
         )
         .expect("a Never ceiling disables the cap");
+        assert_eq!(store.len(), 1);
+    }
+
+    const THIRTY_DAYS_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+
+    fn volatile_assertion(ttl: Ttl) -> FactEvent {
+        // dependency.version is Volatile (authority floor Medium) — assert at High to clear
+        // the floor and isolate the volatility ceiling.
+        let mut event = assertion(
+            "e1",
+            "fact:A",
+            "dependency",
+            "serde",
+            "version",
+            "1.0",
+            AuthorityLevel::High,
+        );
+        event.ttl = ttl;
+        event
+    }
+
+    #[test]
+    fn a_volatile_predicate_caps_claimable_freshness_at_seven_days() {
+        // A 30-day TTL exceeds the 7-day volatility ceiling (well under the 90-day global)
+        // and is rejected, not clamped.
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        let error = admit(
+            &mut store,
+            &registry,
+            volatile_assertion(Ttl::DurationMillis(THIRTY_DAYS_MS)),
+            NOW,
+        )
+        .expect_err("a volatile predicate rejects a 30-day freshness claim");
+        assert!(
+            matches!(
+                error,
+                StoreError::TtlCeilingExceeded { ceiling_ms, .. }
+                    if ceiling_ms == super::VOLATILE_RETENTION_CEILING_MS
+            ),
+            "expected the 7-day volatility ceiling, got {error:?}"
+        );
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn a_volatile_predicate_admits_freshness_within_the_ceiling() {
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            volatile_assertion(Ttl::DurationMillis(
+                super::VOLATILE_RETENTION_CEILING_MS / 2,
+            )),
+            NOW,
+        )
+        .expect("a claim within the 7-day volatility ceiling is admitted");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_stable_predicate_is_not_bound_by_the_volatile_ceiling() {
+        // repo.database is Stable: a 30-day claim is fine (only the 90-day global applies).
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            timed_assertion("e1", "fact:A", Ttl::DurationMillis(THIRTY_DAYS_MS), NOW),
+            NOW,
+        )
+        .expect("a stable predicate is not capped at the volatile 7-day ceiling");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_per_predicate_max_ttl_overrides_the_volatile_ceiling() {
+        // An explicit per-predicate override wins over volatility: relaxing
+        // dependency.version to `Never` lets a 30-day claim through.
+        let mut registry = PredicateRegistry::coding_agent();
+        registry.set_predicate_max_ttl("dependency", "version", Some(Ttl::Never));
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            volatile_assertion(Ttl::DurationMillis(THIRTY_DAYS_MS)),
+            NOW,
+        )
+        .expect("an explicit per-predicate max_ttl override beats the volatility ceiling");
         assert_eq!(store.len(), 1);
     }
 
