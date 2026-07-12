@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-07-12
+
 ### Added
 - **Linux and Windows backends for keychain-backed identity keys** — `keychain:<account>`
   now works on all three platforms, same contract as the macOS backend shipped in 0.7.0
