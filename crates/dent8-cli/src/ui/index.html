@@ -44,10 +44,12 @@ header .store { color: var(--muted); font-family: var(--mono); font-size: 12px;
 .pill.ok { color: var(--ok); background: var(--ok-soft); }
 .pill.warn { color: var(--warn); background: var(--warn-soft); }
 .pill.bad { color: var(--bad); background: var(--bad-soft); }
-nav { display: flex; gap: 4px; padding: 8px 20px 0; border-bottom: 1px solid var(--line); }
+nav { display: flex; gap: 4px; padding: 8px 20px 0; border-bottom: 1px solid var(--line);
+  overflow-x: auto; }
 nav button {
   border: none; background: none; color: var(--muted); font: inherit; font-weight: 600;
   padding: 8px 14px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  white-space: nowrap;
 }
 nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
 nav button .count { color: var(--muted); font-weight: 500; margin-left: 4px; }
@@ -315,14 +317,22 @@ function renderFacts() {
 
 function renderConflicts() {
   const conflicts = (snapshot.conflicts && snapshot.conflicts.conflicts) || [];
-  const rows = conflicts.map((c) => `
-    <div class="belief" style="margin:12px 16px">
-      <div class="mono">${esc(JSON.stringify(c))}</div>
-    </div>`).join("");
-  $("#tab-conflicts").innerHTML = `
-    <section class="panel"><h2>contested facts</h2>
-      ${rows || `<div class="empty">no contested facts — disagreement would be listed here, kept as data instead of silently resolved</div>`}
-    </section>`;
+  const cards = conflicts.map((c) => {
+    const subject = `${c.subject.kind}:${c.subject.key}`;
+    const rivals = (c.rivals || []).map((r) => `
+      <div class="belief">
+        <div>${chip(r.authority)} <span class="badge ${r.lifecycle === "Contested" ? "contested" : "fresh"}">${esc(r.lifecycle)}</span></div>
+        <div class="val">${esc(r.value && r.value.display)}</div>
+        <div class="mono" style="color:var(--muted);font-size:11.5px">${esc(r.fact_id)}</div>
+      </div>`).join("");
+    return `
+      <section class="panel">
+        <h2><span class="mono" style="text-transform:none;letter-spacing:0">${esc(subject)} ${esc(c.predicate)}</span> — ${(c.rivals || []).length} rival values, kept as data</h2>
+        <div class="grid2" style="align-items:start">${rivals}</div>
+      </section>`;
+  }).join("");
+  $("#tab-conflicts").innerHTML = cards ||
+    `<section class="panel"><div class="empty">no contested facts — disagreement is kept as a contested pair here, never silently resolved</div></section>`;
 }
 
 function beliefCard(entry) {
@@ -502,21 +512,49 @@ function renderNative() {
   $("#native-reconcile").addEventListener("click", () => runNative("reconcile"));
 }
 
+function guardLine(guard) {
+  if (!guard) return "";
+  const cls = guard.protected ? "fresh" : guard.status === "missing" ? "stale" : "contested";
+  const label = guard.protected ? "guard enforced" : `guard ${esc(guard.status || "unknown")}`;
+  return `<div style="padding:12px 16px"><span class="badge ${cls}">${label}</span>
+    <span class="mono" style="color:var(--muted);font-size:12px;margin-left:8px">${esc(guard.message || "")}</span></div>`;
+}
+
+function summaryChips(summary) {
+  return `<div style="padding:0 16px 8px">${Object.entries(summary || {})
+    .filter(([, v]) => typeof v === "number")
+    .map(([k, v]) => `<span class="chip ${v > 0 && /fail|missing|stale|contested|invalid|without/.test(k) ? "medium" : "low"}" style="margin:0 6px 6px 0;display:inline-block">${esc(k.replaceAll("_", " "))}: ${esc(v)}</span>`)
+    .join("")}</div>`;
+}
+
+const RECON_STATUS = { ok: "fresh", missing: "contested", stale: "stale", contested: "contested",
+  no_longer_believed: "gone", not_yet_valid: "not_yet_valid", invalid: "contested" };
+
 async function runNative(mode) {
   const agent = $("#native-agent").value;
   const target = $("#native-result");
   target.innerHTML = `<div class="empty">${esc(mode)} running for ${esc(agent)}…</div>`;
   try {
     const result = await getJSON(`/api/native?${new URLSearchParams({ agent, mode })}`);
-    const items = result.files || result.findings || result.references || result.entries || [];
-    const rows = (Array.isArray(items) ? items : []).map((item) => `
-      <div class="belief" style="margin:12px 16px"><div class="mono" style="font-size:12px">${esc(JSON.stringify(item, null, 1))}</div></div>`).join("");
-    const summary = Object.entries(result)
-      .filter(([, v]) => typeof v !== "object")
-      .map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td class="mono">${esc(v)}</td></tr>`).join("");
-    target.innerHTML = `
-      <table><tbody>${summary}</tbody></table>
-      ${rows || `<div class="empty">nothing found for this profile</div>`}`;
+    let body;
+    if (mode === "reconcile") {
+      const refs = (result.references || []).map((r) => `
+        <tr><td style="width:90px"><span class="badge ${RECON_STATUS[r.status] || "gone"}">${esc(r.status)}</span></td>
+          <td class="mono">${esc(r.reference && r.reference.uri)}</td>
+          <td class="mono" style="color:var(--muted)">${esc(r.file && r.file.relative_path)}:${esc(r.reference && r.reference.line)} — ${esc(r.message)}</td></tr>`).join("");
+      body = refs
+        ? `<table><thead><tr><th>status</th><th>reference</th><th>where / why</th></tr></thead><tbody>${refs}</tbody></table>`
+        : `<div class="empty">no dent8:// references in this profile's native files</div>`;
+    } else {
+      const files = (result.files || []).map((f) => `
+        <tr><td class="mono">${esc(f.relative_path)}</td><td class="mono" style="color:var(--muted)">${esc(f.kind)}</td>
+          <td>${f.has_receipt_marker ? `<span class="badge fresh">receipts</span>` : `<span class="badge gone">no markers</span>`}</td>
+          <td class="mono" style="color:var(--muted)">${esc(f.size_bytes)} B</td></tr>`).join("");
+      body = files
+        ? `<table><thead><tr><th>file</th><th>kind</th><th>markers</th><th>size</th></tr></thead><tbody>${files}</tbody></table>`
+        : `<div class="empty">no native memory/rules files found for this profile</div>`;
+    }
+    target.innerHTML = `${guardLine(result.guard)}${summaryChips(result.summary)}${body}`;
   } catch (error) {
     target.innerHTML = `<div class="error">${esc(error.message)}</div>`;
   }
@@ -568,15 +606,30 @@ $("#drawer-close").addEventListener("click", () => $("#drawer").classList.remove
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") $("#drawer").classList.remove("open");
 });
+const TABS = ["overview", "facts", "activity", "conflicts", "whatif", "doctor", "witness", "native"];
+function selectTab(name, fromHash) {
+  if (!TABS.includes(name)) name = "overview";
+  currentTab = name;
+  document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  TABS.forEach((tab) => $(`#tab-${tab}`).toggleAttribute("hidden", tab !== name));
+  if (!fromHash && location.hash.slice(1) !== name) location.hash = name; // shareable + back-button
+  render();
+}
 document.querySelectorAll("nav button").forEach((button) =>
-  button.addEventListener("click", () => {
-    currentTab = button.dataset.tab;
-    document.querySelectorAll("nav button").forEach((b) => b.classList.toggle("active", b === button));
-    ["overview", "facts", "activity", "conflicts", "whatif", "doctor", "witness", "native"].forEach((name) =>
-      $(`#tab-${name}`).toggleAttribute("hidden", name !== currentTab));
-    render();
-  }));
+  button.addEventListener("click", () => selectTab(button.dataset.tab)));
+window.addEventListener("hashchange", () => selectTab(location.hash.slice(1), true));
 
+// Click the live pill to pause/resume the 3s poll (paused shows a static snapshot).
+let polling = true;
+$("#live-pill").style.cursor = "pointer";
+$("#live-pill").title = "click to pause auto-refresh";
+$("#live-pill").addEventListener("click", () => {
+  polling = !polling;
+  if (polling) { refresh(); pollTimer = setInterval(refresh, 3000); }
+  else { clearInterval(pollTimer); setPill("#live-pill", "paused", "warn"); }
+});
+
+selectTab(location.hash.slice(1) || "overview", true);
 refresh();
 pollTimer = setInterval(refresh, 3000);
 </script>
