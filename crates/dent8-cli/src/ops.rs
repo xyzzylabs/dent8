@@ -528,9 +528,9 @@ enum BackendWriteLease {
     Postgres(dent8_store_postgres::WriteLease),
 }
 
-/// An exclusive advisory OS lock (flock on Unix, `LockFileEx` on Windows via `fs4`) on the file
-/// dev store's sibling lockfile (`<log>.lock`). Pure RAII: dropping the handle closes the fd and
-/// releases the lock (fs4 also releases explicitly on close). A dedicated lockfile — rather than
+/// An exclusive advisory OS lock (flock on Unix, `LockFileEx` on Windows, via the standard
+/// library's `File::lock`) on the file dev store's sibling lockfile (`<log>.lock`). Pure RAII:
+/// dropping the handle closes the fd and releases the lock. A dedicated lockfile — rather than
 /// the append fd itself — keeps the lock independent of the log's open/append lifecycle.
 struct FileWriteLease {
     _file: std::fs::File,
@@ -625,9 +625,10 @@ fn acquire_file_write_lease() -> Result<FileWriteLease, String> {
         .truncate(false)
         .open(&lock_path)
         .map_err(|error| format!("write lease: cannot open lock file {lock_path}: {error}"))?;
-    // Cross-platform advisory exclusive lock via fs4 (flock on Unix, `LockFileEx` on Windows);
-    // called through the trait explicitly so it is used regardless of any inherent `File::lock`.
-    fs4::FileExt::lock(&file)
+    // Cross-platform advisory exclusive lock via the standard library (`flock` on Unix,
+    // `LockFileEx` on Windows; stabilized in Rust 1.89, covered by this crate's 1.94 MSRV). The
+    // lock is released when the handle is dropped (see `FileWriteLease`).
+    file.lock()
         .map_err(|error| format!("write lease: cannot lock {lock_path}: {error}"))?;
     Ok(FileWriteLease { _file: file })
 }
