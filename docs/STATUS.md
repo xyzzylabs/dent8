@@ -21,6 +21,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh).
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
   [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
+  [--no-native-memory-guard]
   [--witness] [--witness-log PATH] [--witness-pubkey PATH]
   [--install-mcp] [--mcp-config PATH] [--mcp-command COMMAND|--mcp-local-bin]
   [--mcp-use-daemon] [--mcp-daemon-socket PATH] [--mcp-dry-run|--mcp-check]`** —
@@ -28,7 +29,17 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   authority registry granting a chosen source (default `source:local` / High), creates a
   shell-loadable env file (`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`, and either
   `DENT8_LOG` or `DENT8_STORE_URL`), and initializes the file dev log for the default file
-  store (`--agent` profiles use the matching per-agent log name shown in `examples/`). With
+  store (`--agent` profiles use the matching per-agent log name shown in `examples/`).
+  **By default it also wires the enforced `PreToolUse` native-memory guard** into the agent's
+  project hook config (`.claude/settings.json` when no `--agent`, otherwise the selected agent's
+  hook file), so raw agent edits to `CLAUDE.md`/`AGENTS.md`/… are blocked out of the box instead
+  of shipping only a sample the user must copy in. The merge is idempotent (an existing guard
+  entry is replaced, unrelated hooks preserved) and the wired command degrades gracefully — it is
+  fronted by `command -v dent8 >/dev/null 2>&1 || exit 0`, so a clone that has the hook wired but
+  no `dent8` on `PATH` allows the write (exit 0) rather than bricking every edit. Opt out with
+  `--no-native-memory-guard`; the runtime soft-off (`DENT8_HOOK_ENFORCE=0`) and sanctioned bypass
+  (`DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`) still apply per write. `--agent hecate` and non-`.dent8`
+  dirs skip the guard with a note (no stable project hook file). With
   `--identity`, it also creates a signed source identity bundle and
   `.dent8/identity-<source>.env`;
   `--agent` selects the source id for a known agent and implies `--identity`. With
@@ -92,7 +103,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   a best-effort **bypass guard** posture for known hook-capable profiles: OK when an installed
   native-memory hook config references `dent8 hook native-memory-guard` with
   `DENT8_HOOK_ENFORCE=1`, WARN when the hook is missing/advisory, and WARN/unknown for
-  profiles whose hook schema is host-specific. It also runs the same read-only native scan as
+  profiles whose hook schema is host-specific. Since `dent8 init` now installs the enforced
+  guard by default, this reads OK out of the box for the configured agent (doctor reads the
+  actual hook file, so it reflects reality — including after `--no-native-memory-guard`). It also runs the same read-only native scan as
   `dent8 native scan --agent <profile>` and reports how many native memory/rules files exist
   and how many contain dent8 receipt markers. With
   `--write-check`, it runs an explicit acceptance probe through the installed MCP server
@@ -400,7 +413,10 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   `.windsurfrules`), runs `dent8 verify` on session/post-write audit modes, and exits `2`
   when `DENT8_HOOK_ENFORCE=1` blocks a direct native-memory write that would bypass the
   fact-event firewall. It is a bypass guard around provider files, not an alternate dent8
-  store.
+  store. **`dent8 init` installs and enforces this guard by default** (was opt-in — the guard
+  used to ship only as a sample hook config the user copied in); opt out with
+  `dent8 init --no-native-memory-guard`. It only covers agents whose `PreToolUse` hook init
+  wires; a shell-capable agent that routes around its own hook system is still out of scope.
 - **`dent8 native scan --agent <profile> [--dir .dent8] [--root PATH]`** — a read-only audit of
   provider-native memory/rules files. It scans known native surfaces (`AGENTS.md`, `CLAUDE.md`,
   `CLAUDE.local.md`, `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, `.devin/rules`,
