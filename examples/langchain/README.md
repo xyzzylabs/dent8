@@ -56,6 +56,7 @@ agent = create_react_agent("openai:gpt-4o-mini", tools)
 ```sh
 pip install langchain-mcp-adapters langgraph "langchain[openai]"
 export OPENAI_API_KEY=...          # any LangChain-supported model works
+dent8 init --identity --source source:langchain   # provision the signed source the agent writes under
 python dent8_memory_agent.py
 ```
 
@@ -91,6 +92,7 @@ const agent = createReactAgent({ llm: new ChatOpenAI({ model: "gpt-4o-mini" }), 
 ```sh
 npm i @langchain/mcp-adapters @langchain/langgraph @langchain/openai
 export OPENAI_API_KEY=...          # any LangChain-supported model works
+dent8 init --identity --source source:langchain   # provision the signed source the agent writes under
 npx tsx dent8_memory_agent.ts
 ```
 
@@ -109,9 +111,12 @@ Point each at `{ command: "dent8", args: ["mcp", "serve"] }`:
 
 - MCP-client APIs move fast; if `MultiServerMCPClient` / `get_tools()` has shifted, check the
   langchain-mcp-adapters README — the dent8 side (`dent8 mcp serve`) is stable.
-- For a protected local setup, run `dent8 init --identity --source <source>` and pass the
-  generated `.dent8/env` + `.dent8/identity-<source>.env` variables into the process that launches
-  `dent8 mcp serve`. For an operational backend, set `DENT8_STORE_URL` (a `postgres://…` /
+- A signed identity is **required** for any write above the agent tier (medium/high/canonical):
+  v0.8.0 rejects such a write unless it carries a valid signed grant whose source matches. Run
+  `dent8 init --identity --source <source>` and pass the generated `.dent8/env` +
+  `.dent8/identity-<source>.env` variables (or the `DENT8_TRUST`/`DENT8_GRANT`/`DENT8_IDENTITY_KEY`
+  set the samples wire up) into the process that launches `dent8 mcp serve`. Agent-tier (`low`)
+  writes work without one. For an operational backend, set `DENT8_STORE_URL` (a `postgres://…` /
   `sqlite://…` build). dent8 stays the firewall; the framework just calls it.
 - First-class framework adapters now ship for LangChain (Python, `dent8.langchain`), the
   Vercel AI SDK (`dent8/ai`), and LangChain.js (`dent8/langchain`); MCP remains the

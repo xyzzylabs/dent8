@@ -47,10 +47,12 @@ branch:<branch> status
 user:<name> preference
 ```
 
-## Optional hook guard
+## Native-memory guard (installed by default)
 
-After MCP works, merge
+`dent8 init --agent claude-code` already wires an **enforced** `PreToolUse` native-memory guard
+into `.claude/settings.json`, so direct edits to `CLAUDE.md`, `MEMORY.md`, and `AGENTS.md` are
+blocked out of the box (opt out with `dent8 init --no-native-memory-guard`; per write,
+`DENT8_ALLOW_NATIVE_MEMORY_WRITE=1` is the sanctioned bypass and `DENT8_HOOK_ENFORCE=0` softens
+it to advisory). To customize the guard or layer the fuller session loop on top, merge
 [`../agent-hooks/claude-code/settings.sample.json`](../agent-hooks/claude-code/settings.sample.json)
-into `.claude/settings.json` or another Claude Code settings scope. The sample blocks direct
-edits to `CLAUDE.md`, `MEMORY.md`, and `AGENTS.md` unless you explicitly set
-`DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`.
+into `.claude/settings.json` or another Claude Code settings scope.

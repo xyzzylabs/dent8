@@ -28,18 +28,29 @@ import { resolve } from "node:path";
 async function main(): Promise<void> {
   // Spawn `dent8 mcp serve` (stdio JSON-RPC) and expose its tools to LangChain.js.
   // DENT8_LOG points the firewall at this agent's memory log; set DENT8_STORE_URL
-  // instead for an operational postgres://… / sqlite://… backend. The env replaces
-  // the child environment, so spread process.env to keep PATH et al.
+  // instead for an operational postgres://… / sqlite://… backend. The signed-identity
+  // vars carry the source grant this server writes under — v0.8.0 rejects any write above
+  // the agent tier without one, so the high-authority write below needs it. Provision the
+  // bundle once with `dent8 init --identity --source source:langchain` (see README). The env
+  // replaces the child environment, so spread process.env to keep PATH et al.
   const client = new MultiServerMCPClient({
     mcpServers: {
       dent8: {
         transport: "stdio",
         command: "dent8",
         args: ["mcp", "serve"],
-        env: { ...process.env, DENT8_LOG: resolve("agent-memory.jsonl") } as Record<
-          string,
-          string
-        >,
+        env: {
+          ...process.env,
+          DENT8_LOG: resolve("agent-memory.jsonl"),
+          DENT8_AUTHORITY: process.env.DENT8_AUTHORITY ?? resolve(".dent8/authority.json"),
+          DENT8_REQUIRE_AUTHORITY: process.env.DENT8_REQUIRE_AUTHORITY ?? "1",
+          DENT8_TRUST: process.env.DENT8_TRUST ?? resolve(".dent8/trust.json"),
+          DENT8_REQUIRE_IDENTITY: process.env.DENT8_REQUIRE_IDENTITY ?? "1",
+          DENT8_GRANT:
+            process.env.DENT8_GRANT ?? resolve(".dent8/grants/source_langchain.grant.json"),
+          DENT8_IDENTITY_KEY:
+            process.env.DENT8_IDENTITY_KEY ?? resolve(".dent8/identities/source_langchain.key"),
+        } as Record<string, string>,
       },
     },
   });
@@ -63,8 +74,8 @@ async function main(): Promise<void> {
         role: "user",
         content:
           "Record that this repo's database is postgres (subject repo:myproj, predicate " +
-          "database, authority high, source owner) through dent8, then run a dent8 verify " +
-          "and tell me the integrity result.",
+          "database, authority high, source source:langchain) through dent8, then run a dent8 " +
+          "verify and tell me the integrity result.",
       },
     ],
   });

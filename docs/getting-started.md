@@ -19,15 +19,15 @@ trimmed but verbatim.
 In a git repository:
 
 ```sh
-dent8 init --source source:owner
+dent8 init --source source:human
 set -a; . .dent8/env; set +a
-dent8 assert repo:myproj deploy_target production --authority high --source source:owner
+dent8 assert repo:myproj deploy_target production --authority high --source source:human
 dent8 explain repo:myproj deploy_target
 dent8 context
 ```
 
-`init` creates `.dent8/` (file log + authority registry with human > CI > agent defaults plus
-your `source:local` grant), **by default provisions a signed source identity** (trust root +
+`init` creates `.dent8/` (file log + authority registry with human > CI > agent defaults, here
+granting `source:human` at high), **by default provisions a signed source identity** (trust root +
 issuer key + source key + grant, wired into `.dent8/env`) so signed above-agent writes work out of
 the box, and, **by default, wires the enforced `PreToolUse` native-memory guard** into the agent's
 hook config (`.claude/settings.json` with no `--agent`, otherwise the selected agent's hook file)
@@ -42,7 +42,7 @@ write, `DENT8_HOOK_ENFORCE=0` softens the guard to advisory and `DENT8_ALLOW_NAT
 is the sanctioned bypass (the reviewed `dent8 export --target` path never sets it). You do **not**
 need Postgres or MCP for the first fact, and the signing identity that above-agent writes require is
 provisioned automatically by `init` (no extra setup).
-Optional smoke: `dent8 doctor --source source:owner --write-check`. To *see* the whole
+Optional smoke: `dent8 doctor --source source:human --write-check`. To *see* the whole
 thing — live fact table, integrity receipts, replay timelines, an interactive what-if —
 run **`dent8 ui`**: a read-only control plane opens in your browser, served straight from
 the binary (localhost-only; every payload comes from the same firewall path as the CLI).
@@ -96,25 +96,28 @@ Full details, pinned/feature installs, and platform caveats: [Installation](inst
 Run `init` at your repo root (it wants an enclosing git repo):
 
 ```
-$ dent8 init
+$ dent8 init --source source:human
 initialized dent8 in .../.dent8
-  authority: .../.dent8/authority.json (granted source:local max=high)
+  authority: .../.dent8/authority.json (granted source:human max=high)
   store: file dev log at .../.dent8/memory.jsonl
   env: .../.dent8/env
-  identity: .../.dent8/grants/source_local.grant.json (source key: .../.dent8/identities/source_local.key)
-  identity env: .../.dent8/identity-local.env
+  identity: .../.dent8/grants/source_human.grant.json (source key: .../.dent8/identities/source_human.key)
+  identity env: .../.dent8/identity-human.env
 
 Next (first fact in under a minute once `dent8` is on PATH):
   set -a
   . '.../.dent8/env'
-  . '.../.dent8/identity-local.env'
+  . '.../.dent8/identity-human.env'
   set +a
-  dent8 assert repo:myproj deploy_target production --authority high --source source:local
+  dent8 assert repo:myproj deploy_target production --authority high --source source:human
   dent8 explain repo:myproj deploy_target
-  dent8 doctor --source source:local --write-check
+  dent8 doctor --source source:human --write-check
 
 native-memory guard created (enforced PreToolUse hook): .../.claude/settings.json
 ```
+
+Plain `dent8 init` (no `--source`) provisions `source:local` instead; this walkthrough uses
+`source:human` so the seeded facts match the **human > CI > agent** model below.
 
 It provisions a `.dent8/` directory holding the file dev store (`memory.jsonl`), the
 authority profile (`authority.json`), the env pointers (`env`), and a signed **source
@@ -126,11 +129,14 @@ writes can be signed. It also installs the native-memory guard, a `PreToolUse` h
 ```
 $ ls .dent8
 active-grants.json  authority.json  env  grant-log.jsonl  grants/
-identities/  identity-local.env  memory.jsonl  trust.json
+identities/  identity-human.env  memory.jsonl  trust.json
 ```
 
-`.dent8/env` holds the pointers the CLI reads (`DENT8_AUTHORITY`, `DENT8_LOG`,
-`DENT8_REQUIRE_AUTHORITY=1`). Load it once per shell:
+`.dent8/env` holds the pointers the CLI reads — the store and authority ceiling (`DENT8_LOG`,
+`DENT8_AUTHORITY`, `DENT8_REQUIRE_AUTHORITY=1`) plus the signed-identity vars `dent8 init` now
+provisions by default (`DENT8_REQUIRE_IDENTITY=1`, `DENT8_TRUST`, `DENT8_ACTIVE_GRANTS`,
+`DENT8_GRANT`, `DENT8_IDENTITY_KEY`), so sourcing it makes this shell's above-agent writes
+signed. Load it once per shell:
 
 ```sh
 set -a; . .dent8/env; set +a
@@ -142,15 +148,15 @@ matters for the **enforcement** switch: `DENT8_REQUIRE_AUTHORITY=1` lives in `.d
 load it when you want deny-by-default authority in the current shell.
 
 **`init` auto-seeds the authority profile.** As of PR #12 you no longer run a follow-up
-command — `init` writes the **human > CI > agent** ranking (plus the `source:local` init
-source at high) straight into `authority.json`:
+command — `init` writes the **human > CI > agent** ranking straight into `authority.json`
+(here `--source source:human` grants the human source at high; plain `dent8 init` would add a
+separate `source:local` at high instead):
 
 ```
 $ dent8 authority list
 source:agent  max=low
 source:ci  max=medium
 source:human  max=high
-source:local  max=high
 ```
 
 **Store discovery is repo-confined.** dent8 finds the nearest ancestor holding a `.git`, then
@@ -163,43 +169,61 @@ overrides bypass discovery entirely.
 
 ## 3. Seed real facts
 
-There are three ways to get facts into the base.
+There are three ways to get facts into the base. The walkthrough writes as the **human > CI >
+agent** sources: `init --source source:human` already provisioned (and `. .dent8/env` loaded)
+the human signing identity; add the CI source's identity too, so its `medium` writes are signed
+(the issuer key is the one `init` created, default `~/.config/dent8/issuer.key`; agents write at
+the `low` tier and need none):
+
+```sh
+dent8 identity agent-keygen source:ci --out .dent8/identities/source_ci.key
+dent8 identity grant-issue source:ci --public-key .dent8/identities/source_ci.key.pub \
+  --max medium --issuer owner --issuer-key ~/.config/dent8/issuer.key \
+  --out .dent8/grants/source_ci.grant.json
+dent8 identity repair-env --source source:ci
+```
 
 **(a) By hand, with `assert`.** Give each fact a subject (`<kind>:<key>`), a predicate, a
-value, and an authority + source. `--ttl` accepts human durations (`90d`, `12h`, `30m`):
+value, and an authority + source. These are signed as `source:human`, the identity this shell
+loaded — v0.8.0 rejects an above-agent write without one. `--ttl` accepts human durations
+(`90d`, `12h`, `30m`):
 
 ```
-$ dent8 assert repo:dent8 msrv "1.94" --authority high --source source:local --ttl 90d
+$ dent8 assert repo:dent8 msrv "1.94" --authority high --source source:human --ttl 90d
 ACCEPTED  repo:dent8 msrv = "1.94"  (authority=high)
-  seq=3  hash=3b2b5821c426…
+  seq=0  hash=c659103db121…
 
-$ dent8 assert repo:dent8 build_command "cargo build --release" --authority high --source source:local
+$ dent8 assert repo:dent8 build_command "cargo build --release" --authority high --source source:human
 ACCEPTED  repo:dent8 build_command = "cargo build --release"  (authority=high)
-  seq=4  hash=6ddf4ad8324b…
+  seq=1  hash=7e0edc1225ba…
+
+$ dent8 assert repo:dent8 commit.attribution "no Co-Authored-By trailers and no AI attribution" --authority high --source source:human
+ACCEPTED  repo:dent8 commit.attribution = "no Co-Authored-By trailers and no AI attribution"  (authority=high)
+  seq=2  hash=062e40d99d4a…
 ```
 
 The firewall in action — a low-authority write cannot overwrite the high-authority MSRV fact
 (this exits `1`):
 
 ```
-$ dent8 supersede repo:dent8 msrv "1.90" --authority low --source source:local
+$ dent8 supersede repo:dent8 msrv "1.90" --authority low --source source:human
 REJECTED: firewall rejected the write: insufficient authority: low may not override or remove an incumbent of high
   the incumbent recorded the survived challenge (fact.challenge_rejected)
 ```
 
 **(b) In bulk, from a proposals file, with `capture`.** Write one JSON proposal per line
-(`authority` / `source` are optional — an unattributed line lands at `source:agent` @ `low`):
-
-```jsonl
-{"subject": "repo:dent8", "predicate": "commit.attribution", "value": "no Co-Authored-By trailers and no AI attribution", "authority": "high", "source": "source:human"}
-{"subject": "repo:dent8", "predicate": "lint_gate", "value": "cargo clippy --workspace --all-targets -- -D warnings"}
-```
+(`authority` / `source` are optional). When a signed grant is active (the default), an
+unattributed line inherits that grant's source and max authority; captured **without** a
+signing grant — as an agent's own `SessionEnd` hook runs — it lands at `source:agent` @ `low`.
+An agent queues proposals it can't sign at human authority, so drain them unsigned:
 
 ```
-$ dent8 capture .dent8/proposals.jsonl --consume --keep-failed
-line 1: ACCEPTED  repo:dent8 commit.attribution = "no Co-Authored-By trailers and no AI attribution"  (authority=high)
-line 2: ACCEPTED  repo:dent8 lint_gate = "cargo clippy --workspace --all-targets -- -D warnings"  (authority=low)
-captured 2 proposal(s): 2 accepted, 0 contested, 0 rejected, 0 invalid
+$ ( unset DENT8_GRANT DENT8_IDENTITY_KEY DENT8_REQUIRE_IDENTITY DENT8_TRUST DENT8_ACTIVE_GRANTS
+    echo '{"subject": "repo:dent8", "predicate": "lint_gate", "value": "cargo clippy --workspace --all-targets -- -D warnings"}' \
+      > .dent8/proposals.jsonl
+    dent8 capture .dent8/proposals.jsonl --consume --keep-failed )
+line 1: ACCEPTED  repo:dent8 lint_gate = "cargo clippy --workspace --all-targets -- -D warnings"  (authority=low)
+captured 1 proposal(s): 1 accepted, 0 contested, 0 rejected, 0 invalid
 consumed .dent8/proposals.jsonl
 ```
 
@@ -370,14 +394,23 @@ jobs:
       - uses: actions/checkout@v4
       - run: cargo install dent8-cli --locked
       - name: record test command as a CI-sourced fact
+        env:
+          DENT8_CI_KEY: ${{ secrets.DENT8_CI_KEY }}   # source:ci private signing key, a CI secret
         run: |
           set -a; . .dent8/env; set +a
+          # The committed .dent8/ carries source:ci's grant + trust; its private key is
+          # gitignored, so materialize it from the CI secret and point the identity at
+          # source:ci — a medium write above the agent tier must be signed (see
+          # docs/team-identity.md). source:ci is capped at medium, so it can never mint high.
+          umask 077; printf '%s' "$DENT8_CI_KEY" > .dent8/identities/source_ci.key
+          export DENT8_GRANT=.dent8/grants/source_ci.grant.json
+          export DENT8_IDENTITY_KEY=.dent8/identities/source_ci.key
           dent8 assert repo:dent8 test_command "cargo test --workspace" \
             --authority medium --source source:ci
 ```
 
 **(d) MCP — live tool-mediated access.** For any MCP-capable client, `dent8 mcp serve` exposes
-the belief surface over JSON-RPC 2.0 stdio (16 tools; the 7 write tools go through the same
+the belief surface over JSON-RPC 2.0 stdio (17 tools; the 7 write tools go through the same
 firewall as the CLI). Reading a fact via `resources/read` also records a `fact.retrieved`
 audit event by default (opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`) — so MCP retrieval is
 replayable like `dent8 context --record-retrieval`. The canonical `mcpServers` block:
@@ -429,16 +462,16 @@ expected on a no-witness file store — `init` provisions the signed identity, s
 pass):
 
 ```
-$ dent8 doctor --source source:local --write-check
+$ dent8 doctor --source source:human --write-check
 dent8 doctor
   OK  binary: .../dent8
   OK  file dev store: .../.dent8/memory.jsonl (0 event(s))
-  OK  authority: .../.dent8/authority.json (4 source(s); source:local max=high)
+  OK  authority: .../.dent8/authority.json (3 source(s); source:human max=high)
   OK  identity trust: .../.dent8/trust.json (1 issuer(s))
-  OK  identity grant: .../.dent8/grants/source_local.grant.json (source=source:local max=high issuer=owner scope=*)
-  OK  identity active grant: .../.dent8/active-grants.json (current for source:local)
-  OK  identity source: grant source matches doctor source source:local
-  OK  identity key: .../.dent8/identities/source_local.key (matches grant public key)
+  OK  identity grant: .../.dent8/grants/source_human.grant.json (source=source:human max=high issuer=owner scope=*)
+  OK  identity active grant: .../.dent8/active-grants.json (current for source:human)
+  OK  identity source: grant source matches doctor source source:human
+  OK  identity key: .../.dent8/identities/source_human.key (matches grant public key)
   WARN  witness: not configured (optional; set DENT8_WITNESS_LOG + DENT8_WITNESS_PUBKEY for signed tree heads)
   OK  verify: OK: 0 event(s) ... STRUCTURAL integrity holds ...
   OK  mcp: `dent8 mcp serve` is available over stdio
@@ -450,6 +483,9 @@ dent8 doctor
 and exits `1`:
 
 ```
+$ dent8 derive service:api min_toolchain "1.94" --basis repo:dent8 msrv --authority high --source source:human
+ACCEPTED  service:api min_toolchain = "1.94"  (authority=high, derived from repo:dent8 msrv)
+
 $ dent8 retract repo:dent8 msrv --authority high --source source:human
 ACCEPTED  retracted 1 believed fact of repo:dent8 msrv  (authority=high)
 
@@ -462,7 +498,8 @@ INTEGRITY ISSUES (1 found):
 a winner); `context` flags it inline:
 
 ```
-$ dent8 contradict repo:dent8 test_command "cargo nextest run" --authority medium --source source:ci
+$ ( set -a; . .dent8/identity-ci.env; set +a
+    dent8 contradict repo:dent8 test_command "cargo nextest run" --authority medium --source source:ci )
 CONTESTED  repo:dent8 test_command: "cargo test --workspace" (incumbent) vs "cargo nextest run"  (authority=medium)
   both are now believed; resolve with `supersede` (install a winner) or `retract`.
 

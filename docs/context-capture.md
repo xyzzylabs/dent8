@@ -156,17 +156,37 @@ that prepends `dent8 context` output and pipes collected proposals to `dent8 cap
 
 ## Worked example (this repository)
 
-Seeded against a fresh store for the dent8 repo itself:
+Seeded against a fresh store. The two above-agent facts (`source:human` @ high and `source:ci`
+@ medium) each need a **signed identity** — v0.8.0 rejects any write above the agent tier
+without one — so provision both up front (the issuer key is the one `dent8 init` created,
+default `~/.config/dent8/issuer.key`). The agent's proposals stay at the `low` tier and need no
+identity:
 
 ```sh
+$ dent8 init --source source:human            # trust root + issuer key + source:human identity
+$ dent8 identity agent-keygen source:ci --out .dent8/identities/source_ci.key
+$ dent8 identity grant-issue source:ci --public-key .dent8/identities/source_ci.key.pub \
+    --max medium --issuer owner --issuer-key ~/.config/dent8/issuer.key \
+    --out .dent8/grants/source_ci.grant.json
+$ dent8 identity repair-env --source source:ci
 $ dent8 authority defaults
-seeded the default authority profile (human > CI > agent) in ./dent8-authority.json:
-  added source:human  max=high
-  added source:ci  max=medium
-  added source:agent  max=low
+seeded the default authority profile (human > CI > agent) in .dent8/authority.json:
+  kept source:human  max=high
+  kept source:ci  max=medium
+  kept source:agent  max=low
+the registry is now deny-by-default: unlisted sources are blocked until granted with `dent8 authority add`.
+```
 
-$ dent8 assert repo:dent8 repo.database "postgres (operational) and embedded sqlite; file dev log by default" --authority high --source source:human
-$ dent8 assert repo:dent8 repo.test_command "cargo test --workspace" --authority medium --source source:ci
+Load the store and ceiling for the shell — but **not** a source grant, so the agent's
+unattributed proposals below land at `source:agent` @ `low`. Each signed fact is written in a
+subshell that loads only that source's identity:
+
+```sh
+$ export DENT8_LOG=.dent8/memory.jsonl DENT8_AUTHORITY=.dent8/authority.json DENT8_REQUIRE_AUTHORITY=1
+$ ( set -a; . .dent8/identity-human.env; set +a
+    dent8 assert repo:dent8 repo.database "postgres (operational) and embedded sqlite; file dev log by default" --authority high --source source:human )
+$ ( set -a; . .dent8/identity-ci.env; set +a
+    dent8 assert repo:dent8 repo.test_command "cargo test --workspace" --authority medium --source source:ci )
 $ echo '{"subject": "repo:dent8", "predicate": "cli_binary", "value": "dent8"}' | dent8 capture
 line 1: ACCEPTED  repo:dent8 cli_binary = "dent8"  (authority=low)
 captured 1 proposal(s): 1 accepted, 0 contested, 0 rejected, 0 invalid

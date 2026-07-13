@@ -25,8 +25,10 @@ fi
 # Clean rebuild: the store is machine-local and fully reproduced below.
 rm -rf .dent8
 
-# 1. Initialize the local store (authority.json, env, memory.jsonl).
-"$DENT8_BIN" init --force
+# 1. Initialize the local store (authority.json, env, memory.jsonl) and provision a signed
+#    identity for source:human, so the human-authored facts below can be captured at high
+#    authority (v0.8.0 requires a valid signed identity for any write above the agent tier).
+"$DENT8_BIN" init --force --source source:human
 
 # 2. Load machine-local env: authority registry path, event log, require-authority.
 set -a

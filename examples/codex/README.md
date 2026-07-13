@@ -78,9 +78,11 @@ branch:<branch> status
 user:<name> preference
 ```
 
-## Optional hook guard
+## Native-memory guard (installed by default)
 
-After MCP works, you can add [`../agent-hooks/codex/hooks.sample.json`](../agent-hooks/codex/hooks.sample.json)
-to a trusted `.codex/hooks.json` or merge it into your Codex hook config. It runs `dent8
-verify` on session boundaries and blocks direct edits to native memory/rules files such as
-`AGENTS.md`, forcing durable facts through dent8 instead.
+`dent8 init --agent codex` already wires an **enforced** native-memory guard into
+`.codex/hooks.json`, blocking direct edits to native memory/rules files such as `AGENTS.md` and
+forcing durable facts through dent8 instead (opt out with `dent8 init --no-native-memory-guard`).
+To customize it or add the fuller profile that also runs `dent8 verify` on session boundaries,
+merge [`../agent-hooks/codex/hooks.sample.json`](../agent-hooks/codex/hooks.sample.json) into
+your Codex hook config.

@@ -99,7 +99,8 @@ Client-specific examples:
 - [Vercel AI SDK](../vercel-ai-sdk/) — discover dent8 MCP tools with `@ai-sdk/mcp` and pass
   them to `generateText`.
 
-Optional hook guards for native memory/rules files live in
+`dent8 init` installs an enforced native-memory guard for the selected agent by default; the
+customizable hook profiles for native memory/rules files live in
 [`../agent-hooks/`](../agent-hooks/). Install MCP first; hooks only catch bypasses.
 
 ## Try it without a client

@@ -44,10 +44,12 @@ branch:<branch> status
 user:<name> preference
 ```
 
-## Optional hook guard
+## Native-memory guard (installed by default)
 
-After MCP works, copy
-[`../agent-hooks/cascade/hooks.sample.json`](../agent-hooks/cascade/hooks.sample.json) to
-`.windsurf/hooks.json` or merge its `pre_write_code` / `post_write_code` entries into your
-existing hooks. The guard blocks direct native memory/rules writes when
-`DENT8_HOOK_ENFORCE=1` and runs `dent8 verify` after relevant writes.
+`dent8 init --agent cascade` already wires an **enforced** native-memory guard into
+`.windsurf/hooks.json`, blocking direct native memory/rules writes out of the box (opt out with
+`dent8 init --no-native-memory-guard`; `DENT8_HOOK_ENFORCE=0` softens it to advisory). To
+customize it or add the `post_write_code` `dent8 verify` pass, merge the `pre_write_code` /
+`post_write_code` entries from
+[`../agent-hooks/cascade/hooks.sample.json`](../agent-hooks/cascade/hooks.sample.json) into your
+existing hooks.

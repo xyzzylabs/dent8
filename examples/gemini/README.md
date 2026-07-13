@@ -56,10 +56,12 @@ branch:<branch> status
 user:<name> preference
 ```
 
-## Optional hook guard
+## Native-memory guard (installed by default)
 
-After MCP works, merge
+`dent8 init --agent gemini` already wires an **enforced** native-memory guard into
+`.gemini/settings.json`, blocking direct writes to `GEMINI.md`, `AGENTS.md`, and other native
+memory/rules files out of the box (opt out with `dent8 init --no-native-memory-guard`; per
+write, `DENT8_ALLOW_NATIVE_MEMORY_WRITE=1` is the sanctioned bypass). To customize it or add the
+fuller profile that also runs `dent8 verify` on session boundaries, merge
 [`../agent-hooks/gemini/settings.sample.json`](../agent-hooks/gemini/settings.sample.json)
-into `.gemini/settings.json`. The sample runs `dent8 verify` on session boundaries and blocks
-direct writes to `GEMINI.md`, `AGENTS.md`, and other native memory/rules files unless you
-explicitly set `DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`.
+into `.gemini/settings.json`.

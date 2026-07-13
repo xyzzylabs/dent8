@@ -33,9 +33,10 @@ import { Dent8, Dent8Rejected } from "dent8";
 
 const d8 = new Dent8(); // finds `dent8` on PATH; new Dent8({ binary, env }) to pin
 
-// A high-authority write is signed as the active `source:*` identity (from `dent8 init`).
+// A high-authority write is signed as the active `source:*` identity (`source:local` from
+// `dent8 init`; pass `dent8 init --source source:<name>` to provision a different one).
 d8.assertFact("repo:myproj", "database", "postgres",
-              { authority: "high", source: "source:alice" });
+              { authority: "high", source: "source:local" });
 
 try {
   d8.supersede("repo:myproj", "database", "mysql",

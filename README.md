@@ -167,9 +167,10 @@ arbitrated at the append boundary (`EventStore::append`) before it is persisted:
 - **Tamper-evidence** — a SHA-256 hash chain over the log, plus an optional off-host
   **witness** (Ed25519 signed tree heads) that catches a history rewrite an internal re-check
   cannot.
-- **Signed identity** — optional issuer-signed grants bind a source to a key; every accepted
-  write carries a signature `verify` re-checks offline, backed by a hash-chained grant history
-  with first-class **revocation**.
+- **Signed identity** — issuer-signed grants bind a source to a key, **required for any write
+  above the agent tier** (medium/high/canonical); every accepted write carries a signature
+  `verify` re-checks offline, backed by a hash-chained grant history with first-class
+  **revocation**.
 
 Nothing is a black box: `dent8 replay` shows the full event history behind any fact, and
 `dent8 verify` re-checks integrity, supersession lineage, and retraction taint.

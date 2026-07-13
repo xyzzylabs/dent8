@@ -35,7 +35,7 @@ set +a
 
 DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness keygen
 
-dent8 assert person:alice favorite_drink tea --authority high --source user:alice
+dent8 assert person:alice favorite_drink tea --authority high --source source:local
 DENT8_WITNESS_KEY=.dent8/witness.key dent8 witness sign
 
 dent8 doctor

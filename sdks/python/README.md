@@ -33,9 +33,10 @@ from dent8 import Dent8, Dent8Rejected
 
 d8 = Dent8()  # finds `dent8` on PATH; Dent8(binary=..., env={"DENT8_LOG": ...}) to pin
 
-# A high-authority write is signed as the active `source:*` identity (from `dent8 init`).
+# A high-authority write is signed as the active `source:*` identity (`source:local` from
+# `dent8 init`; pass `dent8 init --source source:<name>` to provision a different one).
 d8.assert_fact("repo:myproj", "database", "postgres",
-               authority="high", source="source:alice")
+               authority="high", source="source:local")
 
 try:
     d8.supersede("repo:myproj", "database", "mysql",

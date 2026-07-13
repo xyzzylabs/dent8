@@ -11,21 +11,34 @@
 set -euo pipefail
 
 DENT8="${DENT8:-dent8}"
-# A run-scoped temp dir holds both the log and the Parquet, so cleanup is exact (appending
-# .parquet to a `mktemp` path would name a file mktemp never created and leak the one it did).
+# Isolate from any dent8 identity/store env the caller may have loaded (e.g. `. .dent8/env`),
+# so this demo's own temp store and registry are authoritative and it runs the same from
+# anywhere, including inside an initialized project.
+unset DENT8_STORE_URL DENT8_DAEMON_SOCKET
+unset DENT8_TRUST DENT8_REQUIRE_IDENTITY DENT8_GRANT DENT8_ACTIVE_GRANTS DENT8_IDENTITY_KEY
+# A run-scoped temp dir holds the log, the authority registry, and the Parquet, so cleanup is
+# exact (appending .parquet to a `mktemp` path would name a file mktemp never created and leak
+# the one it did).
 WORK="$(mktemp -d -t dent8-duckdb-demo.XXXXXX)"
 DENT8_LOG="$WORK/log.jsonl"
+DENT8_AUTHORITY="$WORK/authority.json"
 OUT="$WORK/events.parquet"
-export DENT8_LOG
+export DENT8_LOG DENT8_AUTHORITY DENT8_REQUIRE_AUTHORITY=1
+# The writes stay at the agent tier (low), so this analytics demo needs no signed identity;
+# above-agent (medium/high) writes require one — see docs/getting-started.md. Both sources are
+# granted at low so the firewall admits them.
+cat >"$DENT8_AUTHORITY" <<'JSON'
+{"sources":{"user:alice":{"max_authority":"low"},"assistant":{"max_authority":"low"}}}
+JSON
 trap 'rm -rf "$WORK"' EXIT
 
 echo "# 1. Build a belief history (asserts, a derivation, a retraction of the source)"
-$DENT8 assert person:alice favorite_drink tea --authority high --source user:alice
-$DENT8 assert person:alice city paris --authority medium --source user:alice
+$DENT8 assert person:alice favorite_drink tea --authority low --source user:alice
+$DENT8 assert person:alice city paris --authority low --source user:alice
 # A fact derived FROM another fact — records a claim->claim dependency edge (ADR 0010).
-$DENT8 derive person:alice shopping_item tea --basis person:alice favorite_drink --authority medium --source assistant
+$DENT8 derive person:alice shopping_item tea --basis person:alice favorite_drink --authority low --source assistant
 # Retract the source fact: its derivative is now poisoned (verify/export surface the taint).
-$DENT8 retract person:alice favorite_drink --authority high --source user:alice
+$DENT8 retract person:alice favorite_drink --authority low --source user:alice
 
 echo
 echo "# 2. Export the whole log to Parquet"

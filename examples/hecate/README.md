@@ -74,7 +74,10 @@ For Hecate-supervised Codex, Claude Code, Cursor Agent, or Grok Build sessions, 
 source id to the supervised agent (`source:codex`, `source:claude-code`, `source:cursor`, or
 `source:grok-build`) and run the matching `dent8 init --agent ...` profile.
 
-## Optional hook guard
+## Native-memory guard
 
-Use Hecate as the policy distributor: mount the same dent8 MCP server and pass the matching
-hook profile to the supervised agent. See [`../agent-hooks/hecate/`](../agent-hooks/hecate/).
+`dent8 init --agent hecate` deliberately does **not** wire a guard for Hecate itself — Hecate
+distributes policy to its child agents, and each child's own `dent8 init --agent <child>`
+installs its enforced native-memory guard by default. Use Hecate as the policy distributor:
+mount the same dent8 MCP server and pass the matching hook profile to the supervised agent. See
+[`../agent-hooks/hecate/`](../agent-hooks/hecate/).

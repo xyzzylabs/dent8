@@ -65,7 +65,10 @@ removed) for inspection or retry.
 
 Override the queue path with `DENT8_PROPOSALS` (default `.dent8/proposals.jsonl`, matching the
 live Claude Code `SessionEnd` hook). A verified run where one proposal is accepted and one
-malformed line is kept for retry:
+malformed line is kept for retry — the store was initialized with `dent8 init --source
+source:ci --authority medium`, so `.dent8/env` carries the CI source's signed grant and the
+`source:ci` proposal is admitted at `medium` (v0.8.0 requires a valid signed identity for any
+write above the agent tier):
 
 ```text
 $ cat .dent8/proposals.jsonl

@@ -41,9 +41,11 @@ branch:<branch> status
 user:<name> preference
 ```
 
-## Optional hook/rules guard
+## Native-memory guard (installed by default)
 
-Cursor should use dent8 through MCP first. Install the project hook profile from
+`dent8 init --agent cursor` already wires an **enforced** native-memory `preToolUse` guard into
+`.cursor/hooks.json` (Cursor 1.7+) by default (opt out with `dent8 init
+--no-native-memory-guard`). To customize it or add the `stop` capture, merge the project hook
+profile from
 [`../agent-hooks/cursor/hooks.sample.json`](../agent-hooks/cursor/hooks.sample.json) into
-`.cursor/hooks.json` for an enforced native-memory `preToolUse` guard and `stop` capture
-(Cursor 1.7+). Prefer project scope over `~/.cursor/hooks.json` for a single-repo store.
+`.cursor/hooks.json`; prefer project scope over `~/.cursor/hooks.json` for a single-repo store.

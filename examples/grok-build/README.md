@@ -65,9 +65,11 @@ branch:<branch> status
 user:<name> preference
 ```
 
-## Optional hook guard
+## Native-memory guard (installed by default)
 
-Install the project hook sample at `.grok/hooks/dent8.json` (not `~/.grok/hooks/`):
+`dent8 init --agent grok-build` already wires an **enforced** native-memory guard into
+`.grok/hooks/dent8.json` by default (opt out with `dent8 init --no-native-memory-guard`). To
+customize it, overwrite that file with the project hook sample (not `~/.grok/hooks/`):
 
 ```sh
 mkdir -p .grok/hooks

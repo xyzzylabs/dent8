@@ -34,15 +34,35 @@ from langgraph.prebuilt import create_react_agent
 async def main() -> None:
     # Spawn `dent8 mcp serve` (stdio JSON-RPC) and expose its tools to LangChain.
     # DENT8_LOG points the firewall at this agent's memory log; set DENT8_STORE_URL
-    # instead for an operational postgres://… / sqlite://… backend. The env dict
-    # replaces the child environment, so merge os.environ to keep PATH et al.
+    # instead for an operational postgres://… / sqlite://… backend. The signed-identity
+    # vars carry the source grant this server writes under — v0.8.0 rejects any write above
+    # the agent tier without one, so the high-authority write below needs it. Provision the
+    # bundle once with `dent8 init --identity --source source:langchain` (see README). The env
+    # dict replaces the child environment, so merge os.environ to keep PATH et al.
+    def _abs(path: str) -> str:
+        return os.path.abspath(path)
+
+    env = {
+        **os.environ,
+        "DENT8_LOG": _abs("agent-memory.jsonl"),
+        "DENT8_AUTHORITY": os.environ.get("DENT8_AUTHORITY", _abs(".dent8/authority.json")),
+        "DENT8_REQUIRE_AUTHORITY": os.environ.get("DENT8_REQUIRE_AUTHORITY", "1"),
+        "DENT8_TRUST": os.environ.get("DENT8_TRUST", _abs(".dent8/trust.json")),
+        "DENT8_REQUIRE_IDENTITY": os.environ.get("DENT8_REQUIRE_IDENTITY", "1"),
+        "DENT8_GRANT": os.environ.get(
+            "DENT8_GRANT", _abs(".dent8/grants/source_langchain.grant.json")
+        ),
+        "DENT8_IDENTITY_KEY": os.environ.get(
+            "DENT8_IDENTITY_KEY", _abs(".dent8/identities/source_langchain.key")
+        ),
+    }
     client = MultiServerMCPClient(
         {
             "dent8": {
                 "command": "dent8",
                 "args": ["mcp", "serve"],
                 "transport": "stdio",
-                "env": {**os.environ, "DENT8_LOG": os.path.abspath("agent-memory.jsonl")},
+                "env": env,
             }
         }
     )
@@ -61,8 +81,8 @@ async def main() -> None:
                     "role": "user",
                     "content": (
                         "Record that this repo's database is postgres (subject repo:myproj, "
-                        "predicate database, authority high, source owner) through dent8, then "
-                        "run a dent8 verify and tell me the integrity result."
+                        "predicate database, authority high, source source:langchain) through "
+                        "dent8, then run a dent8 verify and tell me the integrity result."
                     ),
                 }
             ]
