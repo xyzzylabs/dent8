@@ -1,0 +1,37 @@
+# Compile the LaTeX whitepaper (paper/dent8.tex) to a PDF and attach it as a build artifact.
+# This only builds/verifies the source — it never submits anywhere (arXiv submission is a
+# manual, human-gated step). Runs on changes to the paper and on demand.
+name: paper
+
+on:
+  push:
+    paths:
+      - "paper/**"
+      - ".github/workflows/paper.yml"
+  pull_request:
+    paths:
+      - "paper/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: compile dent8.tex
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compile the paper
+        uses: xu-cheng/latex-action@v3
+        with:
+          root_file: dent8.tex
+          working_directory: paper
+          latexmk_use_xelatex: false
+      - name: Upload the PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: dent8-paper-pdf
+          path: paper/dent8.pdf
+          if-no-files-found: error

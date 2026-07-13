@@ -1,0 +1,285 @@
+\documentclass[11pt]{article}
+
+% arXiv-ready single-column article. Builds with a standard TeX Live via
+% `latexmk -pdf dent8.tex` (two passes resolve the reference list). No external
+% bibliography processor is required: the references are an embedded thebibliography.
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{dent8: A Memory Firewall for Coding Agents}
+\author{The dent8 authors\\\normalsize\url{https://github.com/xyzzylabs/dent8}}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Long-running LLM agents accumulate durable memory across sessions, and that memory is almost universally governed by \emph{newest-write-wins} semantics: the most recent write to a key, edge, or record becomes the believed value. This makes agent memory a persistent, low-friction attack surface. A privilege-less user, a poisoned document, or a compromised low-authority tool can silently overwrite a trusted decision, and the corruption persists across sessions and users. dent8 is an open-source memory integrity firewall, written in Rust, that interposes on every durable write. It models memory not as mutable items but as an append-only log of typed \emph{fact-events}, and arbitrates each candidate write against the current belief state by \textbf{authority-weighted supersession}: a write cannot displace a strictly higher-authority incumbent, and the \emph{actual} backing authority of a revision is checked rather than the label it claims. Contradiction is retained as data rather than silently resolved; entrenchment is earned through corroboration and survived challenges; freshness and valid-time are first-class; provenance is mandatory; and the log is tamper-evident via a SHA-256 hash chain with an optional off-host Ed25519 signed-tree-head witness. As of v0.8.0, writes above the agent tier require a valid signed source identity by default, closing an unauthenticated-label bypass. We are explicit about scope: dent8 is an authority and provenance layer, not a content scanner and not a truth oracle. Against an externally-grounded adversarial corpus of 47 cases across 10 attack classes --- adapted from AgentDojo, InjecAgent, MINJA, AgentPoison, PoisonedRAG, and related public work --- arbitration blocks 16 by preventing belief displacement, flags 4 as detect-only, and admits 27 as out-of-model (owned by named downstream layers), while a recency-only baseline is compromised by 46 of 47. On a complementary legitimate-traffic corpus the firewall produces 0 false positives across 22 benign writes in 7 scenarios. We distinguish throughout what is proven and tested from what is designed.
+\end{abstract}
+
+\section{Introduction}
+
+Agent frameworks increasingly persist memory so that an agent can recall prior decisions, learned facts, and user preferences across sessions. The dominant storage models fall into two families, and both resolve conflicting writes in ways that offer no structural defense against corruption.
+
+\emph{Mutate-in-place stores} (Mem0's base path is the clearest example) let an LLM tool-call select \code{ADD}/\code{UPDATE}/\code{DELETE}/\code{NOOP} over semantically similar memories. There is no append-only log, no provenance, no confidence, no TTL, and no supersession history; the last \code{UPDATE} wins and a \code{DELETE} destroys the original record. The graph variant softens deletion into a mark-invalid attribute flip, but this is a flag on a node, not a typed, replayable event.
+
+\emph{Temporal/graph stores} (Zep, powered by the Graphiti engine) are considerably more sophisticated: they ship per-edge valid-time versus transaction-time, contradiction handling via edge invalidation rather than deletion, supersession in place of deletion, and a non-lossy episodic provenance trail from extracted facts back to source messages. This is genuinely close to dent8's headline list, and dent8 does not claim any of these primitives as unique. But Graphiti resolves contradictions purely by \textbf{recency} --- it ``consistently prioritizes new information when determining edge invalidation'' --- with no arbitration by source authority or confidence, no event-sourced log as the source of truth, no deterministic replay, and no cryptographic hash chain.
+
+Recency arbitration is precisely the property an attacker exploits. Consider the failure modes documented in the recent literature:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Memory injection (MINJA).} A privilege-less regular user, through query-only interaction and with no backend access, poisons an agent's long-term memory with reported injection success above 95\%, and the injection persists across sessions and across users. Under newest-write-wins, the attacker's write is the newest write, so it becomes the belief.
+  \item \textbf{Authority laundering.} An attacker asserts a weak fact but stamps the \emph{revision event} with a high authority label, or routes a low-authority value through a high-authority-looking supersession. If the store trusts the label on the event rather than the real backing, the weak fact is laundered into a trusted one.
+  \item \textbf{Source poisoning and derivation cascades.} A retrieved corpus is corrupted (PoisonedRAG reports ${\sim}90\%{+}$ attack success from as few as ${\sim}5$ injected texts). Even if the poisoned source is later retracted, any facts \emph{derived} from it silently remain believed --- because a recency store has no dependency graph to express ``this conclusion rested on that source.''
+  \item \textbf{Cross-session persistence.} Because the corruption lives in durable memory, it survives the session in which it was injected and is re-served as trusted context indefinitely.
+\end{itemize}
+
+None of these are prevented \emph{structurally} by mutate-in-place or recency semantics. They can only be patched heuristically --- a content classifier, a similarity threshold, a hand-tuned prompt --- none of which changes the resolution rule that let the bad write win in the first place. dent8's thesis is that the resolution rule itself is the control point: memory writes should pass through a firewall that arbitrates by \emph{authority as entrenchment} over an append-only, replayable, tamper-evident log.
+
+\section{Design}
+
+\subsection{Memory as an append-only log of fact-events}
+
+The core primitive is a \code{FactEvent}, not a mutable memory item (ADR 0002). A fact stream is identified by a \code{fact\_id} and begins with a \code{fact.asserted} event; subsequent events reinforce, contradict, supersede, expire, retract, retrieve, record a decision-use, or record a rejected challenge. Each event carries a \code{subject} (a \code{kind:key} pair, e.g.\ \code{repo:myproj}), a \code{predicate}, a \code{fact\_value}, a \code{confidence}, an \code{authority}, a \code{ttl}, a \code{valid\_from}/\code{valid\_to} window, mandatory \code{provenance}, at least one \code{evidence} reference, timestamps, and a chained \code{event\_hash}.
+
+``Memory'' is a \emph{projection} over this log --- a deterministic fold, \code{replay\_fact}, that applies each event via the pure function \code{apply\_event} to produce an \code{Option<FactState>}. The lifecycle state machine is intentionally small: \code{active} can transition to \code{contested}, \code{superseded}, \code{expired}, or \code{retracted}; \code{contested} can further transition to the terminal states. Retrieval and decision-use are audit events that never change lifecycle. The invariant that makes this trustworthy is \code{projection == fold(events)}: the materialized state any backend serves must equal the fold of the ordered log, and a backend that cannot reproduce it is defined as broken.
+
+This is belief-\emph{base} revision in the sense of Hansson, not classical AGM (ADR 0005). dent8 stores opaque \code{subject + predicate + value} triples with no deductive closure and no entailment engine, so it implements the \emph{operational spirit} of revision operators, which the design documents label ``inspirational,'' not a formal AGM claim. One postulate is deliberately violated: \textbf{Recovery}. Retracting a fact and later re-asserting it must not resurrect the facts that depended on the original, because the new assertion carries different provenance and evidence. For an auditable store, non-recovery is the correct choice, not a defect.
+
+\subsection{The arbitration function at the write boundary}
+
+Every write that enters dent8 passes through \code{EventStore::append}, and \code{append} itself calls the firewall --- there is no un-arbitrated write path. The security decision is factored into a single pure, I/O-free function, \code{arbitrate\_events}, shared by the in-memory, file, SQLite, and Postgres backends so they cannot diverge. It enforces two layers.
+
+\textbf{Layer 1 --- per-fact arbitration} (\code{apply\_event}) gates on the candidate event's own stated authority and the incumbent's folded state. The authority lattice is a total order, \code{Unknown < Low < Medium < High < Canonical}, kept strictly separate from \code{Confidence} (an integer in $0\ldots1000$ millis). The relevant rules:
+
+\begin{itemize}[leftmargin=*]
+  \item A \code{fact.superseded} whose event authority is strictly below the incumbent's is rejected with \code{InsufficientAuthority}. Confidence is deliberately never consulted here --- a high-confidence low-authority fact cannot out-rank a low-confidence high-authority one.
+  \item \code{fact.expired} and \code{fact.retracted} are terminal closes and are gated identically: a strictly lower-authority actor cannot make a trusted fact disappear by calling it stale or retracting it.
+  \item A \code{fact.contradicted} against a \code{Canonical} fact is a hard alarm (\code{CanonicalContradiction}), not a soft transition to \code{contested}.
+  \item A re-assertion of a live fact id is a \code{DuplicateAssertion}; any lifecycle event against a terminal fact is a \code{TerminalStateMutation}.
+\end{itemize}
+
+\textbf{Layer 2 --- subject-aware anti-laundering} closes a hole the per-fact gate cannot see. A supersession event \emph{names} a replacing fact. Layer 1 can only check the authority the event asserts; a laundering attacker asserts \code{high} on the event while the fact behind it is \code{low}. So \code{arbitrate\_events} loads the replacing fact's own stream, folds it to resolve its \textbf{actual} authority, and rejects the write with \code{LaunderedAuthority} if that real authority is below the incumbent's (or \code{UnbackedSupersession} if the named fact does not exist). This is the mechanism that distinguishes dent8 from a recency store on the laundering axis, and it is enforced identically in the transactional Postgres path, inside the same serialized append transaction so the arbitrated state cannot change before the write lands.
+
+\subsection{Contradiction as data}
+
+Silently merging $A$ and $\neg A$ would trivialize the store. Instead, a \code{fact.contradicted} event (which, unlike supersession, is \emph{not} authority-gated --- dissent is always admissible) flips the incumbent to \code{Contested} and appends to its \code{contradicted\_by} edge set, keeping both rival values. This is the paraconsistent move: localize the contradiction, keep the store non-trivial, surface it. A contested set is exempt from uniqueness so both beliefs coexist. The one exception is the canonical hard-alarm above --- a fact declared \code{Canonical} that genuinely changed must be superseded by an equal-authority fact, never merely contradicted.
+
+\subsection{Earned entrenchment}
+
+Authority is the primary entrenchment ordering, but dent8 also lets a fact \emph{earn} additional entrenchment (ADR 0007, 0015, 0017). Two signals accumulate on \code{FactState}:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Corroboration.} Distinct reinforcing sources are recorded with the highest authority each has backed the value at (\code{corroborating\_sources}), read Sybil-resistantly via \code{corroboration\_at\_or\_above} --- a volume of low-authority sources earns no high-trust standing.
+  \item \textbf{Survived challenges.} When a supersession is rejected, the firewall records a \code{fact.challenge\_rejected} event on the \emph{incumbent's} stream carrying the challenger's provenance and effective authority. These accumulate into \code{survived\_challenges}, again read Sybil-resistantly.
+\end{itemize}
+
+A subject-level audit, \code{unearned\_supersessions}, flags supersessions where the replacing fact is actually weaker than the incumbent's earned entrenchment (\code{AuthorityDowngrade}, \code{WeakerEntrenchment}). Challenge recording is on by default; feeding earned entrenchment into write-time arbitration is an opt-in gate (\code{DENT8\_ENTRENCHMENT\_GATE}). This keeps the aggressive form opt-in while the audit and recording ship by default.
+
+\subsection{Freshness and valid-time}
+
+Facts carry TTLs and asserted validity windows (ADR 0016). Freshness is a \emph{read-time predicate}, \code{is\_fresh\_at}, distinct from the lifecycle: a stale-but-\code{Active} fact is still revisable. \code{expires\_at()} is the earliest of the TTL bound and the asserted \code{valid\_to}, so an elapsed \code{valid\_to} reads stale exactly like an elapsed TTL, and a future \code{valid\_from} reads not-yet-valid. Reads prefer a fresh believed fact but fall back to a stale one they then flag rather than hiding it. Enumeration surfaces mark each stream's freshness from a single load, and \code{--as-of}/\code{--valid-at} provide deterministic time-travel reads (``what did we believe last Tuesday, and was it fresh then?''). A predicate registry adds a retention ceiling: a finite TTL past the effective ceiling (a per-predicate override, else a 90-day global default, with a 7-day ceiling for predicates classed \code{Volatile}) is \emph{rejected, not clamped} --- silently rewriting an asserted freshness window would falsify the audit record.
+
+\subsection{Provenance and derivation edges}
+
+Every \code{fact.asserted} requires provenance and at least one evidence reference, enforced by \code{FactEvent::validate} and, on Postgres, by schema \code{CHECK} constraints. Derivation is modeled as an evidence edge: \code{EvidenceKind::DerivedFrom} records a fact$\rightarrow$fact dependency, with the source fact id in the evidence locator (ADR 0010). Because it reuses the already-hashed evidence vector, the dependency graph is tamper-evident and reconstructable from the log alone. When a source fact enters a terminal invalidated state (retracted or expired), a store-level analysis, \code{tainted\_facts}, flags every still-believed fact that transitively derives from it --- cross-subject and cycle-safe. Taint is \emph{surfaced, not auto-removed}: this is the paraconsistent ``make it visible, do not silently destroy'' stance, and it avoids a legitimate retraction nuking unrelated derivatives. Operator-initiated cascade-retract on \code{PoisoningDetected} is a documented, deferred option.
+
+\subsection{Signed source identity, with anti-laundering}
+
+Authority arbitration defends against low-privilege injection, but on its own it trusts the authority \emph{label} on an event. Two layers bind labels to real principals.
+
+The opt-in \textbf{authority registry} caps a source's stated authority at its registered ceiling and enforces the grant's issuer and scope, with deny-by-default and no self-escalation. Above it sits \textbf{signed source identity} (ADR 0012): an issuer key signs a grant binding a source id to a source public key, a maximum authority, an optional subject scope, and an optional expiration; each write proves possession of the source private key before the candidate event reaches the firewall.
+
+As of \textbf{v0.8.0 this is enforced by default above the agent tier} (a breaking change). A write whose effective authority is strictly greater than \code{low} --- i.e.\ \code{medium}, \code{high}, or \code{canonical} --- is rejected unless backed by a valid signed identity: a grant chaining to a trusted issuer, matching the claimed source/authority/scope, with proven key possession. Previously, when signed identity was unconfigured, such a write was trusted on the strength of the label alone, so \code{dent8 assert --authority high --source source:human} was an unauthenticated label any shell-capable agent could claim for free. That bypass is now closed at the shared write boundary --- CLI, capture/import, MCP, and daemon all funnel through the same \code{require\_signed\_above\_agent} gate. Writes at or below the agent tier stay permissive and need no signing, so ordinary local and agent use is unchanged, and \code{dent8 init} provisions a default signing identity so the honest path keeps working. Signed keys may live in a \code{0600} file or the OS keychain (macOS, Linux via the Secret Service, and Windows Credential Manager), narrowing but not eliminating the key-at-rest residual.
+
+Each accepted write is durably attested (ADR 0013): \code{provenance.attestation} carries an Ed25519 \code{WriteAttestation} over a domain-separated message --- a version tag followed by the length-framed canonical bytes of the event with the attestation field stripped, so a signature cannot cover itself. Any later verifier recomputes the message from the stored event alone, so an attested event is offline-re-verifiable long after the write and without dent8's trust files. On the file dev store, which keeps no per-event hash column, the attestation is the one available content-tamper check.
+
+\subsection{Tamper-evidence: hash chain and off-host witness}
+
+Tamper-evidence is only as strong as deterministic bytes (ADR 0004). dent8 canonicalizes each event to a sorted-key \code{serde\_json} form --- explicitly \textbf{not} RFC 8785/JCS; the two coincide only because every object key is an ASCII field name and every number is an integer, an invariant guarded by a canonicalization-version constant. The chain uses SHA-256 over an injective, length-framed leaf: $\mathrm{SHA\text{-}256}(\mathtt{0x00} \parallel \textsc{canon\_version} \parallel \mathrm{len}(c) \parallel c \parallel \mathit{tag} \parallel \mathit{prev})$, with an RFC 6962-style \code{0x00} leaf prefix (\code{0x01} reserved for a future Merkle layer). Length-framing plus a genesis tag guarantee that no two distinct (canonical, previous) pairs share a hash input. The chain is \textbf{global} --- one tamper-evident head for the whole log --- which is why appends are serialized. \code{verify\_chain} recomputes the chain to catch any event mutated without rehashing.
+
+The chain is tamper-\emph{evident}, not tamper-\emph{resistant}: a writer with full store access can rewrite an event and re-hash the log forward into a self-consistent chain. Closing that requires an \textbf{external witness}. The witness commits to (event\_count, head): symmetrically via HMAC-SHA256, or --- the runnable end-to-end form --- asymmetrically via an Ed25519 \textbf{signed tree head}, so a published head is publicly verifiable by anyone with the witness public key (the RFC 6962 construction). \code{dent8 witness} checks each head against the current log prefix, flags \code{TAMPER} (rewrite) or \code{ROLLBACK} (truncation/reorder), and appends heads to a monotonic, append-only published sequence so a retained later head still catches a rewound local state. The honest caveat: \textbf{resistance holds only when the witness issues heads at write time with a key held off the writer's machine.} These functions are that primitive; an operated witness service on separate infrastructure, with a managed publication channel, monitoring, and key rotation, is future product work.
+
+\subsection{Deterministic counterfactuals}
+
+Because belief state is a deterministic fold, dent8 can answer counterfactuals without any model invocation. \code{dent8 whatif} re-folds the \emph{same immutable log} under a swapped epistemic trust policy (\code{--distrust <source>}, \code{--authority-floor <level>}, \code{--confidence-floor <millis>}) and emits a per-fact structural diff against the real fold. It is read-only, deterministic, and makes zero LLM calls; it is also an MCP tool available to read-only connections. This is a first, JTMS-style cut at the ATMS capability of labeling facts under an assumption environment (``what would memory look like if I distrust source $Z$''). Freshness is deliberately not a policy knob.
+
+\section{Threat model and guarantees}
+
+dent8 is a firewall, and a firewall is only meaningful against a stated adversary. The primary adversary is a \textbf{malicious end-user} who, through query-only interaction, can cause the agent to write attacker-chosen facts (the MINJA case). Also in scope: a \textbf{compromised or poisoned source} feeding false tool output or documents that become evidence, and a \textbf{compromised low-authority agent} attempting to override higher-authority facts. Partially in scope: a \textbf{same-user process bypassing dent8} by writing provider-native files or raw store rows (guard/detect/harden, not absolute prevention), and an \textbf{operator with direct DB access} (the hash chain makes tampering evident, not impossible). Out of scope: a network/transport attacker (delegated to TLS).
+
+\textbf{The trust boundary is the append path.} Any write that enters through the CLI, MCP server, daemon, or an adapter calling \code{EventStore::append} is validated, authority-checked, arbitrated, hashed, attested, and made replayable, and a low-authority or stale write cannot silently override trusted state on that path. dent8 is explicitly \textbf{not a sandbox for a same-user process}. A shell-capable agent that edits provider-native memory files, rewrites a file-backed log directly, or connects with raw database write privileges routes around the firewall. Against that, dent8 shifts from prevention to detection and containment: a \code{PreToolUse} native-memory guard (installed and enforced by default as of v0.8.0, blocking raw edits to \code{CLAUDE.md}, \code{AGENTS.md}, \code{MEMORY.md}, \code{GEMINI.md}, \code{.cursor/rules}, and similar), \code{verify} catching broken chains and unentitled attestations, and witness-published heads exposing rewrites, rollback, and truncation. The recommended hardening is to make the dent8 service the only writer, deny agents raw table access, and keep native-memory files read-only or hook-guarded.
+
+Several things are \textbf{out of scope by design}, and stating them precisely is part of the design:
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Content truth.} Arbitration governs provenance, freshness, authority, and contradiction \emph{visibility} --- not whether a well-formed, well-sourced fact is factually correct. A confidently-false-but-authoritative statement is admitted.
+  \item \textbf{A legitimately high-authority source asserting a falsehood.} Authority is asserted and (above the agent tier) authenticated, but authenticity is not correctness. dent8 defends against low-privilege injection and label forgery, not a genuinely trusted principal that is wrong or compromised.
+  \item \textbf{The local-daemon trust boundary is the OS user.} The Unix-socket daemon refuses any peer not running as the same OS user (\code{SO\_PEERCRED}), and a same-OS-user process that can read a private key can impersonate its source.
+  \item \textbf{Real tamper-resistance requires the witness on a second host.} On a single machine the writer can re-anchor after tampering; only an off-host witness with a proactively-issued, monotonic, published head sequence provides resistance rather than evidence.
+  \item \textbf{Content scanning is delegated.} dent8 ships no classifier. A pluggable write-boundary hook (\code{DENT8\_CONTENT\_CHECK}) runs an external scanner per candidate fact, after the authority gate and before persistence, on every write entry point; it can \code{reject} or \code{taint} (admit-but-flag), is fail-closed by default, and is un-bypassable on the write path --- but detection quality is the attached scanner's, not dent8's.
+\end{itemize}
+
+\section{Evaluation}
+
+dent8's evaluation is designed to test invariants and to report adversarial results \emph{honestly}, including the attacks arbitration does not block. All numbers below are produced by the \code{dent8-evals} crate, frozen as regression tests, and reproducible via \code{dent8 eval} and \code{cargo test -p dent8-evals}.
+
+\subsection{The five demonstrated attack axes}
+
+A demonstrative corpus runs five concrete attacks two ways --- through the real firewall and through a recency-only baseline (newest-write-wins, the resolution Zep/Graphiti use). Each case computes its verdict from an attacker-goal predicate over the projected belief state; nothing is hardcoded.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}llll@{}}
+\toprule
+axis & family & firewall & recency baseline \\
+\midrule
+\code{minja\_low\_authority\_injection} & memory injection & blocked & compromised \\
+\code{authority\_laundering} & memory injection & blocked & compromised \\
+\code{canonical\_contradiction} & canonical contradiction & blocked & compromised \\
+\code{sybil\_corroboration} & earned entrenchment & blocked & compromised \\
+\code{poisoned\_source\_retraction} & retraction / evidence taint & blocked & compromised \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Attack-success rate is \textbf{0/5 against the firewall, 5/5 against the baseline}. A positive control confirms the firewall is not a blanket reject gate: an equal-authority supersession is admitted. The fifth axis is the differentiator neither peer model can structurally express --- retract a poisoned source and dent8 flags every fact derived from it.
+
+\subsection{Comparison against modeled Mem0 and Zep semantics}
+
+The same sequences are judged against \emph{modeled} peer resolution policies rather than live API clients (network, accounts, and version drift would make the suite non-hermetic; the integrity claim is about what each policy \emph{admits}, which the papers document): \code{zep\_recency} (newest-write-wins edge invalidation, no authority weight) and \code{mem0\_mutate} (mutate-in-place by key, last \code{UPDATE} wins, no lineage or taint graph).
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lccc@{}}
+\toprule
+axis & dent8 & zep (recency) & mem0 (mutate) \\
+\midrule
+low-authority write cannot displace trusted belief & holds & compromised & compromised \\
+over-stated supersession cannot launder a low backing fact & holds & compromised & compromised \\
+canonical fact not softened by low-authority contradiction & holds & compromised & compromised \\
+volume of low-authority sources earns no entrenchment & holds & compromised & compromised \\
+derivative of a retracted source is flagged, not silent & holds & compromised & compromised \\
+equal-authority revision is admitted (positive control) & holds & holds & holds \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+dent8 holds \textbf{6/6}; both peers fail all 5 attack axes and admit the positive control. This is an \emph{integrity} comparison, not a retrieval-quality bake-off --- Mem0 and Zep optimize for a different job (retrieval F1), which dent8 does not compete on.
+
+\subsection{Externally-grounded adversarial corpus (47 cases / 10 classes)}
+
+To move beyond self-authored demonstrations, a larger corpus adapts attack \emph{patterns} from the public prompt-injection and memory-poisoning literature --- AgentDojo, InjecAgent, BIPIA, MINJA, AgentPoison, PoisonedRAG, HackAPrompt, garak, Lakera Gandalf, and the OWASP LLM / Agentic Top 10 taxonomy. Patterns are adapted into dent8's fact-proposal format (original phrasings, so no ShareAlike text enters the corpus), and every case is tagged with the public work it adapts. Verdicts are computed, not hardcoded: \code{firewall\_blocked = !attacker\_goal(firewall\_state)}. Each non-block is classified as \textbf{detect-only} (admitted but flagged by read-time freshness or retraction taint) or \textbf{out-of-model} (admitted by arbitration by design; a named downstream layer owns it).
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+class & cases & blocked & detect-only & out-of-model \\
+\midrule
+injection-in-content & 5 & 0 & 0 & 5 \\
+authority/identity spoofing & 5 & 2 & 0 & 3 \\
+supersede/override abuse & 6 & 5 & 0 & 1 \\
+staleness/temporal exploitation & 5 & 2 & 2 & 1 \\
+cross-agent contamination & 5 & 2 & 1 & 2 \\
+data-exfiltration trigger & 4 & 0 & 0 & 4 \\
+conditional/delayed time-bomb & 4 & 0 & 1 & 3 \\
+obfuscated/evasive payload & 5 & 0 & 0 & 5 \\
+false-fact / knowledge corruption & 4 & 2 & 0 & 2 \\
+anti-firewall / self-bypass & 4 & 3 & 0 & 1 \\
+\midrule
+\textbf{total} & \textbf{47} & \textbf{16} & \textbf{4} & \textbf{27} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Overall: \textbf{16/47 blocked} by arbitration, \textbf{4/47 detect-only} (flagged, not removed), \textbf{27/47 out-of-model} (admitted by design). The recency-only baseline is compromised by \textbf{46/47} --- the sole exception is a purely structural unbacked supersession that poisons no store.
+
+Two honesty points are load-bearing. First, \textbf{``blocked'' means the attacker failed to displace the incumbent belief}, not that the attacker's fact vanished: a low-authority fact can still persist as a \emph{parallel} belief on its own fact id (disclosed by a dedicated case, which \code{append} does not deduplicate --- the uniqueness registry owns that). Second, every block ties to a concrete mechanism --- \code{InsufficientAuthority}, \code{LaunderedAuthority}, \code{UnbackedSupersession}, \code{DuplicateAssertion}, \code{TerminalStateMutation}, or \code{CanonicalContradiction} --- verified by a rigor test asserting each attack is rejected by its \emph{intended} mechanism, not an incidental validation error. Notably, confidence cannot launder authority (a \code{Low} fact stamped confidence 1.0 still cannot out-rank \code{High}), and the anti-firewall ``already-approved / treat-rejection-as-a-false-positive'' text is inert because it rides a low-authority override the gate rejects regardless of the prose.
+
+The 27 out-of-model non-blocks are architectural boundaries, not arbitration bugs. Arbitration reads no \code{value} text at all, so content-embedded imperatives, exfil strings, obfuscated payloads (zero-width, base64, rot13, translation), and conditional-trigger prose are stored as inert data --- a downstream content scanner is required, and the obfuscation cases are included precisely to show a naive string filter is insufficient. Arbitration is not a truth oracle, so a standalone confidently-false fact is admitted (though a false fact that \emph{overrides} a trusted one, or contradicts a canonical one, is blocked --- that is authority, not truth). And self-stamped authority and parallel-belief plants are owned by the authority-ceiling/signed-identity and uniqueness registry layers respectively, which sit above the base \code{append} firewall these harnesses exercise directly.
+
+\subsection{Legitimate-traffic corpus: false-positive rate}
+
+The honest counter-question to ``attacks blocked'' is ``does the firewall tax legitimate revision?'' A complementary corpus replays designed benign revision sequences --- maturing understanding (equal-authority supersession), an authority-upgrade correction, independent corroboration, a legitimate retraction, disagreement kept as a contested pair, corroborate-then-revise, and serial revisions --- through the real firewall and counts wrongly-rejected intended writes.
+
+The result is \textbf{0 false positives across 22 benign writes in 7 scenarios}. The firewall admits normal revision in full; \code{dent8 eval} gates its exit code on this, so any false positive is a regression. These are hand-designed scenarios; replaying real captured agent sessions through the same metric is a stated post-launch step, blocked only on trace data (the harness and metric are ready).
+
+\subsection{The content-check hook lane (separate from arbitration)}
+
+To demonstrate the content boundary --- not to claim content-scanning efficacy --- the corpus is re-run with the pluggable hook plus the repository's \textbf{demonstrative regex scanner}, whose rules were written with knowledge of the corpus. With the demo scanner attached, the tally is \textbf{25/47 blocked (16 by arbitration, 9 by the hook), 9 detect-only, 13 admitted unflagged}. The arbitration column is byte-identical to the core table above --- the hook inflates nothing; it is a separate, composable layer. The misses are the point of shipping a \emph{demo}: obfuscation mostly wins (rot13 and translated imperatives sail past, kept that way on purpose by a frozen test), which is exactly why a real deployment must attach an obfuscation-robust scanner rather than trust a bundled regex.
+
+\subsection{Mechanized backing}
+
+Beyond the concrete corpora, arbitration is exercised by an exhaustive test over the full $5\times5$ authority lattice (including non-resurrection after retraction), property tests over event-stream invariants, a golden-fixture replay corpus that freezes whole-stream firewall outcomes (including writes expected to be \emph{rejected}), and two \code{cargo-fuzz} targets run in CI (JSON event ingestion/replay and canonicalization idempotency) whose oracle is that malformed input may be rejected but must never panic or corrupt projection state. Model-checking harnesses (Kani) are written for the arbitration invariants but, per the project's own documentation, are not yet wired into CI.
+
+\section{Related work}
+
+dent8 sits at the intersection of a fast-moving agent-memory market and several mature formal and infrastructural traditions, and it does not claim novelty on any individual primitive.
+
+\textbf{Truth-maintenance systems.} Doyle's JTMS (1979) and de Kleer's ATMS (1986) are the operational ancestors: nodes carry justifications, are labeled IN/OUT, and contradictions are handled over nogoods. dent8's \code{DerivedFrom} edges are TMS justifications over a replayable log; its single-projection fold is JTMS-like, and \code{dent8 whatif} is a first step toward the ATMS capability of labeling facts under an assumption environment.
+
+\textbf{Belief revision.} The AGM framework (Alchourr\'on, G\"ardenfors, Makinson, 1985) is the canonical theory of rational belief change over logically-closed sets. dent8 is better matched by Hansson's belief-\emph{base} revision over finite, non-closed syntactic sets, where the Recovery postulate fails --- which is exactly dent8's deliberate non-recovery on retract-then-reassert. Authority-versus-confidence maps to the entrenchment-versus-probability distinction; the contested state is grounded in paraconsistent logic's inconsistency-versus-triviality separation. dent8 makes no claim of logical closure or AGM compliance.
+
+\textbf{Data provenance and bitemporality.} The provenance, authority, evidence, and edge model maps onto W3C PROV-DM (\code{wasDerivedFrom}, \code{wasInvalidatedBy}, and related), with confidence as a non-standard extension. The transaction-time/valid-time split is textbook bitemporal modeling (SQL:2011), enforced in the \code{replay\_fact} fold rather than delegated to the database.
+
+\textbf{Transparency logs.} The hash chain is standard tamper-evident-log machinery. RFC 6962 (Certificate Transparency), building on Merkle hash trees, supplies the domain-separated leaf/node hashing and the signed-tree-head construction dent8's witness adopts; RFC 8785 (JCS) was the original canonicalization plan but is deliberately not what shipped.
+
+\textbf{Prompt-injection and memory-poisoning literature.} PoisonedRAG and MINJA together establish the premise: retrieval corpora and long-term agent memory are attacker-influenceable, cheaply and persistently. dent8's adversarial corpus draws its attack patterns from these plus AgentDojo, InjecAgent, AgentPoison, BIPIA, garak, HackAPrompt, and Lakera Gandalf, aligned to the OWASP LLM and Agentic Top 10 taxonomies. Contemporary agent-memory systems --- Mem0 (mutate-in-place, with a mark-invalid graph variant) and Zep/Graphiti (bitemporal, recency-arbitrated) --- are the closest peers.
+
+dent8's defensible wedge is therefore not any single primitive but their \textbf{composition treated as substrate}: an append-only, typed, hash-verified \code{FactEvent} log as the single source of truth; deterministic replay; and, above all, authority-weighted supersession \emph{as the write-boundary gate} --- a direct mitigation for MINJA-style poisoning that recency-only arbitration cannot offer. The correct positioning is ``the governed, replayable store of record \emph{beneath} a retrieval-optimized memory system,'' benchmarked on poisoning resistance, replay determinism, and auditability, not on retrieval F1.
+
+\section{Limitations and future work}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Authority is authenticated, not correct.} Above the agent tier, dent8 now proves a source holds its signing key, but it cannot tell whether a genuinely trusted principal is wrong or compromised. Content correctness is delegated to an external scanner via the write-boundary hook; dent8 ships no classifier.
+  \item \textbf{Key-at-rest is the standing residual.} A compromised source private key, or a same-OS-user process that can read it, can make trusted above-agent writes. Keychain-backed keys narrow but do not close this; OS-user separation, hardware-backed keys, and external signers are the stronger boundary and remain future work.
+  \item \textbf{Tamper-resistance requires an operated off-host witness.} The signed-tree-head primitive is runnable end to end, but resistance (as opposed to evidence) holds only when a witness on a second host issues monotonic heads at write time. The operated service --- publication channel, monitoring, key rotation --- is not yet productized.
+  \item \textbf{Retraction taint is detect-only.} Derivatives of a retracted source are flagged, not auto-removed; operator-initiated cascade-retract is designed but deferred.
+  \item \textbf{Assumption-environment replay is a first cut.} \code{dent8 whatif} provides deterministic policy counterfactuals but not the full ATMS multi-environment labeling the design documents envision.
+  \item \textbf{Pre-1.0 and experimental.} The CLI, library API, on-disk event format, and Postgres schema may change between minor versions.
+  \item \textbf{Evals are hand-designed.} Both the adversarial patterns (adapted, not replayed from live attacks) and the legitimate-traffic scenarios are authored; replaying real captured agent sessions through the same measurement is the next evaluation step, and Kani model-checking is written but not yet in CI.
+\end{itemize}
+
+\section{Conclusion}
+
+Agent long-term memory is a durable, cross-session attack surface, and its dominant resolution rule --- newest-write-wins, whether by key mutation or recency-based edge invalidation --- is precisely what lets a low-authority write, a laundered label, or a poisoned source win. dent8 relocates the control point to the resolution rule itself: an arbitration function at the write boundary over an append-only log of typed fact-events, ordering conflicts by authority-as-entrenchment, checking the \emph{real} backing authority rather than the claimed label, retaining contradiction as data, and making the whole history replayable, freshness-aware, provenance-stamped, and tamper-evident. The measured results are specific and bounded: 0/5 on the demonstrative axes and 6/6 against modeled Mem0 and Zep semantics; 16 blocked, 4 detect-only, and 27 out-of-model of 47 externally-grounded cases against a baseline compromised by 46/47; and 0 false positives across 22 benign writes. dent8 is an authority and provenance firewall, not a content scanner and not a truth oracle --- and its honesty about that boundary, backed by frozen tests that encode the known gaps rather than a ``blocks everything'' fiction, is the point. The governed, replayable store of record belongs beneath a retrieval system, not in place of one.
+
+\begin{thebibliography}{99}
+\small
+\bibitem{agm1985} C.~E. Alchourr\'on, P.~G\"ardenfors, and D.~Makinson. On the Logic of Theory Change: Partial Meet Contraction and Revision Functions. \emph{Journal of Symbolic Logic}, 50(2), 1985.
+\bibitem{hansson} S.~O. Hansson. \emph{Revision of Belief Sets and Belief Bases}. In Belief Dynamics, Springer.
+\bibitem{doyle} J.~Doyle. A Truth Maintenance System. \emph{Artificial Intelligence}, 12(3), 1979.
+\bibitem{dekleer} J.~de Kleer. An Assumption-Based TMS. \emph{Artificial Intelligence}, 28(2), 1986.
+\bibitem{reiter} R.~Reiter. A Logic for Default Reasoning. \emph{Artificial Intelligence}, 13, 1980.
+\bibitem{paraconsistent} G.~Priest et al. Paraconsistent Logic. \emph{Stanford Encyclopedia of Philosophy}.
+\bibitem{merkle} R.~C. Merkle. A Digital Signature Based on a Conventional Encryption Function. \emph{CRYPTO '87}.
+\bibitem{rfc6962} B.~Laurie, A.~Langley, and E.~Kasper. RFC 6962: Certificate Transparency. IETF, 2013.
+\bibitem{rfc8785} A.~Rundgren, B.~Jordan, and S.~Erdtman. RFC 8785: JSON Canonicalization Scheme (JCS). IETF, 2020.
+\bibitem{provdm} W3C. PROV-DM: The PROV Data Model. W3C Recommendation.
+\bibitem{poisonedrag} W.~Zou, R.~Geng, B.~Wang, and J.~Jia. PoisonedRAG: Knowledge Corruption Attacks to Retrieval-Augmented Generation of Large Language Models. \emph{USENIX Security}, 2025. arXiv:2402.07867.
+\bibitem{minja} MINJA: A Practical Memory Injection Attack against LLM Agents. arXiv:2503.03704.
+\bibitem{agentdojo} AgentDojo: A Dynamic Environment to Evaluate Prompt Injection Attacks and Defenses for LLM Agents. ETH Z\"urich / Invariant Labs.
+\bibitem{injecagent} InjecAgent: Benchmarking Indirect Prompt Injections in Tool-Integrated LLM Agents. UIUC.
+\bibitem{agentpoison} AgentPoison: Red-teaming LLM Agents via Poisoning Memory or Knowledge Bases.
+\bibitem{bipia} BIPIA: Benchmarking Indirect Prompt Injection Attacks. Microsoft.
+\bibitem{garak} garak: LLM vulnerability scanner. NVIDIA.
+\bibitem{hackaprompt} HackAPrompt. Learn Prompting.
+\bibitem{gandalf} Lakera Gandalf. Lakera.
+\bibitem{owasp} OWASP Top 10 for LLM Applications and OWASP Agentic Security Initiative.
+\bibitem{mem0} Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory. arXiv:2504.19413.
+\bibitem{zep} Zep: A Temporal Knowledge Graph Architecture for Agent Memory. arXiv:2501.13956.
+\end{thebibliography}
+
+\end{document}
