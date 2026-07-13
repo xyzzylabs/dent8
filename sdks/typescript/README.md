@@ -14,6 +14,11 @@ Because the CLI resolves the store itself (repo-confined `.dent8/` discovery,
 `DENT8_DAEMON_SOCKET` is set, and defaults `source`/`authority` from the active
 signed grant, the SDK inherits all of it with zero configuration.
 
+Writes **above the agent tier** (`medium` / `high` / `canonical` authority) require a
+valid signed identity: run `dent8 init` (which provisions one by default) and let the SDK
+inherit its `DENT8_TRUST` / `DENT8_GRANT` / `DENT8_IDENTITY_KEY` env, then write as that
+`source:*` identity. Agent-tier writes (`low`) need no identity.
+
 ## Install
 
 ```sh
@@ -28,8 +33,9 @@ import { Dent8, Dent8Rejected } from "dent8";
 
 const d8 = new Dent8(); // finds `dent8` on PATH; new Dent8({ binary, env }) to pin
 
+// A high-authority write is signed as the active `source:*` identity (from `dent8 init`).
 d8.assertFact("repo:myproj", "database", "postgres",
-              { authority: "high", source: "user:alice" });
+              { authority: "high", source: "source:alice" });
 
 try {
   d8.supersede("repo:myproj", "database", "mysql",

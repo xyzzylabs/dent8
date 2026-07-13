@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 import { dent8Tools } from "../dist/ai.js";
 import { Dent8 } from "../dist/index.js";
@@ -46,6 +46,28 @@ function store() {
   return { cwd: dir, env };
 }
 
+/** A signed human writer on `shared`'s store. Above-agent authority (medium/high/canonical) now
+ * requires a valid signed identity, so an out-of-band human high write bootstraps a `source:*`
+ * identity (up to Canonical) and threads its signing env in. The agent tools stay on the plain
+ * store env, so their low writes are judged by the firewall's authority arbitration. */
+function humanWriter(shared, source = "source:alice") {
+  const slug = source.replace(/[^A-Za-z0-9._-]/g, "_");
+  const bundle = join(shared.cwd, `id-${slug}`);
+  execFileSync(
+    BINARY,
+    ["identity", "bootstrap", "--dir", bundle, "--source", source, "--max", "canonical", "--issuer-key", join(shared.cwd, `issuer-${slug}.key`)],
+    { encoding: "utf8" },
+  );
+  const signing = {
+    DENT8_TRUST: join(bundle, "trust.json"),
+    DENT8_GRANT: join(bundle, "grants", `${slug}.grant.json`),
+    DENT8_IDENTITY_KEY: join(bundle, "identities", `${slug}.key`),
+    DENT8_ACTIVE_GRANTS: join(bundle, "active-grants.json"),
+    DENT8_REQUIRE_IDENTITY: "1",
+  };
+  return new Dent8({ binary: BINARY, cwd: shared.cwd, env: { ...shared.env, ...signing } });
+}
+
 test("exposes the six belief-surface tools keyed by name", () => {
   const tools = dent8Tools();
   assert.deepEqual(Object.keys(tools).sort(), NAMES);
@@ -60,7 +82,9 @@ test("write tools expose only subject/predicate/value — never source/authority
 });
 
 test("record then explain round-trips through the firewall", { skip }, async () => {
-  const tools = dent8Tools({ binary: BINARY, ...store(), source: "source:agent", authority: "high" });
+  // The agent is wired at the agent tier (low) — it cannot escalate its own authority, and an
+  // agent-tier write needs no signed identity. `deploy_target` is unregistered (no floor).
+  const tools = dent8Tools({ binary: BINARY, ...store(), source: "source:agent", authority: "low" });
   const recorded = await tools.dent8_record_fact.execute(
     { subject: "repo:acme", predicate: "deploy_target", value: "fly.io" },
     {},
@@ -75,10 +99,10 @@ test("record then explain round-trips through the firewall", { skip }, async () 
 
 test("a refused write comes back as a tool result, not a throw", { skip }, async () => {
   const shared = store();
-  // A human writes the incumbent at high authority, out of band.
-  new Dent8({ binary: BINARY, ...shared }).assertFact("repo:acme", "database", "postgres", {
+  // A signed human writes the incumbent at high authority, out of band.
+  humanWriter(shared, "source:alice").assertFact("repo:acme", "database", "postgres", {
     authority: "high",
-    source: "user:alice",
+    source: "source:alice",
   });
   // The agent is wired low: it can propose but cannot override.
   const tools = dent8Tools({ binary: BINARY, ...shared, source: "source:agent", authority: "low" });

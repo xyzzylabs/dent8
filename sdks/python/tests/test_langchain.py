@@ -7,7 +7,9 @@ Runs against the real `dent8` binary (like test_client.py) and needs `langchain-
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import subprocess
 
 import pytest
 
@@ -23,24 +25,67 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _signing_env(dirpath, source):
+    """Bootstrap a self-contained signed identity authorizing ``source`` (a ``source:*`` id) up
+    to Canonical under ``dirpath``, returning the DENT8_* signing vars. Above-agent authority now
+    requires a valid signed identity; a plain agent-tier client omits these."""
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", source)
+    bundle = dirpath / f"id-{slug}"
+    subprocess.run(
+        [
+            BINARY, "identity", "bootstrap",
+            "--dir", str(bundle),
+            "--source", source,
+            "--max", "canonical",
+            "--issuer-key", str(dirpath / f"issuer-{slug}.key"),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return {
+        "DENT8_TRUST": str(bundle / "trust.json"),
+        "DENT8_GRANT": str(bundle / "grants" / f"{slug}.grant.json"),
+        "DENT8_IDENTITY_KEY": str(bundle / "identities" / f"{slug}.key"),
+        "DENT8_ACTIVE_GRANTS": str(bundle / "active-grants.json"),
+        "DENT8_REQUIRE_IDENTITY": "1",
+    }
+
+
+class Store:
+    """A throwaway store: ``signed(source)`` signs above-agent writes as that ``source:*``
+    identity; ``plain()`` is an unsigned agent-tier client on the same store."""
+
+    def __init__(self, dirpath):
+        self.dir = dirpath
+        self.base = {
+            "DENT8_LOG": str(dirpath / "memory.jsonl"),
+            "DENT8_AUTHORITY": str(dirpath / "authority.json"),
+        }
+
+    def plain(self):
+        return Dent8(binary=BINARY, cwd=str(self.dir), env=dict(self.base))
+
+    def signed(self, source):
+        env = dict(self.base)
+        env.update(_signing_env(self.dir, source))
+        return Dent8(binary=BINARY, cwd=str(self.dir), env=env)
+
+
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
+def store(tmp_path, monkeypatch):
     for key in list(os.environ):
         if key.startswith("DENT8_"):
             monkeypatch.delenv(key)
-    env = {
-        "DENT8_LOG": str(tmp_path / "memory.jsonl"),
-        "DENT8_AUTHORITY": str(tmp_path / "authority.json"),
-    }
-    return Dent8(binary=BINARY, cwd=str(tmp_path), env=env)
+    return Store(tmp_path)
 
 
 def _by_name(client, **kwargs):
     return {tool.name: tool for tool in dent8_tools(client=client, **kwargs)}
 
 
-def test_tools_cover_the_belief_surface(client):
-    names = set(_by_name(client, source="user:alice", authority="high"))
+def test_tools_cover_the_belief_surface(store):
+    names = set(_by_name(store.plain(), source="source:agent", authority="low"))
     assert {
         "dent8_record_fact",
         "dent8_revise_fact",
@@ -51,8 +96,10 @@ def test_tools_cover_the_belief_surface(client):
     } <= names
 
 
-def test_record_then_explain_round_trips(client):
-    tools = _by_name(client, source="user:alice", authority="high")
+def test_record_then_explain_round_trips(store):
+    # `repo.database` is High-floored, so the record is an above-agent signed write as `source:alice`.
+    client = store.signed("source:alice")
+    tools = _by_name(client, source="source:alice", authority="high")
     recorded = tools["dent8_record_fact"].invoke(
         {"subject": "repo:myproj", "predicate": "database", "value": "postgres"}
     )
@@ -63,14 +110,15 @@ def test_record_then_explain_round_trips(client):
     assert "postgres" in explained
 
 
-def test_low_authority_revision_comes_back_as_a_refusal_not_an_exception(client):
-    # A human records the fact...
-    _by_name(client, source="user:alice", authority="high")["dent8_record_fact"].invoke(
+def test_low_authority_revision_comes_back_as_a_refusal_not_an_exception(store):
+    # A signed human records the fact...
+    human = _by_name(store.signed("source:alice"), source="source:alice", authority="high")
+    human["dent8_record_fact"].invoke(
         {"subject": "repo:myproj", "predicate": "database", "value": "postgres"}
     )
     # ...a low-authority agent tries to revise it down. The firewall's refusal is returned
     # as a normal tool result the agent can read, not raised — and the human fact stands.
-    agent = _by_name(client, source="web:scrape", authority="low")
+    agent = _by_name(store.plain(), source="web:scrape", authority="low")
     refusal = agent["dent8_revise_fact"].invoke(
         {"subject": "repo:myproj", "predicate": "database", "value": "mysql"}
     )
@@ -80,8 +128,8 @@ def test_low_authority_revision_comes_back_as_a_refusal_not_an_exception(client)
     )
 
 
-def test_the_agent_tools_do_not_expose_source_or_authority(client):
+def test_the_agent_tools_do_not_expose_source_or_authority(store):
     # An LLM must not be able to pick its own authority: those are `dent8_tools` config, not
     # tool arguments the model fills in.
-    record = _by_name(client, source="source:agent", authority="low")["dent8_record_fact"]
+    record = _by_name(store.plain(), source="source:agent", authority="low")["dent8_record_fact"]
     assert set(record.args) == {"subject", "predicate", "value"}

@@ -494,7 +494,7 @@ impl IdentityContext {
         })
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(all(test, unix, feature = "async-store"))]
     pub(crate) fn from_test_parts(
         trust_path: String,
         grant_path: String,
@@ -697,7 +697,7 @@ pub(crate) fn existing_bundle(dir: &str, source: &str) -> Result<Option<Bootstra
 /// process-global env, in every feature build. Unlike [`bootstrap_bundle`] it does not constrain
 /// the source spelling (it lays the files down directly), so a test can sign whatever source label
 /// its write already uses.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) fn test_signed_context(source: &str) -> IdentityContext {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);

@@ -16,8 +16,10 @@ active signed grant, this SDK inherits all of that for free.
     from dent8 import Dent8
 
     d8 = Dent8()
+    # Above-agent authority (medium/high/canonical) is signed as the active ``source:*``
+    # identity provisioned by ``dent8 init``; agent-tier (``low``) writes need no identity.
     d8.assert_fact("repo:myproj", "database", "postgres",
-                   authority="high", source="user:alice")
+                   authority="high", source="source:alice")
     fact = d8.explain("repo:myproj", "database")
     assert fact["status"] == "ok"
 
