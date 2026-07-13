@@ -15,8 +15,8 @@ name = "dent8_store_postgres"
 path = "src/lib.rs"
 
 [dependencies]
-dent8-core = { path = "../dent8-core", version = "0.7.2" }
-dent8-store = { path = "../dent8-store", version = "0.7.2" }
+dent8-core = { path = "../dent8-core", version = "0.7.3" }
+dent8-store = { path = "../dent8-store", version = "0.7.3" }
 serde_json = { version = "1", optional = true }
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",

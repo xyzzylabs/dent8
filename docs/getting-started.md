@@ -11,7 +11,7 @@ one non-stale source of truth they all share.
 second of wall time for `init` → `assert` → `explain`). Timed check:
 `./examples/on-ramp/demo.sh`. The sections below expand install, multi-agent wiring, and hooks.
 
-Every command below was run against the real `dent8` v0.7.2 binary; the output blocks are
+Every command below was run against the real `dent8` v0.7.3 binary; the output blocks are
 trimmed but verbatim.
 
 ## 0. Sixty-second path (binary already installed)
@@ -38,23 +38,23 @@ the binary (localhost-only; every payload comes from the same firewall path as t
 The stock binary needs no services — it uses a local file log by default. MSRV is Rust
 **1.94**.
 
-**Release binaries (recommended, v0.7.2+).** The [releases page][releases] ships prebuilt
+**Release binaries (recommended, v0.7.3+).** The [releases page][releases] ships prebuilt
 archives for five targets, each with a `.sha256` sidecar (built with `postgres,sqlite`):
 
-- `dent8-v0.7.2-aarch64-apple-darwin.tar.gz`
-- `dent8-v0.7.2-x86_64-apple-darwin.tar.gz`
-- `dent8-v0.7.2-aarch64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.7.2-x86_64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.7.2-x86_64-pc-windows-msvc.zip`
+- `dent8-v0.7.3-aarch64-apple-darwin.tar.gz`
+- `dent8-v0.7.3-x86_64-apple-darwin.tar.gz`
+- `dent8-v0.7.3-aarch64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.7.3-x86_64-pc-windows-msvc.zip`
 
 Download, verify, and install one target (Linux x86_64 shown):
 
 ```sh
-BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.7.2
-curl -LO "$BASE/dent8-v0.7.2-x86_64-unknown-linux-gnu.tar.gz"
-curl -LO "$BASE/dent8-v0.7.2-x86_64-unknown-linux-gnu.tar.gz.sha256"
-sha256sum -c dent8-v0.7.2-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar xzf dent8-v0.7.2-x86_64-unknown-linux-gnu.tar.gz
+BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.7.3
+curl -LO "$BASE/dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "$BASE/dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum -c dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz
 chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 ```
 
@@ -66,8 +66,8 @@ cargo install dent8-cli --locked
 dent8 --version
 ```
 
-> The `cargo install dent8-cli --version 0.7.2 --locked` path was verified in a clean install
-> root as part of cutting v0.7.2 (the built binary reports `dent8 0.7.2`); a from-source build
+> The `cargo install dent8-cli --version 0.7.3 --locked` path was verified in a clean install
+> root as part of cutting v0.7.3 (the built binary reports `dent8 0.7.3`); a from-source build
 > takes about **3 minutes**. Only the **Parquet** analytical export
 > (`dent8 export <file>.parquet`, for DuckDB) is feature-gated — it is not in the release
 > archives and stays a `cargo install dent8-cli --features export --locked` build.

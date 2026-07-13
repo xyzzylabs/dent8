@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-07-13
+
 ### Added
 - **First-class TypeScript tools for the Vercel AI SDK and LangChain.js** (`dent8/ai`,
   `dent8/langchain`; roadmap: framework adapters). The `npm i dent8` package now exports

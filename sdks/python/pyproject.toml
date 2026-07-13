@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dent8"
-version = "0.7.2"
+version = "0.7.3"
 description = "A memory firewall for coding agents — thin Python SDK over the dent8 CLI's JSON contract."
 readme = "README.md"
 requires-python = ">=3.9"
