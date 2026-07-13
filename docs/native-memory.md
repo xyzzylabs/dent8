@@ -22,7 +22,9 @@ The invariant from [agent-adapters.md](agent-adapters.md) still holds:
    block.
 3. **Let the guard keep export the source of truth.** The `PreToolUse` native-memory guard
    (`dent8 hook native-memory-guard`) blocks direct agent edits to these files, so the only
-   sanctioned way to change the managed block is to re-run `dent8 export`. See
+   sanctioned way to change the managed block is to re-run `dent8 export`. `dent8 init` installs
+   and enforces this guard **by default** (opt out with `--no-native-memory-guard`), so a fresh
+   project is protected out of the box — you no longer have to copy in a sample hook config. See
    [Guard interaction](#guard-interaction) below.
 
 Because import can only *assert* facts and the firewall's uniqueness rule rejects a second
@@ -125,7 +127,11 @@ The `PreToolUse` guard (`dent8 hook native-memory-guard`, mode
 `guard-native-memory-write`) blocks agent `Write`/`Edit`/`MultiEdit` tool calls that target a
 native memory/rules file, so an agent cannot hand-edit `CLAUDE.md`/`AGENTS.md` and bypass the
 fact-event firewall. This blocking behaviour is **unchanged** — a raw agent write of arbitrary
-prose to `CLAUDE.md` still exits 2 under `DENT8_HOOK_ENFORCE`.
+prose to `CLAUDE.md` still exits 2 under `DENT8_HOOK_ENFORCE`. What changed is activation:
+`dent8 init` now wires this enforced guard into the configured agent's hook config **by default**
+(opt out with `--no-native-memory-guard`), and the installed command degrades gracefully — it is
+fronted by `command -v dent8 >/dev/null 2>&1 || exit 0`, so a clone without the `dent8` binary on
+`PATH` allows the write (exit 0) instead of bricking every edit.
 
 `dent8 export --target` is the sanctioned write path **by construction**: it writes the file
 from the dent8 CLI process, and the guard only ever sees the agent's tool calls, not dent8's

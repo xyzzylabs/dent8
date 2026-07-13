@@ -27,7 +27,15 @@ dent8 context
 ```
 
 `init` creates `.dent8/` (file log + authority registry with human > CI > agent defaults plus
-your `source:owner` grant). You do **not** need Postgres, identity, or MCP for the first fact.
+your `source:owner` grant) and, **by default, wires the enforced `PreToolUse` native-memory
+guard** into the agent's hook config (`.claude/settings.json` with no `--agent`, otherwise the
+selected agent's hook file) so raw agent edits to `CLAUDE.md`/`AGENTS.md`/… are blocked from the
+start. Opt out with `dent8 init --no-native-memory-guard`. The wired command fails **open** when
+the binary is absent (`command -v dent8 >/dev/null 2>&1 || exit 0; …`), so a fresh clone that has
+the hook wired but no `dent8` on `PATH` allows the write rather than bricking every edit. Per
+write, `DENT8_HOOK_ENFORCE=0` softens the guard to advisory and `DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`
+is the sanctioned bypass (the reviewed `dent8 export --target` path never sets it). You do **not**
+need Postgres, identity, or MCP for the first fact.
 Optional smoke: `dent8 doctor --source source:owner --write-check`. To *see* the whole
 thing — live fact table, integrity receipts, replay timelines, an interactive what-if —
 run **`dent8 ui`**: a read-only control plane opens in your browser, served straight from
@@ -250,7 +258,9 @@ describe — so treat that side as documented per vendor.
 The sub-sections below detail the load-bearing patterns — Claude Code hooks (a), the
 universal `dent8 context` pipe (b), CI capture (c), and the MCP server (d).
 
-**(a) Claude Code hooks.** This repo ships its own wiring in
+**(a) Claude Code hooks.** `dent8 init` already writes the enforced `PreToolUse` native-memory
+guard into `.claude/settings.json` for you (unless you passed `--no-native-memory-guard`); this
+section shows the fuller loop you can layer on top. This repo ships its own wiring in
 [`.claude/settings.json`](../.claude/settings.json). The two load-bearing hooks are
 `SessionStart` (inject the believed facts via `dent8 context`) and `SessionEnd` (flush
 agent-queued proposals via `dent8 capture`). The full, hardened block — it guards on
