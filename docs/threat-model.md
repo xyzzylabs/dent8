@@ -152,12 +152,21 @@ Recommended hardening order:
 - **Source identity is proven only at the dent8 boundary.** The opt-in **authority registry**
   (`dent8 authority`) caps a stated `Authority` at the source's registered ceiling and
   *rejects* an over-ceiling write — so a low-trust source cannot mint `canonical` even by
-  passing it. The stock CLI's **signed source identity** layer (`dent8 init --identity`,
-  `dent8 init --agent <profile>`, or `dent8 identity`) adds authn: a trusted issuer signs a
-  grant binding source id -> source public key + authority ceiling + optional subject
-  scope/expiration, and each write proves possession of the source private key before the
-  candidate event reaches the firewall. This closes the "copy a grant but not the key" and
-  "fact to be `source:owner`" gap for CLI/MCP writes.
+  passing it. **Above-agent authority now requires signed identity by default (BREAKING).** A
+  write whose effective authority is strictly greater than the agent tier (`low`) — i.e.
+  `medium`/`high`/`canonical` — is *rejected* unless it is backed by a valid signed identity
+  attestation (a grant chaining to a trusted issuer, matching the claimed source/authority/scope,
+  plus proven key possession). Previously such a write was trusted on the strength of the *label*
+  alone whenever signed identity was unconfigured, so any shell-capable agent could claim
+  `--authority high --source source:human` for free; that unauthenticated-label bypass is now
+  closed at the write boundary regardless of the opt-in `DENT8_REQUIRE_IDENTITY`/registry. Writes at
+  or below the agent tier stay permissive (no signing required). To keep the honest path working,
+  `dent8 init` now provisions a default signing identity by default. The stock CLI's **signed source
+  identity** layer (`dent8 init`, `dent8 init --agent <profile>`, or `dent8 identity`) provides the
+  authn: a trusted issuer signs a grant binding source id -> source public key + authority ceiling +
+  optional subject scope/expiration, and each write proves possession of the source private key
+  before the candidate event reaches the firewall. This closes the "copy a grant but not the key"
+  and "claim to be `source:owner`" gap for CLI/MCP writes.
   Residuals: a compromised source private key or same-OS-user process that can read the key
   can still impersonate the source; a compromised issuer can issue bad grants; direct DB
   writes or direct adapter calls bypass this boundary; and a shared MCP server can only prove
@@ -170,7 +179,11 @@ Recommended hardening order:
   OS-user separation remains the stronger boundary. Stronger deployments need separate OS
   users, hardware/secret-store-backed keys, external signers, and key rotation. Authority arbitration
   plus the ceiling/identity chiefly defends against *low*-privilege injection (the MINJA
-  case); a compromised high-authority actor remains out of scope.
+  case). The signing-required-above-agent default raises the bar so an *unsigned* high-authority
+  **label** is rejected rather than trusted — but it does **not** protect a signing key a
+  shell-capable agent can read off disk: a compromised high-authority key (or a same-OS-user process
+  that reads it) can still make trusted above-agent writes. That key-at-rest / key-compromise threat
+  is the documented, unchanged residual and remains out of scope for this layer.
 - **The firewall cannot judge truth — and does not judge content itself.** It governs
   provenance, freshness, authority, and contradiction *visibility* — not whether a
   well-formed, well-sourced fact is factually correct. That is the correct scope for an

@@ -468,7 +468,12 @@ pub(crate) fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
     let dir = std::path::PathBuf::from(&args.dir);
     let dir = absolute_path(&dir)?;
     let source = init_source(args);
-    let bootstrap_identity = args.identity || args.agent.is_some();
+    // Signed identity is provisioned BY DEFAULT (opt out with `--no-identity`). Above-agent
+    // authority (medium/high/canonical) now requires a valid signed identity, so a default
+    // `dent8 init` must lay down the trust root + issuer key + source key + grant and wire them
+    // into `.dent8/env` — otherwise the honest high-authority path documented below would be
+    // rejected by the fail-closed above-agent gate. `--identity`/`--agent` remain accepted.
+    let bootstrap_identity = !args.no_identity;
     let authority_path = dir.join("authority.json");
     let env_path = dir.join("env");
     if env_path.exists() && !args.force {
@@ -511,7 +516,19 @@ pub(crate) fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
 
     let identity = init_identity(args, &dir, &source, bootstrap_identity)?;
     let witness = init_witness(args, &dir)?;
-    let env_contents = init_env_contents(&env_path, &authority_path, &store, &witness);
+    // Embed the signed identity into the shared `.dent8/env` only for a default (single-source)
+    // init, so `. .dent8/env` alone can make signed above-agent writes. For `--agent` bundles the
+    // identity is per-agent (`identity-<agent>.env`, sourced separately), so the shared env stays
+    // agent-neutral — embedding one agent's grant there would be arbitrary and mask staleness.
+    let embed_identity = args.agent.is_none();
+    let env_contents = init_env_contents(
+        &env_path,
+        &authority_path,
+        &store,
+        &identity,
+        &witness,
+        embed_identity,
+    );
     write_atomic(&env_path.to_string_lossy(), &env_contents)?;
 
     let mut message = init_base_message(
@@ -671,7 +688,9 @@ pub(crate) fn init_env_contents(
     env_path: &std::path::Path,
     authority_path: &std::path::Path,
     store: &InitStoreOutput,
+    identity: &InitIdentityOutput,
     witness: &InitWitnessOutput,
+    embed_identity: bool,
 ) -> String {
     format!(
         "# dent8 local environment\n\
@@ -679,11 +698,40 @@ pub(crate) fn init_env_contents(
          DENT8_AUTHORITY={}\n\
          DENT8_REQUIRE_AUTHORITY=1\n\
          {}\n\
-         {}",
+         {}{}",
         shell_quote(&env_path.to_string_lossy()),
         shell_quote(&authority_path.to_string_lossy()),
         store.env_line(),
+        if embed_identity {
+            identity_env_lines(identity)
+        } else {
+            String::new()
+        },
         witness.env_lines,
+    )
+}
+
+/// The signed-identity env lines carried in the **main** `.dent8/env` when `init` provisioned a
+/// default signing identity, so a freshly-init'd project can make signed above-agent writes with
+/// just `. .dent8/env` (ADR 0012/0013) — no separate identity env file to source. The private
+/// source key these reference is written `0600` by the bundle machinery. Empty when identity was
+/// not provisioned (`--no-identity`), in which case above-agent authority stays rejected until
+/// signing is configured.
+fn identity_env_lines(identity: &InitIdentityOutput) -> String {
+    if !identity.enabled {
+        return String::new();
+    }
+    let line = |key: &str, path: Option<&std::path::PathBuf>| {
+        path.map_or_else(String::new, |path| {
+            format!("{key}={}\n", shell_quote(&path.to_string_lossy()))
+        })
+    };
+    format!(
+        "DENT8_REQUIRE_IDENTITY=1\n{}{}{}{}",
+        line("DENT8_TRUST", identity.trust_file.as_ref()),
+        line("DENT8_ACTIVE_GRANTS", identity.active_grants_file.as_ref()),
+        line("DENT8_GRANT", identity.grant_file.as_ref()),
+        line("DENT8_IDENTITY_KEY", identity.source_key_path.as_ref()),
     )
 }
 
@@ -817,6 +865,7 @@ pub(crate) fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::V
             "source": args.source.as_deref(),
             "agent": args.agent.map(InitAgent::cli_name),
             "identity": args.identity,
+            "no_identity": args.no_identity,
             "no_native_memory_guard": args.no_native_memory_guard,
             "install_mcp": args.mcp.install_mcp,
             "mcp_use_daemon": args.mcp.mcp_use_daemon,
@@ -1347,7 +1396,9 @@ pub(crate) fn preflight_identity(
     enabled: bool,
 ) -> Result<(), String> {
     {
-        if enabled {
+        // Skip preflight when an identity for this source already exists: init reuses it
+        // idempotently (bootstrap's absent-file preflight would otherwise reject a re-init).
+        if enabled && identity::existing_bundle(&dir.to_string_lossy(), source)?.is_none() {
             identity::preflight_bootstrap_bundle(
                 &dir.to_string_lossy(),
                 source,
@@ -1400,15 +1451,20 @@ pub(crate) fn init_identity(
                 env_file: None,
             });
         }
-        let identity = identity::bootstrap_bundle(
-            &dir.to_string_lossy(),
-            source,
-            &args.issuer,
-            args.issuer_key.as_deref(),
-            args.authority,
-            &args.identity_scope,
-            args.identity_expires_at_ms,
-        )?;
+        // Reuse an already-provisioned identity (idempotent re-init / `--force`) rather than
+        // re-bootstrapping, which refuses to overwrite key material.
+        let identity = match identity::existing_bundle(&dir.to_string_lossy(), source)? {
+            Some(existing) => existing,
+            None => identity::bootstrap_bundle(
+                &dir.to_string_lossy(),
+                source,
+                &args.issuer,
+                args.issuer_key.as_deref(),
+                args.authority,
+                &args.identity_scope,
+                args.identity_expires_at_ms,
+            )?,
+        };
         let env_load = format!(
             "\n  . {}",
             shell_quote(&identity.env_file.to_string_lossy())

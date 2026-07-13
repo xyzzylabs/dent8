@@ -440,12 +440,31 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
         return DoctorReport::new(output, false);
     }
 
+    // Report the native-memory guard posture FIRST: it depends only on the agent's hook config, not
+    // on a signed identity, so a project with the guard installed but no identity configured still
+    // gets an honest guard report instead of a hard error on the missing identity env below.
+    doctor_agent_bypass_guard(&mut output, agent, &dir);
+    doctor_agent_native_scan(&mut output, agent, &dir);
+
     let bundle_env =
         match load_doctor_agent_env(&mut output, agent, &dir, args.mcp_config.as_deref()) {
             Ok(env) => env,
             Err(error) => {
-                doctor_line(&mut output, "FAIL", &error);
-                return DoctorReport::new(output, false);
+                // A missing/incomplete agent identity env is only fatal when the caller actually
+                // asked to exercise identity (`--write-check`). Otherwise the guard posture above is
+                // what was asked for, so report the gap as a WARN and finish cleanly.
+                if args.write_check {
+                    doctor_line(&mut output, "FAIL", &error);
+                    return DoctorReport::new(output, false);
+                }
+                doctor_line(&mut output, "WARN", &error);
+                doctor_line(
+                    &mut output,
+                    "SKIP",
+                    "mcp + identity checks: skipped (no signing identity configured); the guard \
+                     posture above is independent of identity",
+                );
+                return DoctorReport::new(output, true);
             }
         };
 
@@ -456,8 +475,6 @@ pub(crate) fn doctor_agent_report(args: &DoctorArgs, agent: InitAgent) -> Doctor
             return DoctorReport::new(output, false);
         }
     };
-    doctor_agent_bypass_guard(&mut output, agent, &dir);
-    doctor_agent_native_scan(&mut output, agent, &dir);
 
     let expected_command = expected_doctor_mcp_command(args, &dir);
     match validate_installed_agent_config(&bundle_env, &installed, expected_command.as_deref()) {

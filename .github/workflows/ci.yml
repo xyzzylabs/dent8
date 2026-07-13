@@ -118,6 +118,14 @@ jobs:
           trap 'rm -rf "$tmpdir"' EXIT
           export DENT8_AUTHORITY="$tmpdir/authority.json"
           "$BIN" authority add source:ci high
+          # Above-agent authority (medium/high/canonical) now requires a valid signed identity, so
+          # provision one for source:ci and export its signing env before the High writes below.
+          "$BIN" identity bootstrap --dir "$tmpdir/id" --source source:ci --max high --issuer-key "$tmpdir/issuer.key"
+          export DENT8_TRUST="$tmpdir/id/trust.json"
+          export DENT8_GRANT="$tmpdir/id/grants/source_ci.grant.json"
+          export DENT8_IDENTITY_KEY="$tmpdir/id/identities/source_ci.key"
+          export DENT8_ACTIVE_GRANTS="$tmpdir/id/active-grants.json"
+          export DENT8_REQUIRE_IDENTITY=1
           "$BIN" assert person:ci-e2e favorite_drink tea --authority high --source source:ci
           "$BIN" supersede person:ci-e2e favorite_drink coffee --authority high --source source:ci
           output="$("$BIN" explain person:ci-e2e favorite_drink)"

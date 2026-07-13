@@ -169,17 +169,18 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
     );
 
     let requests = mcp_authority_scenario_requests();
-    let output = run_mcp_server(
-        &(requests + "\n"),
-        &[
-            ("DENT8_LOG", log_path.to_string_lossy().into_owned()),
-            (
-                "DENT8_AUTHORITY",
-                authority_path.to_string_lossy().into_owned(),
-            ),
-            ("DENT8_REQUIRE_AUTHORITY", "1".to_string()),
-        ],
-    );
+    // The accepted assert is source:codex at High — an above-agent write that now needs a signed
+    // identity; the rejected supersede (source:cursor) is refused at the registry ceiling first.
+    let mut server_env = vec![
+        ("DENT8_LOG", log_path.to_string_lossy().into_owned()),
+        (
+            "DENT8_AUTHORITY",
+            authority_path.to_string_lossy().into_owned(),
+        ),
+        ("DENT8_REQUIRE_AUTHORITY", "1".to_string()),
+    ];
+    server_env.extend(signing_env(&temp, "source:codex"));
+    let output = run_mcp_server(&(requests + "\n"), &server_env);
     let responses = output
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("JSON-RPC response"))
@@ -362,6 +363,59 @@ fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
     command.output().expect("run dent8")
 }
 
+/// Bootstrap a signed identity for `source` (up to Canonical) under `temp` and return the env vars
+/// that authorize signed above-agent writes as it. Above-agent authority now requires a signed
+/// identity, so an integration test that makes such writes attaches these to its process env.
+fn signing_env(temp: &TempDir, source: &str) -> Vec<(&'static str, String)> {
+    let slug: String = source
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let dir = temp.file(&format!("id-{slug}"));
+    let issuer = temp.file(&format!("issuer-{slug}.key"));
+    let out = Command::new(dent8_bin())
+        .args([
+            "identity",
+            "bootstrap",
+            "--dir",
+            &dir.to_string_lossy(),
+            "--source",
+            source,
+            "--max",
+            "canonical",
+            "--issuer-key",
+            &issuer.to_string_lossy(),
+        ])
+        .env_remove("DENT8_STORE_URL")
+        .output()
+        .expect("run identity bootstrap");
+    assert!(
+        out.status.success(),
+        "identity bootstrap failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let owned = |p: PathBuf| p.to_string_lossy().into_owned();
+    vec![
+        ("DENT8_TRUST", owned(dir.join("trust.json"))),
+        (
+            "DENT8_GRANT",
+            owned(dir.join(format!("grants/{slug}.grant.json"))),
+        ),
+        (
+            "DENT8_IDENTITY_KEY",
+            owned(dir.join(format!("identities/{slug}.key"))),
+        ),
+        ("DENT8_ACTIVE_GRANTS", owned(dir.join("active-grants.json"))),
+        ("DENT8_REQUIRE_IDENTITY", "1".to_string()),
+    ]
+}
+
 /// ADR 0011, through the CLI surface: an explicit `expire` that under-ranks the incumbent is
 /// rejected (a low-trust source cannot terminally close a high-authority fact by calling it
 /// stale); an equal-authority expire is accepted.
@@ -369,9 +423,14 @@ fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> std::process::Output {
 fn cli_expire_is_authority_gated() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    // absent -> permissive dev mode
+    // No registry (permissive authority ceiling), but the High assert is an above-agent write, so a
+    // signed source:owner identity is configured; the low expire is then refused by arbitration.
     let missing_registry = temp.file("authority.json").to_string_lossy().into_owned();
-    let envs: &[(&str, &str)] = &[("DENT8_LOG", &log), ("DENT8_AUTHORITY", &missing_registry)];
+    let sign = signing_env(&temp, "source:owner");
+    let mut envs: Vec<(&str, &str)> =
+        vec![("DENT8_LOG", &log), ("DENT8_AUTHORITY", &missing_registry)];
+    envs.extend(sign.iter().map(|(key, value)| (*key, value.as_str())));
+    let envs: &[(&str, &str)] = &envs;
 
     assert!(
         run_dent8(

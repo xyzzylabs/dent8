@@ -634,7 +634,10 @@ mod tests {
                 to: None,
                 ttl: None,
             },
-            &WriteIdentity::Env,
+            // Above-agent (High) seeds require a signed identity; sign as source:human.
+            &WriteIdentity::TestSigned(std::sync::Arc::new(crate::identity::test_signed_context(
+                "source:human",
+            ))),
         );
         assert!(outcome.is_ok(), "seed assert failed for repo:demo {pred}");
     }

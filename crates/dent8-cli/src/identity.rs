@@ -594,12 +594,47 @@ pub(crate) fn env_grant_authority(source: &str) -> Option<AuthorityLevel> {
     grant_authority_for_source(&nonempty_env("DENT8_GRANT")?, source)
 }
 
+/// The highest authority a write may claim with no signed identity at all: the agent tier
+/// (`source:agent` → [`AuthorityLevel::Low`]) and everything below it. A write claiming
+/// *strictly greater* authority (Medium/High/Canonical) is "above the agent tier" and must be
+/// backed by a valid signed attestation — see [`require_signed_above_agent`].
+const AGENT_TIER: AuthorityLevel = AuthorityLevel::Low;
+
+/// Fail-closed gate for the otherwise-permissive dev-mode path: a write whose claimed authority
+/// is *above the agent tier* requires a configured, valid signed identity. Historically an
+/// unconfigured project trusted any authority LABEL — so `--authority high --source source:human`
+/// was believed on the say-so of a shell-capable agent. That is now rejected: above-agent
+/// authority ALWAYS requires signing, independent of the opt-in `DENT8_REQUIRE_IDENTITY` /
+/// authority registry. Writes at or below the agent tier (Low/Unknown) stay permissive, so
+/// ordinary local/agent use is unchanged.
+///
+/// This is the *unconfigured* backstop only. When signed identity IS configured, [`enforce_write`]
+/// runs the full grant/trust/possession checks (which reject an insufficient grant for the claimed
+/// level), so this gate never weakens that stronger path.
+fn require_signed_above_agent(auth: &WriteAuth<'_>) -> Result<(), String> {
+    if auth.authority > AGENT_TIER {
+        return Err(format!(
+            "unsigned write claims authority '{}' above the agent tier (source {:?}); \
+             above-agent authority requires a valid signed identity. Run `dent8 init` to \
+             provision a signing identity (or configure \
+             DENT8_TRUST/DENT8_GRANT/DENT8_IDENTITY_KEY), or lower the authority to the agent \
+             tier (`--authority {}`).",
+            auth.authority, auth.source, AGENT_TIER,
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn enforce_write(
     ctx: &IdentityContext,
     auth: &WriteAuth<'_>,
     now: TimestampMillis,
 ) -> Result<(), String> {
     let Some(trust) = load_trust_at(&ctx.trust_path, ctx.configured())? else {
+        // Signed identity is not configured — historically a permissive "dev mode" where any
+        // authority label was trusted. It stays permissive for agent-tier and below, but an
+        // above-agent claim is now rejected outright rather than believed unauthenticated.
+        require_signed_above_agent(auth)?;
         return Ok(());
     };
     if trust.issuers.is_empty() {
@@ -623,6 +658,115 @@ pub(crate) fn enforce_write(
     // Possession is proven for real by the persisted per-event attestation ([`attest_events`],
     // ADR 0013), signed at the append boundary over the final event content.
     Ok(())
+}
+
+/// If a signed identity bundle for `source` already exists under `dir`, return its
+/// [`BootstrapOutput`] (reading the existing grant for issuer/authority/scope) so `dent8 init`
+/// can reuse it idempotently instead of re-bootstrapping — bootstrap deliberately refuses to
+/// overwrite key material, so `init --force` (or a second `init`) must reuse, never clobber, an
+/// already-provisioned identity. Returns `Ok(None)` when no grant exists for `source`.
+pub(crate) fn existing_bundle(dir: &str, source: &str) -> Result<Option<BootstrapOutput>, String> {
+    parse_source(source)?;
+    let dir_path = PathBuf::from(dir);
+    let slug = source_slug(source);
+    let grant_file = dir_path.join("grants").join(format!("{slug}.grant.json"));
+    if !grant_file.exists() {
+        return Ok(None);
+    }
+    let signed = load_grant(&grant_file.to_string_lossy())?;
+    let grant = signed.grant;
+    Ok(Some(BootstrapOutput {
+        issuer: grant.issuer,
+        source: grant.source,
+        max_authority: grant.max_authority,
+        scope: grant.scope.unwrap_or_else(|| "*".to_string()),
+        // The operator issuer key lives outside the bundle and is not needed to reuse it.
+        issuer_key_path: PathBuf::new(),
+        trust_file: dir_path.join("trust.json"),
+        active_grants_file: dir_path.join(ACTIVE_GRANTS_FILE),
+        grant_file,
+        source_key_path: dir_path.join("identities").join(format!("{slug}.key")),
+        env_file: bundle::identity_env_path_for_source(&dir_path, source)?,
+        bundle_dir: dir_path,
+    }))
+}
+
+/// Mint a throwaway signed identity for ANY `source` label (source:*, bare, or `kind:key`) under a
+/// fresh temp dir and return an [`IdentityContext`] over it, authorizing up to Canonical for every
+/// subject. In-process unit tests use this to exercise signed above-agent writes without touching
+/// process-global env, in every feature build. Unlike [`bootstrap_bundle`] it does not constrain
+/// the source spelling (it lays the files down directly), so a test can sign whatever source label
+/// its write already uses.
+#[cfg(test)]
+pub(crate) fn test_signed_context(source: &str) -> IdentityContext {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root = std::env::temp_dir().join(format!(
+        "dent8-test-signing-{}-{n}-{}",
+        std::process::id(),
+        source_slug(source)
+    ));
+    std::fs::create_dir_all(&root).expect("create test signing dir");
+
+    let mint = || -> Result<[u8; 32], String> {
+        let mut seed = [0u8; 32];
+        getrandom::getrandom(&mut seed).map_err(|error| error.to_string())?;
+        Ok(seed)
+    };
+    let issuer_key = SigningKey::from_bytes(&mint().expect("issuer keygen"));
+    let source_key = SigningKey::from_bytes(&mint().expect("source keygen"));
+
+    let mut trust = TrustedIssuers::default();
+    trust.issuers.insert(
+        "owner".to_string(),
+        TrustedIssuer {
+            public_key: hex::encode(issuer_key.verifying_key().to_bytes()),
+        },
+    );
+    let trust_path = root.join("trust.json");
+    write_json(&trust_path.to_string_lossy(), &trust).expect("write trust");
+
+    let grant = SourceGrantPayload {
+        version: 1,
+        source: source.to_string(),
+        public_key: hex::encode(source_key.verifying_key().to_bytes()),
+        max_authority: AuthorityLevel::Canonical,
+        issuer: "owner".to_string(),
+        scope: Some("*".to_string()),
+        expires_at_ms: None,
+    };
+    let signature = hex::encode(
+        issuer_key
+            .sign(&framed(GRANT_DOMAIN, &grant).expect("frame grant"))
+            .to_bytes(),
+    );
+    let signed = SignedSourceGrant { grant, signature };
+    let grant_path = root.join("grant.json");
+    write_json(&grant_path.to_string_lossy(), &signed).expect("write grant");
+
+    let mut active = ActiveSourceGrants::default();
+    active
+        .sources
+        .insert(source.to_string(), active_source_grant_for(&signed));
+    let active_path = root.join("active-grants.json");
+    write_active_grants_path(&active_path, &active).expect("write active grants");
+
+    let key_path = root.join("source.key");
+    write_secret(
+        &key_path.to_string_lossy(),
+        &hex::encode(source_key.to_bytes()),
+    )
+    .expect("write source key");
+
+    IdentityContext {
+        trust_path: trust_path.to_string_lossy().into_owned(),
+        trust_explicit: true,
+        grant_path: Some(grant_path.to_string_lossy().into_owned()),
+        identity_key_path: Some(key_path.to_string_lossy().into_owned()),
+        active_grants_override: Some(active_path.to_string_lossy().into_owned()),
+        required: true,
+    }
 }
 
 /// Attach a signed write attestation (ADR 0013) to each event when signed identity is

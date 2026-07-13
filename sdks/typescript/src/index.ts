@@ -18,8 +18,10 @@
  * import { Dent8 } from "dent8";
  *
  * const d8 = new Dent8();
+ * // Above-agent authority (medium/high/canonical) is signed as the active `source:*`
+ * // identity provisioned by `dent8 init`; agent-tier (`low`) writes need no identity.
  * d8.assertFact("repo:myproj", "database", "postgres",
- *               { authority: "high", source: "user:alice" });
+ *               { authority: "high", source: "source:alice" });
  * const fact = d8.explain("repo:myproj", "database");
  * ```
  *

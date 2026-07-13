@@ -14,6 +14,169 @@ use std::{
     sync::{Arc, Barrier},
 };
 
+/// PROOF (the closed bypass): an UNSIGNED write claiming authority ABOVE the agent tier is now
+/// REJECTED by default — no identity configured, no opt-in flag. This is the exact
+/// `--authority high --source source:human` label trick the security review used; before this
+/// change it was trusted, now it fails closed. A `--authority medium --source source:ci` variant
+/// is rejected too. This must FAIL (be rejected) here and would have PASSED (been trusted) before.
+#[test]
+fn unsigned_above_agent_write_is_rejected_by_default() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    for (authority, source) in [("high", "source:human"), ("medium", "source:ci")] {
+        let rejected = run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "notes",
+                "hello",
+                "--authority",
+                authority,
+                "--source",
+                source,
+            ],
+            &envs,
+        );
+        assert_eq!(
+            rejected.status.code(),
+            Some(2),
+            "unsigned {authority} write must be rejected: {}",
+            stdout(&rejected)
+        );
+        assert!(
+            stderr(&rejected).contains("above the agent tier")
+                && stderr(&rejected).contains("requires a valid signed identity"),
+            "{}",
+            stderr(&rejected)
+        );
+        // Nothing was persisted: the fail-closed gate runs before the store is touched.
+        assert!(
+            !std::path::Path::new(&log).exists()
+                || !fs::read_to_string(&log)
+                    .unwrap_or_default()
+                    .contains("hello"),
+            "a rejected above-agent write must not reach the log"
+        );
+    }
+}
+
+/// PROOF (the honest path works out of the box): after a DEFAULT `dent8 init` — which now
+/// provisions a signing identity — the same above-agent write SUCCEEDS (signed), and the persisted
+/// event carries a valid attestation that `verify` accepts.
+#[cfg(feature = "sqlite")]
+#[test]
+fn signed_above_agent_write_accepted_after_default_init() {
+    let temp = TempDir::new();
+    let root = temp.path.clone();
+    fs::create_dir(root.join(".git")).expect("create .git");
+    let dir = root.join(".dent8").to_string_lossy().into_owned();
+
+    let init = run_dent8(&["init", "--dir", &dir], &[]);
+    assert_success(&init, "default init provisions identity");
+
+    // Source the env init wrote (it now carries the signed-identity vars) and make a High write.
+    let env_file = fs::read_to_string(root.join(".dent8").join("env")).expect("env file");
+    let pairs: Vec<(String, String)> = env_file
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| key.starts_with("DENT8_"))
+        .map(|(key, value)| (key.to_string(), value.trim().trim_matches('\'').to_string()))
+        .collect();
+    let envs: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect();
+
+    let asserted = run_dent8(
+        &[
+            "assert",
+            "repo:myproj",
+            "deploy_target",
+            "production",
+            "--authority",
+            "high",
+            "--source",
+            "source:local",
+        ],
+        &envs,
+    );
+    assert_success(&asserted, "signed above-agent write after default init");
+
+    // The persisted event carries a write attestation and `verify` accepts it.
+    let store_log = root.join(".dent8").join("memory.jsonl");
+    let contents = fs::read_to_string(&store_log).expect("read store");
+    assert!(
+        contents.contains("attestation"),
+        "signed event must carry an attestation: {contents}"
+    );
+    let verify = run_dent8(&["verify"], &envs);
+    assert_success(&verify, "verify signed above-agent write");
+    assert!(
+        stdout(&verify).contains("write attestation(s) verify"),
+        "{}",
+        stdout(&verify)
+    );
+}
+
+/// PROOF (agent-tier stays permissive): an agent-tier write (Low / `source:agent`) with NO signing
+/// identity configured still succeeds — ordinary local/agent use is unchanged.
+#[test]
+fn agent_tier_unsigned_write_still_works() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let accepted = run_dent8(
+        &[
+            "assert",
+            "repo:app",
+            "notes",
+            "hello",
+            "--authority",
+            "low",
+            "--source",
+            "source:agent",
+        ],
+        &envs,
+    );
+    assert_success(
+        &accepted,
+        "agent-tier unsigned write must still be accepted",
+    );
+    assert!(
+        stdout(&accepted).contains("ACCEPTED"),
+        "{}",
+        stdout(&accepted)
+    );
+}
+
+/// `dent8 doctor --agent claude-code` reports the native-memory guard posture even when NO signing
+/// identity is configured: the guard depends only on the hook config, so a missing identity is a
+/// WARN (not a hard error) and the command still exits cleanly with the guard reported.
+#[test]
+fn doctor_agent_reports_guard_posture_without_identity() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+
+    // A project with the enforced guard installed but NO signing identity provisioned.
+    let init = run_dent8(&["init", "--dir", &dir, "--no-identity"], &[]);
+    assert_success(&init, "init --no-identity (guard on, identity off)");
+    assert!(
+        !temp.file(".dent8/trust.json").exists(),
+        "--no-identity must not provision a signing identity"
+    );
+
+    let doctor = run_dent8(&["doctor", "--agent", "claude-code", "--dir", &dir], &[]);
+    assert_success(&doctor, "doctor --agent claude-code with no identity");
+    let report = stdout(&doctor);
+    assert!(
+        report.contains("native-memory guard is enforced"),
+        "doctor must report the guard posture without identity: {report}"
+    );
+}
+
 #[test]
 fn alice_fact_round_trips_with_subject_and_metadata_flags() {
     let temp = TempDir::new();
@@ -27,7 +190,7 @@ fn alice_fact_round_trips_with_subject_and_metadata_flags() {
             "favorite_drink",
             "tea",
             "--authority",
-            "high",
+            "low",
             "--source",
             "user:alice",
         ],
@@ -53,6 +216,9 @@ fn alice_fact_round_trips_with_subject_and_metadata_flags() {
 fn a_subdir_write_with_unset_env_uses_the_discovered_dent8_store() {
     let temp = TempDir::new();
     let root = temp.path.clone();
+    // `repo.database` has a High authority floor, so this write must be a signed above-agent write.
+    // Provide signing WITHOUT DENT8_LOG so the store is still resolved by discovery.
+    let id = SigningId::provision(&temp, "source:local", "unused");
 
     // Discovery is confined to the enclosing git repo, so mark <root> as a repo root.
     fs::create_dir(root.join(".git")).expect("create .git repo marker");
@@ -83,7 +249,7 @@ fn a_subdir_write_with_unset_env_uses_the_discovered_dent8_store() {
             "--source",
             "source:local",
         ],
-        &[],
+        &id.signing_only(),
     );
     assert_success(&asserted, "assert from subdir");
 
@@ -118,6 +284,9 @@ fn a_planted_ancestor_dent8_store_outside_a_repo_is_not_adopted() {
     // `.dent8/` is considered, so the planted ancestor store is never touched.
     let temp = TempDir::new();
     let root = temp.path.clone();
+    // `repo.database` has a High authority floor → signed above-agent write; no DENT8_LOG so the
+    // store still resolves by discovery (here, the cwd fallback).
+    let id = SigningId::provision(&temp, "source:local", "unused");
 
     // Plant a poisoned store in the ancestor: a `memory.jsonl` a naive adopt would append to, and
     // an `env` whose DENT8_LOG would redirect writes to an attacker-chosen path.
@@ -146,7 +315,7 @@ fn a_planted_ancestor_dent8_store_outside_a_repo_is_not_adopted() {
             "--source",
             "source:local",
         ],
-        &[],
+        &id.signing_only(),
     );
     assert_success(&asserted, "assert from non-repo subdir");
 
@@ -182,6 +351,9 @@ fn discovery_is_confined_to_the_enclosing_git_repo() {
     // from a nested subdirectory.
     let temp = TempDir::new();
     let outside = temp.path.clone();
+    // `repo.database` has a High authority floor → signed above-agent write; no DENT8_LOG so the
+    // store still resolves by discovery.
+    let id = SigningId::provision(&temp, "source:local", "unused");
 
     // Planted, attacker-controlled store ABOVE the repo.
     let planted = outside.join(".dent8");
@@ -213,7 +385,7 @@ fn discovery_is_confined_to_the_enclosing_git_repo() {
             "--source",
             "source:local",
         ],
-        &[],
+        &id.signing_only(),
     );
     assert_success(&asserted, "assert from repo subdir");
 
@@ -239,6 +411,9 @@ fn a_discovered_store_url_selects_the_db_backend_when_the_process_env_is_unset()
     let temp = TempDir::new();
     let root = temp.path.clone();
     fs::create_dir(root.join(".git")).expect("create .git");
+    // `repo.database` has a High authority floor → signed above-agent write; no DENT8_LOG/URL so the
+    // store still resolves by discovery (the sqlite backend from .dent8/env).
+    let id = SigningId::provision(&temp, "source:local", "unused");
 
     // Initialize a SQLite-backed project store; `init` records DENT8_STORE_URL in `.dent8/env`
     // (the db file itself is created lazily on the first backend write).
@@ -267,7 +442,7 @@ fn a_discovered_store_url_selects_the_db_backend_when_the_process_env_is_unset()
             "--source",
             "source:local",
         ],
-        &[],
+        &id.signing_only(),
     );
     assert_success(&asserted, "assert into discovered sqlite backend");
 
@@ -350,7 +525,9 @@ fn init_seeds_the_default_authority_profile_in_a_single_registry() {
 fn assert_with_ttl_sets_the_fact_ttl_and_enforces_the_ceiling() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
+    // The seeds are High (above-agent) writes and now require a signed identity for source:local.
+    let id = SigningId::provision(&temp, "source:local", &log);
+    let envs = id.env_for(&log);
 
     // A within-ceiling --ttl on an unregistered predicate is admitted and the persisted fact
     // carries a finite DurationMillis TTL (30 days).
@@ -428,6 +605,10 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // `repo.database` has a High authority floor, so that fact must be a signed above-agent write
+    // (source:codex). The personal + diagnostic facts are on unregistered predicates and this test
+    // asserts stream URIs/counts (not authority), so they stay at the agent tier.
+    let id_codex = SigningId::provision(&temp, "source:codex", &log);
 
     assert_success(
         &run_dent8(
@@ -437,7 +618,7 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -457,7 +638,7 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
                 "--source",
                 "source:codex",
             ],
-            &envs,
+            &id_codex.env_for(&log),
         ),
         "assert repo fact",
     );
@@ -469,7 +650,7 @@ fn facts_list_hides_diagnostics_by_default_and_supports_filters() {
                 "dent8.write_check",
                 "ok",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "source:dent8",
             ],
@@ -521,31 +702,42 @@ fn context_emits_only_believed_facts_as_annotated_markdown() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // Above-agent writes (medium/high) require signed identities; sign each source into the log.
+    let id_ci = SigningId::provision(&temp, "source:ci", &log);
+    let id_human = SigningId::provision(&temp, "source:human", &log);
 
-    for args in [
-        [
-            "assert",
-            "repo:app",
-            "uses_database",
-            "postgres",
-            "--authority",
-            "medium",
-            "--source",
-            "source:ci",
-        ],
-        [
-            "assert",
-            "repo:app",
-            "deploy_target",
-            "staging",
-            "--authority",
-            "high",
-            "--source",
-            "source:human",
-        ],
-    ] {
-        assert_success(&run_dent8(&args, &envs), "seed context fact");
-    }
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "uses_database",
+                "postgres",
+                "--authority",
+                "medium",
+                "--source",
+                "source:ci",
+            ],
+            &id_ci.env_for(&log),
+        ),
+        "seed context fact (ci)",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "deploy_target",
+                "staging",
+                "--authority",
+                "high",
+                "--source",
+                "source:human",
+            ],
+            &id_human.env_for(&log),
+        ),
+        "seed context fact (human)",
+    );
     // Revise one fact and terminally remove the other's sibling stream, so the pack must
     // show only the current beliefs.
     assert_success(
@@ -560,7 +752,7 @@ fn context_emits_only_believed_facts_as_annotated_markdown() {
                 "--source",
                 "source:human",
             ],
-            &envs,
+            &id_human.env_for(&log),
         ),
         "supersede context fact",
     );
@@ -575,7 +767,7 @@ fn context_emits_only_believed_facts_as_annotated_markdown() {
                 "--source",
                 "source:human",
             ],
-            &envs,
+            &id_human.env_for(&log),
         ),
         "retract context fact",
     );
@@ -630,7 +822,7 @@ fn context_omits_stale_facts_by_default_and_flags_contested_ones() {
                 "release_branch",
                 "release-1.0",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "source:human",
                 "--valid-to",
@@ -648,7 +840,7 @@ fn context_omits_stale_facts_by_default_and_flags_contested_ones() {
                 "uses_database",
                 "postgres",
                 "--authority",
-                "medium",
+                "low",
                 "--source",
                 "source:ci",
             ],
@@ -664,7 +856,7 @@ fn context_omits_stale_facts_by_default_and_flags_contested_ones() {
                 "uses_database",
                 "sqlite",
                 "--authority",
-                "medium",
+                "low",
                 "--source",
                 "source:codex",
             ],
@@ -699,14 +891,19 @@ fn capture_flushes_a_proposals_file_through_the_firewall() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let proposals = temp.file("proposals.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
+    // The High proposal is an above-agent write and now requires a signed identity; capture runs as
+    // one identity (source:human), so the whole batch is attributed/signed under it. The low
+    // supersession therefore also carries source:human so it is judged by the firewall's authority
+    // gate (insufficient authority: low < high) rather than an identity mismatch.
+    let id = SigningId::provision(&temp, "source:human", &log);
+    let envs = id.env_for(&log);
 
     fs::write(
         &proposals,
         concat!(
             r#"{"subject": "repo:app", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
             "\n",
-            r#"{"op": "supersede", "subject": "repo:app", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            r#"{"op": "supersede", "subject": "repo:app", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:human"}"#,
             "\n",
             r#"{"subject": "repo:app", "predicate": "build_tool", "value": "cargo"}"#,
             "\n",
@@ -730,11 +927,11 @@ fn capture_flushes_a_proposals_file_through_the_firewall() {
     let explained = run_dent8(&["explain", "repo:app", "uses_database"], &envs);
     assert_success(&explained, "explain after capture");
     assert!(stdout(&explained).contains("value         : \"postgres\""));
-    // The unattributed proposal fell back to the agent tier of the default profile.
+    // The unattributed proposal fell back to the configured signed grant's default source.
     let fallback = run_dent8(&["replay", "repo:app", "build_tool"], &envs);
     assert_success(&fallback, "replay captured fallback fact");
     assert!(
-        stdout(&fallback).contains("source:agent"),
+        stdout(&fallback).contains("source:human"),
         "{}",
         stdout(&fallback)
     );
@@ -772,7 +969,8 @@ fn capture_reads_stdin_and_reports_json() {
 fn mcp_resources_read_records_retrieval_and_honors_opt_out() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
+    let id = SigningId::provision(&temp, "source:human", &log);
+    let envs = id.env_for(&log);
 
     assert_success(
         &run_dent8(
@@ -872,6 +1070,10 @@ fn mcp_resources_read_records_retrieval_and_honors_opt_out() {
 fn context_record_retrieval_appends_audit_events() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    // Only the High seed needs a signed identity. The retrieval audit itself is agent-tier and
+    // deliberately unattributed (the reader is an agent), so it runs WITHOUT the grant configured —
+    // otherwise the audit would inherit the grant's source instead of falling back to source:agent.
+    let id = SigningId::provision(&temp, "source:human", &log);
     let envs = [("DENT8_LOG", log.as_str())];
 
     assert_success(
@@ -886,7 +1088,7 @@ fn context_record_retrieval_appends_audit_events() {
                 "--source",
                 "source:human",
             ],
-            &envs,
+            &id.env_for(&log),
         ),
         "seed retrieval fact",
     );
@@ -948,14 +1150,18 @@ fn capture_keep_failed_preserves_rejected_lines_on_consume() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let proposals = temp.file("proposals.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
+    // Capture runs as one signed identity (source:human) so the High proposal is a valid signed
+    // above-agent write; the low supersession also carries source:human so it is refused by the
+    // firewall's authority gate (low < high), not an identity mismatch.
+    let id = SigningId::provision(&temp, "source:human", &log);
+    let envs = id.env_for(&log);
 
     fs::write(
         &proposals,
         concat!(
             r#"{"subject": "repo:app", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
             "\n",
-            r#"{"op": "supersede", "subject": "repo:app", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            r#"{"op": "supersede", "subject": "repo:app", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:human"}"#,
             "\n",
             "not json\n",
         ),
@@ -1014,6 +1220,15 @@ fn scoped_and_issuer_capped_grants_are_enforced_end_to_end() {
         ("DENT8_LOG", log.as_str()),
         ("DENT8_AUTHORITY", registry.as_str()),
     ];
+    // The successful in-scope writes are above-agent (medium) and must clear the identity gate too
+    // (which runs after the registry scope/ceiling check), so sign source:lead and source:bot. The
+    // rejected writes fail at the registry check first, so they need no signing.
+    let id_lead = SigningId::provision(&temp, "source:lead", &log);
+    let id_bot = SigningId::provision(&temp, "source:bot", &log);
+    let mut lead_env = id_lead.env_for(&log);
+    lead_env.push(("DENT8_AUTHORITY", registry.as_str()));
+    let mut bot_env = id_bot.env_for(&log);
+    bot_env.push(("DENT8_AUTHORITY", registry.as_str()));
 
     // A lead scoped to repo:app, and a bot whose grant is issued by that lead.
     assert_success(
@@ -1058,7 +1273,7 @@ fn scoped_and_issuer_capped_grants_are_enforced_end_to_end() {
                 "--source",
                 "source:lead",
             ],
-            &envs,
+            &lead_env,
         ),
         "in-scope write",
     );
@@ -1154,7 +1369,7 @@ fn scoped_and_issuer_capped_grants_are_enforced_end_to_end() {
                 "--source",
                 "source:bot",
             ],
-            &envs,
+            &bot_env,
         ),
         "delegated in-scope write",
     );
@@ -1165,11 +1380,12 @@ fn doctor_write_check_probes_within_a_subject_scoped_grant() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let registry = temp.file("authority.json").to_string_lossy().into_owned();
-    let envs = [
-        ("DENT8_LOG", log.as_str()),
-        ("DENT8_AUTHORITY", registry.as_str()),
-        ("DENT8_REQUIRE_AUTHORITY", "1"),
-    ];
+    // The write-check probes at the source's ceiling (High, above the agent tier), so a signed
+    // identity for source:scoped must be configured alongside the authority registry.
+    let id = SigningId::provision(&temp, "source:scoped", &log);
+    let mut envs = id.env_for(&log);
+    envs.push(("DENT8_AUTHORITY", registry.as_str()));
+    envs.push(("DENT8_REQUIRE_AUTHORITY", "1"));
 
     assert_success(
         &run_dent8(
@@ -1257,11 +1473,12 @@ fn doctor_write_check_asserts_at_the_source_ceiling_and_retracts() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let registry = temp.file("authority.json").to_string_lossy().into_owned();
-    let envs = [
-        ("DENT8_LOG", log.as_str()),
-        ("DENT8_AUTHORITY", registry.as_str()),
-        ("DENT8_REQUIRE_AUTHORITY", "1"),
-    ];
+    // The write-check probes at the source's ceiling (Medium, above the agent tier), so a signed
+    // identity for source:mid must be configured alongside the authority registry.
+    let id = SigningId::provision(&temp, "source:mid", &log);
+    let mut envs = id.env_for(&log);
+    envs.push(("DENT8_AUTHORITY", registry.as_str()));
+    envs.push(("DENT8_REQUIRE_AUTHORITY", "1"));
 
     // A source whose granted ceiling is *below* `high`.
     assert_success(
@@ -1313,6 +1530,11 @@ fn authority_remove_refuses_to_orphan_dependent_grants_without_force() {
         ("DENT8_LOG", log.as_str()),
         ("DENT8_AUTHORITY", registry.as_str()),
     ];
+    // The one real write here (the delegated bot's Medium assertion) is above-agent and needs a
+    // signed identity for source:bot; the registry commands themselves need none.
+    let id_bot = SigningId::provision(&temp, "source:bot", &log);
+    let mut bot_env = id_bot.env_for(&log);
+    bot_env.push(("DENT8_AUTHORITY", registry.as_str()));
 
     assert_success(
         &run_dent8(&["authority", "add", "source:lead", "high"], &envs),
@@ -1345,7 +1567,7 @@ fn authority_remove_refuses_to_orphan_dependent_grants_without_force() {
                 "--source",
                 "source:bot",
             ],
-            &envs,
+            &bot_env,
         ),
         "delegated write after refused removal",
     );
@@ -1578,7 +1800,7 @@ fn native_reconcile_verifies_dent8_receipt_references() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -1672,10 +1894,13 @@ fn native_reconcile_reports_missing_and_invalid_receipts() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn read_audit_commands_emit_machine_readable_json() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
+    // Asserts authority round-trips as `high`, so this is a signed above-agent write (source:alice).
+    let id = SigningId::provision(&temp, "source:alice", &log);
+    let envs = id.env_for(&log);
 
     assert_success(
         &run_dent8(
@@ -1687,7 +1912,7 @@ fn read_audit_commands_emit_machine_readable_json() {
                 "--authority",
                 "high",
                 "--source",
-                "user:alice",
+                "source:alice",
             ],
             &envs,
         ),
@@ -1765,7 +1990,11 @@ fn read_audit_commands_emit_machine_readable_json() {
     assert_eq!(snapshot["verify"]["tool"], "verify");
     assert_eq!(snapshot["conflicts"]["tool"], "conflicts");
 
-    let doctor = run_dent8(&["--output", "json", "doctor"], &envs);
+    // Signing is configured, so doctor's identity check needs the matching --source.
+    let doctor = run_dent8(
+        &["--output", "json", "doctor", "--source", "source:alice"],
+        &envs,
+    );
     assert_success(&doctor, "doctor --output json");
     let doctor = stdout_json(&doctor);
     assert_eq!(doctor["status"], "ok");
@@ -1845,7 +2074,7 @@ fn whatif_refolds_under_a_counterfactual_policy() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -1861,7 +2090,7 @@ fn whatif_refolds_under_a_counterfactual_policy() {
                 "favorite_drink",
                 "coffee",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "note:rumor",
             ],
@@ -1953,7 +2182,7 @@ fn replay_and_conflicts_emit_machine_readable_json() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -2097,6 +2326,11 @@ fn write_commands_emit_machine_readable_json() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // The assertion round-trips its authority as `high`, so it is a signed above-agent write
+    // (signed identities are source:*-scoped, so the writer is source:alice). The weak
+    // supersession stays an unsigned agent-tier write so the firewall's authority arbitration —
+    // not the identity gate — rejects it (code `insufficient-authority`).
+    let id = SigningId::provision(&temp, "source:alice", &log);
 
     let asserted = run_dent8(
         &[
@@ -2109,9 +2343,9 @@ fn write_commands_emit_machine_readable_json() {
             "--authority",
             "high",
             "--source",
-            "user:alice",
+            "source:alice",
         ],
-        &envs,
+        &id.env_for(&log),
     );
     assert_success(&asserted, "assert --output json");
     let asserted = stdout_json(&asserted);
@@ -2123,7 +2357,7 @@ fn write_commands_emit_machine_readable_json() {
     assert_eq!(asserted["predicate"], "favorite_drink");
     assert_eq!(asserted["value"]["text"], "tea");
     assert_eq!(asserted["authority"], "high");
-    assert_eq!(asserted["source"], "user:alice");
+    assert_eq!(asserted["source"], "source:alice");
 
     let rejected = run_dent8(
         &[
@@ -2180,7 +2414,7 @@ fn derived_write_json_includes_source_fact() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -2200,7 +2434,7 @@ fn derived_write_json_includes_source_fact() {
             "person:alice",
             "favorite_drink",
             "--authority",
-            "medium",
+            "low",
             "--source",
             "assistant:local",
         ],
@@ -2301,7 +2535,7 @@ fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -2320,7 +2554,7 @@ fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
                 "person:alice",
                 "favorite_drink",
                 "--authority",
-                "medium",
+                "low",
                 "--source",
                 "assistant:local",
             ],
@@ -2335,7 +2569,7 @@ fn verify_json_reports_findings_on_stdout_with_nonzero_exit() {
                 "person:alice",
                 "favorite_drink",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -2442,6 +2676,7 @@ fn believed_facts(log: &str) -> Vec<(String, String, String)> {
 fn export_target_writes_a_managed_block_and_import_round_trips() {
     let temp = TempDir::new();
     let source_log = temp.file("source.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &source_log);
     let claude = temp.file("CLAUDE.md");
     let claude_path = claude.to_string_lossy().into_owned();
 
@@ -2461,7 +2696,7 @@ fn export_target_writes_a_managed_block_and_import_round_trips() {
                 "--source",
                 "source:human",
             ],
-            &[("DENT8_LOG", source_log.as_str())],
+            &id.env_for(&source_log),
         );
         assert_success(&asserted, "seed assert");
     }
@@ -2477,7 +2712,7 @@ fn export_target_writes_a_managed_block_and_import_round_trips() {
             "--target",
             claude_path.as_str(),
         ],
-        &[("DENT8_LOG", source_log.as_str())],
+        &id.env_for(&source_log),
     );
     assert_success(&exported, "export --target");
     let exported = stdout_json(&exported);
@@ -2499,7 +2734,7 @@ fn export_target_writes_a_managed_block_and_import_round_trips() {
     let imported_log = temp.file("imported.jsonl").to_string_lossy().into_owned();
     let imported = run_dent8(
         &["--output", "json", "import", claude_path.as_str()],
-        &[("DENT8_LOG", imported_log.as_str())],
+        &id.env_for(&imported_log),
     );
     assert_success(&imported, "import");
     let imported = stdout_json(&imported);
@@ -2517,14 +2752,11 @@ fn export_target_writes_a_managed_block_and_import_round_trips() {
     let claude2_path = claude2.to_string_lossy().into_owned();
     let export2 = run_dent8(
         &["export", "--target", claude2_path.as_str()],
-        &[("DENT8_LOG", imported_log.as_str())],
+        &id.env_for(&imported_log),
     );
     assert_success(&export2, "second export");
     let third_log = temp.file("third.jsonl").to_string_lossy().into_owned();
-    let import2 = run_dent8(
-        &["import", claude2_path.as_str()],
-        &[("DENT8_LOG", third_log.as_str())],
-    );
+    let import2 = run_dent8(&["import", claude2_path.as_str()], &id.env_for(&third_log));
     assert_success(&import2, "second import");
     assert_eq!(
         believed_facts(&imported_log),
@@ -2537,6 +2769,7 @@ fn export_target_writes_a_managed_block_and_import_round_trips() {
 fn export_target_is_idempotent_and_preserves_surrounding_prose() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &log);
     let claude = temp.file("CLAUDE.md");
 
     let asserted = run_dent8(
@@ -2550,7 +2783,7 @@ fn export_target_is_idempotent_and_preserves_surrounding_prose() {
             "--source",
             "source:human",
         ],
-        &[("DENT8_LOG", log.as_str())],
+        &id.env_for(&log),
     );
     assert_success(&asserted, "seed assert");
 
@@ -2569,7 +2802,7 @@ fn export_target_is_idempotent_and_preserves_surrounding_prose() {
             "--target",
             claude_path.as_str(),
         ],
-        &[("DENT8_LOG", log.as_str())],
+        &id.env_for(&log),
     );
     assert_success(&refreshed, "export refresh");
     assert_eq!(stdout_json(&refreshed)["block"], "refreshed");
@@ -2593,7 +2826,7 @@ fn export_target_is_idempotent_and_preserves_surrounding_prose() {
     let first = file;
     let again = run_dent8(
         &["export", "--target", claude_path.as_str()],
-        &[("DENT8_LOG", log.as_str())],
+        &id.env_for(&log),
     );
     assert_success(&again, "second export");
     let second = fs::read_to_string(&claude).expect("read second export");
@@ -2604,8 +2837,9 @@ fn export_target_is_idempotent_and_preserves_surrounding_prose() {
 fn export_target_refuses_a_stray_begin_sentinel_and_leaves_the_file_unchanged() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &log);
     let claude = temp.file("CLAUDE.md");
-    let envs = [("DENT8_LOG", log.as_str())];
+    let envs = id.env_for(&log);
 
     let asserted = run_dent8(
         &[
@@ -2653,6 +2887,7 @@ fn export_target_refuses_a_stray_begin_sentinel_and_leaves_the_file_unchanged() 
 fn export_import_round_trips_a_value_containing_the_receipt_token() {
     let temp = TempDir::new();
     let source_log = temp.file("source.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &source_log);
     let claude = temp.file("CLAUDE.md");
     let claude_path = claude.to_string_lossy().into_owned();
 
@@ -2669,20 +2904,20 @@ fn export_import_round_trips_a_value_containing_the_receipt_token() {
             "--source",
             "source:human",
         ],
-        &[("DENT8_LOG", source_log.as_str())],
+        &id.env_for(&source_log),
     );
     assert_success(&asserted, "seed tricky fact");
 
     let exported = run_dent8(
         &["export", "--target", claude_path.as_str()],
-        &[("DENT8_LOG", source_log.as_str())],
+        &id.env_for(&source_log),
     );
     assert_success(&exported, "export");
 
     let imported_log = temp.file("imported.jsonl").to_string_lossy().into_owned();
     let imported = run_dent8(
         &["--output", "json", "import", claude_path.as_str()],
-        &[("DENT8_LOG", imported_log.as_str())],
+        &id.env_for(&imported_log),
     );
     assert_success(&imported, "import");
     assert_eq!(
@@ -2704,8 +2939,9 @@ fn export_import_round_trips_a_value_containing_the_receipt_token() {
 fn export_ignores_a_fenced_example_block_and_appends_fresh() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &log);
     let claude = temp.file("CLAUDE.md");
-    let envs = [("DENT8_LOG", log.as_str())];
+    let envs = id.env_for(&log);
 
     let asserted = run_dent8(
         &[
@@ -2761,8 +2997,9 @@ fn export_ignores_a_fenced_example_block_and_appends_fresh() {
 fn export_refreshes_the_real_block_and_preserves_a_fenced_example() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &log);
     let claude = temp.file("CLAUDE.md");
-    let envs = [("DENT8_LOG", log.as_str())];
+    let envs = id.env_for(&log);
 
     let asserted = run_dent8(
         &[
@@ -2818,6 +3055,7 @@ fn export_refreshes_the_real_block_and_preserves_a_fenced_example() {
 fn export_into_a_crlf_file_emits_a_crlf_block_and_round_trips() {
     let temp = TempDir::new();
     let source_log = temp.file("source.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &source_log);
     let claude = temp.file("CLAUDE.md");
     let claude_path = claude.to_string_lossy().into_owned();
 
@@ -2832,7 +3070,7 @@ fn export_into_a_crlf_file_emits_a_crlf_block_and_round_trips() {
             "--source",
             "source:human",
         ],
-        &[("DENT8_LOG", source_log.as_str())],
+        &id.env_for(&source_log),
     );
     assert_success(&asserted, "seed assert");
 
@@ -2841,7 +3079,7 @@ fn export_into_a_crlf_file_emits_a_crlf_block_and_round_trips() {
 
     let exported = run_dent8(
         &["export", "--target", claude_path.as_str()],
-        &[("DENT8_LOG", source_log.as_str())],
+        &id.env_for(&source_log),
     );
     assert_success(&exported, "export into CRLF file");
 
@@ -2873,7 +3111,7 @@ fn export_into_a_crlf_file_emits_a_crlf_block_and_round_trips() {
     let imported_log = temp.file("imported.jsonl").to_string_lossy().into_owned();
     let imported = run_dent8(
         &["--output", "json", "import", claude_path.as_str()],
-        &[("DENT8_LOG", imported_log.as_str())],
+        &id.env_for(&imported_log),
     );
     assert_success(&imported, "import CRLF file");
     assert_eq!(
@@ -2893,8 +3131,9 @@ fn export_into_a_crlf_file_emits_a_crlf_block_and_round_trips() {
 fn export_refuses_a_file_that_ends_inside_an_unclosed_fence_and_never_grows_it() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let id = SigningId::provision(&temp, "source:human", &log);
     let claude = temp.file("CLAUDE.md");
-    let envs = [("DENT8_LOG", log.as_str())];
+    let envs = id.env_for(&log);
 
     let asserted = run_dent8(
         &[
@@ -2962,7 +3201,7 @@ fn export_target_flags_contested_facts() {
             "db",
             "postgres",
             "--authority",
-            "medium",
+            "low",
             "--source",
             "source:human",
         ],
@@ -2976,7 +3215,7 @@ fn export_target_flags_contested_facts() {
             "db",
             "mysql",
             "--authority",
-            "medium",
+            "low",
             "--source",
             "source:ci",
         ],
@@ -2998,6 +3237,10 @@ fn export_target_flags_contested_facts() {
 fn import_applies_all_three_rules_and_reports_skips() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    // The managed-block fact re-imports at `authority=medium source=source:human` (an above-agent
+    // write on `repo.test_command`, whose Medium floor forbids lowering it), so import runs under a
+    // signed source:human identity; the unattributed facts inherit that signed grant's defaults.
+    let id = SigningId::provision(&temp, "source:human", &log);
     let file = temp.file("CLAUDE.md");
     let contents = concat!(
         "# Project notes\n",
@@ -3019,7 +3262,7 @@ fn import_applies_all_three_rules_and_reports_skips() {
     let file_path = file.to_string_lossy().into_owned();
     let imported = run_dent8(
         &["--output", "json", "import", file_path.as_str()],
-        &[("DENT8_LOG", log.as_str())],
+        &id.env_for(&log),
     );
     assert_success(&imported, "import three rules");
     let imported = stdout_json(&imported);
@@ -3079,10 +3322,12 @@ fn import_cannot_bypass_the_authority_ceiling() {
     )
     .expect("seed authority registry");
     let authority_path = authority.to_string_lossy().into_owned();
-    let envs = [
-        ("DENT8_LOG", log.as_str()),
-        ("DENT8_AUTHORITY", authority_path.as_str()),
-    ];
+    // The High seed is an above-agent write and needs a signed source:human identity; the
+    // over-ceiling proposal (source:agent) is refused at the registry ceiling before the identity
+    // gate, so capture and import still reject it with the identical message.
+    let id = SigningId::provision(&temp, "source:human", &log);
+    let mut envs = id.env_for(&log);
+    envs.push(("DENT8_AUTHORITY", authority_path.as_str()));
 
     let asserted = run_dent8(
         &[
@@ -3135,7 +3380,8 @@ fn native_memory_guard_blocks_raw_writes_but_export_block_is_recognized() {
     let dir = root.join(".dent8");
     fs::create_dir(&dir).expect("create .dent8");
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
+    let id = SigningId::provision(&temp, "source:human", &log);
+    let envs = id.env_for(&log);
 
     // (i) The PreToolUse guard still exits 2 on a raw agent Write of arbitrary prose to CLAUDE.md.
     let payload = r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/repo/CLAUDE.md","content":"just arbitrary prose"}}"#;
@@ -3266,6 +3512,10 @@ fn low_authority_supersede_is_rejected_and_original_fact_remains() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // The believed incumbent is a High (above-agent) write and needs a signed identity
+    // (source:alice). The weak challenger stays an unsigned agent-tier write so it reaches — and is
+    // refused by — the firewall's authority arbitration (not the identity gate).
+    let id = SigningId::provision(&temp, "source:alice", &log);
 
     assert_success(
         &run_dent8(
@@ -3275,9 +3525,9 @@ fn low_authority_supersede_is_rejected_and_original_fact_remains() {
                 "favorite_drink",
                 "tea",
                 "--authority=high",
-                "--source=user:alice",
+                "--source=source:alice",
             ],
-            &envs,
+            &id.env_for(&log),
         ),
         "assert",
     );
@@ -3322,7 +3572,7 @@ fn valid_time_intervals_bound_freshness_and_validate() {
                 "person:alice",
                 "favorite_drink",
                 "tea",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:alice",
                 "--valid-from=1000",
                 "--valid-to=2000",
@@ -3376,7 +3626,7 @@ fn valid_time_intervals_bound_freshness_and_validate() {
             "person:alice",
             "favorite_snack",
             "apple",
-            "--authority=high",
+            "--authority=low",
             "--source=user:alice",
             "--valid-from=2000",
             "--valid-to=1000",
@@ -3406,7 +3656,7 @@ fn a_future_valid_from_reads_not_yet_valid() {
                 "repo:proj",
                 "feature",
                 "enabled",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:owner",
                 "--valid-from=5000",
             ],
@@ -3467,7 +3717,7 @@ fn a_future_valid_from_reads_not_yet_valid() {
                 "repo:proj",
                 "window",
                 "open",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:owner",
                 "--valid-from=1000",
                 "--valid-to=2000",
@@ -3502,7 +3752,7 @@ fn facts_list_flags_freshness_and_derive_stamps_validity() {
                 "repo:proj",
                 "db",
                 "postgres",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:o",
             ],
             &envs,
@@ -3519,7 +3769,7 @@ fn facts_list_flags_freshness_and_derive_stamps_validity() {
                 "--basis",
                 "repo:proj",
                 "db",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:o",
                 "--valid-from=1000",
                 "--valid-to=2000",
@@ -3570,7 +3820,7 @@ fn as_of_reads_travel_to_the_store_as_it_stood() {
                 "person:alice",
                 "favorite_drink",
                 "tea",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:alice",
             ],
             &envs,
@@ -3592,7 +3842,7 @@ fn as_of_reads_travel_to_the_store_as_it_stood() {
                 "person:alice",
                 "favorite_drink",
                 "coffee",
-                "--authority=high",
+                "--authority=low",
                 "--source=user:alice",
             ],
             &envs,
@@ -3654,6 +3904,10 @@ fn rejected_challenges_entrench_the_incumbent_and_are_replayable() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // The believed incumbent is a High (above-agent) write needing a signed identity
+    // (source:alice); the weak challengers stay unsigned agent-tier writes so the firewall's
+    // arbitration refuses and records them (not the identity gate).
+    let id = SigningId::provision(&temp, "source:alice", &log);
 
     assert_success(
         &run_dent8(
@@ -3663,9 +3917,9 @@ fn rejected_challenges_entrench_the_incumbent_and_are_replayable() {
                 "favorite_drink",
                 "tea",
                 "--authority=high",
-                "--source=user:alice",
+                "--source=source:alice",
             ],
-            &envs,
+            &id.env_for(&log),
         ),
         "assert",
     );
@@ -3782,11 +4036,14 @@ fn rejected_challenges_entrench_the_incumbent_and_are_replayable() {
 fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
-    let gated = [
-        ("DENT8_LOG", log.as_str()),
-        ("DENT8_ENTRENCHMENT_GATE", "1"),
-    ];
+    // High (above-agent) writes now require signed identities, and signed identities are
+    // source:*-scoped — so the two High backers write as source:alice/source:bob (was
+    // user:alice/user:bob), each with its own signed bundle over the shared store log.
+    let id_alice = SigningId::provision(&temp, "source:alice", &log);
+    let id_bob = SigningId::provision(&temp, "source:bob", &log);
+    let id_web = SigningId::provision(&temp, "source:web", &log);
+    let mut gated = id_web.env_for(&log);
+    gated.push(("DENT8_ENTRENCHMENT_GATE", "1"));
 
     assert_success(
         &run_dent8(
@@ -3796,9 +4053,9 @@ fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
                 "favorite_drink",
                 "tea",
                 "--authority=high",
-                "--source=user:alice",
+                "--source=source:alice",
             ],
-            &envs,
+            &id_alice.env_for(&log),
         ),
         "assert",
     );
@@ -3809,9 +4066,9 @@ fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
                 "person:alice",
                 "favorite_drink",
                 "--authority=high",
-                "--source=user:bob",
+                "--source=source:bob",
             ],
-            &envs,
+            &id_bob.env_for(&log),
         ),
         "reinforce",
     );
@@ -3846,7 +4103,7 @@ fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
             "person:alice",
             "favorite_drink",
         ],
-        &envs,
+        &id_web.env_for(&log),
     );
     assert_eq!(stdout_json(&explained)["value"]["text"], "tea");
     assert_eq!(stdout_json(&explained)["survived_challenges"], 1);
@@ -3864,7 +4121,7 @@ fn the_entrenchment_gate_rejects_a_weaker_corroborated_replacement() {
                 "--source",
                 "source:web",
             ],
-            &envs,
+            &id_web.env_for(&log),
         ),
         "ungated supersede",
     );
@@ -3878,11 +4135,14 @@ fn a_survived_challenge_hardens_a_fact_against_a_fresh_replacement() {
     // stays 1) then makes a fresh equal-authority replacement unearned.
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-    let envs = [("DENT8_LOG", log.as_str())];
-    let gated = [
-        ("DENT8_LOG", log.as_str()),
-        ("DENT8_ENTRENCHMENT_GATE", "1"),
-    ];
+    // Every write here is Canonical (above-agent) and must be signed to clear the identity gate and
+    // reach arbitration; each source gets its own signed bundle over the shared store logs. The
+    // incumbent asserter is source:owner (was user:owner — signed identities are source:*-scoped).
+    let id_owner = SigningId::provision(&temp, "source:owner", &log);
+    let id_web = SigningId::provision(&temp, "source:web", &log);
+    let id_web2 = SigningId::provision(&temp, "source:web2", &log);
+    let mut gated = id_web2.env_for(&log);
+    gated.push(("DENT8_ENTRENCHMENT_GATE", "1"));
 
     assert_success(
         &run_dent8(
@@ -3892,9 +4152,9 @@ fn a_survived_challenge_hardens_a_fact_against_a_fresh_replacement() {
                 "database",
                 "postgres",
                 "--authority=canonical",
-                "--source=user:owner",
+                "--source=source:owner",
             ],
-            &envs,
+            &id_owner.env_for(&log),
         ),
         "assert canonical",
     );
@@ -3903,10 +4163,8 @@ fn a_survived_challenge_hardens_a_fact_against_a_fresh_replacement() {
     // gate admits an equal-authority replacement. Prove that on a separate clean stream.
     let temp0 = TempDir::new();
     let log0 = temp0.file("memory.jsonl").to_string_lossy().into_owned();
-    let gated0 = [
-        ("DENT8_LOG", log0.as_str()),
-        ("DENT8_ENTRENCHMENT_GATE", "1"),
-    ];
+    let mut gated0 = id_web.env_for(&log0);
+    gated0.push(("DENT8_ENTRENCHMENT_GATE", "1"));
     assert_success(
         &run_dent8(
             &[
@@ -3915,9 +4173,9 @@ fn a_survived_challenge_hardens_a_fact_against_a_fresh_replacement() {
                 "database",
                 "postgres",
                 "--authority=canonical",
-                "--source=user:owner",
+                "--source=source:owner",
             ],
-            &[("DENT8_LOG", log0.as_str())],
+            &id_owner.env_for(&log0),
         ),
         "assert canonical (control)",
     );
@@ -3947,7 +4205,7 @@ fn a_survived_challenge_hardens_a_fact_against_a_fresh_replacement() {
             "--authority=canonical",
             "--source=source:web",
         ],
-        &envs,
+        &id_web.env_for(&log),
     );
     assert_eq!(
         contradicted.status.code(),
@@ -4076,7 +4334,7 @@ fn color_always_paints_status_words_even_when_captured() {
             "favorite_drink",
             "tea",
             "--authority",
-            "high",
+            "low",
             "--source",
             "user:alice",
         ],
@@ -4107,6 +4365,17 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
     assert!(env_file.contains("DENT8_REQUIRE_AUTHORITY=1"));
     assert!(env_file.contains("DENT8_LOG="));
     assert!(env_file.contains("DENT8_AUTHORITY="));
+    // A default `dent8 init` now provisions a signing identity by default so above-agent writes
+    // work out of the box: the env carries the signed-identity vars and the bundle files exist.
+    assert!(env_file.contains("DENT8_REQUIRE_IDENTITY=1"), "{env_file}");
+    assert!(env_file.contains("DENT8_TRUST="), "{env_file}");
+    assert!(env_file.contains("DENT8_GRANT="), "{env_file}");
+    assert!(env_file.contains("DENT8_IDENTITY_KEY="), "{env_file}");
+    assert!(
+        temp.file(".dent8/grants/source_local.grant.json").exists(),
+        "init should provision a signed grant for the default source"
+    );
+    assert!(temp.file(".dent8/identities/source_local.key").exists());
 
     let authority = fs::read_to_string(&authority_path).expect("authority registry");
     assert!(authority.contains("source:local"));
@@ -4115,12 +4384,35 @@ fn init_bootstraps_authority_env_and_doctor_write_check() {
 
     let log = log_path.to_string_lossy().into_owned();
     let authority = authority_path.to_string_lossy().into_owned();
+    let trust = temp
+        .file(".dent8/trust.json")
+        .to_string_lossy()
+        .into_owned();
+    let grant = temp
+        .file(".dent8/grants/source_local.grant.json")
+        .to_string_lossy()
+        .into_owned();
+    let key = temp
+        .file(".dent8/identities/source_local.key")
+        .to_string_lossy()
+        .into_owned();
+    let active_grants = temp
+        .file(".dent8/active-grants.json")
+        .to_string_lossy()
+        .into_owned();
+    // The write-check probes at source:local's High ceiling, which now requires the signed identity
+    // init provisioned — exactly the out-of-the-box honest above-agent path.
     let doctor = run_dent8(
         &["doctor", "--write-check"],
         &[
             ("DENT8_LOG", &log),
             ("DENT8_AUTHORITY", &authority),
             ("DENT8_REQUIRE_AUTHORITY", "1"),
+            ("DENT8_TRUST", &trust),
+            ("DENT8_GRANT", &grant),
+            ("DENT8_IDENTITY_KEY", &key),
+            ("DENT8_ACTIVE_GRANTS", &active_grants),
+            ("DENT8_REQUIRE_IDENTITY", "1"),
         ],
     );
     assert_success(&doctor, "doctor --write-check");
@@ -4161,6 +4453,9 @@ fn init_witness_adds_verification_config_without_signing_key() {
 }
 
 fn assert_alice_fact(log: &str, predicate: &str, value: &str, context: &str) {
+    // Agent-tier authority: these personal facts on unregistered predicates are fixtures for the
+    // witness/chain tests, which do not assert authority — and `user:alice` is not a signable
+    // (source:*) identity, so an above-agent write here could not be signed anyway.
     assert_success(
         &run_dent8(
             &[
@@ -4169,7 +4464,7 @@ fn assert_alice_fact(log: &str, predicate: &str, value: &str, context: &str) {
                 predicate,
                 value,
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -4699,7 +4994,7 @@ fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -4743,7 +5038,7 @@ fn witness_doctor_reports_coverage_and_detects_rewritten_history() {
                 "favorite_snack",
                 "apple",
                 "--authority",
-                "high",
+                "low",
                 "--source",
                 "user:alice",
             ],
@@ -6640,6 +6935,7 @@ fn concurrent_cli_asserts_on_shared_postgres_store_get_unique_event_ids() {
 }
 
 #[cfg(any(feature = "sqlite", feature = "postgres"))]
+#[allow(clippy::too_many_lines)]
 fn assert_concurrent_cli_asserts_get_unique_event_ids(
     store_url: &str,
     subject_key_prefix: &str,
@@ -6654,6 +6950,17 @@ fn assert_concurrent_cli_asserts_get_unique_event_ids(
         &format!("pre-migrate {backend_label} store"),
     );
 
+    // `repo.database` has a High floor, so the racing writes must be signed; the writers target
+    // distinct subjects, so one shared signed identity (source:concurrent) authorizes them all.
+    let bundle = TempDir::new();
+    let id = SigningId::provision(&bundle, "source:concurrent", "unused");
+    let (trust, grant, key, active_grants) = (
+        id.trust.clone(),
+        id.grant.clone(),
+        id.key.clone(),
+        id.active_grants.clone(),
+    );
+
     let barrier = Arc::new(Barrier::new(WRITERS));
     let mut handles = Vec::new();
     for index in 0..WRITERS {
@@ -6661,10 +6968,15 @@ fn assert_concurrent_cli_asserts_get_unique_event_ids(
         let store_url = store_url.to_owned();
         let subject_key_prefix = subject_key_prefix.to_owned();
         let backend_label = backend_label.to_owned();
+        let (trust, grant, key, active_grants) = (
+            trust.clone(),
+            grant.clone(),
+            key.clone(),
+            active_grants.clone(),
+        );
         handles.push(std::thread::spawn(move || {
             let subject = format!("repo:{subject_key_prefix}-{index}");
             let value = format!("database-{backend_label}-{index}");
-            let source = format!("source:{backend_label}-writer-{index}");
             barrier.wait();
             run_dent8(
                 &[
@@ -6675,9 +6987,16 @@ fn assert_concurrent_cli_asserts_get_unique_event_ids(
                     "--authority",
                     "high",
                     "--source",
-                    &source,
+                    "source:concurrent",
                 ],
-                &[("DENT8_STORE_URL", store_url.as_str())],
+                &[
+                    ("DENT8_STORE_URL", store_url.as_str()),
+                    ("DENT8_TRUST", trust.as_str()),
+                    ("DENT8_GRANT", grant.as_str()),
+                    ("DENT8_IDENTITY_KEY", key.as_str()),
+                    ("DENT8_ACTIVE_GRANTS", active_grants.as_str()),
+                    ("DENT8_REQUIRE_IDENTITY", "1"),
+                ],
             )
         }));
     }
@@ -6756,15 +7075,31 @@ fn concurrent_cli_asserts_on_shared_file_store_serialize_through_the_firewall() 
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // `repo.database` has a High authority floor, so the racing writes must be signed above-agent
+    // writes. They all sign as ONE source (source:contended) — the race is over the same
+    // subject/predicate, so a single signed identity is enough and arbitration still admits exactly
+    // one winner regardless of source.
+    let id = SigningId::provision(&temp, "source:contended", &log);
+    let (trust, grant, key, active_grants) = (
+        id.trust.clone(),
+        id.grant.clone(),
+        id.key.clone(),
+        id.active_grants.clone(),
+    );
 
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
     let mut handles = Vec::new();
     for index in 0..WRITERS {
         let barrier = std::sync::Arc::clone(&barrier);
         let log = log.clone();
+        let (trust, grant, key, active_grants) = (
+            trust.clone(),
+            grant.clone(),
+            key.clone(),
+            active_grants.clone(),
+        );
         handles.push(std::thread::spawn(move || {
             let value = format!("database-{index}");
-            let source = format!("source:file-writer-{index}");
             barrier.wait();
             run_dent8(
                 &[
@@ -6775,9 +7110,16 @@ fn concurrent_cli_asserts_on_shared_file_store_serialize_through_the_firewall() 
                     "--authority",
                     "high",
                     "--source",
-                    &source,
+                    "source:contended",
                 ],
-                &[("DENT8_LOG", log.as_str())],
+                &[
+                    ("DENT8_LOG", log.as_str()),
+                    ("DENT8_TRUST", trust.as_str()),
+                    ("DENT8_GRANT", grant.as_str()),
+                    ("DENT8_IDENTITY_KEY", key.as_str()),
+                    ("DENT8_ACTIVE_GRANTS", active_grants.as_str()),
+                    ("DENT8_REQUIRE_IDENTITY", "1"),
+                ],
             )
         }));
     }
@@ -6837,6 +7179,10 @@ fn a_corrupt_line_in_the_file_store_is_skipped_and_reported_not_fatal() {
     let temp = TempDir::new();
     let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
     let envs = [("DENT8_LOG", log.as_str())];
+    // `repo.database` has a High authority floor, so the seeds must be signed above-agent writes;
+    // sign each source into the shared store log. (Reads need no identity, so they keep `envs`.)
+    let id_a = SigningId::provision(&temp, "source:a", &log);
+    let id_b = SigningId::provision(&temp, "source:b", &log);
 
     // Two valid events (distinct predicates so both stay believed).
     assert_success(
@@ -6851,7 +7197,7 @@ fn a_corrupt_line_in_the_file_store_is_skipped_and_reported_not_fatal() {
                 "--source",
                 "source:a",
             ],
-            &envs,
+            &id_a.env_for(&log),
         ),
         "seed valid event 1",
     );
@@ -6867,7 +7213,7 @@ fn a_corrupt_line_in_the_file_store_is_skipped_and_reported_not_fatal() {
                 "--source",
                 "source:b",
             ],
-            &envs,
+            &id_b.env_for(&log),
         ),
         "seed valid event 2",
     );
@@ -10318,7 +10664,8 @@ fn writes_carry_attestations_that_verify_and_detect_tamper() {
     );
     assert!(stderr(&tampered).contains("does not verify"));
 
-    // Unconfigured dev mode still writes plain, unattested events.
+    // Unconfigured dev mode still writes plain, unattested events — at the agent tier, which stays
+    // permissive without signing (an unsigned *above-agent* write is now rejected outright).
     let plain_log = temp.file("plain.jsonl").to_string_lossy().into_owned();
     assert_success(
         &run_dent8(
@@ -10328,9 +10675,9 @@ fn writes_carry_attestations_that_verify_and_detect_tamper() {
                 "favorite_drink",
                 "tea",
                 "--authority",
-                "high",
+                "low",
                 "--source",
-                "source:codex",
+                "source:agent",
             ],
             &[("DENT8_LOG", plain_log.as_str())],
         ),
@@ -10442,10 +10789,23 @@ mod content_check_hook {
     use std::os::unix::fs::PermissionsExt as _;
 
     use super::{
-        TempDir, assert_success, fs, json_response, json_rpc_lines, run_dent8, run_dent8_mcp,
-        run_dent8_stdin, stderr, stdout,
+        SigningId, TempDir, assert_success, fs, json_response, json_rpc_lines, run_dent8,
+        run_dent8_mcp, run_dent8_stdin, stderr, stdout,
     };
     use serde_json::Value;
+
+    /// The content check runs AFTER the authority/identity gate, so a write must clear signing to
+    /// reach the scanner. These tests exercise the scanner over one signed source (source:owner);
+    /// this builds its signed env plus any extra vars (the scanner config) for a given store `log`.
+    fn owner_env<'a>(
+        id: &'a SigningId,
+        log: &'a str,
+        extra: &[(&'a str, &'a str)],
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut env = id.env_for(log);
+        env.extend_from_slice(extra);
+        env
+    }
 
     /// Write an executable scanner script into `temp` and return its path.
     fn scanner_script(temp: &TempDir, name: &str, body: &str) -> String {
@@ -10471,7 +10831,10 @@ mod content_check_hook {
     fn a_reject_verdict_blocks_every_write_entry_point() {
         let temp = TempDir::new();
         let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
-        let clean = [("DENT8_LOG", log.as_str())];
+        // The seed and revisions are above-agent writes on `repo.database` (High floor), so they run
+        // under one signed identity (source:owner); every write in this sweep uses it.
+        let id = SigningId::provision(&temp, "source:owner", &log);
+        let clean = id.env_for(&log);
 
         // Seed an incumbent with no scanner configured, so the revising entry points
         // (supersede/contradict/derive) have a believed fact to act on.
@@ -10494,10 +10857,7 @@ mod content_check_hook {
         let seeded = fs::read_to_string(&log).expect("read seeded log");
 
         let scanner = scanner_script(&temp, "reject-all.sh", REJECT_ALL);
-        let envs = [
-            ("DENT8_LOG", log.as_str()),
-            ("DENT8_CONTENT_CHECK", scanner.as_str()),
-        ];
+        let envs = owner_env(&id, &log, &[("DENT8_CONTENT_CHECK", scanner.as_str())]);
 
         // CLI write commands.
         let cli_writes: &[&[&str]] = &[
@@ -10527,9 +10887,9 @@ mod content_check_hook {
                 "database",
                 "attacker-db",
                 "--authority",
-                "low",
+                "high",
                 "--source",
-                "source:agent",
+                "source:owner",
             ],
             &[
                 "derive",
@@ -10633,7 +10993,7 @@ mod content_check_hook {
                     "--authority",
                     "high",
                     "--source",
-                    "source:ci",
+                    "source:owner",
                 ],
                 &envs,
             ),
@@ -10647,11 +11007,9 @@ mod content_check_hook {
     fn a_taint_verdict_admits_but_marks_and_verify_surfaces_it() {
         let temp = TempDir::new();
         let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let id = SigningId::provision(&temp, "source:owner", &log);
         let scanner = scanner_script(&temp, "taint-all.sh", TAINT_ALL);
-        let envs = [
-            ("DENT8_LOG", log.as_str()),
-            ("DENT8_CONTENT_CHECK", scanner.as_str()),
-        ];
+        let envs = owner_env(&id, &log, &[("DENT8_CONTENT_CHECK", scanner.as_str())]);
 
         assert_success(
             &run_dent8(
@@ -10689,6 +11047,7 @@ mod content_check_hook {
     fn a_broken_scanner_fails_closed_by_default_and_flags_on_opt_in_fail_open() {
         let temp = TempDir::new();
         let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let id = SigningId::provision(&temp, "source:owner", &log);
         let scanner = scanner_script(&temp, "crash.sh", CRASH);
         let args = [
             "assert",
@@ -10703,10 +11062,7 @@ mod content_check_hook {
 
         let closed = run_dent8(
             &args,
-            &[
-                ("DENT8_LOG", log.as_str()),
-                ("DENT8_CONTENT_CHECK", scanner.as_str()),
-            ],
+            &owner_env(&id, &log, &[("DENT8_CONTENT_CHECK", scanner.as_str())]),
         );
         assert_eq!(closed.status.code(), Some(1), "{}", stdout(&closed));
         assert!(
@@ -10720,11 +11076,14 @@ mod content_check_hook {
             "fail-closed must persist nothing"
         );
 
-        let open_envs = [
-            ("DENT8_LOG", log.as_str()),
-            ("DENT8_CONTENT_CHECK", scanner.as_str()),
-            ("DENT8_CONTENT_CHECK_FAIL_OPEN", "1"),
-        ];
+        let open_envs = owner_env(
+            &id,
+            &log,
+            &[
+                ("DENT8_CONTENT_CHECK", scanner.as_str()),
+                ("DENT8_CONTENT_CHECK_FAIL_OPEN", "1"),
+            ],
+        );
         assert_success(&run_dent8(&args, &open_envs), "fail-open admits");
         let verify = run_dent8(&["verify"], &open_envs);
         assert_eq!(verify.status.code(), Some(1), "{}", stdout(&verify));
@@ -10741,12 +11100,16 @@ mod content_check_hook {
     fn a_hung_scanner_is_killed_at_the_configured_timeout() {
         let temp = TempDir::new();
         let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let id = SigningId::provision(&temp, "source:owner", &log);
         let scanner = scanner_script(&temp, "hang.sh", "cat > /dev/null\nsleep 60");
-        let envs = [
-            ("DENT8_LOG", log.as_str()),
-            ("DENT8_CONTENT_CHECK", scanner.as_str()),
-            ("DENT8_CONTENT_CHECK_TIMEOUT_MS", "300"),
-        ];
+        let envs = owner_env(
+            &id,
+            &log,
+            &[
+                ("DENT8_CONTENT_CHECK", scanner.as_str()),
+                ("DENT8_CONTENT_CHECK_TIMEOUT_MS", "300"),
+            ],
+        );
 
         let started = std::time::Instant::now();
         let output = run_dent8(
@@ -10779,11 +11142,9 @@ mod content_check_hook {
     fn an_allow_verdict_admits_unchanged() {
         let temp = TempDir::new();
         let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+        let id = SigningId::provision(&temp, "source:owner", &log);
         let scanner = scanner_script(&temp, "allow-all.sh", ALLOW_ALL);
-        let envs = [
-            ("DENT8_LOG", log.as_str()),
-            ("DENT8_CONTENT_CHECK", scanner.as_str()),
-        ];
+        let envs = owner_env(&id, &log, &[("DENT8_CONTENT_CHECK", scanner.as_str())]);
 
         assert_success(
             &run_dent8(
@@ -11270,4 +11631,100 @@ impl Drop for TempDir {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.path);
     }
+}
+
+/// A signed identity provisioned for a test. Above-agent authority (medium/high/canonical) now
+/// requires a valid signed identity to be trusted, so a test that makes such writes provisions one
+/// of these per source and threads [`SigningId::env_for`] into the `run_dent8` calls that write as
+/// that source. The bundle authorizes `source` up to Canonical for every subject; each `SigningId`
+/// is a self-contained bundle (its own trust root + issuer key + active grant), so several can
+/// share one store log to cover a multi-source test.
+struct SigningId {
+    trust: String,
+    grant: String,
+    key: String,
+    active_grants: String,
+}
+
+impl SigningId {
+    /// Bootstrap a signed identity authorizing `source` (up to Canonical) in a fresh bundle under
+    /// `temp`. The issuer key is written outside the bundle. `_log` is accepted for call-site
+    /// readability (each write picks its store via [`SigningId::env_for`]).
+    fn provision(temp: &TempDir, source: &str, _log: &str) -> Self {
+        let slug = path_slug(source);
+        let dir = temp.file(&format!("id-{slug}"));
+        let dir_str = dir.to_string_lossy().into_owned();
+        let issuer_key = temp
+            .file(&format!("issuer-{slug}.key"))
+            .to_string_lossy()
+            .into_owned();
+        let out = run_dent8(
+            &[
+                "identity",
+                "bootstrap",
+                "--dir",
+                &dir_str,
+                "--source",
+                source,
+                "--max",
+                "canonical",
+                "--issuer-key",
+                &issuer_key,
+            ],
+            &[],
+        );
+        assert_success(&out, "identity bootstrap (test signing id)");
+        Self {
+            trust: dir.join("trust.json").to_string_lossy().into_owned(),
+            grant: dir
+                .join(format!("grants/{slug}.grant.json"))
+                .to_string_lossy()
+                .into_owned(),
+            key: dir
+                .join(format!("identities/{slug}.key"))
+                .to_string_lossy()
+                .into_owned(),
+            active_grants: dir
+                .join("active-grants.json")
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+
+    /// The process env that authorizes signed above-agent writes as this identity's source, pointed
+    /// at store `log`. Pass as `&id.env_for(&log)` to `run_dent8`; a round-trip test can point one
+    /// identity at several stores.
+    fn env_for<'a>(&'a self, log: &'a str) -> Vec<(&'a str, &'a str)> {
+        let mut env = self.signing_only();
+        env.push(("DENT8_LOG", log));
+        env
+    }
+
+    /// Just the signed-identity vars, with NO `DENT8_LOG`/`DENT8_STORE_URL`. Lets a discovery test
+    /// leave the store unset (so the CLI resolves it by discovery) while still authorizing a signed
+    /// above-agent write.
+    fn signing_only(&self) -> Vec<(&str, &str)> {
+        vec![
+            ("DENT8_TRUST", self.trust.as_str()),
+            ("DENT8_GRANT", self.grant.as_str()),
+            ("DENT8_IDENTITY_KEY", self.key.as_str()),
+            ("DENT8_ACTIVE_GRANTS", self.active_grants.as_str()),
+            ("DENT8_REQUIRE_IDENTITY", "1"),
+        ]
+    }
+}
+
+/// Mirror of the CLI's `source_slug`: map any char outside `[A-Za-z0-9._-]` to `_`, so a test can
+/// predict the on-disk grant/key file names a bootstrapped `source` produces.
+fn path_slug(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
