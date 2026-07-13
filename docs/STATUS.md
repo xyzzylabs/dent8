@@ -807,12 +807,14 @@ subject+predicate.
   return the receipt but skip the audit write. The MCP server also *renders* these events
   in replay/explain; the agent-report half (`used_in_decision`) remains a capture proposal
   (agents already use that queue for session-end reporting).
-- The official `rmcp` SDK / richer transports — the v0 server (read/audit tools, full belief
-  surface as tools, `resources/list`/`resources/read`, **`resources/subscribe` with
+- The official `rmcp` SDK — the v0 server (read/audit tools, full belief surface as tools,
+  `resources/list`/`resources/read`, **`resources/subscribe` with
   `notifications/resources/updated` pushed on both transports** (own writes immediately,
   cross-process writes within a poll tick; `dent8 mcp proxy` pumps frames bidirectionally),
-  and JSON-RPC batches, above) is a hand-rolled stdio JSON-RPC loop; prompts are not
-  implemented.
+  and JSON-RPC batches, above) is a hand-rolled JSON-RPC loop, now over **three transports**:
+  stdio, the local Unix-socket daemon, and **HTTP** (`dent8 mcp serve --http`, ADR 0019 —
+  loopback + bearer token, same `dispatch`). Prompts and streamable-HTTP push are not
+  implemented; the official `rmcp` SDK is the eventual upgrade path.
 - **Desktop debugger/control plane** — the **app is runnable**: `dent8 ui` serves a local,
   human-first read-only memory dashboard from the stock binary
   ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md) steps 2+3), organised around

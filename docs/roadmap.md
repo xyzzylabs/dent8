@@ -133,11 +133,12 @@ What remains to make it a hardened multi-user product:
   appends, with an in-transaction final projection check for touched unique predicates; the
   load testing and tuning landed (cross-process write leases + `scripts/load-test.sh`, item 3
   above).
-- **Richer protocol/product surfaces.** The v0 MCP server is useful today, and the thin
-  Python/TS SDKs shipped ([`sdks/`](../sdks/)), and `resources/subscribe` pushes fact-change
-  notifications on both transports; official `rmcp`, richer transports (HTTP/streamable),
-  prompts, and a TypeScript/Tauri desktop debugger/control
-  plane are later ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)).
+- **Richer protocol/product surfaces.** The v0 MCP server is useful today, the thin
+  Python/TS SDKs shipped ([`sdks/`](../sdks/)), `resources/subscribe` pushes fact-change
+  notifications on both transports, and **MCP-over-HTTP** ships (`dent8 mcp serve --http`,
+  [ADR 0019](decisions/0019-http-api-mcp-over-http.md)); the official `rmcp` SDK,
+  streamable-HTTP push, prompts, and the `dent8 ui` Tauri shell
+  ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)) are later.
 - **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
   fixtures, the adversarial corpus, and **`cargo-fuzz` targets** (the
   deserialize→fold→canonicalize path and `CanonicalJson` idempotency, in [`fuzz/`](../fuzz/),
@@ -370,7 +371,7 @@ debugger/control plane and production deployment packaging.
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger (the core shipped as
 `dent8 whatif`; the interactive debugger view remains) ·
-HTTP API · **first-class in-process framework adapters**
+**first-class in-process framework adapters**
 (LangChain, LlamaIndex, Vercel AI SDK) layered on the shipped `pip install dent8` /
 `npm i dent8` SDKs; MCP is the integration path *today*, see
 [examples/langchain](../examples/langchain/) and

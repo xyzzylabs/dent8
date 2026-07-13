@@ -10,6 +10,19 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **HTTP API — MCP-over-HTTP** ([ADR 0019](docs/decisions/0019-http-api-mcp-over-http.md)):
+  `dent8 mcp serve --http --port 3369` serves the full MCP JSON-RPC belief surface over HTTP —
+  a third transport (after stdio and the Unix-socket daemon) over the **same** `dispatch`
+  firewall path, so it cannot drift from the CLI/MCP contract and there is no new write path.
+  `POST /` (or `/mcp`) a JSON-RPC message or batch and get the result (`204` for a lone
+  notification); the whole surface — `assert`…`derive`, `explain`, `replay`, `list_facts`,
+  `conflicts`, `snapshot`, `whatif`, `verify`, `native_*` — is reachable as `tools/call`
+  carrying the same `status` / error `code` / `structuredContent`. `curl`-able. Loopback-only
+  with an anti-DNS-rebinding `Host` check and a **bearer token** on every non-health request
+  (`DENT8_HTTP_TOKEN`, else generated per run and printed on start — it substitutes for the
+  daemon's `SO_PEERCRED` guard, which TCP can't do); `GET /healthz` is open. Writes are
+  attested with the server's own identity, like stdio serve. Remote multi-tenant identity
+  (each client proving its own source key) is a documented deferred follow-up.
 - **Predicate volatility now bounds claimable freshness** (roadmap: predicate-level
   volatility policy). The registry's `Volatility` classification was advisory metadata that
   did nothing; it is now functional. A `Volatile` predicate (e.g. `branch.status`,

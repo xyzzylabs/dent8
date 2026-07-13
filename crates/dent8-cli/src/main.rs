@@ -176,7 +176,9 @@ fn run_cli(cli: Cli) -> i32 {
             NativeCommand::Reconcile(args) => native::cmd_native_reconcile(&args, cli.output),
         },
         Some(CliCommand::Mcp(args)) => match args.command {
-            McpCommand::Serve(args) => mcp::serve_command(args.daemon, args.socket.as_deref()),
+            McpCommand::Serve(args) => {
+                mcp::serve_command(args.daemon, args.socket.as_deref(), args.http, args.port)
+            }
             McpCommand::Proxy(args) => mcp::proxy_command(args.socket.as_deref()),
             McpCommand::Install(args) => setup::cmd_mcp_install(&args, cli.output),
         },
@@ -1379,12 +1381,20 @@ struct McpServeArgs {
     /// Serve on a local Unix-domain socket instead of stdio: a per-user daemon many processes
     /// share over one transport. Authenticated connections can write; unauthenticated
     /// connections are read-only.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "http")]
     daemon: bool,
     /// Socket path for `--daemon`. Defaults to `$XDG_RUNTIME_DIR/dent8/dent8.sock` (a per-user
     /// fallback under the temp dir is used when `$XDG_RUNTIME_DIR` is unset, e.g. macOS).
     #[arg(long, value_name = "PATH", requires = "daemon")]
     socket: Option<String>,
+    /// Serve the MCP JSON-RPC surface over HTTP (ADR 0019): loopback-only, bearer-token
+    /// guarded (set/print `DENT8_HTTP_TOKEN`), writing with this process's own identity. POST
+    /// a JSON-RPC message to `/` or `/mcp`; `GET /healthz` for liveness.
+    #[arg(long)]
+    http: bool,
+    /// TCP port for `--http`, bound on 127.0.0.1. Pass 0 for an ephemeral port.
+    #[arg(long, value_name = "PORT", default_value_t = 3369, requires = "http")]
+    port: u16,
 }
 
 #[derive(Args, Debug)]

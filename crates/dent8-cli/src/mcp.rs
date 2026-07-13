@@ -284,16 +284,318 @@ pub fn serve() -> i32 {
     0
 }
 
-/// Route `dent8 mcp serve`: the stdio loop by default, or a local per-user Unix-socket daemon
-/// with `--daemon` (ADR 0018) — the same JSON-RPC surface many agents can share over one
-/// transport. Daemon reads are available immediately; writes require the per-connection
-/// session-challenge handshake first.
-pub fn serve_command(daemon: bool, socket: Option<&str>) -> i32 {
-    if daemon {
+/// Route `dent8 mcp serve`: stdio by default, a local per-user Unix-socket daemon with
+/// `--daemon` (ADR 0018), or **MCP-over-HTTP** with `--http` (ADR 0019). All three run the
+/// same JSON-RPC `dispatch` — one firewall path, three transports. Daemon reads are available
+/// immediately; writes require the per-connection session-challenge handshake first. The HTTP
+/// transport is loopback + bearer-token and writes with the server's own identity.
+pub fn serve_command(daemon: bool, socket: Option<&str>, http: bool, port: u16) -> i32 {
+    if http {
+        serve_http(port)
+    } else if daemon {
         serve_daemon(socket)
     } else {
         serve()
     }
+}
+
+/// The largest single HTTP request (head + body) the API will buffer before refusing.
+#[cfg(feature = "async-store")]
+const MAX_HTTP_BYTES: usize = 8 * 1024 * 1024;
+
+/// Serve the MCP JSON-RPC surface over HTTP (ADR 0019). Binds loopback only, requires a bearer
+/// token on every non-health request, and carries the same `dispatch` as stdio/daemon. Writes
+/// are attested with the server's own identity (`WriteIdentity::Env`), like `dent8 mcp serve`
+/// over stdio. Returns a process exit code.
+#[cfg(feature = "async-store")]
+pub fn serve_http(port: u16) -> i32 {
+    // The token authorizes *reaching* the server (loopback TCP has no peer-credential check,
+    // unlike the daemon's Unix socket). Take it from the environment for scripted/reproducible
+    // use, else mint one per run.
+    let token = match std::env::var("DENT8_HTTP_TOKEN") {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => match generate_http_token() {
+            Ok(token) => token,
+            Err(error) => {
+                eprintln!("mcp http: could not generate a bearer token: {error}");
+                return 1;
+            }
+        },
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("mcp http: tokio runtime: {error}");
+            return 1;
+        }
+    };
+    let token = std::sync::Arc::new(token);
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("mcp http: cannot bind 127.0.0.1:{port}: {error}");
+                return 1;
+            }
+        };
+        let bound = listener.local_addr().map_or(port, |addr| addr.port());
+        let store_path = std::sync::Arc::new(log_path());
+        eprintln!(
+            "dent8 mcp serving JSON-RPC over HTTP at http://127.0.0.1:{bound}/ (loopback only). \
+             Authorize with:  authorization: bearer {token}"
+        );
+        eprintln!(
+            "  example:  curl -s http://127.0.0.1:{bound}/ -H 'authorization: bearer {token}' \
+             -d '{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}}'"
+        );
+        loop {
+            match listener.accept().await {
+                Ok((stream, _peer)) => {
+                    let token = std::sync::Arc::clone(&token);
+                    let store_path = std::sync::Arc::clone(&store_path);
+                    tokio::spawn(async move {
+                        serve_http_connection(stream, &token, &store_path).await;
+                    });
+                }
+                Err(error) => eprintln!("mcp http: accept error: {error}"),
+            }
+        }
+    })
+}
+
+/// A 32-hex-char (16-byte) bearer token.
+#[cfg(feature = "async-store")]
+fn generate_http_token() -> Result<String, String> {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(hex::encode(bytes))
+}
+
+/// Handle one HTTP connection: read the request, enforce the loopback + bearer-token guard,
+/// dispatch a JSON-RPC body, write one response.
+#[cfg(feature = "async-store")]
+async fn serve_http_connection(mut stream: tokio::net::TcpStream, token: &str, store_path: &str) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Read until end-of-headers, then the Content-Length body. `buf` accumulates both.
+    let mut buf = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 4096];
+    let header_end = loop {
+        match stream.read(&mut chunk).await {
+            Ok(read) if read > 0 => {
+                buf.extend_from_slice(&chunk[..read]);
+                if let Some(pos) = find_subsequence(&buf, b"\r\n\r\n") {
+                    break pos + 4;
+                }
+                if buf.len() > MAX_HTTP_BYTES {
+                    let _ = stream
+                        .write_all(&http_reply(
+                            431,
+                            "application/json",
+                            b"{\"error\":\"headers too large\"}",
+                        ))
+                        .await;
+                    return;
+                }
+            }
+            _closed_or_error => return,
+        }
+    };
+    let head = String::from_utf8_lossy(&buf[..header_end]).into_owned();
+    let Some(request) = HttpRequest::parse(&head) else {
+        let _ = stream
+            .write_all(&http_reply(
+                400,
+                "application/json",
+                b"{\"error\":\"malformed request\"}",
+            ))
+            .await;
+        return;
+    };
+    // Read the remainder of the body up to Content-Length.
+    let mut body = buf[header_end..].to_vec();
+    while body.len() < request.content_length {
+        if body.len() > MAX_HTTP_BYTES {
+            let _ = stream
+                .write_all(&http_reply(
+                    413,
+                    "application/json",
+                    b"{\"error\":\"body too large\"}",
+                ))
+                .await;
+            return;
+        }
+        match stream.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(read) => body.extend_from_slice(&chunk[..read]),
+            Err(_) => return,
+        }
+    }
+    let response = http_dispatch(&request, &body, token, store_path);
+    let _ = stream.write_all(&response).await;
+    let _ = stream.shutdown().await;
+}
+
+/// Route one parsed HTTP request to a full HTTP response.
+#[cfg(feature = "async-store")]
+fn http_dispatch(request: &HttpRequest, body: &[u8], token: &str, store_path: &str) -> Vec<u8> {
+    if !request.host_is_local() {
+        return http_reply(
+            403,
+            "application/json",
+            b"{\"error\":\"loopback origins only\"}",
+        );
+    }
+    // Unauthenticated liveness probe.
+    if request.method == "GET" && request.path == "/healthz" {
+        return http_reply(
+            200,
+            "application/json",
+            b"{\"status\":\"ok\",\"tool\":\"mcp-http\"}",
+        );
+    }
+    // Constant-ish bearer-token check on everything else.
+    if !request.bearer_matches(token) {
+        return http_reply(
+            401,
+            "application/json",
+            b"{\"error\":\"missing or invalid bearer token (see the server's startup line)\"}",
+        );
+    }
+    if request.method != "POST" || !matches!(request.path.as_str(), "/" | "/mcp") {
+        return http_reply(
+            404,
+            "application/json",
+            b"{\"error\":\"POST a JSON-RPC message to / or /mcp; GET /healthz for liveness\"}",
+        );
+    }
+    let response = match serde_json::from_slice::<Value>(body) {
+        Ok(message) => dispatch_with_subscriptions(&message, store_path, &WriteIdentity::Env, None),
+        Err(error) => Some(error_response(
+            &Value::Null,
+            -32700,
+            &format!("parse error: {error}"),
+        )),
+    };
+    match response {
+        // A JSON-RPC notification (no id) produces no reply — 204 No Content.
+        None => http_reply(204, "application/json", b""),
+        Some(value) => {
+            let body = serde_json::to_vec(&value).unwrap_or_default();
+            http_reply(200, "application/json", &body)
+        }
+    }
+}
+
+/// The parts of an HTTP request the API needs.
+#[cfg(feature = "async-store")]
+struct HttpRequest {
+    method: String,
+    path: String,
+    host: Option<String>,
+    authorization: Option<String>,
+    content_length: usize,
+}
+
+#[cfg(feature = "async-store")]
+impl HttpRequest {
+    fn parse(head: &str) -> Option<Self> {
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next()?;
+        let mut parts = request_line.split_ascii_whitespace();
+        let method = parts.next()?.to_string();
+        let target = parts.next()?;
+        parts.next()?; // HTTP version present
+        let path = target.split('?').next().unwrap_or(target).to_string();
+        let mut host = None;
+        let mut authorization = None;
+        let mut content_length = 0usize;
+        for line in lines {
+            let Some((name, value)) = line.split_once(':') else {
+                continue;
+            };
+            let value = value.trim();
+            if name.eq_ignore_ascii_case("host") {
+                host = Some(value.to_string());
+            } else if name.eq_ignore_ascii_case("authorization") {
+                authorization = Some(value.to_string());
+            } else if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse().unwrap_or(0);
+            }
+        }
+        Some(Self {
+            method,
+            path,
+            host,
+            authorization,
+            content_length,
+        })
+    }
+
+    fn host_is_local(&self) -> bool {
+        let Some(host) = &self.host else {
+            return false;
+        };
+        let name = host
+            .rsplit_once(':')
+            .map_or(host.as_str(), |(name, _port)| name);
+        matches!(name, "localhost" | "127.0.0.1" | "[::1]")
+    }
+
+    fn bearer_matches(&self, token: &str) -> bool {
+        self.authorization
+            .as_deref()
+            .and_then(|value| {
+                value
+                    .strip_prefix("Bearer ")
+                    .or_else(|| value.strip_prefix("bearer "))
+            })
+            .map(str::trim)
+            .is_some_and(|presented| constant_time_eq(presented.as_bytes(), token.as_bytes()))
+    }
+}
+
+/// A length-independent-leak-resistant byte compare for the bearer token.
+#[cfg(feature = "async-store")]
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+#[cfg(feature = "async-store")]
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// Build a full HTTP/1.1 response with a `Connection: close`.
+#[cfg(feature = "async-store")]
+fn http_reply(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
+    let reason = match status {
+        200 => "OK",
+        204 => "No Content",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        404 => "Not Found",
+        413 => "Payload Too Large",
+        431 => "Request Header Fields Too Large",
+        _ => "Internal Server Error",
+    };
+    let mut out = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+         Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    out.extend_from_slice(body);
+    out
 }
 
 /// Run a stdio-to-daemon MCP bridge: authenticate to the local Unix-socket daemon once, then
@@ -907,6 +1209,16 @@ pub fn serve_daemon(_socket: Option<&str>) -> i32 {
     eprintln!(
         "mcp: `--daemon` needs a Unix build with a storage backend (e.g. the default \
          `sqlite` feature); use plain `dent8 mcp serve` for stdio"
+    );
+    1
+}
+
+/// No-`async-store` fallback: the HTTP transport needs tokio (any backend feature brings it).
+#[cfg(not(feature = "async-store"))]
+pub fn serve_http(_port: u16) -> i32 {
+    eprintln!(
+        "mcp: `--http` needs a storage-backend build (e.g. the default `sqlite` feature) for \
+         its async runtime; use plain `dent8 mcp serve` for stdio"
     );
     1
 }
@@ -5888,5 +6200,124 @@ mod tests {
             output.grant_file.to_string_lossy().into_owned(),
             output.source_key_path.to_string_lossy().into_owned(),
         )
+    }
+
+    // ---- MCP-over-HTTP transport (ADR 0019) ----
+
+    #[cfg(feature = "async-store")]
+    mod http {
+        use super::super::{HttpRequest, http_dispatch};
+        use super::temp_log;
+        use serde_json::json;
+
+        fn get(head: &str) -> HttpRequest {
+            HttpRequest::parse(head).expect("request parses")
+        }
+        fn status(response: &[u8]) -> u16 {
+            let line = String::from_utf8_lossy(response);
+            line.split_ascii_whitespace()
+                .nth(1)
+                .and_then(|code| code.parse().ok())
+                .expect("status line")
+        }
+        fn post(path: &str, token: Option<&str>, store: &str, body: &serde_json::Value) -> Vec<u8> {
+            let auth = token.map_or(String::new(), |t| format!("Authorization: bearer {t}\r\n"));
+            let request = get(&format!(
+                "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:3369\r\n{auth}\r\n"
+            ));
+            http_dispatch(&request, body.to_string().as_bytes(), "secret", store)
+        }
+
+        #[test]
+        fn parses_method_path_host_auth_and_length() {
+            let request = get(
+                "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1:3369\r\nAuthorization: bearer abc\r\n\
+                 Content-Length: 12\r\n\r\n",
+            );
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.path, "/mcp");
+            assert!(request.host_is_local());
+            assert!(request.bearer_matches("abc"));
+            assert!(!request.bearer_matches("wrong"));
+            assert_eq!(request.content_length, 12);
+        }
+
+        #[test]
+        fn host_guard_refuses_a_rebound_name() {
+            assert!(!get("GET / HTTP/1.1\r\nHost: rebind.example.com\r\n\r\n").host_is_local());
+            assert!(get("GET / HTTP/1.1\r\nHost: [::1]:3369\r\n\r\n").host_is_local());
+            assert!(!get("GET / HTTP/1.1\r\n\r\n").host_is_local());
+        }
+
+        #[test]
+        fn healthz_is_open_but_everything_else_needs_the_token() {
+            let (_g, store) = temp_log();
+            let health = http_dispatch(
+                &get("GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+                b"",
+                "secret",
+                &store,
+            );
+            assert_eq!(status(&health), 200);
+            // A JSON-RPC POST without the token is refused before dispatch.
+            let unauth = post(
+                "/",
+                None,
+                &store,
+                &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            );
+            assert_eq!(status(&unauth), 401);
+        }
+
+        #[test]
+        fn a_non_local_host_is_forbidden_even_with_the_token() {
+            let (_g, store) = temp_log();
+            let request = get(
+                "POST / HTTP/1.1\r\nHost: evil.example.com\r\nAuthorization: bearer secret\r\n\r\n",
+            );
+            let response = http_dispatch(&request, b"{}", "secret", &store);
+            assert_eq!(status(&response), 403);
+        }
+
+        #[test]
+        fn a_get_or_unknown_path_with_the_token_is_not_found() {
+            let (_g, store) = temp_log();
+            let request = get(
+                "GET /facts HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: bearer secret\r\n\r\n",
+            );
+            assert_eq!(status(&http_dispatch(&request, b"", "secret", &store)), 404);
+        }
+
+        #[test]
+        fn a_write_then_read_round_trips_through_the_firewall() {
+            let (_g, store) = temp_log();
+            let write = post(
+                "/",
+                Some("secret"),
+                &store,
+                &json!({
+                    "jsonrpc":"2.0","id":1,"method":"tools/call",
+                    "params":{"name":"assert","arguments":{
+                        "subject":"repo:demo","predicate":"database","value":"postgres",
+                        "authority":"high","source":"source:human"}},
+                }),
+            );
+            assert_eq!(status(&write), 200);
+            let start = write.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+            let reply: serde_json::Value = serde_json::from_slice(&write[start..]).expect("json");
+            assert_eq!(
+                reply["result"]["isError"], false,
+                "write should be admitted: {reply}"
+            );
+
+            // A notification (no id) yields 204 No Content.
+            let note = post(
+                "/mcp",
+                Some("secret"),
+                &store,
+                &json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            );
+            assert_eq!(status(&note), 204);
+        }
     }
 }

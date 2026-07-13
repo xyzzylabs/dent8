@@ -192,27 +192,40 @@ stream** at `dent8://{kind}/{key}/{predicate}` (segments percent-encoded):
 
 Source: [MCP resources specification](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)
 
-## HTTP API
+## HTTP API — MCP-over-HTTP (built)
 
-The HTTP API should come after the CLI and Postgres adapter have proven the core semantics.
-It is the natural home for a shared local daemon or remote dent8 service used by many agents;
-it must preserve the same firewall path, identity checks, and replay receipts as CLI/MCP,
-instead of becoming a generic memory provider. The local Unix-socket daemon already covers
-the single-user, single-source-key version of this with a session challenge; the HTTP API is
-the future remote/multi-tenant shape and cannot rely on service-held user source keys.
+The HTTP API is the **MCP JSON-RPC surface carried over HTTP** — the third transport of
+`dent8 mcp serve`, after stdio and the local Unix-socket daemon, over the *same*
+`dispatch` firewall path ([ADR 0019](decisions/0019-http-api-mcp-over-http.md)). Rather than a
+bespoke REST surface that would re-map every operation and re-derive every receipt (a second
+copy of the machine contract, free to drift), the belief surface *is* the MCP method set, and
+HTTP just carries it. The "routes" are MCP methods.
 
-Likely routes:
+```sh
+dent8 mcp serve --http --port 3369     # loopback + bearer token; writes with this identity
+curl -s http://127.0.0.1:3369/ -H 'authorization: bearer <token>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"assert","arguments":{"subject":"repo:x","predicate":"database",
+       "value":"postgres","authority":"high","source":"source:owner"}}}'
+```
 
-- `POST /facts/assert`
-- `POST /facts/{fact_id}/reinforce`
-- `POST /facts/{fact_id}/contradict`
-- `POST /facts/{fact_id}/supersede`
-- `GET /facts/{fact_id}`
-- `GET /facts/{fact_id}/explain`
-- `GET /snapshot`
-- `GET /subjects/{subject_type}/{subject_key}/context`
-- `POST /replay`
-- `GET /conflicts`
+- **Endpoint.** `POST /` (and `/mcp`) with a JSON-RPC message or batch; the response is the
+  JSON-RPC result (`204 No Content` for a lone notification). `GET /healthz` is an
+  unauthenticated liveness probe. The full belief surface — `assert` / `supersede` /
+  `retract` / `contradict` / `reinforce` / `expire` / `derive` / `explain` / `replay` /
+  `list_facts` / `conflicts` / `snapshot` / `whatif` / `verify` / `native_*` — is reachable
+  as MCP `tools/call`, carrying the same `status` / error `code` / `structuredContent` as
+  stdio and the CLI's `--output json`.
+- **Trust boundary (local-first).** Binds loopback only, validates the `Host` header against
+  localhost forms (anti-DNS-rebinding), and requires a **bearer token** on every non-health
+  request (`DENT8_HTTP_TOKEN`, else generated per run and printed on start — the token
+  substitutes for the daemon's `SO_PEERCRED` check, which TCP cannot do). Writes are attested
+  with the **server's own identity** (`DENT8_GRANT` / `DENT8_IDENTITY_KEY`), exactly like
+  `dent8 mcp serve` over stdio.
+- **Deferred:** a remote, multi-user service where each client proves *its own* source key
+  (the daemon's session challenge ported to HTTP, or client-signed write attestations) is a
+  distinct decision, blocked until such a deployment exists. Until then the HTTP transport is
+  loopback/trusted-network; front it with a reverse proxy (TLS) for anything else.
 
 ## Desktop Debugger
 

@@ -5,8 +5,8 @@ Date: 2026-07-06
 ## Status
 
 **Accepted.** dent8 should eventually have a desktop app, but only as a debugger/control
-plane over the existing integrity boundary. ADR 0019 is intentionally left for the future
-networked MCP-over-HTTP decision referenced by ADR 0018.
+plane over the existing integrity boundary. ([ADR 0019](0019-http-api-mcp-over-http.md) is the
+networked MCP-over-HTTP decision.)
 
 **Update (2026-07-12):** implementation-order steps 2 and 3 shipped as **`dent8 ui`** — a
 localhost read/audit API plus the web debugger, served straight from the stock binary
