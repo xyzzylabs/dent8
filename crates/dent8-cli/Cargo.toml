@@ -47,6 +47,11 @@ hex = { version = "0.4" }
 # binary stays free of the arrow/parquet columnar stack.
 dent8-export = { path = "../dent8-export", version = "0.7.3", optional = true }
 jiff = { version = "0.2.32", default-features = false, features = ["std"] }
+# Cross-platform advisory file locking (flock on Unix, LockFileEx on Windows) for the default
+# file dev store: an exclusive lock serializes concurrent `dent8` writers through the firewall
+# across the whole read-arbitrate-append critical section. The `unsafe` stays inside fs4, so the
+# workspace `unsafe_code = "forbid"` is preserved.
+fs4 = "1.1.0"
 
 [target.'cfg(windows)'.dependencies]
 # Windows Credential Manager backend for `keychain:<account>` key references. Windows has no

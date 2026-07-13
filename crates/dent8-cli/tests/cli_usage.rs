@@ -6731,6 +6731,169 @@ fn assert_concurrent_cli_asserts_get_unique_event_ids(
     );
 }
 
+/// Concurrent writers against the **default file store** must serialize through the firewall.
+///
+/// Eight `dent8 assert` processes race on the SAME subject+predicate at High authority. Under
+/// serialized arbitration only the first can land a fresh believed fact; every later writer
+/// sees it and is rejected ("already has a believed fact"). So exactly one assert may succeed,
+/// the resulting log stays well-formed, and a subsequent read shows exactly one fact.
+///
+/// Before the exclusive-lock fix this bypassed the firewall: with no lock across
+/// `load_store → arbitrate → append_events`, several processes loaded the same empty snapshot,
+/// each passed arbitration, and each appended — producing multiple fresh believed facts for one
+/// predicate (and colliding `event:0` ids) that `validate_unique_log` then rejects on the next
+/// load, bricking the store. This test fails in that world (>1 success and/or the read errors)
+/// and passes only with the lock. Cross-process timing means the *old* bypass is demonstrated
+/// probabilistically, but the *fixed* invariants asserted here hold deterministically.
+#[test]
+fn concurrent_cli_asserts_on_shared_file_store_serialize_through_the_firewall() {
+    const WRITERS: usize = 8;
+
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(WRITERS));
+    let mut handles = Vec::new();
+    for index in 0..WRITERS {
+        let barrier = std::sync::Arc::clone(&barrier);
+        let log = log.clone();
+        handles.push(std::thread::spawn(move || {
+            let value = format!("database-{index}");
+            let source = format!("source:file-writer-{index}");
+            barrier.wait();
+            run_dent8(
+                &[
+                    "assert",
+                    "repo:contended",
+                    "database",
+                    &value,
+                    "--authority",
+                    "high",
+                    "--source",
+                    &source,
+                ],
+                &[("DENT8_LOG", log.as_str())],
+            )
+        }));
+    }
+
+    let mut successes = 0usize;
+    for handle in handles {
+        let output = handle.join().expect("writer thread should not panic");
+        if output.status.success() {
+            successes += 1;
+        }
+    }
+
+    // Serialized arbitration admits exactly one fresh believed fact for the contended predicate.
+    assert_eq!(
+        successes, 1,
+        "exactly one concurrent writer may win; {successes} succeeded — the firewall was bypassed"
+    );
+
+    // The log must not be bricked: a subsequent read (which re-runs `validate_unique_log`)
+    // succeeds and surfaces exactly one believed fact.
+    let listed = run_dent8(
+        &[
+            "--output",
+            "json",
+            "facts",
+            "list",
+            "--kind",
+            "repo",
+            "--key",
+            "contended",
+            "--predicate",
+            "database",
+        ],
+        &envs,
+    );
+    assert_success(&listed, "facts list after concurrent file-store writers");
+    let listed = stdout_json(&listed);
+    assert_eq!(listed["count"], 1, "{listed}");
+
+    // Exactly one line was appended, and the global chain verifies.
+    assert_eq!(
+        line_count(&log),
+        1,
+        "the firewall must admit exactly one append under contention"
+    );
+    assert_success(
+        &run_dent8(&["verify"], &envs),
+        "verify shared file log after concurrent writers",
+    );
+}
+
+/// A single corrupt line in the file store must be **non-fatal**: it is skipped, reported on
+/// stderr, and the surrounding valid events still load. One torn/garbage line cannot brick the
+/// whole store.
+#[test]
+fn a_corrupt_line_in_the_file_store_is_skipped_and_reported_not_fatal() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl").to_string_lossy().into_owned();
+    let envs = [("DENT8_LOG", log.as_str())];
+
+    // Two valid events (distinct predicates so both stay believed).
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "database",
+                "postgres",
+                "--authority",
+                "high",
+                "--source",
+                "source:a",
+            ],
+            &envs,
+        ),
+        "seed valid event 1",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "assert",
+                "repo:app",
+                "language",
+                "rust",
+                "--authority",
+                "high",
+                "--source",
+                "source:b",
+            ],
+            &envs,
+        ),
+        "seed valid event 2",
+    );
+
+    // Splice a garbage line between the two valid ones: valid / corrupt / valid.
+    let contents = fs::read_to_string(&log).expect("read seeded log");
+    let mut lines: Vec<String> = contents.lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 2, "expected two seeded event lines");
+    lines.insert(1, "{ this is not valid json !!!".to_string());
+    fs::write(&log, format!("{}\n", lines.join("\n"))).expect("rewrite log with corrupt line");
+
+    // A read must succeed (not a hard error / brick) and surface BOTH valid facts.
+    let listed = run_dent8(
+        &[
+            "--output", "json", "facts", "list", "--kind", "repo", "--key", "app",
+        ],
+        &envs,
+    );
+    assert_success(&listed, "facts list over a log with one corrupt line");
+    let json = stdout_json(&listed);
+    assert_eq!(json["count"], 2, "both valid facts must survive: {json}");
+
+    // The skip is reported on stderr (never silently swallowed), naming the corrupt line number.
+    let warning = stderr(&listed);
+    assert!(
+        warning.contains("skipped 1 corrupt line(s)") && warning.contains("lines: 2"),
+        "stderr must report the skipped corrupt line: {warning:?}"
+    );
+}
+
 #[cfg(feature = "sqlite")]
 fn assert_shared_sqlite_all_agents_json(all: &Value) {
     assert_eq!(all["status"], "ok");
