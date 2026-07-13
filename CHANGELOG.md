@@ -9,6 +9,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Added
+- **First-class LlamaIndex tools** (`dent8.llamaindex`, `pip install "dent8[llamaindex]"`).
+  Native LlamaIndex `FunctionTool`s over the belief surface, built on the `dent8` SDK — no MCP
+  subprocess; `dent8_tools(source=…, authority=…)` returns the same six tools as the LangChain
+  toolkit (`dent8_record_fact` … `dent8_verify`). source/authority are deployment configuration,
+  not LLM arguments, so an agent cannot escalate its own authority, and a refused write comes
+  back as a tool result. `llama-index-core` is an optional extra (the SDK core stays
+  zero-dependency); tested against the real binary + `llama-index-core` in CI. This completes
+  first-class coverage of the major agent frameworks — LangChain (Python), LlamaIndex (Python),
+  the Vercel AI SDK, and LangChain.js.
+
 ### Changed
 - **crates.io now publishes automatically on tag** via Trusted Publishing (OIDC), matching the
   PyPI and npm release jobs — a `crates` job in `release.yml` runs

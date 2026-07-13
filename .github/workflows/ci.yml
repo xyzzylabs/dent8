@@ -178,7 +178,7 @@ jobs:
       # Install with the `langchain` extra so both the core SDK tests and the first-class
       # `dent8.langchain` adapter tests run against the real binary.
       - name: Install the SDK (with the langchain extra) + pytest
-        run: python -m pip install -q -e "sdks/python[langchain]" pytest
+        run: python -m pip install -q -e "sdks/python[langchain,llamaindex]" pytest
       # The SDK is a thin wrapper over the CLI's JSON contract, so the binary IS the unit
       # under test: these tests pin schema_version, status, error codes, and that the
       # LangChain tools carry firewall refusals back to the agent as results.

@@ -371,11 +371,11 @@ debugger/control plane and production deployment packaging.
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger (the core shipped as
 `dent8 whatif`; the interactive debugger view remains) ·
-**first-class in-process framework adapters** — **shipped for LangChain (Python,
-`dent8.langchain`), the Vercel AI SDK (`dent8/ai`), and LangChain.js (`dent8/langchain`)** as
-native tools over the SDKs, plus a framework-agnostic `dent8/tools` for the rest; LlamaIndex
-remains (MCP is the path there today, see
-[examples/langchain](../examples/langchain/),
+**first-class in-process framework adapters — done for the major frameworks**: LangChain
+(Python, `dent8.langchain`), LlamaIndex (Python, `dent8.llamaindex`), the Vercel AI SDK
+(`dent8/ai`), and LangChain.js (`dent8/langchain`), all native tools over the SDKs, plus a
+framework-agnostic `dent8/tools` (TS) / `dent8ToolSpecs` for anything else (see
+[examples/langchain](../examples/langchain/), [examples/llamaindex](../examples/llamaindex/),
 [examples/vercel-ai-sdk](../examples/vercel-ai-sdk/), and
 [examples/langchain-js](../examples/langchain-js/)) ·
 a TypeScript/Tauri desktop debugger/control plane for agents, receipts, native-memory audits,

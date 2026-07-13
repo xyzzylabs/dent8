@@ -203,15 +203,17 @@ Desktop, or your own. For code-first agent frameworks there are two paths:
   keep in sync, the agent writes at a configured authority it *can't* escalate (source and
   authority are deployment config, not tool arguments), and refused writes come back as
   results it reads and adapts to.
-  - **Python** — LangChain: `pip install "dent8[langchain]"`, then
-    `from dent8.langchain import dent8_tools`. See [examples/langchain/](examples/langchain/).
+  - **Python** — LangChain (`pip install "dent8[langchain]"`, `from dent8.langchain import
+    dent8_tools`) and LlamaIndex (`pip install "dent8[llamaindex]"`, `from dent8.llamaindex
+    import dent8_tools`). See [examples/langchain/](examples/langchain/) and
+    [examples/llamaindex/](examples/llamaindex/).
   - **TypeScript** — the Vercel AI SDK (`import { dent8Tools } from "dent8/ai"`) and
     LangChain.js (`from "dent8/langchain"`), out of the `npm i dent8` package. See
     [examples/vercel-ai-sdk/](examples/vercel-ai-sdk/) and
     [examples/langchain-js/](examples/langchain-js/).
-- **Over MCP or the SDKs** — any other framework (LlamaIndex, Mastra, …) connects to
-  `dent8 mcp serve` or drives the thin `pip install dent8` / `npm i dent8` SDKs directly —
-  see [examples/mcp/](examples/mcp/).
+- **Over MCP or the SDKs** — any other framework (Mastra, …) connects to `dent8 mcp serve` or
+  drives the thin `pip install dent8` / `npm i dent8` SDKs directly — see
+  [examples/mcp/](examples/mcp/).
 
 To close the loop without MCP, wire the session bookends into provider hooks: a
 `SessionStart` hook injects `dent8 context` (the believed facts, with authority and

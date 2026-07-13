@@ -22,6 +22,9 @@ classifiers = [
 # First-class LangChain tools (`dent8.langchain`): native StructuredTools over the belief
 # surface, no MCP subprocess. The SDK core stays zero-dependency; this extra is opt-in.
 langchain = ["langchain-core>=0.2"]
+# First-class LlamaIndex tools (`dent8.llamaindex`): native FunctionTools over the belief
+# surface, no MCP subprocess. Also opt-in; the SDK core stays zero-dependency.
+llamaindex = ["llama-index-core>=0.11"]
 
 [project.urls]
 Homepage = "https://github.com/xyzzylabs/dent8"
