@@ -49,10 +49,27 @@ The belief surface maps 1:1 onto the CLI: `assert_fact` (Python keyword), `super
 `explain`, `replay`, `facts`, `verify`, `conflicts`. Temporal keywords accept the CLI's
 whole grammar — unix millis, `"now"`, `"-7d"`, RFC 3339, or a bare UTC date.
 
-For LLM tool-calling agents, prefer the MCP server (`dent8 mcp serve`) — see
-[examples/langchain](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain) and
-[examples/vercel-ai-sdk](https://github.com/xyzzylabs/dent8/tree/main/examples/vercel-ai-sdk). This SDK is for
-*programmatic* access from Python code.
+## LangChain tools
+
+`pip install "dent8[langchain]"` adds `dent8.langchain`, native LangChain `StructuredTool`s
+over the belief surface (no MCP subprocess):
+
+```python
+from dent8.langchain import dent8_tools
+from langgraph.prebuilt import create_react_agent
+
+tools = dent8_tools(source="source:agent", authority="low")
+agent = create_react_agent(model, tools)
+```
+
+The tools expose *what* to record (subject, predicate, value); **source and authority are
+your configuration, not LLM arguments**, so the agent cannot escalate its own authority. A
+refused write returns as a tool result the agent reads and adapts to, not an exception. See
+[examples/langchain](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain).
+
+For other frameworks (LlamaIndex, Vercel AI SDK, any MCP client), use the MCP server
+(`dent8 mcp serve`, over stdio / daemon / HTTP). This SDK core stays zero-dependency and is
+for *programmatic* access from Python code.
 
 ## Test
 

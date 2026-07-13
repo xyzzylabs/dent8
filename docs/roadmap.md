@@ -371,11 +371,11 @@ debugger/control plane and production deployment packaging.
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger (the core shipped as
 `dent8 whatif`; the interactive debugger view remains) ·
-**first-class in-process framework adapters**
-(LangChain, LlamaIndex, Vercel AI SDK) layered on the shipped `pip install dent8` /
-`npm i dent8` SDKs; MCP is the integration path *today*, see
+**first-class in-process framework adapters** — **LangChain (Python) shipped**
+(`dent8.langchain`, `pip install "dent8[langchain]"`, native tools over the SDK); LlamaIndex
+and the Vercel AI SDK remain (MCP is the path for those today, see
 [examples/langchain](../examples/langchain/) and
-[examples/vercel-ai-sdk](../examples/vercel-ai-sdk/) ·
+[examples/vercel-ai-sdk](../examples/vercel-ai-sdk/)) ·
 a TypeScript/Tauri desktop debugger/control plane for agents, receipts, native-memory audits,
 witness status, and replay timelines ·
 adapters for existing memory providers · a managed/hosted witness service (publication

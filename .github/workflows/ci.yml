@@ -167,10 +167,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install the SDK + pytest
-        run: python -m pip install -q -e sdks/python pytest
-      # The SDK is a thin wrapper over the CLI's JSON contract, so the binary IS the
-      # unit under test: these tests pin schema_version, status, and error codes.
+      # Install with the `langchain` extra so both the core SDK tests and the first-class
+      # `dent8.langchain` adapter tests run against the real binary.
+      - name: Install the SDK (with the langchain extra) + pytest
+        run: python -m pip install -q -e "sdks/python[langchain]" pytest
+      # The SDK is a thin wrapper over the CLI's JSON contract, so the binary IS the unit
+      # under test: these tests pin schema_version, status, error codes, and that the
+      # LangChain tools carry firewall refusals back to the agent as results.
       - name: Run the SDK tests
         run: DENT8_BIN="$PWD/target/debug/dent8" python -m pytest -q sdks/python/tests
 

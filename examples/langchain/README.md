@@ -1,11 +1,34 @@
-# dent8 as a LangChain agent's memory firewall (MCP)
+# dent8 as a LangChain agent's memory firewall
 
 A Python or TypeScript app — LangChain, LlamaIndex, the Vercel AI SDK, Mastra — doesn't exec
 provider hooks, so the [native-memory hook guard](../agent-hooks/) doesn't apply: *you* own
-every memory write. Wire dent8 in as a **memory firewall over MCP** instead. The agent records
-and reads project facts through dent8's fact-event firewall, so a low-authority or stale write
-can't silently override a trusted fact, contradictions surface instead of overwriting, and
-every fact is replayable with an integrity receipt.
+every memory write. Wire dent8 in as a **memory firewall**. The agent records and reads
+project facts through dent8's fact-event firewall, so a low-authority or stale write can't
+silently override a trusted fact, contradictions surface instead of overwriting, and every
+fact is replayable with an integrity receipt.
+
+Two ways to wire it, both firewalled:
+
+- **First-class tools (recommended for LangChain/Python)** — `dent8.langchain` gives native
+  LangChain `StructuredTool`s over the belief surface, built on the `dent8` SDK, no MCP
+  subprocess:
+
+  ```python
+  from dent8.langchain import dent8_tools          # pip install "dent8[langchain]"
+  from langgraph.prebuilt import create_react_agent
+
+  tools = dent8_tools(source="source:agent", authority="low")
+  agent = create_react_agent("openai:gpt-4o-mini", tools)
+  ```
+
+  The tools expose *what* to record (subject, predicate, value); the **source and authority
+  are your configuration, not LLM arguments**, so the agent can't escalate its own authority —
+  a low-authority agent can propose facts but never override a human's. A refused write comes
+  back as a tool result the agent reads and adapts to, not an exception. See
+  [`dent8_tools_agent.py`](dent8_tools_agent.py).
+
+- **Over MCP** — the language-agnostic path (below), for LlamaIndex / Vercel AI SDK / any
+  MCP-speaking client, or a shared `dent8 mcp serve` your team already runs.
 
 dent8 ships the server already: `dent8 mcp serve` (stdio JSON-RPC) exposes the full belief
 surface as MCP tools — `runtime_status`, `assert`, `supersede`, `retract`, `contradict`,

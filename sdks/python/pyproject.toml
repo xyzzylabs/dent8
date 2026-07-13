@@ -18,6 +18,11 @@ classifiers = [
   "Topic :: Software Development :: Libraries",
 ]
 
+[project.optional-dependencies]
+# First-class LangChain tools (`dent8.langchain`): native StructuredTools over the belief
+# surface, no MCP subprocess. The SDK core stays zero-dependency; this extra is opt-in.
+langchain = ["langchain-core>=0.2"]
+
 [project.urls]
 Homepage = "https://github.com/xyzzylabs/dent8"
 Documentation = "https://xyzzylabs.github.io/dent8/"

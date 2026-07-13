@@ -10,6 +10,17 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **First-class LangChain tools** (`dent8.langchain`, `pip install "dent8[langchain]"`;
+  roadmap: framework adapters). Native LangChain `StructuredTool`s over the belief surface,
+  built on the `dent8` SDK — no MCP subprocess, typed args: `dent8_tools(source=…,
+  authority=…)` returns `dent8_record_fact` / `dent8_revise_fact` / `dent8_dispute_fact` /
+  `dent8_explain_fact` / `dent8_list_facts` / `dent8_verify`. The tools expose *what* to
+  record (subject, predicate, value); **source and authority are deployment configuration,
+  not LLM arguments**, so an agent wired at `authority="low"` cannot escalate its own
+  authority — dent8's thesis at the tool boundary. A refused write comes back as a tool
+  result the agent reads and adapts to, not an exception. The SDK core stays
+  zero-dependency (the extra is opt-in); tested against the real binary + `langchain-core`
+  in CI.
 - **HTTP API — MCP-over-HTTP** ([ADR 0019](docs/decisions/0019-http-api-mcp-over-http.md)):
   `dent8 mcp serve --http --port 3369` serves the full MCP JSON-RPC belief surface over HTTP —
   a third transport (after stdio and the Unix-socket daemon) over the **same** `dispatch`
