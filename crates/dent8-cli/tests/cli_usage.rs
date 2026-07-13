@@ -5986,6 +5986,10 @@ fn doctor_agent_reports_native_memory_bypass_guard_posture() {
                 "codex",
                 "--issuer-key",
                 &issuer_key,
+                // Opt out of the default guard install so the "before" state is genuinely
+                // unguarded; this test then verifies doctor's missing→enforced transition when the
+                // sample hook is installed manually.
+                "--no-native-memory-guard",
                 "--install-mcp",
                 "--mcp-command",
                 &mcp_command,
