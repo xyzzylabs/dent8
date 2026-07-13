@@ -52,6 +52,7 @@ export default defineConfig({
             { slug: "storage" },
             { slug: "threat-model" },
             { slug: "evals" },
+            { slug: "whitepaper" },
             { slug: "belief-revision" },
             { slug: "formal-verification" },
             { slug: "naming" },
