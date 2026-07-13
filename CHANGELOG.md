@@ -9,6 +9,8 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-13
+
 ### BREAKING
 - **Writes above the agent tier now require a valid signed identity.** A write whose
   effective authority is *above the agent tier* — strictly greater than `low`, i.e.
@@ -30,6 +32,32 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   lower the write to `--authority low`. Signed identities are `source:*`-scoped, so
   above-agent writes must come from a `source:*` identity; a bare label like `user:alice`
   can only write at the agent tier.
+
+### Added
+- **Native-memory guard installed and enforced by default.** `dent8 init` now installs
+  *and* enforces a `PreToolUse` hook that blocks raw agent edits to the native-memory files
+  agents read (`CLAUDE.md`, `AGENTS.md`, `MEMORY.md`, `GEMINI.md`, `.cursor/rules`, …),
+  exiting `2` on a blocked write. The hook is merged idempotently into the agent's hook
+  config (claude-code's `.claude/settings.json` by default, or the `--agent`-specific hook
+  file). Opt out with `dent8 init --no-native-memory-guard`; `DENT8_HOOK_ENFORCE=0` softens
+  it to advisory. The sanctioned write path is `dent8 export` (or
+  `DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`). The guard fails open when the `dent8` binary is
+  absent, so a clone is never bricked, and `dent8 doctor` reports the guard enforced out of
+  the box.
+
+### Changed
+- **Reads now tolerate corrupt or blank JSONL lines instead of failing hard.** The default
+  file store skips corrupt/blank lines, counts them, and reports them on stderr
+  (`warning: skipped N corrupt line(s)`) rather than treating them as fatal. `dent8 verify`
+  (and the audit/session hooks) stay **strict** — any skipped line is an `INTEGRITY FAILURE`
+  (exit `1`) — so `verify` remains a strict corruption oracle.
+
+### Security
+- **The default file store now serializes writers through an exclusive OS file lock.** A
+  sibling `.lock` file (a blocking `File::lock()`) is held across the entire
+  read → arbitrate → append critical section, so two concurrent writers can no longer both
+  pass arbitration and append. Previously that race defeated the multi-agent firewall and
+  could brick reload with a duplicate `event:0`.
 
 ## [0.7.3] - 2026-07-13
 

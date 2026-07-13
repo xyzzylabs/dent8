@@ -64,10 +64,8 @@ mutate-in-place memory structurally expresses. Details: [evals.md](docs/evals.md
 ## See the firewall reject a write
 
 ```sh
-dent8 authority add web:scrape low
-
 # A low-authority source tries to overwrite the fact — rejected: Low can't override High.
-dent8 supersede repo:myproj deploy_target staging --authority low --source web:scrape
+dent8 supersede repo:myproj deploy_target staging --authority low --source source:owner
 
 # Still production, with a receipt (survived: 1 challenge).
 dent8 explain repo:myproj deploy_target
