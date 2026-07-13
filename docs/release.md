@@ -89,8 +89,35 @@ Fast manifest/package check:
 cargo package --workspace --no-verify
 ```
 
-Publish/dry-run in dependency order, because downstream crates cannot verify against crates.io
-until their internal dependencies are already published:
+### crates.io publishes automatically on tag (Trusted Publishing)
+
+Pushing a `vX.Y.Z` tag runs the `crates` job in
+[`.github/workflows/release.yml`](../.github/workflows/release.yml) — the same tokenless model
+PyPI and npm already use. `rust-lang/crates-io-auth-action` exchanges the run's OIDC identity
+for a short-lived crates.io token (no `CARGO_REGISTRY_TOKEN` in GitHub secrets), then
+`cargo publish --workspace` uploads all eight crates in dependency order, waiting for each to
+index before its dependents.
+
+**One-time setup — required per crate before this works.** Enable Trusted Publishing on
+crates.io for **each** of `dent8`, `dent8-cli`, `dent8-core`, `dent8-evals`, `dent8-export`,
+`dent8-store`, `dent8-store-postgres`, `dent8-store-sqlite` (the crate must already exist —
+all eight do). For each: crates.io → the crate → **Settings → Trusted Publishing → Add**,
+GitHub, with
+
+- Repository owner and name: `xyzzylabs/dent8`
+- Workflow filename: `release.yml`
+- Environment: `crates-io`
+
+One OIDC exchange then authorizes the whole workspace. Until every crate is configured, the
+`crates` job fails on the crate that isn't (the PyPI/npm jobs are independent and still
+publish); finish the setup, then re-run the failed job.
+
+### Manual publish (fallback)
+
+To publish by hand — before Trusted Publishing is set up, or to recover a partial run — the
+same `cargo publish --workspace` works locally with a `cargo login` token. Or one crate at a
+time in dependency order, because a downstream crate cannot verify against crates.io until its
+internal dependencies are already published:
 
 ```sh
 cargo publish -p dent8-core --dry-run
@@ -115,10 +142,12 @@ cargo publish -p dent8-cli --dry-run
 cargo publish -p dent8-cli
 ```
 
-After publishing, verify the install path in a clean temp directory:
+After publishing (either path), verify the install in a clean temp directory. Use the rustup
+proxy so cargo and rustc are paired — a bare toolchain cargo can desync rustc and false-fail
+with `Unrecognized option: 'check-cfg'`:
 
 ```sh
-cargo install dent8-cli --version 0.8.0 --locked
+rustup run stable cargo install dent8-cli --version 0.8.0 --locked --root "$(mktemp -d)"
 dent8 --version
 ```
 

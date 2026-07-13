@@ -9,6 +9,15 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### Changed
+- **crates.io now publishes automatically on tag** via Trusted Publishing (OIDC), matching the
+  PyPI and npm release jobs — a `crates` job in `release.yml` runs
+  `rust-lang/crates-io-auth-action` + `cargo publish --workspace`, which uploads all eight
+  crates in dependency order with no `CARGO_REGISTRY_TOKEN` in GitHub secrets. Requires a
+  one-time Trusted Publisher entry per crate on crates.io (repo `xyzzylabs/dent8`, workflow
+  `release.yml`, environment `crates-io`); the manual per-crate `cargo publish` sequence
+  remains the documented fallback. See [docs/release.md](docs/release.md).
+
 ## [0.8.0] - 2026-07-13
 
 ### BREAKING
