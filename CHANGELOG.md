@@ -9,6 +9,28 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 
 ## [Unreleased]
 
+### BREAKING
+- **Writes above the agent tier now require a valid signed identity.** A write whose
+  effective authority is *above the agent tier* — strictly greater than `low`, i.e.
+  `medium`, `high`, or `canonical` — must now be backed by a valid signed `source:*`
+  identity: a grant chaining to a trusted issuer, matching the claimed source / authority /
+  scope, plus proven source-key possession. Previously, whenever signed identity was
+  unconfigured, such a write was **trusted on the strength of the label alone**, so
+  `dent8 assert --authority high --source source:human` was an unauthenticated label any
+  shell-capable agent could claim for free. That unsigned above-agent write is now
+  **rejected** (`unsigned write claims authority '<level>' above the agent tier …`) at the
+  shared write boundary — CLI `op_*`, `dent8 capture`/`import`, the MCP tools, and the
+  daemon all funnel through the same `enforce_write` / `require_signed_above_agent` gate, so
+  no path skips it — regardless of the opt-in `DENT8_REQUIRE_IDENTITY`/registry. Writes at
+  or below the agent tier (`low`/`unknown`) stay permissive and need no signing, so ordinary
+  local and agent use is unchanged. **Migration:** run `dent8 init` (which now provisions a
+  default signing identity — trust root + issuer key + source key + grant, with the identity
+  env written into `.dent8/env`; opt out with `--no-identity`) or configure `DENT8_TRUST` /
+  `DENT8_GRANT` / `DENT8_IDENTITY_KEY` yourself to provision a signing identity — otherwise
+  lower the write to `--authority low`. Signed identities are `source:*`-scoped, so
+  above-agent writes must come from a `source:*` identity; a bare label like `user:alice`
+  can only write at the agent tier.
+
 ## [0.7.3] - 2026-07-13
 
 ### Added
