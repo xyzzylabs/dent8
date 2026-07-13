@@ -1,12 +1,48 @@
 # dent8 as a Vercel AI SDK memory firewall
 
-Use dent8 from a TypeScript app built with the Vercel AI SDK by exposing
-`dent8 mcp serve` as an MCP tool source. The AI SDK discovers dent8's tools, then the model
-records and reads facts through the same fact-event firewall used by the CLI: low-authority
-overrides are rejected, stale facts are flagged, contradictions remain explainable, and every
-accepted write has replayable provenance.
+Give a [Vercel AI SDK](https://ai-sdk.dev) agent a memory firewall: it records and reads
+project facts through the same fact-event firewall the CLI uses — low-authority overrides are
+rejected, stale facts are flagged, contradictions stay explainable, and every accepted write
+has replayable provenance.
 
-The sample app is [`dent8_memory_agent.ts`](dent8_memory_agent.ts). It uses the AI SDK's MCP
+Two ways to wire it, both firewalled:
+
+## First-class tools (recommended)
+
+`dent8/ai` gives native AI SDK tools built on the `npm i dent8` SDK — no MCP subprocess to
+keep in sync, typed arguments, and firewall refusals surfaced to the model *as tool results*
+it reads and adapts to. [`dent8_tools_agent.ts`](dent8_tools_agent.ts):
+
+```ts
+import { openai } from "@ai-sdk/openai";
+import { generateText, stepCountIs } from "ai";
+import { dent8Tools } from "dent8/ai";
+
+const { text } = await generateText({
+  model: openai("gpt-4o-mini"),
+  tools: dent8Tools({ source: "source:agent", authority: "low" }),
+  stopWhen: stepCountIs(8),
+  prompt: "Record that repo:myproj uses postgres, then read it back and say why it is believed.",
+});
+```
+
+```sh
+npm i dent8 ai @ai-sdk/openai tsx
+export OPENAI_API_KEY=...
+export DENT8_LOG=.dent8/agent-memory.jsonl   # or a DENT8_STORE_URL backend
+npx tsx dent8_tools_agent.ts
+```
+
+The tools expose *what* to record (subject, predicate, value); the **source and authority are
+your configuration, not LLM arguments**, so the agent can't escalate its own authority — a
+`authority: "low"` agent proposes facts but never overrides a human's. A refused write comes
+back as a tool result the agent reads, not an exception. Without `OPENAI_API_KEY` the sample
+prints the wired tool set and exits — a quick local wiring check.
+
+## Over MCP
+
+The language-agnostic path: expose `dent8 mcp serve` as an MCP tool source and let the AI SDK
+discover dent8's tools. [`dent8_memory_agent.ts`](dent8_memory_agent.ts) uses the AI SDK's MCP
 client for local stdio development:
 
 ```ts
@@ -33,27 +69,29 @@ const mcpClient = await createMCPClient({
 const tools = await mcpClient.tools();
 ```
 
-## Run
-
 ```sh
 npm i ai @ai-sdk/mcp @ai-sdk/openai @modelcontextprotocol/sdk tsx
 export OPENAI_API_KEY=...
-
 dent8 init --identity --source source:vercel-ai-sdk
-
 npx tsx dent8_memory_agent.ts
 ```
 
 If `OPENAI_API_KEY` is not set, the sample still connects to dent8, lists the MCP tools, and
-exits before calling a model. That gives you a quick local wiring check.
+exits before calling a model.
+
+## Which to use
+
+- **First-class tools** own the identity in your process: `source`/`authority` are code, the
+  agent can't touch them, and there is no subprocess. Simplest for a TypeScript app you
+  control.
+- **MCP** is the choice when you want the signed-identity envelope (`dent8 init --identity`),
+  a `dent8 mcp serve` sidecar shared across processes, or one integration path across many
+  languages.
 
 ## Notes
 
-- Stdio MCP is local-development only in the AI SDK docs. For production, expose dent8 through
-  a remote MCP transport when dent8 grows one, or keep it as a trusted sidecar in the same
-  runtime boundary.
-- The source id used by the prompt is `source:vercel-ai-sdk`. `dent8 init --identity --source
-  source:vercel-ai-sdk` creates the authority grant and signed identity files the sample uses.
+- Stdio MCP is local-development only in the AI SDK docs. For production, keep dent8 as a
+  trusted sidecar in the same runtime boundary, or use the first-class tools in-process.
 - For operational persistence, run dent8 with `DENT8_STORE_URL`. `sqlite://` works in the
-  stock build; `postgres://` needs a `--features postgres` build. The AI SDK integration
-  remains just a caller; dent8 remains the memory firewall.
+  stock build; `postgres://` needs a `--features postgres` build. Either way dent8 remains the
+  memory firewall; the AI SDK integration is just a caller.

@@ -52,13 +52,50 @@ The belief surface maps 1:1 onto the CLI: `assertFact`, `supersede`, `contradict
 `explain`, `replay`, `facts`, `verify`, `conflicts`. Temporal options accept the
 CLI's whole grammar — unix millis, `"now"`, `"-7d"`, RFC 3339, or a bare UTC date.
 
-For LLM tool-calling agents in any JS/TS framework — the Vercel AI SDK, LangChain.js,
-Mastra, or your own — connect to the MCP server (`dent8 mcp serve`, over stdio / the local
-daemon / HTTP), which exposes the whole belief surface as MCP tools. See
+## Framework tools
+
+For LLM tool-calling agents, the package ships **first-class tools** for the two big
+TypeScript frameworks — native tool objects built on this SDK (no MCP subprocess to keep in
+sync), with typed arguments and firewall refusals surfaced to the model *as tool results* it
+reads and adapts to.
+
+**Vercel AI SDK** — `npm i ai`:
+
+```ts
+import { generateText } from "ai";
+import { openai } from "@ai-sdk/openai";
+import { dent8Tools } from "dent8/ai";
+
+const { text } = await generateText({
+  model: openai("gpt-4o"),
+  tools: dent8Tools({ source: "source:agent", authority: "low" }),
+  prompt: "Record that repo:acme deploys to fly.io, then read it back.",
+});
+```
+
+**LangChain.js** — `npm i @langchain/core`:
+
+```ts
+import { dent8Tools } from "dent8/langchain";
+import { createReactAgent } from "@langchain/langgraph/prebuilt";
+
+const agent = createReactAgent({
+  llm,
+  tools: dent8Tools({ source: "source:agent", authority: "low" }),
+});
+```
+
+Both give you `dent8_record_fact` / `dent8_revise_fact` / `dent8_dispute_fact` /
+`dent8_explain_fact` / `dent8_list_facts` / `dent8_verify`. They expose *what* to record
+(subject, predicate, value); **source and authority are your configuration, not LLM
+arguments**, so the agent cannot escalate its own authority. See
 [examples/vercel-ai-sdk](https://github.com/xyzzylabs/dent8/tree/main/examples/vercel-ai-sdk)
-and [examples/langchain](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain).
-This SDK is for *programmatic* access from TypeScript/JavaScript. (Python has a first-class
-`dent8.langchain` toolkit; a native TS adapter is a possible follow-up.)
+and [examples/langchain-js](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain-js).
+
+For another framework (LlamaIndex-TS, Mastra, your own), `import { dent8ToolSpecs } from
+"dent8/tools"` gives the same six tools as framework-agnostic specs (name, description,
+JSON-Schema, `execute`) with zero extra dependencies — wrap each in your framework's tool
+object. Or connect any MCP client to `dent8 mcp serve` (over stdio / the local daemon / HTTP).
 
 ## Test
 

@@ -9,14 +9,21 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { Dent8, Dent8Invalid, Dent8Rejected, SCHEMA_VERSION } from "../dist/index.js";
 
-const BINARY =
-  process.env.DENT8_BIN ??
-  (spawnSync("dent8", ["--version"], { encoding: "utf8" }).status === 0 ? "dent8" : undefined);
+// Resolve a relative DENT8_BIN to absolute — the tests set `cwd` to a tmp store, so a
+// relative binary path would no longer resolve from there (a bare PATH name is left alone).
+const RAW = process.env.DENT8_BIN;
+const BINARY = RAW
+  ? RAW.includes("/")
+    ? resolve(RAW)
+    : RAW
+  : spawnSync("dent8", ["--version"], { encoding: "utf8" }).status === 0
+    ? "dent8"
+    : undefined;
 const skip = BINARY ? false : "no dent8 binary (set DENT8_BIN or install dent8-cli)";
 
 /** A client pinned to a throwaway store in permissive dev mode: every ambient DENT8_*

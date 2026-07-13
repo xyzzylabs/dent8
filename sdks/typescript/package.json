@@ -7,7 +7,10 @@
     "memory",
     "provenance",
     "firewall",
-    "mcp"
+    "mcp",
+    "tools",
+    "ai-sdk",
+    "langchain"
   ],
   "license": "(Apache-2.0 OR MIT)",
   "repository": {
@@ -21,6 +24,18 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./ai": {
+      "types": "./dist/ai.d.ts",
+      "default": "./dist/ai.js"
+    },
+    "./langchain": {
+      "types": "./dist/langchain.d.ts",
+      "default": "./dist/langchain.js"
+    },
+    "./tools": {
+      "types": "./dist/tools.d.ts",
+      "default": "./dist/tools.js"
     }
   },
   "files": [
@@ -32,10 +47,24 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "npm run build && node --test tests/client.test.mjs"
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@langchain/core": ">=0.3",
+    "ai": ">=5"
+  },
+  "peerDependenciesMeta": {
+    "@langchain/core": {
+      "optional": true
+    },
+    "ai": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@langchain/core": "^0.3",
     "@types/node": "^26.1.1",
+    "ai": "^5",
     "typescript": "^5.5"
   }
 }

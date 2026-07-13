@@ -10,6 +10,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **First-class TypeScript tools for the Vercel AI SDK and LangChain.js** (`dent8/ai`,
+  `dent8/langchain`; roadmap: framework adapters). The `npm i dent8` package now exports
+  native tool objects built on the SDK — `dent8Tools({ source, authority })` returns
+  `dent8_record_fact` / `dent8_revise_fact` / `dent8_dispute_fact` / `dent8_explain_fact` /
+  `dent8_list_facts` / `dent8_verify` as Vercel AI SDK tools (keyed by name) or LangChain.js
+  `StructuredTool`s — no MCP subprocess to keep in sync. As with the Python toolkit, the tools
+  expose *what* to record (subject, predicate, value); **source and authority are deployment
+  configuration, not LLM arguments**, so an agent wired at `authority: "low"` cannot escalate
+  its own authority, and a refused write comes back as a tool result it reads and adapts to.
+  `ai` / `@langchain/core` are optional peer dependencies (the SDK core stays
+  zero-dependency); a framework-agnostic `dent8/tools` (`dent8ToolSpecs`) covers any other
+  framework. Tested against the real binary + both frameworks in CI.
 - **First-class LangChain tools** (`dent8.langchain`, `pip install "dent8[langchain]"`;
   roadmap: framework adapters). Native LangChain `StructuredTool`s over the belief surface,
   built on the `dent8` SDK — no MCP subprocess, typed args: `dent8_tools(source=…,

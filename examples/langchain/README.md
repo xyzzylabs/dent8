@@ -65,6 +65,11 @@ memory.
 
 ## LangChain.js (TypeScript)
 
+> For a TypeScript app, prefer the **first-class** `dent8/langchain` tools (native
+> LangChain.js tools built on `npm i dent8`, no MCP subprocess) — see
+> [`../langchain-js/`](../langchain-js/). The MCP-adapters route below is the language-agnostic
+> alternative.
+
 [`dent8_memory_agent.ts`](dent8_memory_agent.ts) is the same agent in TypeScript, using
 [`@langchain/mcp-adapters`](https://github.com/langchain-ai/langchainjs/tree/main/libs/langchain-mcp-adapters)
 — the JS twin of the Python adapter:
@@ -95,8 +100,10 @@ The same `dent8 mcp serve` server is framework- and language-agnostic — any MC
 Point each at `{ command: "dent8", args: ["mcp", "serve"] }`:
 
 - **LlamaIndex** (Python): `llama-index-tools-mcp`.
-- **Vercel AI SDK** (TypeScript): see [`../vercel-ai-sdk/`](../vercel-ai-sdk/).
-- **Mastra** (TypeScript): its `MCPClient` MCP tools.
+- **Vercel AI SDK** (TypeScript): first-class `dent8/ai` tools, see
+  [`../vercel-ai-sdk/`](../vercel-ai-sdk/).
+- **Mastra** (TypeScript): its `MCPClient` MCP tools, or wrap `dent8ToolSpecs` from
+  `dent8/tools`.
 
 ## Notes
 
@@ -106,5 +113,6 @@ Point each at `{ command: "dent8", args: ["mcp", "serve"] }`:
   generated `.dent8/env` + `.dent8/identity-<source>.env` variables into the process that launches
   `dent8 mcp serve`. For an operational backend, set `DENT8_STORE_URL` (a `postgres://…` /
   `sqlite://…` build). dent8 stays the firewall; the framework just calls it.
-- An ergonomic native client (`pip install dent8` / `npm i dent8` with first-class framework
-  adapters) is on the [roadmap](../../docs/roadmap.md#later); today MCP is the integration path.
+- First-class framework adapters now ship for LangChain (Python, `dent8.langchain`), the
+  Vercel AI SDK (`dent8/ai`), and LangChain.js (`dent8/langchain`); MCP remains the
+  language-agnostic path for every other client.
