@@ -3205,12 +3205,26 @@ fn now_millis() -> TimestampMillis {
 /// unique predicate — so a torn write or external edit that orphaned a believed fact is
 /// rejected loudly rather than silently masked by `explain`.
 fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
+    let (store, corrupt) = load_store_reporting(path)?;
+    // Everyday reads are resilient: a skipped corrupt line is reported on stderr (never silent)
+    // but does not fail the load. `verify_log` is the strict integrity oracle that instead
+    // *fails* on any corrupt line — see [`load_store_reporting`].
+    report_corrupt_lines(path, &corrupt);
+    Ok(store)
+}
+
+/// Load the file dev store, returning the rehydrated store **and** the 1-based line numbers of
+/// any corrupt lines that were skipped (empty for a backend store, which parses server-side).
+/// Corrupt lines are non-fatal here so one torn line cannot brick everyday reads; the two
+/// callers differ in what they do with the skip list: [`load_store`] reports it on stderr and
+/// continues, while [`verify_log`] treats a non-empty list as an integrity failure.
+fn load_store_reporting(path: &str) -> Result<(InMemoryEventStore, Vec<usize>), String> {
     // Backend selection lives here (and in `append_events`) so every `op_*` is backend-aware
     // with no changes of its own. With `DENT8_STORE_URL` set and a matching backend feature,
     // reads/writes go to that operational store; otherwise to the file dev store.
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
-        return backend_load(&url);
+        return backend_load(&url).map(|store| (store, Vec::new()));
     }
     #[cfg(not(feature = "async-store"))]
     if store_url().is_some() {
@@ -3225,28 +3239,61 @@ fn load_store(path: &str) -> Result<InMemoryEventStore, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(format!("cannot read {path}: {error}")),
     };
+    let (events, corrupt) = parse_jsonl_events(&contents);
+    let store = InMemoryEventStore::from_trusted_events(events)
+        .map_err(|error| format!("cannot load {path}: {error}"))?;
+    validate_unique_log(&store, now_millis()).map_err(|error| format!("{path}: {error}"))?;
+    Ok((store, corrupt))
+}
+
+/// Parse the JSONL dev-store `contents` into events, tolerating **corrupt** lines: a line that
+/// fails to parse is skipped (not fatal) and its 1-based number recorded, so one torn or garbage
+/// line cannot brick the whole store. Blank lines are skipped silently. The caller reports any
+/// skipped lines to stderr via [`report_corrupt_lines`] — the skip is never silent. Returns the
+/// parsed events (in file order) and the sorted list of corrupt line numbers.
+///
+/// Note this is only *parse* resilience: a well-formed but duplicate `event_id`, or a torn
+/// believed-fact set, is a different integrity condition still caught by
+/// `InMemoryEventStore::from_trusted_events` / `validate_unique_log`.
+fn parse_jsonl_events(contents: &str) -> (Vec<FactEvent>, Vec<usize>) {
     let mut events = Vec::new();
+    let mut corrupt = Vec::new();
     for (line_no, line) in contents.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let event: FactEvent = serde_json::from_str(line)
-            .map_err(|error| format!("{path}:{}: corrupt event: {error}", line_no + 1))?;
-        events.push(event);
+        match serde_json::from_str::<FactEvent>(line) {
+            Ok(event) => events.push(event),
+            Err(_) => corrupt.push(line_no + 1),
+        }
     }
-    let store = InMemoryEventStore::from_trusted_events(events)
-        .map_err(|error| format!("cannot load {path}: {error}"))?;
-    validate_unique_log(&store, now_millis()).map_err(|error| format!("{path}: {error}"))?;
-    Ok(store)
+    (events, corrupt)
+}
+
+/// Report skipped corrupt lines to stderr so a resilient load never *silently* swallows a torn
+/// or garbage line. No-op when there were none.
+fn report_corrupt_lines(path: &str, corrupt: &[usize]) {
+    if corrupt.is_empty() {
+        return;
+    }
+    let lines = corrupt
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!(
+        "warning: skipped {} corrupt line(s) in {path} (lines: {lines})",
+        corrupt.len()
+    );
 }
 
 /// The event log as a raw, ordered `Vec<FactEvent>` — the same global append order
 /// [`load_store`] reads, but **without** the trusted-reload integrity gate
 /// (`validate_unique_log`). The witness must be the *authoritative* tamper oracle: it has to
 /// render its own `TAMPER`/`ROLLBACK` verdict even on a log the integrity gate would reject,
-/// rather than be preempted by that gate's error. A genuinely unparseable line is still a hard
-/// error (nothing to witness).
+/// rather than be preempted by that gate's error. A genuinely unparseable line is skipped and
+/// reported to stderr (one corrupt line must not brick the witness) — see [`parse_jsonl_events`].
 fn load_raw_events(path: &str) -> Result<Vec<FactEvent>, String> {
     #[cfg(feature = "async-store")]
     if let Some(url) = store_url() {
@@ -3265,16 +3312,8 @@ fn load_raw_events(path: &str) -> Result<Vec<FactEvent>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => return Err(format!("cannot read {path}: {error}")),
     };
-    let mut events = Vec::new();
-    for (line_no, line) in contents.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let event: FactEvent = serde_json::from_str(line)
-            .map_err(|error| format!("{path}:{}: corrupt event: {error}", line_no + 1))?;
-        events.push(event);
-    }
+    let (events, corrupt) = parse_jsonl_events(&contents);
+    report_corrupt_lines(path, &corrupt);
     Ok(events)
 }
 
@@ -3472,9 +3511,23 @@ fn verify_log(path: &str) -> Result<String, String> {
                 .to_string(),
         );
     }
-    // `load_store` already runs `validate_unique_log`, so a load error *is* an integrity
-    // failure — surface it as one.
-    let store = load_store(path).map_err(|error| format!("INTEGRITY FAILURE: {error}"))?;
+    // `load_store_reporting` already runs `validate_unique_log`, so a load error *is* an
+    // integrity failure — surface it as one. Unlike an everyday read, `verify` is the strict
+    // integrity oracle: a corrupt (unparseable) line is not silently skipped here — it is a
+    // structural failure, so a log with any corrupt line fails verification.
+    let (store, corrupt) =
+        load_store_reporting(path).map_err(|error| format!("INTEGRITY FAILURE: {error}"))?;
+    if !corrupt.is_empty() {
+        let lines = corrupt
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "INTEGRITY FAILURE: {} corrupt line(s) in {path} (lines: {lines})",
+            corrupt.len()
+        ));
+    }
     // The file store keeps no stored per-event hash, so re-folding only confirms the events
     // canonicalize cleanly — it is NOT a reference to detect a content edit against (a tampered
     // log just re-hashes to a different but self-consistent chain). Real tamper-detection over
@@ -4395,6 +4448,48 @@ fn base(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_jsonl_events_skips_corrupt_and_blank_lines_and_reports_them() {
+        // Two well-formed event lines (parse-time only checks the JSON is a FactEvent).
+        let one = serde_json::to_string(&assert_event(
+            "event:0",
+            "fact:repo:app:database:0",
+            "repo",
+            "app",
+            "database",
+            "postgres",
+            "source:a",
+            AuthorityLevel::High,
+        ))
+        .expect("serialize event 1");
+        let two = serde_json::to_string(&assert_event(
+            "event:1",
+            "fact:repo:app:language:1",
+            "repo",
+            "app",
+            "language",
+            "rust",
+            "source:b",
+            AuthorityLevel::High,
+        ))
+        .expect("serialize event 2");
+
+        // valid / blank / corrupt / valid
+        let contents = format!("{one}\n\n{{ not json !!!\n{two}\n");
+        let (events, corrupt) = parse_jsonl_events(&contents);
+        // Both parseable events survive; the blank line is skipped silently; the garbage line
+        // (1-based line 3) is recorded as corrupt, not fatal.
+        assert_eq!(events.len(), 2);
+        assert_eq!(corrupt, vec![3]);
+    }
+
+    #[test]
+    fn parse_jsonl_events_on_all_valid_reports_nothing() {
+        let (events, corrupt) = parse_jsonl_events("");
+        assert!(events.is_empty());
+        assert!(corrupt.is_empty());
+    }
 
     #[test]
     fn parse_duration_ms_accepts_unit_suffixes() {

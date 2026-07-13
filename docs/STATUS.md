@@ -575,14 +575,19 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
 
 `assert`/`explain` persist across invocations via a **local file-backed log**
 (`DENT8_LOG`, default `./dent8-log.jsonl`), rehydrated through the store's trusted-reload
-path. This is a **dev store, not the operational backend**: it is single-writer (no
-concurrency control — two processes appending at once can interleave), non-transactional,
-and single-user. A long-lived `dent8 mcp serve` sharing one `DENT8_LOG` with ad-hoc CLI
-runs makes that race more reachable; corruption is *detected* on the next load
-(`validate_unique_log` rejects a duplicated belief, a duplicate `event_id` wedges the
-reload), not silently believed — but the operational store with atomic append + isolation
-is **Postgres**. The file backend exists so the firewall loop is usable and to prove
-a *second* `EventStore` backend behind the same contract.
+path. This is a **dev store, not the operational backend**: it is non-transactional and
+single-user. Concurrent `dent8` writers on the same file **serialize through the firewall**:
+each write takes an exclusive OS file lock (advisory `flock`/`LockFileEx`, via `fs4`) on a
+sibling `<log>.lock`, held across the whole `load → arbitrate → append` critical section, so
+two processes appending at once queue rather than both loading the same snapshot and racing
+past arbitration. The lock only serializes cooperating `dent8` processes on the same
+host/filesystem — a process that bypasses `dent8` and edits the file directly is still out of
+scope (that tamper is *detected*, not prevented — see the threat model). Reload is also
+resilient: a single corrupt/garbage line is skipped and reported on stderr rather than
+bricking the whole store, while a duplicated belief (`validate_unique_log`) or a duplicate
+`event_id` is still surfaced loudly on the next load. The operational store with atomic
+append + isolation is still **Postgres**; the file backend exists so the firewall loop is
+usable and to prove a *second* `EventStore` backend behind the same contract.
 
 `explain` exits 0 whenever a fact exists (believed *or* terminal — a retracted/superseded
 fact still has an auditable receipt) and exits 1 only when no fact exists for the

@@ -19,6 +19,8 @@
 # The CLI's default file-backed event log (DENT8_LOG) and authority registry (DENT8_AUTHORITY).
 /dent8-log.jsonl
 dent8-log.jsonl
+# The exclusive-write lock sibling(s) of the file dev store (<log>.lock).
+*.jsonl.lock
 /dent8-authority.json
 dent8-authority.json
 

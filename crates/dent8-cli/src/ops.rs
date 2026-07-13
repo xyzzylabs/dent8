@@ -516,19 +516,25 @@ pub(crate) fn with_write_retry(
 
 /// The held backend write lease, whichever backend produced it. Pure RAII — the payload is
 /// never read; dropping it releases the backend's lock.
-#[cfg(any(feature = "sqlite", feature = "postgres"))]
 #[allow(dead_code)] // the payloads exist for their Drop impls
 enum BackendWriteLease {
+    /// The default file dev store's exclusive OS lock, held across the whole
+    /// read-arbitrate-append critical section so concurrent `dent8` writers serialize through
+    /// the firewall on the same file.
+    File(FileWriteLease),
     #[cfg(feature = "sqlite")]
     Sqlite(dent8_store_sqlite::WriteLease),
     #[cfg(feature = "postgres")]
     Postgres(dent8_store_postgres::WriteLease),
 }
 
-/// Placeholder when no leasing backend is compiled in; non-`Copy` so the shared lease scope
-/// in `with_write_retry` stays meaningful.
-#[cfg(not(any(feature = "sqlite", feature = "postgres")))]
-struct BackendWriteLease;
+/// An exclusive advisory OS lock (flock on Unix, `LockFileEx` on Windows, via the standard
+/// library's `File::lock`) on the file dev store's sibling lockfile (`<log>.lock`). Pure RAII:
+/// dropping the handle closes the fd and releases the lock. A dedicated lockfile — rather than
+/// the append fd itself — keeps the lock independent of the log's open/append lifecycle.
+struct FileWriteLease {
+    _file: std::fs::File,
+}
 
 /// Bound on how long one writer waits for another's decide+commit cycle before reporting
 /// retryable contention. Generous on purpose: a queue draining at tens of writes/second
@@ -537,50 +543,94 @@ struct BackendWriteLease;
 const WRITE_LEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Acquire the active backend's cross-process write lease: a sidecar-database `BEGIN
-/// IMMEDIATE` for `sqlite://` stores, a session advisory lock for `postgres://` stores,
-/// `None` for stores that need none (the file dev store never produces a durable write
-/// conflict, and an in-memory database is per-process — its single-connection pool already
-/// serializes writers, and a `-lease` sidecar would be a stray file). Waiting is bounded by
-/// the lease timeout; expiry surfaces as a retryable conflict message.
-#[allow(clippy::unnecessary_wraps)] // the Err path exists only in leasing-backend builds
+/// IMMEDIATE` for `sqlite://` stores, a session advisory lock for `postgres://` stores, and an
+/// exclusive OS file lock (flock/`LockFileEx`) on `<log>.lock` for the **default file dev
+/// store**, so two concurrent `dent8` writers on the same file serialize through the firewall
+/// across the whole `load_store → arbitrate → append_events` span (the lease is held by
+/// [`with_write_retry`] for the lifetime of the `op` call). `None` only for stores that need no
+/// held lease (an in-memory database is per-process — its single-connection pool already
+/// serializes writers, and a `-lease` sidecar would be a stray file). The file lock **blocks**
+/// until it can be acquired — serialization is the goal, so a waiting writer queues rather than
+/// proceeding unlocked. Backend leases wait bounded by the lease timeout; expiry surfaces as a
+/// retryable conflict message.
 fn acquire_backend_write_lease() -> Result<Option<BackendWriteLease>, String> {
-    #[cfg(any(feature = "sqlite", feature = "postgres"))]
     if let Some(url) = crate::store_url() {
-        // The scheme is everything before the first `:` (RFC 3986), case-insensitive —
-        // matching `connect_backend`'s dispatch.
-        let lowered = url.to_ascii_lowercase();
-        let scheme = lowered.split_once(':').map_or("", |(scheme, _)| scheme);
-        #[cfg(feature = "sqlite")]
-        if scheme == "sqlite" {
-            if lowered.contains(":memory:") || lowered.contains("mode=memory") {
-                return Ok(None);
-            }
-            let runtime =
-                crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
-            return runtime
-                .block_on(dent8_store_sqlite::SqliteEventStore::acquire_write_lease(
-                    &url,
-                    WRITE_LEASE_TIMEOUT,
-                ))
-                .map(|lease| Some(BackendWriteLease::Sqlite(lease)))
-                .map_err(|error| format!("write lease: {error}"));
-        }
-        #[cfg(feature = "postgres")]
-        if scheme == "postgres" || scheme == "postgresql" {
-            let runtime =
-                crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
-            return runtime
-                .block_on(
-                    dent8_store_postgres::PostgresEventStore::acquire_write_lease(
+        #[cfg(any(feature = "sqlite", feature = "postgres"))]
+        {
+            // The scheme is everything before the first `:` (RFC 3986), case-insensitive —
+            // matching `connect_backend`'s dispatch.
+            let lowered = url.to_ascii_lowercase();
+            let scheme = lowered.split_once(':').map_or("", |(scheme, _)| scheme);
+            #[cfg(feature = "sqlite")]
+            if scheme == "sqlite" {
+                if lowered.contains(":memory:") || lowered.contains("mode=memory") {
+                    return Ok(None);
+                }
+                let runtime =
+                    crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
+                return runtime
+                    .block_on(dent8_store_sqlite::SqliteEventStore::acquire_write_lease(
                         &url,
                         WRITE_LEASE_TIMEOUT,
-                    ),
-                )
-                .map(|lease| Some(BackendWriteLease::Postgres(lease)))
-                .map_err(|error| format!("write lease: {error}"));
+                    ))
+                    .map(|lease| Some(BackendWriteLease::Sqlite(lease)))
+                    .map_err(|error| format!("write lease: {error}"));
+            }
+            #[cfg(feature = "postgres")]
+            if scheme == "postgres" || scheme == "postgresql" {
+                let runtime =
+                    crate::store_runtime().map_err(|error| format!("write lease: {error}"))?;
+                return runtime
+                    .block_on(
+                        dent8_store_postgres::PostgresEventStore::acquire_write_lease(
+                            &url,
+                            WRITE_LEASE_TIMEOUT,
+                        ),
+                    )
+                    .map(|lease| Some(BackendWriteLease::Postgres(lease)))
+                    .map_err(|error| format!("write lease: {error}"));
+            }
         }
+        // A store URL is set (an operational backend, or a build with no async backend that
+        // will error in `load_store`): the file-store lock does not apply.
+        #[cfg(not(any(feature = "sqlite", feature = "postgres")))]
+        let _ = &url;
+        return Ok(None);
     }
-    Ok(None)
+    // No store URL: the default file dev store. Take an exclusive OS lock over the whole
+    // read-arbitrate-append critical section.
+    Ok(Some(BackendWriteLease::File(acquire_file_write_lease()?)))
+}
+
+/// Take the file dev store's exclusive write lock. The lock file is a sibling `<log>.lock` of
+/// the resolved log path — a dedicated lockfile so the lock is independent of the append fd's
+/// lifecycle. Its parent directory (e.g. `.dent8/`) is created if missing. Blocks until the
+/// exclusive lock is held.
+fn acquire_file_write_lease() -> Result<FileWriteLease, String> {
+    let lock_path = format!("{}.lock", crate::log_path());
+    if let Some(parent) = std::path::Path::new(&lock_path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "write lease: cannot create lock directory {}: {error}",
+                parent.display()
+            )
+        })?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|error| format!("write lease: cannot open lock file {lock_path}: {error}"))?;
+    // Cross-platform advisory exclusive lock via the standard library (`flock` on Unix,
+    // `LockFileEx` on Windows; stabilized in Rust 1.89, covered by this crate's 1.94 MSRV). The
+    // lock is released when the handle is dropped (see `FileWriteLease`).
+    file.lock()
+        .map_err(|error| format!("write lease: cannot lock {lock_path}: {error}"))?;
+    Ok(FileWriteLease { _file: file })
 }
 
 /// Capped exponential backoff with **decorrelated** per-process jitter for the write-conflict

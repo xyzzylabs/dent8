@@ -95,16 +95,24 @@ arbitrated, hashed, attested, and replayable. A low-authority or stale project f
 silently override trusted state on that path.
 
 dent8 is **not** a sandbox for a same-user process. An agent that can edit provider-native
-memory/rules files, mutate a file-backed dev log, or connect with raw database write privileges
-can route around the firewall. In that case dent8 shifts from prevention to detection and
-containment: hooks can block known native-memory writes, `verify` catches broken chains and
-unentitled attestations, and witness-published heads expose rewrites, rollback, and truncation.
+memory/rules files, directly rewrite a file-backed dev log outside `dent8`, or connect with raw
+database write privileges can route around the firewall. In that case dent8 shifts from
+prevention to detection and containment: hooks can block known native-memory writes, `verify`
+catches broken chains and unentitled attestations, and witness-published heads expose rewrites,
+rollback, and truncation. Note that *cooperating* `dent8` writers on the JSONL file store no
+longer race each other: each holds an exclusive OS file lock (advisory `flock`/`LockFileEx`)
+across load→arbitrate→append, so two concurrent `dent8 assert` processes serialize through the
+firewall instead of both loading one snapshot and appending past arbitration. That lock only
+covers processes going *through* `dent8` on the same host/filesystem — it does not stop a process
+that writes the file directly, which remains a detection (not prevention) case.
 
 Recommended hardening order:
 
 1. Run agents through MCP/CLI/daemon only; do not teach them raw store credentials.
 2. Prefer SQLite/Postgres/daemon for shared agents; treat the JSONL file store as a dev-local
-   backend for trusted use.
+   backend for trusted use. Concurrent `dent8` writers on one file now serialize through the
+   firewall under an exclusive file lock, but it remains non-transactional and single-user — not
+   a substitute for the operational backends.
 3. For Postgres, give agents a role that cannot write dent8 tables directly; keep the writer
    role inside the dent8 service/daemon.
 4. Install `dent8 hook native-memory-guard` for every agent profile that has native memory/rules

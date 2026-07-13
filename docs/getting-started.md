@@ -35,8 +35,9 @@ the binary (localhost-only; every payload comes from the same firewall path as t
 
 ## 1. Install
 
-The stock binary needs no services — it uses a local file log by default. MSRV is Rust
-**1.94**.
+The stock binary needs no services — it uses a local file log by default, and concurrent
+`dent8` writers on that file serialize through the firewall via an exclusive file lock (so
+two processes appending at once no longer race). MSRV is Rust **1.94**.
 
 **Release binaries (recommended, v0.7.3+).** The [releases page][releases] ships prebuilt
 archives for five targets, each with a `.sha256` sidecar (built with `postgres,sqlite`):
