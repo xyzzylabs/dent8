@@ -198,9 +198,17 @@ dent8 agent add --agent cursor
 dent8 doctor --all-agents --write-check
 ```
 
-See [examples/mcp/](examples/mcp/) and the per-agent example directories, or wire dent8 in
-over MCP from [LangChain](examples/langchain/) / the
-[Vercel AI SDK](examples/vercel-ai-sdk/).
+Because it speaks MCP, **any MCP-capable client** works — the shortcuts above, Claude
+Desktop, or your own. For code-first agent frameworks there are two paths:
+
+- **First-class tools** — LangChain (Python) has a native toolkit today:
+  `pip install "dent8[langchain]"`, then `from dent8.langchain import dent8_tools` (the agent
+  writes at a configured authority it can't escalate; refused writes come back as results it
+  can read). See [examples/langchain/](examples/langchain/).
+- **Over MCP or the SDKs** — every other framework (LangChain.js, LlamaIndex, the Vercel AI
+  SDK, Mastra, …) connects to `dent8 mcp serve` or drives the thin `pip install dent8` /
+  `npm i dent8` SDKs — see [examples/mcp/](examples/mcp/) and
+  [examples/vercel-ai-sdk/](examples/vercel-ai-sdk/).
 
 To close the loop without MCP, wire the session bookends into provider hooks: a
 `SessionStart` hook injects `dent8 context` (the believed facts, with authority and

@@ -52,11 +52,13 @@ The belief surface maps 1:1 onto the CLI: `assertFact`, `supersede`, `contradict
 `explain`, `replay`, `facts`, `verify`, `conflicts`. Temporal options accept the
 CLI's whole grammar — unix millis, `"now"`, `"-7d"`, RFC 3339, or a bare UTC date.
 
-For LLM tool-calling agents, prefer the MCP server (`dent8 mcp serve`) — see
-[examples/langchain](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain)
-and
-[examples/vercel-ai-sdk](https://github.com/xyzzylabs/dent8/tree/main/examples/vercel-ai-sdk).
-This SDK is for *programmatic* access from TypeScript/JavaScript.
+For LLM tool-calling agents in any JS/TS framework — the Vercel AI SDK, LangChain.js,
+Mastra, or your own — connect to the MCP server (`dent8 mcp serve`, over stdio / the local
+daemon / HTTP), which exposes the whole belief surface as MCP tools. See
+[examples/vercel-ai-sdk](https://github.com/xyzzylabs/dent8/tree/main/examples/vercel-ai-sdk)
+and [examples/langchain](https://github.com/xyzzylabs/dent8/tree/main/examples/langchain).
+This SDK is for *programmatic* access from TypeScript/JavaScript. (Python has a first-class
+`dent8.langchain` toolkit; a native TS adapter is a possible follow-up.)
 
 ## Test
 
