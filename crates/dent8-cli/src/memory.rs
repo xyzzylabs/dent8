@@ -777,26 +777,30 @@ pub(crate) fn import_outcome(
             });
             continue;
         }
-        let (status, message) =
-            match crate::capture::apply_proposal(path, &proposal.json, flag_authority, flag_source)
-            {
-                Ok(message) if message.starts_with("CONTESTED") => {
-                    outcome.contested += 1;
-                    (Status::Contested, message)
-                }
-                Ok(message) => {
-                    outcome.accepted += 1;
-                    (Status::Accepted, message)
-                }
-                Err(OpError::Invalid { message, .. }) => {
-                    outcome.invalid += 1;
-                    (Status::Invalid, message)
-                }
-                Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
-                    outcome.rejected += 1;
-                    (Status::Rejected, message)
-                }
-            };
+        let (status, message) = match crate::capture::apply_proposal(
+            path,
+            &proposal.json,
+            flag_authority,
+            flag_source,
+            &crate::WriteIdentity::Env,
+        ) {
+            Ok(message) if message.starts_with("CONTESTED") => {
+                outcome.contested += 1;
+                (Status::Contested, message)
+            }
+            Ok(message) => {
+                outcome.accepted += 1;
+                (Status::Accepted, message)
+            }
+            Err(OpError::Invalid { message, .. }) => {
+                outcome.invalid += 1;
+                (Status::Invalid, message)
+            }
+            Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
+                outcome.rejected += 1;
+                (Status::Rejected, message)
+            }
+        };
         outcome.results.push(ImportLineResult {
             line: proposal.line,
             rule: proposal.rule,

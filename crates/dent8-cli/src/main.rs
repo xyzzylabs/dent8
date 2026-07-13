@@ -690,9 +690,19 @@ struct InitArgs {
     /// Maximum authority for the granted source.
     #[arg(long, value_enum, default_value = "high")]
     authority: CliAuthority,
-    /// Also bootstrap signed source identity for this source.
+    /// Also bootstrap signed source identity for this source. Signed identity is now
+    /// provisioned **by default** (see `--no-identity`), so this flag is retained only for
+    /// backward compatibility and is a no-op unless `--no-identity` is also unset.
     #[arg(long)]
     identity: bool,
+    /// Skip provisioning the default signing identity. `dent8 init` normally creates a trust
+    /// root, issuer key, source key, and grant so above-agent authority (medium/high/canonical)
+    /// works out of the box. Opting out is a **secure-default trade-off**: without a signing
+    /// identity, any write claiming authority above the agent tier is REJECTED until you
+    /// configure signing (`DENT8_TRUST`/`DENT8_GRANT`/`DENT8_IDENTITY_KEY`); agent-tier writes
+    /// still work.
+    #[arg(long, conflicts_with = "identity")]
+    no_identity: bool,
     /// Stable issuer name used inside the signed identity grant.
     #[arg(long, default_value = "owner")]
     issuer: String,
@@ -2401,6 +2411,13 @@ pub(crate) enum WriteIdentity {
     /// ambient env identity. Constructed only by the Unix-socket daemon handshake.
     #[cfg(all(unix, feature = "async-store"))]
     Connection(std::sync::Arc<identity::IdentityContext>),
+    /// A test-only proven identity: a signed [`identity::IdentityContext`] threaded directly into a
+    /// write path so unit tests can exercise signed above-agent writes without process-global env
+    /// (which would leak across the shared test binary) and in every feature build (unlike
+    /// [`WriteIdentity::Connection`], which needs `async-store`). Behaves exactly like a proven
+    /// connection identity at the write seam. Never constructed outside tests.
+    #[cfg(test)]
+    TestSigned(std::sync::Arc<identity::IdentityContext>),
 }
 
 /// The write-boundary auth gate: source→authority ceiling first (authz), then optional
@@ -2435,6 +2452,8 @@ fn enforce_source_identity(auth: &WriteAuth<'_>, identity: &WriteIdentity) -> Re
         }
         #[cfg(all(unix, feature = "async-store"))]
         WriteIdentity::Connection(ctx) => identity::enforce_write(ctx, auth, now_millis()),
+        #[cfg(test)]
+        WriteIdentity::TestSigned(ctx) => identity::enforce_write(ctx, auth, now_millis()),
         WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
     }
 }
@@ -4164,6 +4183,8 @@ fn attest_events(events: &mut [FactEvent], identity: &WriteIdentity) -> Result<(
         }
         #[cfg(all(unix, feature = "async-store"))]
         WriteIdentity::Connection(ctx) => identity::attest_events(ctx, events).map(|_| ()),
+        #[cfg(test)]
+        WriteIdentity::TestSigned(ctx) => identity::attest_events(ctx, events).map(|_| ()),
         WriteIdentity::Unauthenticated => Err(UNAUTHENTICATED_WRITE_ERROR.to_string()),
     }
 }

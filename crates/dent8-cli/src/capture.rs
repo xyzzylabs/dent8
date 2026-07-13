@@ -160,6 +160,7 @@ pub(crate) fn apply_proposal(
     raw: &str,
     flag_authority: Option<CliAuthority>,
     flag_source: Option<&str>,
+    identity: &WriteIdentity,
 ) -> Result<String, OpError> {
     let proposal: Proposal = serde_json::from_str(raw)
         .map_err(|error| OpError::invalid(format!("malformed proposal: {error}")))?;
@@ -210,26 +211,25 @@ pub(crate) fn apply_proposal(
         }
         (_, None) => "",
     };
-    let identity = WriteIdentity::Env;
     let (kind, key, predicate) = (&subject.kind, &subject.key, proposal.predicate.as_str());
     // One retry wrapper around the dispatch: each attempt re-runs the whole op against a
     // fresh snapshot, exactly like the interactive write commands.
     with_write_retry(|| match op {
         "assert" => op_assert(
-            path, kind, key, predicate, value, authority, &source, validity, &identity,
+            path, kind, key, predicate, value, authority, &source, validity, identity,
         ),
         "supersede" => op_supersede(
-            path, kind, key, predicate, value, authority, &source, validity, &identity,
+            path, kind, key, predicate, value, authority, &source, validity, identity,
         ),
         "contradict" => op_contradict(
-            path, kind, key, predicate, value, authority, &source, validity, &identity,
+            path, kind, key, predicate, value, authority, &source, validity, identity,
         ),
-        "reinforce" => op_reinforce(path, kind, key, predicate, authority, &source, &identity),
-        "retract" => op_retract(path, kind, key, predicate, authority, &source, &identity),
+        "reinforce" => op_reinforce(path, kind, key, predicate, authority, &source, identity),
+        "retract" => op_retract(path, kind, key, predicate, authority, &source, identity),
         "used_in_decision" => op_used_in_decision(
-            path, kind, key, predicate, decision, authority, &source, &identity,
+            path, kind, key, predicate, decision, authority, &source, identity,
         ),
-        _ => op_expire(path, kind, key, predicate, authority, &source, &identity),
+        _ => op_expire(path, kind, key, predicate, authority, &source, identity),
     })
 }
 
@@ -240,6 +240,7 @@ pub(crate) fn capture_outcome(
     input: &str,
     flag_authority: Option<CliAuthority>,
     flag_source: Option<&str>,
+    identity: &WriteIdentity,
 ) -> CaptureOutcome {
     let mut outcome = CaptureOutcome {
         results: Vec::new(),
@@ -256,25 +257,26 @@ pub(crate) fn capture_outcome(
         if raw.is_empty() {
             continue;
         }
-        let (status, message) = match apply_proposal(path, raw, flag_authority, flag_source) {
-            Ok(message) => {
-                if message.starts_with("CONTESTED") {
-                    outcome.contested += 1;
-                    (Status::Contested, message)
-                } else {
-                    outcome.accepted += 1;
-                    (Status::Accepted, message)
+        let (status, message) =
+            match apply_proposal(path, raw, flag_authority, flag_source, identity) {
+                Ok(message) => {
+                    if message.starts_with("CONTESTED") {
+                        outcome.contested += 1;
+                        (Status::Contested, message)
+                    } else {
+                        outcome.accepted += 1;
+                        (Status::Accepted, message)
+                    }
                 }
-            }
-            Err(OpError::Invalid { message, .. }) => {
-                outcome.invalid += 1;
-                (Status::Invalid, message)
-            }
-            Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
-                outcome.rejected += 1;
-                (Status::Rejected, message)
-            }
-        };
+                Err(OpError::Invalid { message, .. }) => {
+                    outcome.invalid += 1;
+                    (Status::Invalid, message)
+                }
+                Err(OpError::Rejected { message, .. } | OpError::Conflict(message)) => {
+                    outcome.rejected += 1;
+                    (Status::Rejected, message)
+                }
+            };
         outcome.results.push(CaptureLineResult {
             line: line_no,
             status,
@@ -400,7 +402,13 @@ pub(crate) fn cmd_capture(args: &CaptureArgs, output: CliOutput) -> i32 {
             };
         }
     };
-    let mut outcome = capture_outcome(&log_path(), &input, args.authority, args.source.as_deref());
+    let mut outcome = capture_outcome(
+        &log_path(),
+        &input,
+        args.authority,
+        args.source.as_deref(),
+        &WriteIdentity::Env,
+    );
     // Consume after processing: every line was read and has a reported outcome, so the
     // queue's job is done — leaving it in place would replay the same proposals (and mint
     // duplicate uniqueness conflicts) on the next hook firing. With --keep-failed the
@@ -462,16 +470,25 @@ mod tests {
         dir.join("log.jsonl").to_string_lossy().into_owned()
     }
 
+    /// A signed identity for `source`, so a capture batch's above-agent proposals clear the identity
+    /// gate. A capture batch runs as ONE process identity, so its above-agent proposals share this
+    /// source (mirroring the real single-identity capture path).
+    fn signed(source: &str) -> WriteIdentity {
+        WriteIdentity::TestSigned(std::sync::Arc::new(crate::identity::test_signed_context(
+            source,
+        )))
+    }
+
     #[test]
     fn capture_asserts_and_supersedes_through_the_firewall() {
         let log = temp_log("assert-supersede");
         let input = concat!(
-            r#"{"subject": "repo:demo", "predicate": "uses_database", "value": "postgres", "authority": "medium", "source": "source:ci"}"#,
+            r#"{"subject": "repo:demo", "predicate": "uses_database", "value": "postgres", "authority": "medium", "source": "source:human"}"#,
             "\n",
             r#"{"op": "supersede", "subject": "repo:demo", "predicate": "uses_database", "value": "sqlite", "authority": "high", "source": "source:human"}"#,
             "\n",
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(&log, input, None, None, &signed("source:human"));
         assert_eq!(outcome.total(), 2);
         assert_eq!(outcome.accepted, 2, "{}", format_capture(&outcome));
         assert_eq!(outcome.overall().1, 0);
@@ -504,7 +521,7 @@ mod tests {
             r#"{"subject": "repo:demo", "predicate": "note", "value": "toolong", "authority": "high", "source": "source:human", "ttl": "120d"}"#,
             "\n",
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(&log, input, None, None, &signed("source:human"));
         assert_eq!(outcome.accepted, 1, "{}", format_capture(&outcome));
         assert_eq!(outcome.rejected, 1, "{}", format_capture(&outcome));
         let contents = std::fs::read_to_string(&log).expect("read capture log");
@@ -522,10 +539,10 @@ mod tests {
             r#"{"subject": "repo:demo", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
             "\n",
             // A low-authority supersession cannot out-rank the High incumbent.
-            r#"{"op": "supersede", "subject": "repo:demo", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            r#"{"op": "supersede", "subject": "repo:demo", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:human"}"#,
             "\n",
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(&log, input, None, None, &signed("source:human"));
         assert_eq!(outcome.accepted, 1);
         assert_eq!(outcome.rejected, 1, "{}", format_capture(&outcome));
         let (status, code) = outcome.overall();
@@ -545,7 +562,7 @@ mod tests {
             r#"{"op": "reinforce", "subject": "repo:demo", "predicate": "p", "value": "v"}"#,
             "\n",
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(&log, input, None, None, &WriteIdentity::Env);
         assert_eq!(outcome.invalid, 4, "{}", format_capture(&outcome));
         let (status, code) = outcome.overall();
         assert_eq!(status, Status::Invalid);
@@ -565,7 +582,7 @@ mod tests {
             r#"{"subject": "repo:demo", "predicate": "build_tool", "value": "cargo"}"#,
             "\n"
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(&log, input, None, None, &WriteIdentity::Env);
         assert_eq!(outcome.accepted, 1, "{}", format_capture(&outcome));
         assert!(
             outcome.results[0].message.contains("authority=low"),
@@ -595,7 +612,13 @@ mod tests {
             r#"{"op": "used_in_decision", "subject": "repo:demo", "predicate": "uses_database", "value": "v", "decision": "x"}"#,
             "\n",
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(
+            &log,
+            input,
+            None,
+            Some("source:human"),
+            &signed("source:human"),
+        );
         assert_eq!(outcome.accepted, 2, "{}", format_capture(&outcome));
         assert_eq!(outcome.rejected, 1, "{}", format_capture(&outcome));
         assert_eq!(outcome.invalid, 3, "{}", format_capture(&outcome));
@@ -618,11 +641,11 @@ mod tests {
             r#"{"subject": "repo:demo", "predicate": "uses_database", "value": "postgres", "authority": "high", "source": "source:human"}"#,
             "\n",
             "\n", // blank lines are skipped by the processor and never kept
-            r#"{"op": "supersede", "subject": "repo:demo", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:agent"}"#,
+            r#"{"op": "supersede", "subject": "repo:demo", "predicate": "uses_database", "value": "mysql", "authority": "low", "source": "source:human"}"#,
             "\n",
             "not json\n",
         );
-        let outcome = capture_outcome(&log, input, None, None);
+        let outcome = capture_outcome(&log, input, None, None, &signed("source:human"));
         assert_eq!(outcome.accepted, 1);
         assert_eq!(outcome.rejected, 1);
         assert_eq!(outcome.invalid, 1);
@@ -635,7 +658,7 @@ mod tests {
     #[test]
     fn empty_input_is_a_clean_no_op() {
         let log = temp_log("empty");
-        let outcome = capture_outcome(&log, "\n  \n", None, None);
+        let outcome = capture_outcome(&log, "\n  \n", None, None, &WriteIdentity::Env);
         assert_eq!(outcome.total(), 0);
         let (status, code) = outcome.overall();
         assert_eq!(status, Status::Ok);

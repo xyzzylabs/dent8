@@ -1251,6 +1251,8 @@ fn access_for(identity: &WriteIdentity) -> Access {
         WriteIdentity::Unauthenticated => Access::ReadOnly,
         #[cfg(all(unix, feature = "async-store"))]
         WriteIdentity::Connection(_) => Access::Full,
+        #[cfg(test)]
+        WriteIdentity::TestSigned(_) => Access::Full,
     }
 }
 
@@ -3026,6 +3028,8 @@ fn write_defaults(
             .map_err(ToolError::invalid),
         #[cfg(all(unix, feature = "async-store"))]
         WriteIdentity::Connection(ctx) => ctx.write_defaults().map_err(ToolError::invalid),
+        #[cfg(test)]
+        WriteIdentity::TestSigned(ctx) => ctx.write_defaults().map_err(ToolError::invalid),
         WriteIdentity::Unauthenticated => Ok(None),
     }
 }
@@ -4377,10 +4381,10 @@ mod tests {
     // (Full access). These shims pin that default so those tests read unchanged; the read-only
     // daemon tests call `raw_dispatch`/`raw_handle` with `WriteIdentity::Unauthenticated`.
     fn handle(request: &Value, path: &str) -> Option<Value> {
-        raw_handle(request, path, &WriteIdentity::Env, None)
+        raw_handle(request, path, &test_write_identity(request), None)
     }
     fn dispatch(message: &Value, path: &str) -> Option<Value> {
-        raw_dispatch(message, path, &WriteIdentity::Env)
+        raw_dispatch(message, path, &test_write_identity(message))
     }
     /// The serve-loop arity: a live [`super::SubscriptionState`] attached.
     fn handle_subscribing(
@@ -4388,7 +4392,26 @@ mod tests {
         path: &str,
         subscriptions: &super::SubscriptionState,
     ) -> Option<Value> {
-        raw_handle(request, path, &WriteIdentity::Env, Some(subscriptions))
+        raw_handle(
+            request,
+            path,
+            &test_write_identity(request),
+            Some(subscriptions),
+        )
+    }
+
+    /// The `WriteIdentity` a stdio MCP test carries: for a write tool call that names a `source`,
+    /// a signed identity for exactly that source (so above-agent writes clear the identity gate);
+    /// otherwise the ambient env identity (reads and sourceless calls do not enforce identity).
+    /// This keeps signing per-request and env-free, so it works in every feature build and never
+    /// leaks across the shared test binary.
+    fn test_write_identity(message: &Value) -> WriteIdentity {
+        match message["params"]["arguments"]["source"].as_str() {
+            Some(source) => WriteIdentity::TestSigned(std::sync::Arc::new(
+                crate::identity::test_signed_context(source),
+            )),
+            None => WriteIdentity::Env,
+        }
     }
 
     fn temp_log() -> (tempdir::Guard, String) {
@@ -5989,7 +6012,7 @@ mod tests {
             }},
         });
         assert_eq!(
-            raw_handle(&seed, &path, &WriteIdentity::Env, None).expect("seed")["result"]["isError"],
+            raw_handle(&seed, &path, &test_write_identity(&seed), None).expect("seed")["result"]["isError"],
             Value::Bool(false),
         );
 
@@ -6295,11 +6318,14 @@ mod tests {
                 "/",
                 Some("secret"),
                 &store,
+                // Agent-tier authority: the HTTP server attests with its own env identity
+                // (WriteIdentity::Env), which is unconfigured here; this test exercises the HTTP
+                // transport round-trip, not authority, so an agent-tier write needs no signing.
                 &json!({
                     "jsonrpc":"2.0","id":1,"method":"tools/call",
                     "params":{"name":"assert","arguments":{
-                        "subject":"repo:demo","predicate":"database","value":"postgres",
-                        "authority":"high","source":"source:human"}},
+                        "subject":"repo:demo","predicate":"deploy_target","value":"postgres",
+                        "authority":"low","source":"source:agent"}},
                 }),
             );
             assert_eq!(status(&write), 200);
