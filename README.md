@@ -140,10 +140,15 @@ source; verify one with `dent8 explain <subject> <predicate>`.
 
 Every line is provenance-stamped and replayable — `dent8 explain repo:dent8 gate.clippy`
 shows who asserted the lint gate and exactly why it is believed. When a fact changes, an
-agent queues a proposal to `.dent8/proposals.jsonl` and the `SessionEnd` hook flushes it
+agent queues a proposal to `.dent8/proposals.jsonl` and a `SessionEnd`-style hook flushes it
 through the firewall, so the shared fact base updates without anyone hand-editing a rules
-file. The hook wiring lives in [`.claude/settings.json`](.claude/settings.json); the setup
-story and its rough edges are in [docs/dogfooding-notes.md](docs/dogfooding-notes.md).
+file. **Four agents develop dent8 against this one store, each with its own signed source
+identity:** Claude Code and Grok Build run the full hook loop (`SessionStart` →
+`dent8 context`, `SessionEnd` → `dent8 capture`; Claude's wiring is tracked in
+[`.claude/settings.json`](.claude/settings.json)), and Codex and Cursor read it through the
+tracked [`AGENTS.md`](AGENTS.md) contract — all four via `dent8 mcp serve` with per-agent
+grants (`dent8 agent add`). The setup story and its rough edges are in
+[docs/dogfooding-notes.md](docs/dogfooding-notes.md).
 
 ## How it works
 
