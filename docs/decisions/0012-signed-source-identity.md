@@ -33,9 +33,15 @@ Add an opt-in signed source identity layer at the CLI/MCP write boundary.
   reaches the firewall. **Updated by ADR 0013:** the original ephemeral per-write payload
   signature is replaced by a *persisted* signed write attestation in `provenance.attestation`,
   signed over the whole event at the append boundary and re-verifiable offline.
-- Signed identity is **opt-in** like the authority registry. If no trust registry exists and
-  `DENT8_REQUIRE_IDENTITY` is unset, dev mode remains permissive. If a trust registry exists
-  or `DENT8_REQUIRE_IDENTITY=1`, missing/invalid grant/key material fails closed.
+- Signed identity's *configured-enforcement* is opt-in like the authority registry: if a trust
+  registry exists or `DENT8_REQUIRE_IDENTITY=1`, missing/invalid grant/key material fails closed.
+- **Update (signing-required-above-agent, BREAKING):** independently of that opt-in, a write whose
+  effective authority is *above the agent tier* (strictly greater than `low` — `medium`/`high`/
+  `canonical`) now **always requires** a valid signed identity; when unconfigured (or the grant is
+  insufficient) such a write is rejected, not trusted. Agent-tier and below stay permissive with no
+  signing. To keep the honest path working, `dent8 init` provisions a default signing identity by
+  default (opt out with `--no-identity`). This closes the unauthenticated-label bypass where an
+  unsigned `--authority high --source source:human` was believed on the label alone.
 
 ## Commands
 

@@ -20,7 +20,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   under 2 minutes once the binary is on `PATH`), use
   [`examples/on-ramp/demo.sh`](../examples/on-ramp/demo.sh).
 - **`dent8 init [--dir .dent8] [--store file|sqlite|postgres] [--store-url URL]
-  [--identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
+  [--identity] [--no-identity] [--agent codex|claude-code|cursor|grok-build|gemini|cascade|hecate]
   [--no-native-memory-guard]
   [--witness] [--witness-log PATH] [--witness-pubkey PATH]
   [--install-mcp] [--mcp-config PATH] [--mcp-command COMMAND|--mcp-local-bin]
@@ -39,10 +39,17 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   no `dent8` on `PATH` allows the write (exit 0) rather than bricking every edit. Opt out with
   `--no-native-memory-guard`; the runtime soft-off (`DENT8_HOOK_ENFORCE=0`) and sanctioned bypass
   (`DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`) still apply per write. `--agent hecate` and non-`.dent8`
-  dirs skip the guard with a note (no stable project hook file). With
-  `--identity`, it also creates a signed source identity bundle and
-  `.dent8/identity-<source>.env`;
-  `--agent` selects the source id for a known agent and implies `--identity`. With
+  dirs skip the guard with a note (no stable project hook file). **By default it now provisions a
+  signed source identity** (trust root + operator issuer key + source key + grant) and writes the
+  identity env vars (`DENT8_TRUST`, `DENT8_ACTIVE_GRANTS`, `DENT8_GRANT`, `DENT8_IDENTITY_KEY`,
+  `DENT8_REQUIRE_IDENTITY=1`) into the shared `.dent8/env`, so a freshly-init'd project can make
+  signed above-agent (`medium`/`high`/`canonical`) writes with just `. .dent8/env` — the honest side
+  of the signing-required-above-agent default. A re-init reuses the existing identity idempotently
+  (it never clobbers key material, so `--force` is safe). Opt out with `--no-identity`: no signing
+  identity is provisioned and above-agent writes stay rejected until you configure signing (the
+  secure default, not a bug). `--identity` is retained (now the default); for `--agent` bundles the
+  identity stays per-agent (`.dent8/identity-<source>.env`, sourced separately) rather than embedded
+  in the shared env, and `--agent` selects the source id for a known agent. With
   `--witness`, it adds witness verification paths (`DENT8_WITNESS_LOG` and
   `DENT8_WITNESS_PUBKEY`) to the env file and creates the local signed-head log, but
   deliberately does **not** put `DENT8_WITNESS_KEY` in the writer env. With
@@ -527,10 +534,28 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   each write verifies the grant plus source-key possession before the candidate event reaches
   the firewall, and every accepted write persists a **signed write attestation**
   (`provenance.attestation`, ADR 0013) that `verify` re-checks offline — the file dev store
-  thereby detects content edits to attested events. Enforcement is opt-in like authority: if `DENT8_TRUST` exists or
-  `DENT8_REQUIRE_IDENTITY=1`, every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`; when
-  `DENT8_ACTIVE_GRANTS` or the sibling active-grant registry exists, the presented grant must
-  also be the current grant for that source. Otherwise local dev mode stays permissive.
+  thereby detects content edits to attested events. **Above-agent authority is signing-required by
+  default (BREAKING).** A write whose effective authority is *above the agent tier* — i.e. strictly
+  greater than `low` (`medium`, `high`, or `canonical`) — MUST be backed by a valid signed identity
+  attestation that proves key possession for the claimed source and authorizes that level. When
+  signed identity is not configured (or the grant is missing/invalid/insufficient), such a write is
+  now **rejected** (`unsigned write claims authority '<level>' above the agent tier …`), not trusted
+  — regardless of the opt-in `DENT8_REQUIRE_IDENTITY`/registry. This closes the old bypass where
+  `--authority high --source source:human` was an *unauthenticated label*. Writes at or below the
+  agent tier (`low`/`unknown`) stay permissive with no signing required, so ordinary local/agent use
+  is unchanged. The gate lives at the shared write boundary (`enforce_write` /
+  `enforce_write_authority`), so every write path — CLI `op_*`, `dent8 capture`/`import`, the MCP
+  tools, and the daemon — is covered. To keep the honest above-agent path working out of the box,
+  **`dent8 init` now provisions a default signing identity by default** (trust root + issuer key +
+  source key + grant, with the identity env vars written into `.dent8/env`); opt out with
+  `--no-identity` (above-agent writes are then rejected until you configure signing). The
+  *configured* enforcement below is unchanged: if `DENT8_TRUST` exists or `DENT8_REQUIRE_IDENTITY=1`,
+  every write must have `DENT8_GRANT` and `DENT8_IDENTITY_KEY`; when `DENT8_ACTIVE_GRANTS` or the
+  sibling active-grant registry exists, the presented grant must also be the current grant for that
+  source. **Migration:** run `dent8 init` (or configure `DENT8_TRUST`/`DENT8_GRANT`/
+  `DENT8_IDENTITY_KEY`) — unsigned high-authority writes that "worked" before are now rejected; lower
+  them to `--authority low` if they do not need above-agent trust. Signed identities are
+  `source:*`-scoped, so an above-agent write must come from a `source:*` identity.
   Limits: source keys are local files (`0600` required on Unix), so this distinguishes honestly
   configured agents on one machine but is not a
   sandbox against malware or another process running as the same OS user; direct DB/adapter

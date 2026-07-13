@@ -27,15 +27,21 @@ dent8 context
 ```
 
 `init` creates `.dent8/` (file log + authority registry with human > CI > agent defaults plus
-your `source:owner` grant) and, **by default, wires the enforced `PreToolUse` native-memory
-guard** into the agent's hook config (`.claude/settings.json` with no `--agent`, otherwise the
-selected agent's hook file) so raw agent edits to `CLAUDE.md`/`AGENTS.md`/… are blocked from the
-start. Opt out with `dent8 init --no-native-memory-guard`. The wired command fails **open** when
+your `source:local` grant), **by default provisions a signed source identity** (trust root +
+issuer key + source key + grant, wired into `.dent8/env`) so signed above-agent writes work out of
+the box, and, **by default, wires the enforced `PreToolUse` native-memory guard** into the agent's
+hook config (`.claude/settings.json` with no `--agent`, otherwise the selected agent's hook file)
+so raw agent edits to `CLAUDE.md`/`AGENTS.md`/… are blocked from the start. Opt out of either with
+`dent8 init --no-identity` / `--no-native-memory-guard`. **Above-agent authority now requires signing
+by default (BREAKING):** a write claiming `--authority medium/high/canonical` is rejected unless it
+carries a valid signed identity — `dent8 init` sets this up; without it, use `--authority low`
+(agent tier, still permissive) or configure signing. The wired command fails **open** when
 the binary is absent (`command -v dent8 >/dev/null 2>&1 || exit 0; …`), so a fresh clone that has
 the hook wired but no `dent8` on `PATH` allows the write rather than bricking every edit. Per
 write, `DENT8_HOOK_ENFORCE=0` softens the guard to advisory and `DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`
 is the sanctioned bypass (the reviewed `dent8 export --target` path never sets it). You do **not**
-need Postgres, identity, or MCP for the first fact.
+need Postgres or MCP for the first fact, and the signing identity that above-agent writes require is
+provisioned automatically by `init` (no extra setup).
 Optional smoke: `dent8 doctor --source source:owner --write-check`. To *see* the whole
 thing — live fact table, integrity receipts, replay timelines, an interactive what-if —
 run **`dent8 ui`**: a read-only control plane opens in your browser, served straight from
