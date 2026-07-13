@@ -46,17 +46,20 @@ set -a
 set +a
 pause_for_reader
 
-echo "# 2. Grant a low-authority source so the rejection is about arbitration, not missing authz"
+echo "# 2. Register a low-authority source (kept in the profile for completeness)"
 $DENT8 authority add source:web-scrape low >/dev/null
 pause_for_reader
 
-echo "# 3. Assert a trusted fact"
+echo "# 3. Assert a trusted fact (a signed, above-agent write from the provisioned owner identity)"
 $DENT8 assert person:alice favorite_drink tea --authority high --source source:owner
 pause_for_reader
 
 echo
 echo "# 4. Try a low-authority override; dent8 rejects it"
-if $DENT8 supersede person:alice favorite_drink coffee --authority low --source source:web-scrape; then
+# `init` provisions a signed owner identity by default, and above-agent writes now require one, so
+# the override comes from that same signed owner at LOW authority: it clears identity but the
+# firewall's arbitration refuses it (low cannot overturn a believed High), the point of the demo.
+if $DENT8 supersede person:alice favorite_drink coffee --authority low --source source:owner; then
   echo "unexpected: low-authority override was accepted" >&2
   exit 1
 fi

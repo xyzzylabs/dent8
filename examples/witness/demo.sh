@@ -98,7 +98,7 @@ run_dent8 \
 echo
 echo "# 3. Writer appends an event; signer signs the current tree head"
 run_dent8 DENT8_LOG="$LOG" \
-  assert person:alice favorite_drink tea --authority high --source user:alice
+  assert person:alice favorite_drink tea --authority low --source user:alice
 run_dent8 \
   DENT8_LOG="$LOG" \
   DENT8_WITNESS_LOG="$WITNESS_LOG" \
