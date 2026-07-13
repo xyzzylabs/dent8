@@ -160,10 +160,13 @@ jobs:
   # this workflow file (release.yml), and the `crates-io` environment below; one token then
   # authorizes all of them. `cargo publish --workspace` computes the dependency order and waits
   # for each crate to index before publishing its dependents — no hand-maintained crate list.
-  # Tag-guarded so the workflow_dispatch build smoke never publishes.
+  # Runs on tags to publish; also on workflow_dispatch as an OIDC auth smoke (the publish step
+  # is tag-guarded), so the Trusted Publishing setup can be verified without cutting a release —
+  # a successful auth step means every crate's Trusted Publisher entry matches. Same
+  # build-smoke pattern the binaries job uses.
   crates:
     name: publish crates to crates.io (trusted publishing)
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: crates-io
@@ -177,7 +180,9 @@ jobs:
       - name: Authenticate to crates.io (OIDC)
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
+      # Publish only on a real tag; a workflow_dispatch run stops after the auth smoke above.
       - name: Publish the workspace in dependency order
+        if: github.ref_type == 'tag'
         run: cargo publish --workspace --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
