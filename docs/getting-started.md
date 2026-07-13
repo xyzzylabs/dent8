@@ -11,7 +11,7 @@ one non-stale source of truth they all share.
 second of wall time for `init` → `assert` → `explain`). Timed check:
 `./examples/on-ramp/demo.sh`. The sections below expand install, multi-agent wiring, and hooks.
 
-Every command below was run against the real `dent8` v0.7.3 binary; the output blocks are
+Every command below was run against the real `dent8` v0.8.0 binary; the output blocks are
 trimmed but verbatim.
 
 ## 0. Sixty-second path (binary already installed)
@@ -53,23 +53,23 @@ The stock binary needs no services — it uses a local file log by default, and 
 `dent8` writers on that file serialize through the firewall via an exclusive file lock (so
 two processes appending at once no longer race). MSRV is Rust **1.94**.
 
-**Release binaries (recommended, v0.7.3+).** The [releases page][releases] ships prebuilt
+**Release binaries (recommended, v0.8.0+).** The [releases page][releases] ships prebuilt
 archives for five targets, each with a `.sha256` sidecar (built with `postgres,sqlite`):
 
-- `dent8-v0.7.3-aarch64-apple-darwin.tar.gz`
-- `dent8-v0.7.3-x86_64-apple-darwin.tar.gz`
-- `dent8-v0.7.3-aarch64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz`
-- `dent8-v0.7.3-x86_64-pc-windows-msvc.zip`
+- `dent8-v0.8.0-aarch64-apple-darwin.tar.gz`
+- `dent8-v0.8.0-x86_64-apple-darwin.tar.gz`
+- `dent8-v0.8.0-aarch64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.8.0-x86_64-unknown-linux-gnu.tar.gz`
+- `dent8-v0.8.0-x86_64-pc-windows-msvc.zip`
 
 Download, verify, and install one target (Linux x86_64 shown):
 
 ```sh
-BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.7.3
-curl -LO "$BASE/dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz"
-curl -LO "$BASE/dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz.sha256"
-sha256sum -c dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar xzf dent8-v0.7.3-x86_64-unknown-linux-gnu.tar.gz
+BASE=https://github.com/xyzzylabs/dent8/releases/download/v0.8.0
+curl -LO "$BASE/dent8-v0.8.0-x86_64-unknown-linux-gnu.tar.gz"
+curl -LO "$BASE/dent8-v0.8.0-x86_64-unknown-linux-gnu.tar.gz.sha256"
+sha256sum -c dent8-v0.8.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar xzf dent8-v0.8.0-x86_64-unknown-linux-gnu.tar.gz
 chmod +x dent8 && sudo mv dent8 /usr/local/bin/
 ```
 
@@ -81,8 +81,8 @@ cargo install dent8-cli --locked
 dent8 --version
 ```
 
-> The `cargo install dent8-cli --version 0.7.3 --locked` path was verified in a clean install
-> root as part of cutting v0.7.3 (the built binary reports `dent8 0.7.3`); a from-source build
+> The `cargo install dent8-cli --version 0.8.0 --locked` path was verified in a clean install
+> root as part of cutting v0.8.0 (the built binary reports `dent8 0.8.0`); a from-source build
 > takes about **3 minutes**. Only the **Parquet** analytical export
 > (`dent8 export <file>.parquet`, for DuckDB) is feature-gated — it is not in the release
 > archives and stays a `cargo install dent8-cli --features export --locked` build.
@@ -101,21 +101,32 @@ initialized dent8 in .../.dent8
   authority: .../.dent8/authority.json (granted source:local max=high)
   store: file dev log at .../.dent8/memory.jsonl
   env: .../.dent8/env
+  identity: .../.dent8/grants/source_local.grant.json (source key: .../.dent8/identities/source_local.key)
+  identity env: .../.dent8/identity-local.env
 
 Next (first fact in under a minute once `dent8` is on PATH):
   set -a
   . '.../.dent8/env'
+  . '.../.dent8/identity-local.env'
   set +a
   dent8 assert repo:myproj deploy_target production --authority high --source source:local
   dent8 explain repo:myproj deploy_target
   dent8 doctor --source source:local --write-check
+
+native-memory guard created (enforced PreToolUse hook): .../.claude/settings.json
 ```
 
-It creates a single `.dent8/` directory with three files:
+It provisions a `.dent8/` directory holding the file dev store (`memory.jsonl`), the
+authority profile (`authority.json`), the env pointers (`env`), and a signed **source
+identity** — a trust root (`trust.json`), a source keypair (`identities/`), and its grant
+(`grants/`, `active-grants.json`, `grant-log.jsonl`) wired into `.dent8/env` so above-agent
+writes can be signed. It also installs the native-memory guard, a `PreToolUse` hook in
+`.claude/settings.json`:
 
 ```
 $ ls .dent8
-authority.json  env  memory.jsonl
+active-grants.json  authority.json  env  grant-log.jsonl  grants/
+identities/  identity-local.env  memory.jsonl  trust.json
 ```
 
 `.dent8/env` holds the pointers the CLI reads (`DENT8_AUTHORITY`, `DENT8_LOG`,
@@ -158,20 +169,20 @@ There are three ways to get facts into the base.
 value, and an authority + source. `--ttl` accepts human durations (`90d`, `12h`, `30m`):
 
 ```
-$ dent8 assert repo:dent8 msrv "1.94" --authority high --source source:human --ttl 90d
+$ dent8 assert repo:dent8 msrv "1.94" --authority high --source source:local --ttl 90d
 ACCEPTED  repo:dent8 msrv = "1.94"  (authority=high)
   seq=3  hash=3b2b5821c426…
 
-$ dent8 assert repo:dent8 build_command "cargo build --release" --authority high --source source:human
+$ dent8 assert repo:dent8 build_command "cargo build --release" --authority high --source source:local
 ACCEPTED  repo:dent8 build_command = "cargo build --release"  (authority=high)
   seq=4  hash=6ddf4ad8324b…
 ```
 
-The firewall in action — a low-authority agent cannot overwrite the human's MSRV fact (this
-exits `1`):
+The firewall in action — a low-authority write cannot overwrite the high-authority MSRV fact
+(this exits `1`):
 
 ```
-$ dent8 supersede repo:dent8 msrv "1.90" --authority low --source source:agent
+$ dent8 supersede repo:dent8 msrv "1.90" --authority low --source source:local
 REJECTED: firewall rejected the write: insufficient authority: low may not override or remove an incumbent of high
   the incumbent recorded the survived challenge (fact.challenge_rejected)
 ```
@@ -413,8 +424,9 @@ explain repo:dent8 msrv
     chain verified: true
 ```
 
-**`doctor --write-check`** smoke-tests the whole setup end-to-end (exit 0; the two WARN lines
-are expected on a no-identity/no-witness file store):
+**`doctor --write-check`** smoke-tests the whole setup end-to-end (exit 0; the WARN line is
+expected on a no-witness file store — `init` provisions the signed identity, so those checks
+pass):
 
 ```
 $ dent8 doctor --source source:local --write-check
@@ -422,7 +434,11 @@ dent8 doctor
   OK  binary: .../dent8
   OK  file dev store: .../.dent8/memory.jsonl (0 event(s))
   OK  authority: .../.dent8/authority.json (4 source(s); source:local max=high)
-  WARN  identity: not configured (optional; run `dent8 identity bootstrap` to create a signed source grant)
+  OK  identity trust: .../.dent8/trust.json (1 issuer(s))
+  OK  identity grant: .../.dent8/grants/source_local.grant.json (source=source:local max=high issuer=owner scope=*)
+  OK  identity active grant: .../.dent8/active-grants.json (current for source:local)
+  OK  identity source: grant source matches doctor source source:local
+  OK  identity key: .../.dent8/identities/source_local.key (matches grant public key)
   WARN  witness: not configured (optional; set DENT8_WITNESS_LOG + DENT8_WITNESS_PUBKEY for signed tree heads)
   OK  verify: OK: 0 event(s) ... STRUCTURAL integrity holds ...
   OK  mcp: `dent8 mcp serve` is available over stdio

@@ -15,7 +15,7 @@ name = "dent8_export"
 path = "src/lib.rs"
 
 [dependencies]
-dent8-core = { path = "../dent8-core", version = "0.7.3" }
+dent8-core = { path = "../dent8-core", version = "0.8.0" }
 serde_json = "1"
 # Pure-Rust columnar/Parquet stack. Heavy, so this crate is opt-in (the CLI gates it behind
 # `--features export`); DuckDB reads the resulting Parquet directly, no embedded engine.
