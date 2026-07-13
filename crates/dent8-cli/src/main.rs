@@ -30,6 +30,7 @@ mod context;
 mod daemon;
 mod doctor;
 mod hook;
+mod hook_config;
 mod identity;
 mod mcp;
 /// The daemon write client (ADR 0018 PR 5): a synchronous Unix socket that proves identity via
@@ -669,6 +670,7 @@ struct CompletionsArgs {
 }
 
 #[derive(Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct InitArgs {
     /// Directory for dent8's local project config.
     #[arg(long, default_value = ".dent8", value_name = "DIR")]
@@ -720,6 +722,12 @@ struct InitArgs {
     witness_pubkey: Option<String>,
     #[command(flatten)]
     mcp: InitMcpArgs,
+    /// Skip wiring the enforced `PreToolUse` native-memory guard into the agent's hook config.
+    /// By default `init` installs it so raw agent edits to `CLAUDE.md`/`AGENTS.md`/… are blocked
+    /// out of the box; the runtime soft-off (`DENT8_HOOK_ENFORCE=0`) and sanctioned bypass
+    /// (`DENT8_ALLOW_NATIVE_MEMORY_WRITE=1`) still apply per write.
+    #[arg(long)]
+    no_native_memory_guard: bool,
     /// Overwrite the generated env file if it already exists.
     #[arg(long)]
     force: bool,

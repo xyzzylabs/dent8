@@ -383,6 +383,7 @@ pub(crate) struct InitOutcome {
     store: InitStoreOutput,
     identity: InitIdentityOutput,
     witness: InitWitnessOutput,
+    guard: InitGuardOutput,
     mcp_install: Option<McpInstallAttempt>,
 }
 
@@ -524,8 +525,14 @@ pub(crate) fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
         &witness,
         args.agent,
     );
+    let guard = init_native_memory_guard(args, &dir);
+    message.push_str("\n\n");
+    message.push_str(&guard.message());
     let mcp_install = init_mcp_install(args, &dir)?;
-    let exit_code = mcp_install.as_ref().map_or(0, McpInstallAttempt::exit_code);
+    let exit_code = mcp_install
+        .as_ref()
+        .map_or(0, McpInstallAttempt::exit_code)
+        .max(guard.exit_code());
     if let Some(install) = mcp_install.as_ref() {
         message.push_str("\n\n");
         message.push_str(&install.message());
@@ -542,8 +549,122 @@ pub(crate) fn init_project(args: &InitArgs) -> Result<InitOutcome, String> {
         store,
         identity,
         witness,
+        guard,
         mcp_install,
     })
+}
+
+/// Wire the enforced `PreToolUse` native-memory guard into the agent's project hook config. Runs
+/// **by default** (opt out with `--no-native-memory-guard`) so raw agent writes to
+/// `CLAUDE.md`/`AGENTS.md`/… are blocked out of the box. With no `--agent`, the guard targets the
+/// Claude Code profile (`.claude/settings.json`); with `--agent X` it targets that agent's hook
+/// config, mirroring how MCP install selects its target. A guard install problem never aborts init
+/// — the store, authority, and env are already written — it only surfaces as a warning.
+pub(crate) fn init_native_memory_guard(args: &InitArgs, dir: &std::path::Path) -> InitGuardOutput {
+    let agent = args.agent.unwrap_or(InitAgent::ClaudeCode);
+    if args.no_native_memory_guard {
+        return InitGuardOutput {
+            agent,
+            kind: GuardKind::Disabled,
+        };
+    }
+    if agent == InitAgent::Hecate {
+        return InitGuardOutput {
+            agent,
+            kind: GuardKind::Skipped(
+                "Hecate distributes policy to child agents; wire the guard into each supervised \
+                 child agent's hook profile instead"
+                    .to_string(),
+            ),
+        };
+    }
+    let Some(path) = crate::doctor::agent_hook_config_path(agent, dir) else {
+        return InitGuardOutput {
+            agent,
+            kind: GuardKind::Skipped(format!(
+                "cannot infer a hook config path from --dir {}; use a .dent8 directory, or copy \
+                 examples/agent-hooks/{}/ manually",
+                dir.display(),
+                agent.cli_name()
+            )),
+        };
+    };
+    match crate::hook_config::install_native_memory_guard(agent, &path) {
+        Ok(result) => InitGuardOutput {
+            agent,
+            kind: GuardKind::Installed(result),
+        },
+        Err(error) => InitGuardOutput {
+            agent,
+            kind: GuardKind::Failed(error),
+        },
+    }
+}
+
+pub(crate) struct InitGuardOutput {
+    agent: InitAgent,
+    kind: GuardKind,
+}
+
+pub(crate) enum GuardKind {
+    Disabled,
+    Skipped(String),
+    Installed(crate::hook_config::HookInstallResult),
+    Failed(String),
+}
+
+impl InitGuardOutput {
+    fn exit_code(&self) -> i32 {
+        i32::from(matches!(self.kind, GuardKind::Failed(_)))
+    }
+
+    fn message(&self) -> String {
+        match &self.kind {
+            GuardKind::Disabled => {
+                "native-memory guard: skipped (--no-native-memory-guard). Raw agent edits to \
+                 CLAUDE.md/AGENTS.md/… are not blocked; wire it later from examples/agent-hooks/."
+                    .to_string()
+            }
+            GuardKind::Skipped(reason) => format!("native-memory guard: not wired ({reason})"),
+            GuardKind::Installed(result) => result.message(),
+            GuardKind::Failed(error) => format!(
+                "native-memory guard: install failed ({error}); copy \
+                 examples/agent-hooks/{}/ manually",
+                self.agent.cli_name()
+            ),
+        }
+    }
+
+    pub(crate) fn json(&self) -> serde_json::Value {
+        match &self.kind {
+            GuardKind::Disabled => serde_json::json!({
+                "status": "disabled",
+                "agent": self.agent.cli_name(),
+                "installed": false,
+            }),
+            GuardKind::Skipped(reason) => serde_json::json!({
+                "status": "skipped",
+                "agent": self.agent.cli_name(),
+                "installed": false,
+                "reason": reason,
+            }),
+            GuardKind::Installed(result) => serde_json::json!({
+                "status": "ok",
+                "agent": self.agent.cli_name(),
+                "installed": true,
+                "enforced": true,
+                "action": result.action.name(),
+                "changed": result.changed(),
+                "path": path_string(&result.path),
+            }),
+            GuardKind::Failed(error) => serde_json::json!({
+                "status": "failed",
+                "agent": self.agent.cli_name(),
+                "installed": false,
+                "message": error,
+            }),
+        }
+    }
 }
 
 pub(crate) fn init_env_contents(
@@ -682,6 +803,7 @@ pub(crate) fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::V
         },
         "identity": init_identity_json(&outcome.identity),
         "witness": init_witness_json(&outcome.witness),
+        "native_memory_guard": outcome.guard.json(),
         "mcp_install": outcome.mcp_install.as_ref().map(mcp_install_attempt_json),
         "next": {
             "doctor_command": format!("dent8 doctor --source {} --write-check", outcome.source),
@@ -695,6 +817,7 @@ pub(crate) fn init_json(args: &InitArgs, outcome: &InitOutcome) -> serde_json::V
             "source": args.source.as_deref(),
             "agent": args.agent.map(InitAgent::cli_name),
             "identity": args.identity,
+            "no_native_memory_guard": args.no_native_memory_guard,
             "install_mcp": args.mcp.install_mcp,
             "mcp_use_daemon": args.mcp.mcp_use_daemon,
             "mcp_daemon_socket": args.mcp.mcp_daemon_socket.as_deref(),

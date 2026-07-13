@@ -20,7 +20,7 @@
           {
             "name": "dent8-native-memory-guard",
             "type": "command",
-            "command": "DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
+            "command": "command -v dent8 >/dev/null 2>&1 || exit 0; DENT8_HOOK_MODE=guard-native-memory-write DENT8_HOOK_ENFORCE=1 dent8 hook native-memory-guard",
             "timeout": 30000
           }
         ]
