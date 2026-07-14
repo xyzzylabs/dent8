@@ -45,6 +45,13 @@ cargo clippy -p dent8-cli --features export --all-targets -- -D warnings
 cargo test -p dent8-export
 ```
 
+Check packaging before a tag. This is also in CI now, so path/version metadata and
+publishable file lists cannot drift unnoticed:
+
+```sh
+cargo package --workspace --no-verify --locked
+```
+
 Run the release acceptance path:
 
 ```sh
@@ -97,6 +104,13 @@ PyPI and npm already use. `rust-lang/crates-io-auth-action` exchanges the run's 
 for a short-lived crates.io token (no `CARGO_REGISTRY_TOKEN` in GitHub secrets), then
 `cargo publish --workspace` uploads all eight crates in dependency order, waiting for each to
 index before its dependents.
+
+The binary release job also emits GitHub artifact attestations for every archive via
+`actions/attest@v4` (SLSA build provenance, signed through Sigstore/GitHub OIDC) before it uploads
+the `.tar.gz` / `.zip` and `.sha256` files. Consumers can verify the archive's provenance with
+`gh attestation verify <archive> --repo xyzzylabs/dent8`; the checksum still catches accidental
+download corruption, while the attestation answers "was this archive built by the release
+workflow for this repo/tag?"
 
 **One-time setup — required per crate before this works.** Enable Trusted Publishing on
 crates.io for **each** of `dent8`, `dent8-cli`, `dent8-core`, `dent8-evals`, `dent8-export`,

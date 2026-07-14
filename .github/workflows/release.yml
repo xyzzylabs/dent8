@@ -15,6 +15,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   binaries:
@@ -92,6 +95,11 @@ jobs:
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 || \
             gh release create "${GITHUB_REF_NAME}" --title "dent8 ${GITHUB_REF_NAME}" --generate-notes
+      - name: Attest archive provenance
+        if: github.ref_type == 'tag'
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ env.ARCHIVE }}
       - name: Upload archive
         if: github.ref_type == 'tag'
         env:

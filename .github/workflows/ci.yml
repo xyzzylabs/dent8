@@ -23,6 +23,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  msrv:
+    name: MSRV 1.94 check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.94
+      - uses: Swatinem/rust-cache@v2
+      - name: Check workspace on the declared MSRV
+        run: cargo check --workspace --all-targets --locked
+
   check:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
@@ -74,6 +85,8 @@ jobs:
         run: cargo test -p dent8-core --features signed-anchor
       - name: Test export crate
         run: cargo test -p dent8-export
+      - name: Package workspace manifests
+        run: cargo package --workspace --no-verify --locked
 
   postgres:
     name: Postgres adapter + CLI smoke
