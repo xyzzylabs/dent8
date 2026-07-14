@@ -2614,18 +2614,9 @@ fn registry_grant_check(
 /// configured (exact pass-through). Malformed configuration is a loud error, not a silent
 /// disable — the operator tried to set a security control.
 fn content_check_config() -> Result<Option<content_check::ContentCheckConfig>, String> {
-    let raw = match std::env::var("DENT8_CONTENT_CHECK") {
-        Ok(value) => value,
-        Err(std::env::VarError::NotPresent) => return Ok(None),
-        Err(std::env::VarError::NotUnicode(_)) => {
-            return Err("DENT8_CONTENT_CHECK must be valid UTF-8".to_string());
-        }
-    };
-    if raw.trim().is_empty() {
+    let Some(command) = content_check_command_from_env()? else {
         return Ok(None);
-    }
-    // Whitespace-split program + args; anything needing quoting belongs in a wrapper script.
-    let command: Vec<String> = raw.split_whitespace().map(ToString::to_string).collect();
+    };
     let mut config = content_check::ContentCheckConfig::new(command)?;
     if let Ok(millis) = std::env::var("DENT8_CONTENT_CHECK_TIMEOUT_MS") {
         let millis: u64 = millis.trim().parse().map_err(|_| {
@@ -2639,6 +2630,58 @@ fn content_check_config() -> Result<Option<content_check::ContentCheckConfig>, S
         config.failure_policy = content_check::FailurePolicy::FailOpen;
     }
     Ok(Some(config))
+}
+
+fn content_check_command_from_env() -> Result<Option<Vec<String>>, String> {
+    let argv = match std::env::var("DENT8_CONTENT_CHECK_ARGV") {
+        Ok(raw) => Some(raw),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("DENT8_CONTENT_CHECK_ARGV must be valid UTF-8".to_string());
+        }
+    };
+    let legacy = match std::env::var("DENT8_CONTENT_CHECK") {
+        Ok(raw) => Some(raw),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err("DENT8_CONTENT_CHECK must be valid UTF-8".to_string());
+        }
+    };
+    content_check_command_from_values(argv.as_deref(), legacy.as_deref())
+}
+
+fn content_check_command_from_values(
+    argv: Option<&str>,
+    legacy: Option<&str>,
+) -> Result<Option<Vec<String>>, String> {
+    if let Some(raw) = argv
+        && !raw.trim().is_empty()
+    {
+        return parse_content_check_argv(raw);
+    }
+    let Some(raw) = legacy else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    // Whitespace-split program + args; anything needing quoting belongs in a wrapper script.
+    Ok(Some(
+        raw.split_whitespace().map(ToString::to_string).collect(),
+    ))
+}
+
+fn parse_content_check_argv(raw: &str) -> Result<Option<Vec<String>>, String> {
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let command: Vec<String> = serde_json::from_str(raw).map_err(|error| {
+        format!(
+            "DENT8_CONTENT_CHECK_ARGV must be a JSON array of argv strings, e.g. \
+             [\"/usr/local/bin/scanner\",\"--policy\",\"strict mode\"]: {error}"
+        )
+    })?;
+    Ok(Some(command))
 }
 
 /// The write-boundary content gate, run on every batch of candidate events **after**
@@ -4594,6 +4637,46 @@ mod tests {
             parse_duration_ms("90d"),
             Ok(dent8_store::registry::DEFAULT_MAX_TTL_MS)
         );
+    }
+
+    #[test]
+    fn content_check_argv_parses_exact_arguments() {
+        let parsed =
+            parse_content_check_argv(r#"["/usr/local/bin/my scanner","--policy","strict mode"]"#)
+                .expect("valid argv")
+                .expect("configured");
+        assert_eq!(
+            parsed,
+            vec!["/usr/local/bin/my scanner", "--policy", "strict mode"]
+        );
+    }
+
+    #[test]
+    fn content_check_argv_rejects_non_array_json() {
+        let error = parse_content_check_argv(r#"{"command":"scanner"}"#).unwrap_err();
+        assert!(error.contains("JSON array"), "{error}");
+    }
+
+    #[test]
+    fn content_check_argv_takes_precedence_over_legacy_command() {
+        let parsed = content_check_command_from_values(
+            Some(r#"["/usr/local/bin/my scanner","--policy","strict mode"]"#),
+            Some("/tmp/legacy --old"),
+        )
+        .expect("valid command")
+        .expect("configured");
+        assert_eq!(
+            parsed,
+            vec!["/usr/local/bin/my scanner", "--policy", "strict mode"]
+        );
+    }
+
+    #[test]
+    fn content_check_empty_argv_falls_back_to_legacy_command() {
+        let parsed = content_check_command_from_values(Some(" \t "), Some("/tmp/legacy --old"))
+            .expect("valid command")
+            .expect("configured");
+        assert_eq!(parsed, vec!["/tmp/legacy", "--old"]);
     }
 
     fn grant(

@@ -23,12 +23,13 @@ Environment variables, like every other dent8 control
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DENT8_CONTENT_CHECK` | *(unset → pass-through)* | The scanner command, whitespace-split into program + args (use a wrapper script for anything needing quoting). Unset/empty disables the hook entirely — exactly the pre-hook write path, zero overhead. |
+| `DENT8_CONTENT_CHECK_ARGV` | *(unset → fall back to `DENT8_CONTENT_CHECK`)* | Preferred structured scanner command: a JSON array of argv strings, preserving spaces and quoting exactly. Empty disables the hook when `DENT8_CONTENT_CHECK` is also unset. |
+| `DENT8_CONTENT_CHECK` | *(unset → pass-through)* | Legacy/convenience scanner command, whitespace-split into program + args (use a wrapper script or `DENT8_CONTENT_CHECK_ARGV` for anything needing quoting). Unset/empty disables the hook entirely — exactly the pre-hook write path, zero overhead. |
 | `DENT8_CONTENT_CHECK_TIMEOUT_MS` | `5000` | Per-candidate-fact wall-clock budget. A scanner still running past it is killed and the run counts as a scanner failure. |
 | `DENT8_CONTENT_CHECK_FAIL_OPEN` | *(unset / false)* | Failure policy for scanner failures (spawn error, timeout, non-zero exit, malformed verdict). **Default fail-closed.** When true, a failed scan admits the write but still marks it (see below). |
 
 ```sh
-export DENT8_CONTENT_CHECK="/usr/local/bin/my-scanner --policy strict"
+export DENT8_CONTENT_CHECK_ARGV='["/usr/local/bin/my-scanner","--policy","strict"]'
 dent8 assert repo:app note "…"        # every value-carrying write is now scanned
 ```
 

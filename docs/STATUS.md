@@ -494,6 +494,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   flagged facts as `CONTENT-FLAGGED`). Scanner failures (crash/timeout/garbage) are
   **fail-closed by default** — a configured scanner going dark must not silently readmit
   unchecked content; `DENT8_CONTENT_CHECK_FAIL_OPEN=1` opts into admit-but-flag.
+  Use `DENT8_CONTENT_CHECK_ARGV` for structured JSON argv when scanner paths or arguments
+  contain spaces; legacy `DENT8_CONTENT_CHECK` remains whitespace-split for simple commands.
   Unconfigured = exact pass-through. This repositions dent8 as an **authority layer + a
   composable content hook**: dent8 deliberately ships **no content classifier** — the eval
   corpus's content classes (A/F/G/H) are owned by whatever scanner (LLM Guard, Rebuff,
