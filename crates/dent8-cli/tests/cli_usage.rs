@@ -5798,6 +5798,7 @@ fn mcp_install_json_reports_daemon_proxy_args() {
 
 #[test]
 #[cfg(all(unix, feature = "async-store"))]
+#[allow(clippy::too_many_lines)] // one linear daemon-proxy failure scenario plus JSON contract checks
 fn doctor_agent_reports_unreachable_daemon_proxy_config() {
     let temp = TempDir::new();
     let dir = temp.file(".dent8").to_string_lossy().into_owned();
@@ -5862,6 +5863,47 @@ fn doctor_agent_reports_unreachable_daemon_proxy_config() {
     let doctor_json = stdout_json(&doctor_json);
     assert_eq!(doctor_json["status"], "failed");
     assert_eq!(doctor_json["mcp_runtime"]["status"], "failed");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["path"],
+        temp.file(".codex/config.toml")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["config"]["command"], mcp_command);
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["args"],
+        serde_json::json!(["mcp", "proxy", "--socket", socket.as_str()])
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["store"]["backend"],
+        "sqlite"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["mode"],
+        "daemon_proxy"
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["status"], "failed");
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["socket"], socket);
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["socket_source"],
+        "args"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["authenticated_source"],
+        Value::Null
+    );
+    assert!(
+        doctor_json["mcp_runtime"]["transport"]["error"]
+            .as_str()
+            .is_some_and(|message| message.contains("daemon proxy: cannot reach")),
+        "{doctor_json}"
+    );
+    assert!(
+        doctor_json["mcp_runtime"]["transport"]["start_command"]
+            .as_str()
+            .is_some_and(|command| command.contains(&socket)),
+        "{doctor_json}"
+    );
     assert!(
         doctor_json["mcp_runtime"]["message"]
             .as_str()
@@ -5930,6 +5972,53 @@ fn doctor_agent_smokes_reachable_daemon_proxy_config() {
             "daemon proxy: reachable at {socket_arg}, authenticated as source:codex"
         )) && stdout.contains("mcp write-check: accepted trusted diagnostic:doctor-mcp-"),
         "{stdout}"
+    );
+
+    let doctor_json = run_dent8(
+        &[
+            "doctor", "--agent", "codex", "--dir", &dir, "--output", "json",
+        ],
+        &[("DENT8_DAEMON_SOCKET", &socket_arg)],
+    );
+    assert_success(
+        &doctor_json,
+        "doctor --agent codex --output json through daemon proxy",
+    );
+    let doctor_json = stdout_json(&doctor_json);
+    assert_eq!(doctor_json["status"], "ok");
+    assert_eq!(doctor_json["mcp_runtime"]["status"], "ok");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["args"],
+        serde_json::json!(["mcp", "proxy"])
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["store"]["backend"],
+        "sqlite"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["mode"],
+        "daemon_proxy"
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["status"], "ok");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["socket"],
+        socket_arg
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["socket_source"],
+        "process_env"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["authenticated_source"],
+        "source:codex"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["error"],
+        Value::Null
+    );
+    assert!(
+        doctor_json["mcp_runtime"]["runtime_status"]["identity"]["source"] == "source:codex",
+        "{doctor_json}"
     );
 }
 
@@ -6190,6 +6279,32 @@ fn doctor_agent_checks_bundle_config_and_mcp_smoke() {
     let doctor_json = stdout_json(&doctor_json);
     assert_eq!(doctor_json["status"], "ok");
     assert_eq!(doctor_json["mcp_runtime"]["status"], "ok");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["path"],
+        temp.file(".codex/config.toml")
+            .to_string_lossy()
+            .to_string()
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["config"]["command"], mcp_command);
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["args"],
+        serde_json::json!(["mcp", "serve"])
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["config"]["cwd"], Value::Null);
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["expected_source"],
+        "source:codex"
+    );
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["store"]["backend"],
+        "file"
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["mode"], "stdio");
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["status"], "ok");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["transport"]["socket"],
+        Value::Null
+    );
     assert_eq!(
         doctor_json["mcp_runtime"]["runtime_status"]["tool"],
         "runtime_status"
@@ -7897,6 +8012,30 @@ fn doctor_agent_smokes_the_configured_mcp_command() {
     assert!(stdout.contains("agent mcp config: up to date"));
     assert!(stdout.contains("mcp smoke: could not start"));
     assert!(stdout.contains(&missing_command));
+
+    let doctor_json = run_dent8(
+        &[
+            "doctor", "--agent", "codex", "--dir", &dir, "--output", "json",
+        ],
+        &[],
+    );
+    assert_eq!(doctor_json.status.code(), Some(1));
+    let doctor_json = stdout_json(&doctor_json);
+    assert_eq!(doctor_json["mcp_runtime"]["status"], "failed");
+    assert_eq!(
+        doctor_json["mcp_runtime"]["config"]["command"],
+        missing_command
+    );
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["mode"], "stdio");
+    assert_eq!(doctor_json["mcp_runtime"]["transport"]["status"], "failed");
+    assert!(
+        doctor_json["mcp_runtime"]["transport"]["error"]
+            .as_str()
+            .is_some_and(|error| {
+                error.contains("could not start") && error.contains("missing-dent8")
+            }),
+        "{doctor_json}"
+    );
 }
 
 #[cfg(unix)]

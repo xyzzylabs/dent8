@@ -230,6 +230,10 @@ that installed MCP server with the agent source id. If doctor reports a stale ge
 identity env or installed MCP env, `dent8 doctor --agent <profile> --repair --write-check`
 repairs the generated env from the current signed grant, refreshes the selected MCP config,
 and then reruns those checks.
+With `--output json`, the agent report includes `mcp_runtime.config` (installed config
+path/command/args/source/store) and `mcp_runtime.transport` (`stdio` or `daemon_proxy` with the
+resolved socket, source, and error/status fields), so automation does not need to scrape the
+human text report.
 
 For a shared local setup, use `dent8 doctor --agent all --write-check` (or the older
 `--all-agents` flag) to check every installed known profile in the bundle. Profiles without a

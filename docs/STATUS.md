@@ -138,7 +138,9 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   browsing by default. When the optional write-check is not requested, doctor reports it as `SKIP` rather
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections,
   and `doctor --agent --output json` also includes a structured `mcp_runtime` object with the
-  MCP smoke result plus the live `runtime_status` payload when the server answers.
+  MCP smoke result, installed MCP config path/command/args/source/store, effective transport
+  (`stdio` or `daemon_proxy` with resolved socket/source/error fields), plus the live
+  `runtime_status` payload when the server answers.
   `doctor --agent all --output json` includes an `agents[]` array with each profile's
   `ok` / `failed` / `skipped` status and nested report.
 - **`dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>]

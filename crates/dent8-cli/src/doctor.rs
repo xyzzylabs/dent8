@@ -49,7 +49,29 @@ pub(crate) struct DoctorReport {
 pub(crate) struct DoctorMcpRuntime {
     status: &'static str,
     message: String,
+    config: DoctorMcpConfig,
+    transport: DoctorMcpTransport,
     runtime_status: Option<serde_json::Value>,
+}
+
+pub(crate) struct DoctorMcpConfig {
+    path: String,
+    command: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    expected_source: String,
+    store: serde_json::Value,
+}
+
+#[derive(Clone)]
+pub(crate) struct DoctorMcpTransport {
+    mode: &'static str,
+    status: &'static str,
+    socket: Option<String>,
+    socket_source: Option<&'static str>,
+    authenticated_source: Option<String>,
+    error: Option<String>,
+    start_command: Option<String>,
 }
 
 pub(crate) struct DoctorAgentRun {
@@ -120,6 +142,8 @@ pub(crate) fn doctor_report_json(report: &DoctorReport) -> serde_json::Value {
         payload["mcp_runtime"] = serde_json::json!({
             "status": mcp_runtime.status,
             "message": mcp_runtime.message,
+            "config": doctor_mcp_config_json(&mcp_runtime.config),
+            "transport": doctor_mcp_transport_json(&mcp_runtime.transport),
             "runtime_status": mcp_runtime.runtime_status,
         });
     }
@@ -161,6 +185,29 @@ pub(crate) fn doctor_check_json(check: &DoctorCheck<'_>) -> serde_json::Value {
         "status": check.level.to_ascii_lowercase(),
         "level": check.level,
         "message": check.message,
+    })
+}
+
+pub(crate) fn doctor_mcp_config_json(config: &DoctorMcpConfig) -> serde_json::Value {
+    serde_json::json!({
+        "path": config.path,
+        "command": config.command,
+        "args": config.args,
+        "cwd": config.cwd,
+        "expected_source": config.expected_source,
+        "store": config.store,
+    })
+}
+
+pub(crate) fn doctor_mcp_transport_json(transport: &DoctorMcpTransport) -> serde_json::Value {
+    serde_json::json!({
+        "mode": transport.mode,
+        "status": transport.status,
+        "socket": transport.socket,
+        "socket_source": transport.socket_source,
+        "authenticated_source": transport.authenticated_source,
+        "error": transport.error,
+        "start_command": transport.start_command,
     })
 }
 
@@ -585,6 +632,7 @@ pub(crate) fn doctor_agent_mcp_smoke(
     installed: &mcp_config::InstalledServer,
     source: &str,
 ) -> (bool, Option<DoctorMcpRuntime>) {
+    let config = doctor_mcp_config(installed, source);
     match mcp_smoke_with_server(installed, source) {
         Ok(smoke) => {
             doctor_line(output, "OK", &smoke.message);
@@ -594,6 +642,8 @@ pub(crate) fn doctor_agent_mcp_smoke(
                 Some(DoctorMcpRuntime {
                     status: "ok",
                     message: smoke.message,
+                    config,
+                    transport: smoke.transport,
                     runtime_status: Some(smoke.runtime_status),
                 }),
             )
@@ -606,11 +656,57 @@ pub(crate) fn doctor_agent_mcp_smoke(
                 Some(DoctorMcpRuntime {
                     status: "failed",
                     message,
+                    config,
+                    transport: *error.transport,
                     runtime_status: error.runtime_status,
                 }),
             )
         }
     }
+}
+
+pub(crate) fn doctor_mcp_config(
+    server: &mcp_config::InstalledServer,
+    expected_source: &str,
+) -> DoctorMcpConfig {
+    DoctorMcpConfig {
+        path: server.path.to_string_lossy().into_owned(),
+        command: server.command.clone(),
+        args: server.args.clone(),
+        cwd: server
+            .cwd
+            .as_ref()
+            .map(|cwd| cwd.to_string_lossy().into_owned()),
+        expected_source: expected_source.to_string(),
+        store: doctor_mcp_config_store(server),
+    }
+}
+
+pub(crate) fn doctor_mcp_config_store(server: &mcp_config::InstalledServer) -> serde_json::Value {
+    if let Some(url) = installed_env_value(server, "DENT8_STORE_URL") {
+        let backend = url.split_once(':').map_or(url, |(scheme, _)| scheme);
+        let path = url.strip_prefix("sqlite://");
+        return serde_json::json!({
+            "backend": backend,
+            "url": redact_runtime_url(url),
+            "path": path,
+            "file_log_path": serde_json::Value::Null,
+        });
+    }
+    if let Some(log) = installed_env_value(server, "DENT8_LOG") {
+        return serde_json::json!({
+            "backend": "file",
+            "url": serde_json::Value::Null,
+            "path": serde_json::Value::Null,
+            "file_log_path": log,
+        });
+    }
+    serde_json::json!({
+        "backend": serde_json::Value::Null,
+        "url": serde_json::Value::Null,
+        "path": serde_json::Value::Null,
+        "file_log_path": serde_json::Value::Null,
+    })
 }
 
 pub(crate) fn doctor_agent_mcp_version(output: &mut String, runtime_status: &serde_json::Value) {
@@ -670,32 +766,47 @@ pub(crate) fn doctor_agent_mcp_write_check(
 pub(crate) fn doctor_agent_mcp_proxy_preflight(
     server: &mcp_config::InstalledServer,
     expected_source: &str,
+    transport: &mut DoctorMcpTransport,
 ) -> Result<Option<String>, String> {
-    let (uses_proxy, explicit_socket) = mcp_transport_from_args(&server.args);
-    if !uses_proxy {
+    if transport.mode != "daemon_proxy" {
         return Ok(None);
     }
-    let socket = explicit_socket
-        .or_else(|| installed_env_value(server, "DENT8_DAEMON_SOCKET"))
-        .map(std::path::PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("DENT8_DAEMON_SOCKET")
-                .filter(|value| !value.is_empty())
-                .map(std::path::PathBuf::from)
-        })
-        .unwrap_or_else(|| crate::mcp::daemon_socket_path(None));
-    let socket_text = socket.to_string_lossy().into_owned();
+    let socket_text = transport.socket.clone().unwrap_or_else(|| {
+        crate::mcp::daemon_socket_path(None)
+            .to_string_lossy()
+            .into_owned()
+    });
+    transport.socket = Some(socket_text.clone());
+    transport.start_command = Some(daemon_start_command(std::path::Path::new(&socket_text)));
     match crate::mcp_client::daemon_health_with_env(&socket_text, &server.env) {
-        Ok(source) if source == expected_source => Ok(Some(format!(
-            "daemon proxy: reachable at {socket_text}, authenticated as {source}"
-        ))),
-        Ok(source) => Err(format!(
-            "daemon proxy identity mismatch at {socket_text}: expected {expected_source}, authenticated as {source}"
-        )),
-        Err(error) => Err(format!(
-            "daemon proxy: {error}; start it with `{}` using the same .dent8/env and identity env, or reinstall with `dent8 mcp install --agent <profile> --daemon-socket PATH`",
-            daemon_start_command(&socket),
-        )),
+        Ok(source) if source == expected_source => {
+            transport.status = "ok";
+            transport.authenticated_source = Some(source.clone());
+            Ok(Some(format!(
+                "daemon proxy: reachable at {socket_text}, authenticated as {source}"
+            )))
+        }
+        Ok(source) => {
+            let message = format!(
+                "daemon proxy identity mismatch at {socket_text}: expected {expected_source}, authenticated as {source}"
+            );
+            transport.status = "failed";
+            transport.authenticated_source = Some(source);
+            transport.error = Some(message.clone());
+            Err(message)
+        }
+        Err(error) => {
+            let message = format!(
+                "daemon proxy: {error}; start it with `{}` using the same .dent8/env and identity env, or reinstall with `dent8 mcp install --agent <profile> --daemon-socket PATH`",
+                transport
+                    .start_command
+                    .as_deref()
+                    .unwrap_or("dent8 daemon serve"),
+            );
+            transport.status = "failed";
+            transport.error = Some(message.clone());
+            Err(message)
+        }
     }
 }
 
@@ -703,13 +814,16 @@ pub(crate) fn doctor_agent_mcp_proxy_preflight(
 pub(crate) fn doctor_agent_mcp_proxy_preflight(
     server: &mcp_config::InstalledServer,
     _expected_source: &str,
+    transport: &mut DoctorMcpTransport,
 ) -> Result<Option<String>, String> {
     let (uses_proxy, _) = mcp_transport_from_args(&server.args);
     if uses_proxy {
-        return Err(
+        let message =
             "daemon proxy config needs a Unix build with a storage backend; reinstall without --use-daemon or run a daemon-capable dent8 binary"
-                .to_string(),
-        );
+                .to_string();
+        transport.status = "failed";
+        transport.error = Some(message.clone());
+        return Err(message);
     }
     Ok(None)
 }
@@ -720,6 +834,64 @@ fn daemon_start_command(socket: &std::path::Path) -> String {
         "dent8 daemon serve --socket {}",
         shell_quote(&socket.to_string_lossy())
     )
+}
+
+pub(crate) fn doctor_mcp_transport(server: &mcp_config::InstalledServer) -> DoctorMcpTransport {
+    let (uses_proxy, explicit_socket) = mcp_transport_from_args(&server.args);
+    if !uses_proxy {
+        return DoctorMcpTransport {
+            mode: "stdio",
+            status: "ok",
+            socket: None,
+            socket_source: None,
+            authenticated_source: None,
+            error: None,
+            start_command: None,
+        };
+    }
+    let (socket, socket_source) = daemon_proxy_socket(server, explicit_socket);
+    DoctorMcpTransport {
+        mode: "daemon_proxy",
+        status: "unchecked",
+        socket,
+        socket_source,
+        authenticated_source: None,
+        error: None,
+        start_command: None,
+    }
+}
+
+pub(crate) fn daemon_proxy_socket(
+    server: &mcp_config::InstalledServer,
+    explicit_socket: Option<&str>,
+) -> (Option<String>, Option<&'static str>) {
+    if let Some(socket) = explicit_socket {
+        return (Some(socket.to_string()), Some("args"));
+    }
+    if let Some(socket) = installed_env_value(server, "DENT8_DAEMON_SOCKET") {
+        return (Some(socket.to_string()), Some("config_env"));
+    }
+    if let Some(socket) = std::env::var_os("DENT8_DAEMON_SOCKET")
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string_lossy().into_owned())
+    {
+        return (Some(socket), Some("process_env"));
+    }
+    #[cfg(all(unix, feature = "async-store"))]
+    {
+        (Some(default_daemon_socket_path()), Some("default"))
+    }
+    #[cfg(not(all(unix, feature = "async-store")))]
+    {
+        (None, Some("default"))
+    }
+}
+
+#[cfg(all(unix, feature = "async-store"))]
+fn default_daemon_socket_path() -> String {
+    crate::mcp::daemon_socket_path(None)
+        .to_string_lossy()
+        .into_owned()
 }
 
 pub(crate) fn doctor_agent_bypass_guard(
@@ -1514,10 +1686,12 @@ pub(crate) fn run_doctor_with_env(
 pub(crate) struct McpSmokeReport {
     message: String,
     runtime_status: serde_json::Value,
+    transport: DoctorMcpTransport,
 }
 
 pub(crate) struct McpSmokeError {
     message: String,
+    transport: Box<DoctorMcpTransport>,
     runtime_status: Option<serde_json::Value>,
 }
 
@@ -1525,8 +1699,9 @@ pub(crate) fn mcp_smoke_with_server(
     server: &mcp_config::InstalledServer,
     expected_source: &str,
 ) -> Result<McpSmokeReport, McpSmokeError> {
-    let proxy_note = doctor_agent_mcp_proxy_preflight(server, expected_source)
-        .map_err(McpSmokeError::without_runtime)?;
+    let mut transport = doctor_mcp_transport(server);
+    let proxy_note = doctor_agent_mcp_proxy_preflight(server, expected_source, &mut transport)
+        .map_err(|error| McpSmokeError::without_runtime(error, transport.clone()))?;
     let responses = mcp_exchange_with_server(
         server,
         &[
@@ -1541,35 +1716,48 @@ pub(crate) fn mcp_smoke_with_server(
         ],
         "mcp smoke",
     )
-    .map_err(McpSmokeError::without_runtime)?;
+    .map_err(|error| {
+        let failed = mcp_transport_failed(transport.clone(), &error);
+        McpSmokeError::without_runtime(error, failed)
+    })?;
     if responses.len() != 3 {
-        return Err(McpSmokeError::without_runtime(format!(
-            "expected 3 JSON-RPC responses, got {}",
-            responses.len()
-        )));
+        let error = format!("expected 3 JSON-RPC responses, got {}", responses.len());
+        return Err(McpSmokeError::without_runtime(
+            error.clone(),
+            mcp_transport_failed(transport, &error),
+        ));
     }
     if responses[0]["result"]["serverInfo"]["name"] != "dent8" {
+        let error = "initialize did not return dent8 serverInfo".to_string();
         return Err(McpSmokeError::without_runtime(
-            "initialize did not return dent8 serverInfo".to_string(),
+            error.clone(),
+            mcp_transport_failed(transport, &error),
         ));
     }
     let tools = responses[1]["result"]["tools"].as_array().ok_or_else(|| {
-        McpSmokeError::without_runtime("tools/list did not return a tools array".to_string())
+        let error = "tools/list did not return a tools array".to_string();
+        McpSmokeError::without_runtime(
+            error.clone(),
+            mcp_transport_failed(transport.clone(), &error),
+        )
     })?;
     for expected in ["runtime_status", "assert", "explain", "verify"] {
         if !tools
             .iter()
             .any(|tool| tool["name"].as_str() == Some(expected))
         {
-            return Err(McpSmokeError::without_runtime(format!(
-                "tools/list is missing {expected}"
-            )));
+            let error = format!("tools/list is missing {expected}");
+            return Err(McpSmokeError::without_runtime(
+                error.clone(),
+                mcp_transport_failed(transport, &error),
+            ));
         }
     }
     let runtime_status = mcp_runtime_status_result(&responses[2], server, expected_source)
         .map_err(|error| {
             McpSmokeError::new(
                 error,
+                transport.clone(),
                 mcp_runtime_status_payload(&responses[2]).ok().cloned(),
             )
         })?;
@@ -1586,19 +1774,34 @@ pub(crate) fn mcp_smoke_with_server(
             tools.len(),
         ),
         runtime_status: runtime_status.clone(),
+        transport,
     })
 }
 
+fn mcp_transport_failed(
+    mut transport: DoctorMcpTransport,
+    error: impl Into<String>,
+) -> DoctorMcpTransport {
+    transport.status = "failed";
+    transport.error = Some(error.into());
+    transport
+}
+
 impl McpSmokeError {
-    fn new(message: String, runtime_status: Option<serde_json::Value>) -> Self {
+    fn new(
+        message: String,
+        transport: DoctorMcpTransport,
+        runtime_status: Option<serde_json::Value>,
+    ) -> Self {
         Self {
             message,
+            transport: Box::new(transport),
             runtime_status,
         }
     }
 
-    fn without_runtime(message: String) -> Self {
-        Self::new(message, None)
+    fn without_runtime(message: String, transport: DoctorMcpTransport) -> Self {
+        Self::new(message, transport, None)
     }
 }
 
