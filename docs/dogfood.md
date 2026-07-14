@@ -19,6 +19,12 @@ set +a
 .dent8/bin/dent8 doctor --agent codex --dir .dent8
 ```
 
+Run the read-only local bundle check before trusting an existing `.dent8` directory:
+
+```sh
+scripts/dogfood-doctor.sh
+```
+
 Use the source identity for the agent doing the work. **MCP config is project-scoped** —
 each agent points at this repo's `.dent8` store only when the session is in this project.
 Do **not** install the dogfood store into user-global agent config (`~/.codex`,
@@ -44,6 +50,7 @@ See [`examples/grok-build/`](../examples/grok-build/).
 Run the full dogfood acceptance path when the setup itself changed:
 
 ```sh
+scripts/dogfood-doctor.sh
 ./examples/dogfood/demo.sh
 ```
 

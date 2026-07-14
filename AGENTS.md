@@ -63,6 +63,7 @@ See [docs/dogfooding-notes.md](docs/dogfooding-notes.md) for the setup walkthrou
 
 ```sh
 CARGO_TARGET_DIR=.dent8/target-sqlite cargo build -p dent8-cli --features sqlite
+scripts/dogfood-doctor.sh
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check
