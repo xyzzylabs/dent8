@@ -1323,7 +1323,7 @@ pub(crate) fn render_local_mcp_wrapper(local: &LocalMcpBinary) -> String {
 
 pub(crate) fn local_mcp_build_command(local: &LocalMcpBinary) -> String {
     format!(
-        "CARGO_TARGET_DIR={} cargo build -p dent8 --features sqlite",
+        "CARGO_TARGET_DIR={} cargo build -p dent8-cli --features sqlite",
         shell_quote(
             &local
                 .target

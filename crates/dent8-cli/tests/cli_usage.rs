@@ -5543,10 +5543,8 @@ fn mcp_install_local_bin_writes_wrapper_and_config() {
 
     let wrapper = fs::read_to_string(temp.file(".dent8/bin/dent8")).expect("local wrapper");
     assert!(wrapper.contains("target-sqlite/debug/dent8"));
-    assert!(
-        !wrapper.contains("cargo run"),
-        "local wrapper must not run Cargo during MCP startup"
-    );
+    assert!(wrapper.contains("cargo build -p dent8-cli --features sqlite"));
+    assert!(!wrapper.contains("cargo run"));
 
     let config = fs::read_to_string(temp.file(".codex/config.toml")).expect("codex mcp config");
     assert!(config.contains(&format!(
