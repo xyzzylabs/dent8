@@ -18,7 +18,7 @@ It checks the useful path an agent relies on:
 4. reject a low-authority supersession of that fact;
 5. explain and verify the retained value;
 6. sign and verify a local witness head when `.dent8/witness.key` is present;
-7. run an advisory read-only `dent8 doctor --all-agents`;
+7. run an advisory read-only `dent8 doctor --agent all`;
 8. run `dent8 doctor --agent <profile> --write-check` for the selected agent;
 9. sign again so doctor write probes do not leave an unwitnessed tail, then run an advisory
    read-only all-agents doctor check.

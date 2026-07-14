@@ -6595,7 +6595,6 @@ fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
     for (agent, source, config_path) in [
         ("claude-code", "source:claude-code", ".mcp.json"),
         ("cursor", "source:cursor", ".cursor/mcp.json"),
-        ("grok-build", "source:grok-build", ".mcp.json"),
         ("gemini", "source:gemini", ".gemini/settings.json"),
         ("cascade", "source:cascade", ".windsurf/mcp_config.json"),
     ] {
@@ -6644,6 +6643,123 @@ fn doctor_agent_mcp_write_check_works_for_json_config_profiles() {
             doctor_stdout
         );
     }
+}
+
+#[test]
+fn doctor_agent_mcp_write_check_works_for_grok_native_toml_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let expected_config = temp.file(".grok/config.toml");
+    let issuer_key = temp.file("grok-owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "grok-build",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent grok-build --install-mcp",
+    );
+    assert!(
+        expected_config.exists(),
+        "grok-build should install MCP config at {}",
+        expected_config.display()
+    );
+    let config = fs::read_to_string(&expected_config).expect("read grok native MCP config");
+    assert!(config.contains("[mcp_servers.dent8]"));
+    assert!(config.contains("[mcp_servers.dent8.env]"));
+    assert!(config.contains("DENT8_GRANT = "));
+    assert!(config.contains("grants/source_grok-build.grant.json"));
+    assert!(config.contains("DENT8_IDENTITY_KEY = "));
+    assert!(config.contains("identities/source_grok-build.key"));
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "grok-build",
+            "--dir",
+            &dir,
+            "--write-check",
+        ],
+        &[],
+    );
+    assert_installed_agent_doctor_ok(&doctor, "grok-build", "source:grok-build", &mcp_command);
+    let doctor_stdout = stdout(&doctor);
+    assert!(
+        doctor_stdout.contains(&expected_config.display().to_string()),
+        "doctor should read {} for grok-build; stdout:\n{}",
+        expected_config.display(),
+        doctor_stdout
+    );
+}
+
+#[test]
+fn doctor_agent_grok_build_accepts_explicit_mcp_json_config() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let expected_config = temp.file(".mcp.json");
+    let expected_config_arg = expected_config.to_string_lossy().into_owned();
+    let issuer_key = temp.file("grok-owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "grok-build",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+                "--mcp-config",
+                &expected_config_arg,
+            ],
+            &[],
+        ),
+        "init --agent grok-build --install-mcp --mcp-config .mcp.json",
+    );
+    assert!(
+        expected_config.exists(),
+        "grok-build should support explicit MCP JSON config at {}",
+        expected_config.display()
+    );
+    let config = fs::read_to_string(&expected_config).expect("read grok MCP JSON config");
+    assert!(config.contains("\"mcpServers\""));
+    assert!(config.contains("\"DENT8_GRANT\""));
+    assert!(config.contains("grants/source_grok-build.grant.json"));
+    assert!(config.contains("\"DENT8_IDENTITY_KEY\""));
+    assert!(config.contains("identities/source_grok-build.key"));
+
+    let doctor = run_dent8(
+        &[
+            "doctor",
+            "--agent",
+            "grok-build",
+            "--dir",
+            &dir,
+            "--mcp-config",
+            &expected_config_arg,
+            "--write-check",
+        ],
+        &[],
+    );
+    assert_installed_agent_doctor_ok(&doctor, "grok-build", "source:grok-build", &mcp_command);
 }
 
 #[test]
@@ -6888,20 +7004,8 @@ fn doctor_passes_for_multiple_agents_on_shared_sqlite_store() {
         );
     }
 
-    let all = run_dent8(
-        &[
-            "doctor",
-            "--all-agents",
-            "--dir",
-            &dir,
-            "--write-check",
-            "--output",
-            "json",
-        ],
-        &[],
-    );
-    assert_success(&all, "doctor --all-agents --output json");
-    assert_shared_sqlite_all_agents_json(&stdout_json(&all));
+    assert_shared_sqlite_all_agents_json(&doctor_all_agents_json(&dir, true, false));
+    assert_shared_sqlite_all_agents_json(&doctor_all_agents_json(&dir, true, true));
 }
 
 #[cfg(feature = "sqlite")]
@@ -7240,6 +7344,138 @@ fn a_corrupt_line_in_the_file_store_is_skipped_and_reported_not_fatal() {
         warning.contains("skipped 1 corrupt line(s)") && warning.contains("lines: 2"),
         "stderr must report the skipped corrupt line: {warning:?}"
     );
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn doctor_all_agents_prefers_grok_native_config_over_sidecar() {
+    let temp = TempDir::new();
+    let dir = temp.file(".dent8").to_string_lossy().into_owned();
+    let issuer_key = temp.file("owner.key").to_string_lossy().into_owned();
+    let mcp_command = dent8_bin().to_string_lossy().into_owned();
+    let grok_native_config = temp
+        .file(".grok/config.toml")
+        .to_string_lossy()
+        .into_owned();
+    let grok_sidecar_config = temp
+        .file(".dent8/mcp-grok-build.json")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_success(
+        &run_dent8(
+            &[
+                "init",
+                "--dir",
+                &dir,
+                "--agent",
+                "claude-code",
+                "--store",
+                "sqlite",
+                "--issuer-key",
+                &issuer_key,
+                "--install-mcp",
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "init --agent claude-code --store sqlite --install-mcp",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "agent",
+                "add",
+                "--agent",
+                "grok-build",
+                "--dir",
+                &dir,
+                "--issuer-key",
+                &issuer_key,
+                "--mcp-command",
+                &mcp_command,
+            ],
+            &[],
+        ),
+        "agent add --agent grok-build",
+    );
+    assert_success(
+        &run_dent8(
+            &[
+                "mcp",
+                "install",
+                "--agent",
+                "grok-build",
+                "--dir",
+                &dir,
+                "--command",
+                &mcp_command,
+                "--config",
+                &grok_sidecar_config,
+            ],
+            &[],
+        ),
+        "mcp install --agent grok-build --config .dent8/mcp-grok-build.json",
+    );
+
+    let all = run_dent8(
+        &[
+            "doctor", "--agent", "all", "--dir", &dir, "--output", "json",
+        ],
+        &[],
+    );
+    assert_success(&all, "doctor --agent all with native Grok config");
+    let all = stdout_json(&all);
+    assert_eq!(all["status"], "ok", "{all}");
+    let agents = all["agents"].as_array().expect("agents");
+    let claude = agents
+        .iter()
+        .find(|run| run["agent"] == "claude-code")
+        .unwrap_or_else(|| panic!("missing claude-code in {all}"));
+    assert_eq!(claude["status"], "ok", "{claude}");
+    let grok = agents
+        .iter()
+        .find(|run| run["agent"] == "grok-build")
+        .unwrap_or_else(|| panic!("missing grok-build in {all}"));
+    assert_eq!(grok["status"], "ok", "{grok}");
+    assert_eq!(
+        grok["report"]["mcp_runtime"]["runtime_status"]["identity"]["source"], "source:grok-build",
+        "{grok}"
+    );
+    assert!(
+        grok["report"]["checks"]
+            .as_array()
+            .is_some_and(|checks| checks.iter().any(|check| check["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(&grok_native_config)))),
+        "{grok}"
+    );
+}
+
+#[cfg(feature = "sqlite")]
+fn doctor_all_agents_json(dir: &str, write_check: bool, agent_all: bool) -> Value {
+    let mut args = vec!["doctor"];
+    if agent_all {
+        args.extend(["--agent", "all"]);
+    } else {
+        args.push("--all-agents");
+    }
+    args.extend(["--dir", dir]);
+    if write_check {
+        args.push("--write-check");
+    }
+    args.extend(["--output", "json"]);
+    let output = run_dent8(&args, &[]);
+    assert_success(
+        &output,
+        if agent_all {
+            "doctor --agent all --output json"
+        } else {
+            "doctor --all-agents --output json"
+        },
+    );
+    stdout_json(&output)
 }
 
 #[cfg(feature = "sqlite")]

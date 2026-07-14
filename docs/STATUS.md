@@ -77,7 +77,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   the config to run `dent8 mcp proxy` against a local daemon instead of launching a direct
   stdio server. Supports `--output json` with structured identity,
   authority, store, MCP install, and follow-up doctor fields.
-- **`dent8 doctor [--agent <profile>|--all-agents] [--dir .dent8] [--mcp-config PATH]
+- **`dent8 doctor [--agent <profile>|--agent all|--all-agents] [--dir .dent8] [--mcp-config PATH]
   [--mcp-command COMMAND|--mcp-local-bin] [--repair] [--write-check]`** — diagnoses the current setup: binary path,
   selected store, authority registry/grant, signed identity configuration when present,
   witness verification status when configured, `verify`, and MCP availability. Configured
@@ -98,10 +98,13 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   on success, and reports a concrete `dent8 daemon serve --socket ...` hint when the
   daemon is unreachable. With `--write-check`, a failed MCP smoke skips the write probe because
   the same server would be reused.
-  With `--all-agents`, it checks every known profile that has both a source-bound identity env
-  and a default project-local MCP config, skips uninstalled profiles, and fails the aggregate
-  command if any installed profile fails its normal `--agent` doctor. Hecate has no default
-  project-local config path, so use `--agent hecate --mcp-config PATH` for Hecate task configs.
+  With `--agent all` (or the older `--all-agents` flag), it checks every known profile that has
+  a source-bound identity env plus the profile's default project-local MCP config, or a
+  source-bound sidecar config (`.dent8/mcp-<agent>.json`) for explicit compatibility setups, skips
+  uninstalled profiles, and fails the aggregate command if any installed profile fails its
+  normal `--agent` doctor. Hecate has no default project-local config path, so use
+  `--agent hecate --mcp-config PATH` or a `.dent8/mcp-hecate.json` sidecar for Hecate task
+  configs.
   If `--mcp-command` is omitted,
   the expected command is read from the installed config; pass it only to assert a specific
   expected command. By default it is read-only; with `--repair`, it first repairs the
@@ -136,7 +139,7 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   than `WARN`; `doctor --output json` exposes stable `ok` / `warn` / `fail` / `skip` sections,
   and `doctor --agent --output json` also includes a structured `mcp_runtime` object with the
   MCP smoke result plus the live `runtime_status` payload when the server answers.
-  `doctor --all-agents --output json` includes an `agents[]` array with each profile's
+  `doctor --agent all --output json` includes an `agents[]` array with each profile's
   `ok` / `failed` / `skipped` status and nested report.
 - **`dent8 assert <subject> <predicate> <value> [--authority <level>] [--source <source>]
   [--valid-from TIME] [--valid-to TIME]`** — asserts a
@@ -395,8 +398,8 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   config action, generated argv, rendered contents, and local-bin wrapper metadata. It reads the generated
   `.dent8/env` plus the selected source's identity env instead of asking the user to paste paths
   by hand. Built-in defaults cover Codex
-  (`.codex/config.toml`), Claude Code (`.mcp.json`), Grok Build (`.mcp.json` by default, or
-  a side file / project `.grok/config.toml` when Claude already owns `.mcp.json`), Cursor
+  (`.codex/config.toml`), Claude Code (`.mcp.json`), Grok Build (`.grok/config.toml`; pass
+  `--config .mcp.json` only when you intentionally want the Claude-compatible JSON path), Cursor
   (`.cursor/mcp.json`), Gemini (`.gemini/settings.json`), and Cascade
   (`.windsurf/mcp_config.json`); Hecate requires `--config` because its MCP servers live in a
   task/UI payload rather than a stable project config file. Prefer those **project** paths over

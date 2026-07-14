@@ -934,6 +934,33 @@ impl InitAgent {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DoctorAgent {
+    All,
+    Codex,
+    ClaudeCode,
+    Cursor,
+    GrokBuild,
+    Gemini,
+    Cascade,
+    Hecate,
+}
+
+impl DoctorAgent {
+    fn profile(self) -> Option<InitAgent> {
+        match self {
+            Self::All => None,
+            Self::Codex => Some(InitAgent::Codex),
+            Self::ClaudeCode => Some(InitAgent::ClaudeCode),
+            Self::Cursor => Some(InitAgent::Cursor),
+            Self::GrokBuild => Some(InitAgent::GrokBuild),
+            Self::Gemini => Some(InitAgent::Gemini),
+            Self::Cascade => Some(InitAgent::Cascade),
+            Self::Hecate => Some(InitAgent::Hecate),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum InitStore {
     File,
     Sqlite,
@@ -959,12 +986,14 @@ struct DoctorArgs {
     /// High-authority source to use for --write-check.
     #[arg(long, value_parser = parse_source)]
     source: Option<String>,
-    /// Agent profile to diagnose from its generated .dent8 bundle and MCP config.
+    /// Agent profile to diagnose from its generated .dent8 bundle and MCP config; use `all`
+    /// for every installed known profile.
     #[arg(long, value_enum, conflicts_with = "source")]
-    agent: Option<InitAgent>,
+    agent: Option<DoctorAgent>,
     /// Diagnose every installed known agent profile from its generated .dent8 bundle.
     #[arg(
         long,
+        visible_alias = "all-configured-agents",
         conflicts_with_all = [
             "source",
             "agent",
@@ -975,7 +1004,7 @@ struct DoctorArgs {
         ]
     )]
     all_agents: bool,
-    /// Directory for dent8's local project config when --agent or --all-agents is set.
+    /// Directory for dent8's local project config when --agent/--agent all/--all-agents is set.
     #[arg(long, default_value = ".dent8", value_name = "DIR")]
     dir: String,
     /// MCP config file to check when --agent is set.

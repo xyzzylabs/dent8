@@ -273,7 +273,7 @@ tool speaks it, the **MCP** server for live tool-mediated access. The matrix bel
 tools to their adapter. The **dent8 side of every bundled profile is verified in this repo**:
 the sample MCP configs (Claude Code, Cursor, grok-build, Gemini, Cascade, hecate) are validated
 against the real server contract in tests, and the release-acceptance script initializes the
-Codex profile and runs `doctor --all-agents --write-check` — a real signed write through every
+Codex profile and runs `doctor --agent all --write-check` — a real signed write through every
 bundled profile's generated config. On top of that, dent8's own development **dogfoods several
 rows at once**: Claude Code and Grok Build run the full hook loop (`SessionStart` →
 `dent8 context`, `SessionEnd` → `dent8 capture` — Claude's wiring is tracked in

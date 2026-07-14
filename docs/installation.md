@@ -95,7 +95,7 @@ backend, with one stdio MCP server subprocess per agent identity:
 dent8 init --agent codex --store sqlite --install-mcp
 dent8 agent add --agent claude-code
 dent8 agent add --agent cursor
-dent8 doctor --all-agents --write-check
+dent8 doctor --agent all --write-check
 ```
 
 Each agent gets its own source key/grant and **project-local** MCP config (for example

@@ -16,18 +16,13 @@ shape as the [Codex example](../codex/config.sample.toml) — or `grok mcp add d
 
 When this repo already dogfoods Claude Code on `.mcp.json` (bound to
 `source:claude-code`), **do not** overwrite that file for Grok. Add Grok as a second
-agent and keep its MCP entry **project-scoped** so other Grok sessions do not attach
-this store:
+agent; dent8 writes Grok's native **project-scoped** `.grok/config.toml` by default so
+other Grok sessions do not attach this store:
 
 ```sh
 cd /abs/path/to/project
 # Shared store already exists:
-dent8 agent add --agent grok-build --mcp-local-bin \
-  --mcp-config .dent8/mcp-grok-build.json
-# Wire Grok's native config from the generated env (project scope only):
-grok mcp add dent8 --scope project \
-  -e DENT8_STORE_URL=… -e DENT8_GRANT=… -e DENT8_IDENTITY_KEY=… \
-  -- .dent8/bin/dent8 mcp serve
+dent8 agent add --agent grok-build --mcp-local-bin
 # Do not use --scope user for a repo dogfood store.
 ```
 
@@ -37,12 +32,12 @@ Fresh project (no Claude `.mcp.json` yet):
 dent8 init --agent grok-build --install-mcp --mcp-local-bin
 ```
 
-Re-run `dent8 mcp install --agent grok-build` (or `agent add` with the same
-`--mcp-config`) to regenerate later. Doctor:
+Re-run `dent8 mcp install --agent grok-build` (or `agent add`) to regenerate later.
+Use `--mcp-config .mcp.json` only when you intentionally want Grok's Claude-compatible JSON
+path. Doctor:
 
 ```sh
-dent8 doctor --agent grok-build --dir .dent8 \
-  --mcp-config .dent8/mcp-grok-build.json --write-check
+dent8 doctor --agent grok-build --dir .dent8 --write-check
 ```
 
 ## Prompt Grok Build

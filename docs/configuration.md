@@ -231,11 +231,14 @@ identity env or installed MCP env, `dent8 doctor --agent <profile> --repair --wr
 repairs the generated env from the current signed grant, refreshes the selected MCP config,
 and then reruns those checks.
 
-For a shared local setup, use `dent8 doctor --all-agents --write-check` to check every installed
-known profile in the bundle. Profiles without a source-bound identity env or default project-local
-MCP config are reported as `SKIP`; any installed profile that fails its normal agent doctor fails
-the aggregate command. Hecate task configs are custom paths, so check them with
-`dent8 doctor --agent hecate --mcp-config PATH`.
+For a shared local setup, use `dent8 doctor --agent all --write-check` (or the older
+`--all-agents` flag) to check every installed known profile in the bundle. Profiles without a
+source-bound identity env or MCP config are reported as `SKIP`; all-agent discovery prefers
+the profile's default project-local MCP config (for example Grok Build's
+`.grok/config.toml`) and falls back to `.dent8/mcp-<agent>.json` sidecars for explicit
+compatibility setups. Any installed profile that fails its normal agent doctor fails the
+aggregate command. Hecate task configs are custom paths, so check them with
+`dent8 doctor --agent hecate --mcp-config PATH` or a `.dent8/mcp-hecate.json` sidecar.
 
 `doctor --agent` also reports native-memory bypass posture. For Codex, Claude Code, Gemini,
 Cascade, Cursor, and Grok Build it inspects the expected **project** hook config and reports

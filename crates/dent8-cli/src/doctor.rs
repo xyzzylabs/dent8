@@ -22,7 +22,7 @@ use crate::setup::{
 };
 use crate::witness;
 use crate::{
-    CliOutput, DEFAULT_MCP_SMOKE_TIMEOUT, DoctorArgs, InitAgent, absolute_path,
+    CliOutput, DEFAULT_MCP_SMOKE_TIMEOUT, DoctorAgent, DoctorArgs, InitAgent, absolute_path,
     authority_registry_path, authority_required, first_line, load_authority_registry_at,
     load_store, log_path, mcp_config, now_millis, ops, print_json_stdout, shell_quote, store_url,
     verify_log,
@@ -165,10 +165,15 @@ pub(crate) fn doctor_check_json(check: &DoctorCheck<'_>) -> serde_json::Value {
 }
 
 pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
-    if args.all_agents {
+    if args.all_agents || args.agent == Some(DoctorAgent::All) {
+        if let Some(error) = doctor_all_agents_arg_error(args) {
+            let mut output = String::from("dent8 doctor\n");
+            doctor_line(&mut output, "FAIL", &error);
+            return DoctorReport::new(output, false);
+        }
         return doctor_all_agents_report(args);
     }
-    if let Some(agent) = args.agent {
+    if let Some(agent) = args.agent.and_then(DoctorAgent::profile) {
         return doctor_agent_report(args, agent);
     }
 
@@ -243,6 +248,22 @@ pub(crate) fn doctor_report(args: &DoctorArgs) -> DoctorReport {
     DoctorReport::new(output, ok)
 }
 
+fn doctor_all_agents_arg_error(args: &DoctorArgs) -> Option<String> {
+    if args.mcp_config.is_some() {
+        return Some("--agent all cannot be combined with --mcp-config".to_string());
+    }
+    if args.mcp_command.is_some() {
+        return Some("--agent all cannot be combined with --mcp-command".to_string());
+    }
+    if args.mcp_local_bin {
+        return Some("--agent all cannot be combined with --mcp-local-bin".to_string());
+    }
+    if args.repair {
+        return Some("--agent all cannot be combined with --repair".to_string());
+    }
+    None
+}
+
 pub(crate) fn doctor_all_agents_report(args: &DoctorArgs) -> DoctorReport {
     let mut output = String::from("dent8 doctor\n");
     let dir = std::path::PathBuf::from(&args.dir);
@@ -297,22 +318,33 @@ pub(crate) fn doctor_all_agent_run(
     agent: InitAgent,
     dir: &std::path::Path,
 ) -> DoctorAgentRun {
-    if let Some(reason) = doctor_all_agent_skip_reason(agent, dir) {
-        let message = format!("{}: {reason}", agent.cli_name());
-        return DoctorAgentRun {
-            agent,
-            status: "skipped",
-            report: doctor_skip_report(&message),
-        };
-    }
+    let config_path = match doctor_all_agent_config_path(agent, dir) {
+        Ok(path) => path,
+        Err(reason) => {
+            let message = format!("{}: {reason}", agent.cli_name());
+            return DoctorAgentRun {
+                agent,
+                status: "skipped",
+                report: doctor_skip_report(&message),
+            };
+        }
+    };
 
     let agent_args = DoctorArgs {
         write_check: args.write_check,
         source: None,
-        agent: Some(agent),
+        agent: Some(match agent {
+            InitAgent::Codex => DoctorAgent::Codex,
+            InitAgent::ClaudeCode => DoctorAgent::ClaudeCode,
+            InitAgent::Cursor => DoctorAgent::Cursor,
+            InitAgent::GrokBuild => DoctorAgent::GrokBuild,
+            InitAgent::Gemini => DoctorAgent::Gemini,
+            InitAgent::Cascade => DoctorAgent::Cascade,
+            InitAgent::Hecate => DoctorAgent::Hecate,
+        }),
         all_agents: false,
         dir: dir.to_string_lossy().into_owned(),
-        mcp_config: None,
+        mcp_config: Some(config_path.to_string_lossy().into_owned()),
         mcp_command: None,
         mcp_local_bin: false,
         repair: false,
@@ -326,38 +358,45 @@ pub(crate) fn doctor_all_agent_run(
     }
 }
 
-pub(crate) fn doctor_all_agent_skip_reason(
+pub(crate) fn doctor_all_agent_config_path(
     agent: InitAgent,
     dir: &std::path::Path,
-) -> Option<String> {
+) -> Result<std::path::PathBuf, String> {
     let identity_env = match identity::identity_env_path_for_source(dir, agent.source()) {
         Ok(path) => path,
-        Err(error) => return Some(format!("identity env path: {error}")),
+        Err(error) => return Err(format!("identity env path: {error}")),
     };
     if !identity_env.exists() {
-        return Some(format!(
+        return Err(format!(
             "not installed (missing source identity env {})",
             identity_env.display()
         ));
     }
 
-    let config_path = match mcp_config::default_project_config_path(agent, dir) {
+    let default_config_path = match mcp_config::default_project_config_path(agent, dir) {
         Ok(Some(path)) => path,
-        Ok(None) => {
-            return Some(
-                "no default MCP config path; run `dent8 doctor --agent hecate --mcp-config PATH`"
-                    .to_string(),
-            );
-        }
-        Err(error) => return Some(error),
+        Ok(None) => dir.join(format!("mcp-{}.json", agent.cli_name())),
+        Err(error) => return Err(error),
     };
-    if !config_path.exists() {
-        return Some(format!(
-            "MCP config not installed at {}",
-            config_path.display()
-        ));
+    if default_config_path.exists() {
+        return Ok(default_config_path);
     }
-    None
+
+    let sidecar = dir.join(format!("mcp-{}.json", agent.cli_name()));
+    if sidecar.exists() {
+        return Ok(sidecar);
+    }
+
+    if agent == InitAgent::Hecate {
+        return Err(
+            "no default MCP config path; run `dent8 doctor --agent hecate --mcp-config PATH`"
+                .to_string(),
+        );
+    }
+    Err(format!(
+        "MCP config not installed at {}",
+        default_config_path.display()
+    ))
 }
 
 pub(crate) fn doctor_skip_report(message: &str) -> DoctorReport {

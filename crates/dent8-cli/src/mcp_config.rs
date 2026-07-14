@@ -156,7 +156,7 @@ impl InstallMode {
 
 #[derive(Copy, Clone)]
 enum ConfigFormat {
-    CodexToml,
+    McpServersToml,
     McpServersJson,
     HecateTaskJson,
 }
@@ -178,15 +178,16 @@ pub(crate) fn install(options: &InstallOptions) -> Result<InstallResult, String>
     let dent8_dir = absolute_path(&options.dent8_dir)?;
     let env = load_agent_env(&dent8_dir, options.agent)?;
     let target = target_config_path(options.agent, options.config_path.as_deref(), &dent8_dir)?;
-    let format = config_format(options.agent);
+    let format = config_format(options.agent, &target);
     let existing = match std::fs::read_to_string(&target) {
         Ok(contents) => Some(contents),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => return Err(format!("cannot read {}: {error}", target.display())),
     };
     let rendered = match format {
-        ConfigFormat::CodexToml => patch_codex_toml(
+        ConfigFormat::McpServersToml => patch_mcp_servers_toml(
             existing.as_deref().unwrap_or_default(),
+            options.agent,
             &options.command,
             &options.args,
             &env,
@@ -238,9 +239,9 @@ pub(crate) fn load_installed_server(
     let target = target_config_path(agent, config_path, &dent8_dir)?;
     let contents = std::fs::read_to_string(&target)
         .map_err(|error| format!("cannot read {}: {error}", target.display()))?;
-    let format = config_format(agent);
+    let format = config_format(agent, &target);
     let (command, args, env, cwd) = match format {
-        ConfigFormat::CodexToml => read_codex_toml_server(&contents, &target)?,
+        ConfigFormat::McpServersToml => read_mcp_servers_toml_server(&contents, &target)?,
         ConfigFormat::McpServersJson => read_mcp_servers_json_server(&contents, &target)?,
         ConfigFormat::HecateTaskJson => read_hecate_task_json_server(&contents, &target)?,
     };
@@ -421,18 +422,20 @@ fn project_root_for(dent8_dir: &Path) -> Option<PathBuf> {
 fn default_config_path(agent: InitAgent, root: &Path) -> Option<PathBuf> {
     match agent {
         InitAgent::Codex => Some(root.join(".codex/config.toml")),
-        InitAgent::ClaudeCode | InitAgent::GrokBuild => Some(root.join(".mcp.json")),
+        InitAgent::ClaudeCode => Some(root.join(".mcp.json")),
         InitAgent::Cursor => Some(root.join(".cursor/mcp.json")),
+        InitAgent::GrokBuild => Some(root.join(".grok/config.toml")),
         InitAgent::Gemini => Some(root.join(".gemini/settings.json")),
         InitAgent::Cascade => Some(root.join(".windsurf/mcp_config.json")),
         InitAgent::Hecate => None,
     }
 }
 
-fn config_format(agent: InitAgent) -> ConfigFormat {
+fn config_format(agent: InitAgent, target: &Path) -> ConfigFormat {
     match agent {
-        InitAgent::Codex => ConfigFormat::CodexToml,
+        InitAgent::Codex => ConfigFormat::McpServersToml,
         InitAgent::Hecate => ConfigFormat::HecateTaskJson,
+        InitAgent::GrokBuild if path_extension_is(target, "toml") => ConfigFormat::McpServersToml,
         InitAgent::ClaudeCode
         | InitAgent::Cursor
         | InitAgent::GrokBuild
@@ -441,8 +444,15 @@ fn config_format(agent: InitAgent) -> ConfigFormat {
     }
 }
 
-fn patch_codex_toml(
+fn path_extension_is(path: &Path, expected: &str) -> bool {
+    path.extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(expected))
+}
+
+fn patch_mcp_servers_toml(
     existing: &str,
+    agent: InitAgent,
     command: &str,
     server_args: &[String],
     env: &BTreeMap<String, String>,
@@ -462,8 +472,10 @@ fn patch_codex_toml(
         toml_args.push(arg.as_str());
     }
     server["args"] = value(toml_args);
-    server["startup_timeout_sec"] = value(20);
-    server["tool_timeout_sec"] = value(60);
+    if agent == InitAgent::Codex {
+        server["startup_timeout_sec"] = value(20);
+        server["tool_timeout_sec"] = value(60);
+    }
     let mut env_table = Table::new();
     for (key, value_text) in env {
         env_table[key] = value(value_text.as_str());
@@ -476,7 +488,7 @@ fn patch_codex_toml(
     Ok(ensure_trailing_newline(doc.to_string()))
 }
 
-fn read_codex_toml_server(contents: &str, path: &Path) -> Result<ServerFields, String> {
+fn read_mcp_servers_toml_server(contents: &str, path: &Path) -> Result<ServerFields, String> {
     let doc = contents
         .parse::<DocumentMut>()
         .map_err(|error| format!("cannot parse TOML MCP config: {error}"))?;

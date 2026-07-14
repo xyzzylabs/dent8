@@ -42,9 +42,10 @@ MCP and hooks are **project-scoped** (gitignored except committed Claude setting
 
 Grok Build does **not** share Claude Code's project-root `.mcp.json` in this dogfood
 setup (that file is bound to `source:claude-code`). Install Grok's MCP entry with
-`dent8 agent add --agent grok-build --mcp-local-bin --mcp-config .dent8/mcp-grok-build.json`,
-then wire the same env into project `.grok/config.toml` only. Doctor must pass that side
-file: `dent8 doctor --agent grok-build --dir .dent8 --mcp-config .dent8/mcp-grok-build.json`.
+`dent8 agent add --agent grok-build --mcp-local-bin`; dent8 patches project
+`.grok/config.toml`, and `dent8 doctor --agent grok-build --dir .dent8` reads that native
+config by default. Use `--mcp-config .mcp.json` only for an intentional Claude-compatible
+JSON setup in a project where that file is not already owned by another source.
 See [`examples/grok-build/`](../examples/grok-build/).
 
 Run the full dogfood acceptance path when the setup itself changed:

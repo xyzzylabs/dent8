@@ -92,7 +92,7 @@ run_dent8 witness verify
 
 echo
 echo "# 7. Smoke every installed agent profile through its configured MCP server"
-run_advisory doctor --all-agents --dir "$DIR"
+run_advisory doctor --agent all --dir "$DIR"
 
 echo
 echo "# 8. Prove the selected agent's installed MCP write path"
@@ -101,4 +101,4 @@ run_dent8 doctor --agent "$AGENT" --dir "$DIR" --write-check
 echo
 echo "# 9. Keep witness coverage current after doctor write probes"
 sign_witness_if_possible
-run_advisory doctor --all-agents --dir "$DIR"
+run_advisory doctor --agent all --dir "$DIR"

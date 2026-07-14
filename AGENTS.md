@@ -67,8 +67,7 @@ scripts/dogfood-doctor.sh
 .dent8/bin/dent8 doctor --agent codex --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent claude-code --dir .dent8 --write-check
 .dent8/bin/dent8 doctor --agent cursor --dir .dent8 --write-check
-.dent8/bin/dent8 doctor --agent grok-build --dir .dent8 \
-  --mcp-config .dent8/mcp-grok-build.json --write-check
+.dent8/bin/dent8 doctor --agent grok-build --dir .dent8 --write-check
 set -a; . .dent8/env; set +a
 export DENT8_WITNESS_GRANTS_LOG=.dent8/witness-grants.jsonl
 DENT8_WITNESS_KEY=.dent8/witness.key .dent8/bin/dent8 witness sign

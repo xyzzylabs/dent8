@@ -92,7 +92,7 @@ echo "# doctor: installed MCP smoke + trusted write check"
 
 echo "# doctor: aggregate installed-agent gate"
 "$BIN" doctor \
-  --all-agents \
+  --agent all \
   --dir .dent8 \
   --write-check \
   --output json >"$OUT/doctor-all-agents.json"
