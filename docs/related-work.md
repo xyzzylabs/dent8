@@ -192,6 +192,14 @@ a deterministic, replayable, hash-pinnable fold over one append-only log. See
 [research/novelty.md](research/novelty.md) for the vetted (and largely killed)
 candidate directions.
 
+**LLM-as-verifier work.** LLM-as-a-Verifier frames verification itself as a scaling axis for
+agentic tasks, using scoring-token distributions, repeated evaluation, and criteria
+decomposition to produce fine-grained scores; it also reports task-progress signals and a
+Claude Code extension [23]. For dent8, this is best treated as an optional evaluator or
+content-check adapter: useful for judging trajectories and suspicious fact proposals, but
+not a replacement for authority, provenance, replay, signatures, or witnessed logs (see
+[ADR 0021](decisions/0021-llm-verifier-adapters.md)).
+
 ## Where dent8 is — and is not — differentiated
 
 Honestly stated: dent8 is **not** differentiated on any individual primitive.
@@ -246,3 +254,4 @@ and auditability — **not** on retrieval F1, where dent8 does not compete.
 - [20] [MemLineage: Lineage-Guided Enforcement for LLM Agent Memory (arXiv 2605.14421)](https://arxiv.org/abs/2605.14421)
 - [21] [Adaptive Memory Admission Control for LLM Agents (arXiv 2603.04549)](https://arxiv.org/abs/2603.04549)
 - [22] [Memory Poisoning Attack and Defense on Memory Based LLM-Agents (arXiv 2601.05504)](https://arxiv.org/abs/2601.05504)
+- [23] [LLM-as-a-Verifier: A General-Purpose Verification Framework (arXiv 2607.05391v2)](https://arxiv.org/abs/2607.05391v2)

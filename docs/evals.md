@@ -293,6 +293,25 @@ Honest notes on the non-catches, which are the point of shipping a *demo*:
 Run it with `cargo test -p dent8-evals --lib content_hook -- --nocapture` (prints the
 table; requires the repo checkout for the example scanner).
 
+## Optional LLM-verifier eval lane (design-only)
+
+[ADR 0021](decisions/0021-llm-verifier-adapters.md) allows LLM-as-verifier systems as an
+**optional, non-default** eval adapter, not as part of the deterministic firewall. This is
+useful for scoring complete agent trajectories and dent8-vs-baseline dogfood runs on
+criteria such as "used trusted facts," "did not rely on stale memory," "preserved evidence,"
+and "explained the memory decision."
+
+The lane must stay separate from the built-in corpus above:
+
+- hermetic CI continues to use deterministic fixtures and computed outcome predicates;
+- verifier runs record model, provider, prompt/criteria id, temperature, and score shape;
+- results are reported as auxiliary metrics, never as proof that a fact is true;
+- a verifier may flag or taint a candidate through the content-check hook, but may not raise
+  authority or canonicalize a fact.
+
+This is design-only until there is a concrete adapter and a fixture/mocking strategy that
+keeps normal `cargo test --workspace` reproducible.
+
 ## Scenario-family golden corpus (built)
 
 The file-based fixture corpus this strategy calls for lives under
@@ -415,4 +434,3 @@ Minimum database checks:
 - `fact.asserted` cannot omit value or evidence.
 - Projection update and event append are atomic.
 - Concurrent contradiction writes serialize into deterministic outcomes.
-

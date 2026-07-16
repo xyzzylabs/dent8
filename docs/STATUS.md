@@ -882,6 +882,11 @@ subject+predicate.
   That completes the ADR's read/audit-first shape. Remaining from the ADR: the Tauri desktop
   shell (step 4) and write actions over the signed identity path (step 5). It must not
   become a separate write path or memory provider.
+- **LLM verifier adapters are design-only.** [ADR 0021](decisions/0021-llm-verifier-adapters.md)
+  accepts LLM-as-verifier systems as optional eval/content-check/debugger signals, not as part
+  of the deterministic core. No adapter ships today: the built-in evals remain deterministic,
+  the content-check hook remains scanner-agnostic, and a model score cannot raise authority,
+  canonicalize a fact, or bypass the signed write path.
 - **A *hosted* / operated witness service.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now

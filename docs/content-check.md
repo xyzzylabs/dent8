@@ -165,6 +165,24 @@ fi
 Prefer `taint` over `reject` for advisory signals (low-confidence detections,
 policy-of-record scanners) so the write survives but stays visible.
 
+### LLM verifier adapters
+
+LLM-as-verifier systems belong here when they are used for write-time content judgment
+([ADR 0021](decisions/0021-llm-verifier-adapters.md)). An adapter can evaluate the candidate
+fact, evidence summaries, and source metadata, then map its result to the same three verdicts:
+`allow`, `reject`, or `taint`.
+
+Keep the boundary sharp:
+
+- the verifier's score is evidence or a content flag, not authority;
+- `reject` should be reserved for policy-level confidence, not vague unease;
+- `taint` is the safer default for advisory, drifting, or provider-dependent signals;
+- model/provider, prompt or criteria id, and score shape should be included in the reason or
+  sidecar audit output so a later replay can explain what judged the fact.
+
+Verifier designs that require scoring-token logits are still adapter details. dent8's hook
+contract does not depend on any one provider exposing logits.
+
 ## The reference scanner is a demo, not a defense
 
 [`examples/scanners/demo-content-check.sh`](../examples/scanners/README.md) is a handful
