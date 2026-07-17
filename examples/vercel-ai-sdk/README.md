@@ -13,6 +13,8 @@ Two ways to wire it, both firewalled:
 keep in sync, typed arguments, and firewall refusals surfaced to the model *as tool results*
 it reads and adapts to. [`dent8_tools_agent.ts`](dent8_tools_agent.ts):
 
+This adapter requires AI SDK 7.0.31+ and Node.js 22+.
+
 ```ts
 import { openai } from "@ai-sdk/openai";
 import { generateText, stepCountIs } from "ai";

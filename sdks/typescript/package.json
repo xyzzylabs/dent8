@@ -50,8 +50,8 @@
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "peerDependencies": {
-    "@langchain/core": ">=0.3",
-    "ai": ">=5"
+    "@langchain/core": ">=1.2.3",
+    "ai": ">=7.0.31"
   },
   "peerDependenciesMeta": {
     "@langchain/core": {
@@ -62,10 +62,10 @@
     }
   },
   "devDependencies": {
-    "@langchain/core": "^0.3",
+    "@langchain/core": "^1.2.3",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@types/node": "^26.1.1",
-    "ai": "^5",
+    "ai": "^7.0.31",
     "typescript": "^5.5",
     "zod": "^4.4.3"
   }

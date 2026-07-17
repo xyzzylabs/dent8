@@ -214,6 +214,7 @@ jobs:
         working-directory: sdks/typescript
         run: |
           npm ci
+          npm audit --audit-level=low
           DENT8_BIN="$GITHUB_WORKSPACE/target/debug/dent8" npm test
 
   docker:

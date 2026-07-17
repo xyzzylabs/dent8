@@ -45,6 +45,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   instructions but rejected all 17 tools at `tools/list` schema validation.
 
 ### Changed
+- **The optional TypeScript framework adapters now require non-vulnerable framework lines:**
+  AI SDK 7.0.31+ (Node.js 22+) and `@langchain/core` 1.2.3+ (Node.js 20+). The dependency-free
+  SDK core remains Node.js 18-compatible. This clears the known `provider-utils`, LangSmith,
+  and UUID advisories from the adapter test tree instead of suppressing development-only audit
+  findings; the Node SDK CI job now fails on any future npm advisory.
 - **Tauri, operated-witness hosting, and the training/eval substrate are active product
   directions rather than frozen roadmap items.** Status remains explicit: the browser control
   plane and witness primitives are runnable; native packaging, managed hosting, and a concrete

@@ -13,6 +13,8 @@ Two ways to wire it, both firewalled:
 no MCP subprocess to keep in sync, typed arguments, and firewall refusals surfaced to the
 model *as tool results* it reads and adapts to. [`dent8_tools_agent.ts`](dent8_tools_agent.ts):
 
+This adapter requires `@langchain/core` 1.2.3+ and Node.js 20+.
+
 ```ts
 import { ChatOpenAI } from "@langchain/openai";
 import { createReactAgent } from "@langchain/langgraph/prebuilt";

@@ -68,6 +68,8 @@ reads and adapts to.
 
 **Vercel AI SDK** — `npm i ai`:
 
+Requires AI SDK 7.0.31+ and Node.js 22+, matching the framework's runtime requirement.
+
 ```ts
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
@@ -81,6 +83,9 @@ const { text } = await generateText({
 ```
 
 **LangChain.js** — `npm i @langchain/core`:
+
+Requires `@langchain/core` 1.2.3+ and Node.js 20+. The dependency-free dent8 SDK core still
+supports Node.js 18+; these higher requirements apply only when importing a framework adapter.
 
 ```ts
 import { dent8Tools } from "dent8/langchain";
