@@ -10,6 +10,15 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Human-reviewed legitimate-session evals:** `dent8 eval --trace <FILE>` (repeatable) accepts
+  the strict `dent8.legitimate-trace/1` format, atomically replays independent expected-admit
+  operation scenarios against their exact trusted pre-write baselines, and reports reviewed false
+  positives separately from the designed 0/22 corpus. `DENT8_EVAL_CAPTURE` now records admitted
+  and rejected store decisions from the shared CLI/MCP/daemon path into raw mode-0600 JSONL;
+  `dent8 eval prepare` creates a non-runnable per-operation review/redaction draft and
+  `dent8 eval finalize` refuses incomplete classifications before producing an evaluable trace.
+  Capture is fail-open and outside the event log. Reports never echo event values. A synthetic
+  template and privacy checklist live in `evals/traces/` — no captured-user result is claimed yet.
 - **First-class LlamaIndex tools** (`dent8.llamaindex`, `pip install "dent8[llamaindex]"`).
   Native LlamaIndex `FunctionTool`s over the belief surface, built on the `dent8` SDK — no MCP
   subprocess; `dent8_tools(source=…, authority=…)` returns the same six tools as the LangChain

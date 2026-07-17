@@ -11,6 +11,7 @@ use dent8_core::{
     FactEventId, FactEventKind, FactId, FactLifecycle, FactValue, Predicate, Provenance,
     RetractionReason, Subject, SupersessionReason, TimestampMillis, Ttl,
 };
+use dent8_evals::TraceOperationKind;
 use dent8_store::{
     AppendReceipt, EventFilter, EventStore, InMemoryEventStore, IntegrityReceipt,
     PredicateRegistry, StateDiff, StoreError, apply_policy_defaults, diff_states, enforce_policy,
@@ -699,13 +700,18 @@ pub(crate) fn op_assert(
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
     attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::invalid)?;
-    let receipt = admit(&mut store, &registry, event.clone(), now).map_err(|error| {
-        OpError::rejected_as(
-            ErrorCode::for_store_error(&error),
-            format!("REJECTED: {error}"),
-        )
-    })?;
+    let capture =
+        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Assert, source, &store);
+    let receipt = match admit(&mut store, &registry, event.clone(), now) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(std::slice::from_ref(&event), code);
+            return Err(OpError::rejected_as(code, format!("REJECTED: {error}")));
+        }
+    };
     append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
+    capture.admitted(std::slice::from_ref(&event));
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority})\n  \
          seq={}  hash={}",
@@ -819,13 +825,18 @@ pub(crate) fn op_derive(
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
     attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::invalid)?;
-    let receipt = admit(&mut store, &registry, event.clone(), now).map_err(|error| {
-        OpError::rejected_as(
-            ErrorCode::for_store_error(&error),
-            format!("REJECTED: {error}"),
-        )
-    })?;
+    let capture =
+        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Derive, source, &store);
+    let receipt = match admit(&mut store, &registry, event.clone(), now) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(std::slice::from_ref(&event), code);
+            return Err(OpError::rejected_as(code, format!("REJECTED: {error}")));
+        }
+    };
     append_events(path, std::slice::from_mut(&mut event), identity).map_err(write_error_to_op)?;
+    capture.admitted(std::slice::from_ref(&event));
     Ok(format!(
         "ACCEPTED  {subject_kind}:{subject_key} {predicate} = \"{value}\"  (authority={authority}, \
          derived from {from_kind}:{from_key} {from_predicate})\n  seq={}  hash={}",
@@ -1392,18 +1403,23 @@ pub(crate) fn op_supersede(
         }
     }
 
+    let capture =
+        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Supersede, source, &store);
     // Apply all in memory first (replacement, then each supersession); persist only if
     // every one is admitted, so a rejected revision leaves no orphan in the durable log.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(&events, code);
             let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::rejected_as(
-                ErrorCode::for_store_error(&error),
+                code,
                 format!("REJECTED: {error}{note}"),
             ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
+    capture.admitted(&events);
 
     let count = incumbents.len();
     let facts = if count == 1 { "fact" } else { "facts" };
@@ -1531,17 +1547,22 @@ pub(crate) fn op_retract(
         now_millis(),
     )
     .map_err(|error| OpError::invalid(format!("invalid retraction: {error}")))?;
+    let capture =
+        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Retract, source, &store);
     // Apply all in memory first (each authority-gated); persist only if all are admitted.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(&events, code);
             let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::rejected_as(
-                ErrorCode::for_store_error(&error),
+                code,
                 format!("REJECTED: {error}{note}"),
             ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
+    capture.admitted(&events);
     let count = incumbents.len();
     let facts = if count == 1 { "fact" } else { "facts" };
     Ok(format!(
@@ -1602,6 +1623,7 @@ pub(crate) fn op_reinforce(
         predicate,
         authority,
         source,
+        TraceOperationKind::Reinforce,
         "reinforce",
         |incumbent| FactEventKind::Reinforced {
             by: incumbent.clone(),
@@ -1635,6 +1657,7 @@ pub(crate) fn op_expire(
         predicate,
         authority,
         source,
+        TraceOperationKind::Expire,
         "expire",
         |_incumbent| FactEventKind::Expired {
             reason: dent8_core::ExpirationReason::PolicyRetention,
@@ -1679,6 +1702,7 @@ pub(crate) fn op_used_in_decision(
         predicate,
         authority,
         source,
+        TraceOperationKind::UsedInDecision,
         "mark used-in-decision",
         |_incumbent| FactEventKind::UsedInDecision {
             decision_id: decision.to_string(),
@@ -1752,15 +1776,24 @@ pub(crate) fn op_record_retrievals(
         .map_err(|error| OpError::invalid(format!("invalid retrieval record: {error}")))?;
         events.push(event);
     }
+    let capture = crate::eval_capture::EvalCapture::begin(
+        TraceOperationKind::RecordRetrievals,
+        source,
+        &store,
+    );
     // Apply all in memory first; persist only if every record is admitted.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
-            return Err(OpError::rejected(format!(
-                "could not record retrieval: {error}"
-            )));
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(&events, code);
+            return Err(OpError::rejected_as(
+                code,
+                format!("could not record retrieval: {error}"),
+            ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
+    capture.admitted(&events);
     Ok(events.len())
 }
 
@@ -1776,6 +1809,7 @@ pub(crate) fn build_per_incumbent(
     predicate: &str,
     authority: AuthorityLevel,
     source: &str,
+    operation: TraceOperationKind,
     verb: &str,
     kind_for: impl Fn(&FactId) -> FactEventKind,
     identity: &WriteIdentity,
@@ -1816,16 +1850,20 @@ pub(crate) fn build_per_incumbent(
         .map_err(|error| OpError::invalid(format!("invalid {verb}: {error}")))?;
         events.push(event);
     }
+    let capture = crate::eval_capture::EvalCapture::begin(operation, source, &store);
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(&events, code);
             let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::rejected_as(
-                ErrorCode::for_store_error(&error),
+                code,
                 format!("REJECTED: {error}{note}"),
             ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
+    capture.admitted(&events);
     Ok(events)
 }
 
@@ -1989,18 +2027,23 @@ pub(crate) fn op_contradict(
     // opposing fact carries the new content; the contradiction marker is value-less.
     enforce_content_check(&mut events)?;
 
+    let capture =
+        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Contradict, source, &store);
     // Apply both in memory first; persist only if both admit (a Canonical incumbent makes
     // the contradiction hard-alarm, rejecting the whole operation with nothing persisted).
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
+            let code = ErrorCode::for_store_error(&error);
+            capture.rejected(&events, code);
             let note = record_survived_challenge(path, event, &error, identity);
             return Err(OpError::rejected_as(
-                ErrorCode::for_store_error(&error),
+                code,
                 format!("REJECTED: {error}{note}"),
             ));
         }
     }
     append_events(path, &mut events, identity).map_err(write_error_to_op)?;
+    capture.admitted(&events);
     Ok(format!(
         "CONTESTED  {subject_kind}:{subject_key} {predicate}: {} (incumbent) vs \"{opposing_value}\"  \
          (authority={authority})\n  both are now believed; resolve with `supersede` (install a \

@@ -792,6 +792,21 @@ subject+predicate.
   scanner's deliberate misses, rot13/translation, are themselves frozen as a regression guard
   so the numbers stay honest). Run:
   `cargo test -p dent8-evals --lib content_hook -- --nocapture`.
+- **Reviewed legitimate-traffic traces** (`dent8 eval --trace <FILE>`): the strict
+  `dent8.legitimate-trace/1` lane evaluates human-reviewed expected-admit operation batches
+  atomically through the same store-level firewall as the designed benign corpus. Every operation
+  is an independent scenario with its exact trusted pre-write baseline, so rejected writes and
+  reused reserved ids replay honestly. It rejects duplicate ids within a scenario and
+  unannotated/persisted-log input as malformed evidence, requires explicit
+  captured/synthetic and raw/redacted metadata, never echoes event values in reports, aggregates
+  repeated `--trace` inputs in text/JSON, and exits non-zero on a reviewed false positive. The
+  opt-in recorder (`DENT8_EVAL_CAPTURE`) captures admitted and rejected decisions from the shared
+  CLI/MCP/daemon operation path into a raw mode-0600 JSONL journal. `dent8 eval prepare` emits a
+  non-runnable review draft; `dent8 eval finalize` requires explicit per-operation classification,
+  reviewer, and basis before producing a trace. Capture is fail-open and outside the event log.
+  The workflow and synthetic example are in [`evals/traces/`](../evals/traces/). **No
+  captured-user trace ships yet**; the published false-positive evidence remains the designed
+  0/22 tally.
 
 ## Remaining Gaps
 

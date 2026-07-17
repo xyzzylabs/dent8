@@ -56,10 +56,46 @@ table.
 
 Current result: **0 false positives across 22 benign writes (7 scenarios)** — the firewall
 admits normal revision in full. These are hand-designed scenarios covering the ordinary ways
-a shared fact base evolves; the roadmap's next step is to replay **real captured agent
-sessions** through the same measurement, which dogfooding and early users produce (the
-harness and metric are ready for that data). Frozen as a test
+a shared fact base evolves. Frozen as a test
 (`the_legitimate_corpus_has_zero_false_positives`).
+
+### Reviewed session traces (built; awaiting captured data)
+
+`dent8 eval --trace <FILE>` extends the same store-level false-positive measurement to
+human-reviewed attempted operation batches using the strict `dent8.legitimate-trace/1` schema.
+This avoids a circular result: a normal persisted store log contains only admitted events, so it
+cannot reveal writes the firewall rejected. Each trace must explicitly declare captured vs
+synthetic provenance, agent/integration, raw vs redacted content, a reviewer and review basis,
+and `expected: "admit"` on every operation. Each operation is an independent scenario with its
+own trusted pre-write `baseline_events`; its candidate batch is replayed atomically. A rejection
+counts once at the operation boundary, cannot contaminate another scenario, and event ids may be
+reused across scenarios exactly as the CLI reuses a reserved id after a rejected write. Duplicate
+trace/operation ids, duplicate ids within one scenario, or structurally invalid events invalidate
+the evidence instead of distorting the rate.
+
+Reports expose ids, counts, and typed rejection categories but never echo fact values, evidence
+locators, review notes, or error strings. A `raw` trace is accepted for local analysis with a
+warning; only reviewed `redacted` traces should be shared. The synthetic format example and
+privacy checklist live in [`evals/traces/`](../evals/traces/). Repeat `--trace` to aggregate
+multiple sessions (duplicate trace ids are refused); `--output json` exposes a separate
+`reviewed_legitimate_traffic` object with captured and synthetic counts, and any reviewed false
+positive makes the command exit non-zero.
+
+The collection workflow is built. `DENT8_EVAL_CAPTURE=<FILE>` records completed arbitration
+attempts (admitted and rejected) from the shared CLI/MCP/daemon `op_*` path into a raw mode-0600
+JSONL journal, with the exact pre-operation baseline for every case. `dent8 eval prepare` converts
+that journal to the deliberately non-runnable `dent8.legitimate-trace-review/1` draft; every
+operation remains `review_required` until a human classifies it, supplies reviewer/basis, and
+redacts it. `dent8 eval finalize` rejects incomplete reviews and emits the only schema accepted by
+`--trace`. The recorder is fail-open and stays outside the event log, so eval collection cannot
+change a production write decision or self-label traffic as legitimate. See the exact workflow
+and redaction checklist in [`evals/traces/`](../evals/traces/).
+
+No captured-user trace ships today, so the observed tally is deliberately **not** presented as
+evidence yet. What remains is collecting and human-reviewing dogfood and early-user traces. This
+v1 lane replays deterministic store arbitration plus the built-in `assert`/`derive` predicate
+policy at the captured seam. Authority-ceiling, identity, content-check, transport, commit, and
+custom integration-policy failures remain separately scoped write-boundary lanes.
 
 ## Integrity-axis comparison vs Mem0 / Zep (built)
 

@@ -1,6 +1,6 @@
 [package]
 name = "dent8-evals"
-description = "Adversarial evaluation corpus for the dent8 memory firewall: attack scenarios against the real firewall, a recency-only baseline, and modeled Mem0/Zep integrity comparison."
+description = "Evaluation corpus for the dent8 memory firewall: adversarial scenarios, reviewed legitimate traffic, and modeled peer comparisons."
 edition.workspace = true
 license.workspace = true
 readme.workspace = true
@@ -17,6 +17,8 @@ path = "src/lib.rs"
 [dependencies]
 dent8-core = { path = "../dent8-core", version = "0.8.0" }
 dent8-store = { path = "../dent8-store", version = "0.8.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints]
 workspace = true

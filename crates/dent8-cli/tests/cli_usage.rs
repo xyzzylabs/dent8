@@ -14,6 +14,179 @@ use std::{
     sync::{Arc, Barrier},
 };
 
+#[test]
+fn eval_accepts_a_reviewed_legitimate_trace_in_text_and_json() {
+    let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../evals/traces/synthetic_revision.example.json");
+    let trace = trace.to_string_lossy();
+
+    let text = run_dent8(&["eval", "--trace", &trace], &[]);
+    assert_success(&text, "eval reviewed trace");
+    assert!(
+        stdout(&text).contains("Reviewed legitimate-traffic traces")
+            && stdout(&text).contains("trace:synthetic-revision-example")
+            && stdout(&text).contains("false positives=0"),
+        "{}",
+        stdout(&text)
+    );
+
+    let json = run_dent8(&["eval", "--trace", &trace, "--output", "json"], &[]);
+    assert_success(&json, "eval reviewed trace JSON");
+    let payload: Value = serde_json::from_slice(&json.stdout).expect("eval JSON");
+    assert_eq!(payload["status"], "ok");
+    assert_eq!(payload["reviewed_legitimate_traffic"]["provided"], true);
+    assert_eq!(payload["reviewed_legitimate_traffic"]["trace_count"], 1);
+    assert_eq!(
+        payload["reviewed_legitimate_traffic"]["captured_trace_count"],
+        0
+    );
+    assert_eq!(
+        payload["reviewed_legitimate_traffic"]["synthetic_trace_count"],
+        1
+    );
+    assert_eq!(payload["reviewed_legitimate_traffic"]["false_positives"], 0);
+    assert_eq!(
+        payload["reviewed_legitimate_traffic"]["traces"][0]["operations"][1]["admitted"],
+        true
+    );
+}
+
+#[test]
+fn eval_refuses_to_count_the_same_trace_twice() {
+    let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../evals/traces/synthetic_revision.example.json");
+    let trace = trace.to_string_lossy();
+
+    let output = run_dent8(
+        &["eval", "--trace", &trace, "--trace", &trace, "-o", "json"],
+        &[],
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("error JSON");
+    assert_eq!(payload["status"], "invalid");
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("duplicate trace_id"))
+    );
+}
+
+#[test]
+fn eval_rejects_a_persisted_log_disguised_as_a_reviewed_trace() {
+    let temp = TempDir::new();
+    let trace = temp.file("not-a-trace.json");
+    fs::write(&trace, r#"{"event_id":"event:0"}"#).expect("write invalid trace");
+    let trace = trace.to_string_lossy();
+
+    let output = run_dent8(&["eval", "--trace", &trace, "--output", "json"], &[]);
+    assert_eq!(output.status.code(), Some(2), "{}", stdout(&output));
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("error JSON");
+    assert_eq!(payload["status"], "invalid");
+    assert_eq!(payload["code"], "invalid-argument");
+    assert!(
+        payload["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("invalid legitimate-traffic trace"))
+    );
+}
+
+#[test]
+fn eval_capture_requires_review_and_preserves_rejected_attempts() {
+    let temp = TempDir::new();
+    let log = temp.file("memory.jsonl");
+    let capture = temp.file("session.capture.jsonl");
+    let draft = temp.file("session.review.json");
+    let trace = temp.file("session.trace.json");
+    let log = log.to_string_lossy().into_owned();
+    let capture_text = capture.to_string_lossy().into_owned();
+    let envs = [
+        ("DENT8_LOG", log.as_str()),
+        ("DENT8_EVAL_CAPTURE", capture_text.as_str()),
+        ("DENT8_EVAL_AGENT", "codex"),
+        ("DENT8_EVAL_SESSION", "session:test"),
+    ];
+
+    let admitted = run_dent8(
+        &[
+            "assert",
+            "branch:main",
+            "status",
+            "clean",
+            "--authority",
+            "low",
+            "--source",
+            "source:agent",
+        ],
+        &envs,
+    );
+    assert_success(&admitted, "captured admitted write");
+    let rejected = run_dent8(
+        &[
+            "assert",
+            "branch:main",
+            "status",
+            "dirty",
+            "--authority",
+            "low",
+            "--source",
+            "source:agent",
+        ],
+        &envs,
+    );
+    assert_eq!(rejected.status.code(), Some(1), "{}", stderr(&rejected));
+
+    let capture_jsonl = fs::read_to_string(&capture).expect("capture journal");
+    assert_private_file(&capture);
+    let records = capture_jsonl.lines().collect::<Vec<_>>();
+    assert_eq!(records.len(), 3, "header plus two attempts");
+    assert!(records[1].contains(r#""decision":"admitted""#));
+    assert!(records[2].contains(r#""decision":"rejected""#));
+    assert!(records[2].contains(r#""code":"uniqueness-violation""#));
+
+    let capture_arg = capture.to_string_lossy();
+    let draft_arg = draft.to_string_lossy();
+    let prepared = run_dent8(&["eval", "prepare", &capture_arg, "--out", &draft_arg], &[]);
+    assert_success(&prepared, "prepare capture review");
+    assert_private_file(&draft);
+
+    let trace_arg = trace.to_string_lossy();
+    let incomplete = run_dent8(&["eval", "finalize", &draft_arg, "--out", &trace_arg], &[]);
+    assert_eq!(incomplete.status.code(), Some(2));
+    assert!(stderr(&incomplete).contains("still requires review"));
+
+    let mut review: Value =
+        serde_json::from_str(&fs::read_to_string(&draft).expect("draft")).expect("draft JSON");
+    review["review"]["reviewer"] = Value::String("human:owner".to_string());
+    review["review"]["basis"] = Value::String("normal branch-status updates".to_string());
+    for operation in review["operations"]
+        .as_array_mut()
+        .expect("review operations")
+    {
+        operation["classification"] = Value::String("legitimate".to_string());
+    }
+    fs::write(
+        &draft,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&review).expect("serialize review")
+        ),
+    )
+    .expect("write reviewed draft");
+
+    let finalized = run_dent8(&["eval", "finalize", &draft_arg, "--out", &trace_arg], &[]);
+    assert_success(&finalized, "finalize reviewed trace");
+
+    let evaluated = run_dent8(&["eval", "--trace", &trace_arg, "-o", "json"], &[]);
+    assert_eq!(evaluated.status.code(), Some(1), "{}", stdout(&evaluated));
+    let report: Value = serde_json::from_slice(&evaluated.stdout).expect("eval JSON");
+    assert_eq!(report["reviewed_legitimate_traffic"]["operation_count"], 2);
+    assert_eq!(report["reviewed_legitimate_traffic"]["false_positives"], 1);
+    assert_eq!(
+        report["reviewed_legitimate_traffic"]["traces"][0]["operations"][1]["rejection_category"],
+        "uniqueness-violation"
+    );
+}
+
 /// PROOF (the closed bypass): an UNSIGNED write claiming authority ABOVE the agent tier is now
 /// REJECTED by default — no identity configured, no opt-in flag. This is the exact
 /// `--authority high --source source:human` label trick the security review used; before this
@@ -11549,6 +11722,23 @@ fn run_dent8(args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(None, args, envs)
 }
 
+#[cfg(unix)]
+fn assert_private_file(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    assert_eq!(
+        fs::metadata(path)
+            .expect("private artifact metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}
+
+#[cfg(not(unix))]
+fn assert_private_file(_path: &Path) {}
+
 fn run_dent8_in(cwd: &Path, args: &[&str], envs: &[(&str, &str)]) -> Output {
     run_dent8_inner(Some(cwd), args, envs)
 }
@@ -11572,6 +11762,9 @@ fn run_dent8_stdin(args: &[&str], input: &str, envs: &[(&str, &str)]) -> Output 
         .env_remove("DENT8_CONTENT_CHECK_TIMEOUT_MS")
         .env_remove("DENT8_CONTENT_CHECK_FAIL_OPEN")
         .env_remove("DENT8_DAEMON_SOCKET")
+        .env_remove("DENT8_EVAL_CAPTURE")
+        .env_remove("DENT8_EVAL_AGENT")
+        .env_remove("DENT8_EVAL_SESSION")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -11610,7 +11803,10 @@ fn run_dent8_inner(cwd: Option<&Path>, args: &[&str], envs: &[(&str, &str)]) -> 
         .env_remove("DENT8_DAEMON_SOCKET")
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
-        .env_remove("DENT8_WITNESS_LOG");
+        .env_remove("DENT8_WITNESS_LOG")
+        .env_remove("DENT8_EVAL_CAPTURE")
+        .env_remove("DENT8_EVAL_AGENT")
+        .env_remove("DENT8_EVAL_SESSION");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -11641,6 +11837,9 @@ fn run_dent8_mcp(input: &str, envs: &[(&str, &str)]) -> Output {
         .env_remove("DENT8_WITNESS_KEY")
         .env_remove("DENT8_WITNESS_PUBKEY")
         .env_remove("DENT8_WITNESS_LOG")
+        .env_remove("DENT8_EVAL_CAPTURE")
+        .env_remove("DENT8_EVAL_AGENT")
+        .env_remove("DENT8_EVAL_SESSION")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

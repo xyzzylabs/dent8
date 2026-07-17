@@ -1,0 +1,165 @@
+{
+  "schema": "dent8.legitimate-trace/1",
+  "trace_id": "trace:synthetic-revision-example",
+  "provenance": {
+    "origin": "synthetic",
+    "agent": "codex",
+    "session": "session:example"
+  },
+  "privacy": {
+    "content": "redacted",
+    "note": "Synthetic values only; safe to publish."
+  },
+  "review": {
+    "reviewer": "human:example-reviewer",
+    "basis": "A normal correction from an older observation to a newer observation."
+  },
+  "operations": [
+    {
+      "operation_id": "op:assert-initial",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:jan",
+          "kind": "Asserted",
+          "subject": { "kind": "person", "key": "alex" },
+          "predicate": "developer_level",
+          "value": { "Text": "beginner" },
+          "confidence": 900,
+          "authority": { "level": "high", "issuer": null, "scope": null },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:owner",
+            "actor": "actor:agent",
+            "tool": null,
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 0
+          },
+          "evidence": [
+            {
+              "id": "evidence:0",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null,
+          "valid_to": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:supersede-with-new-observation",
+      "operation": "supersede",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:jan",
+          "kind": "Asserted",
+          "subject": { "kind": "person", "key": "alex" },
+          "predicate": "developer_level",
+          "value": { "Text": "beginner" },
+          "confidence": 900,
+          "authority": { "level": "high", "issuer": null, "scope": null },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:owner",
+            "actor": "actor:agent",
+            "tool": null,
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 0
+          },
+          "evidence": [
+            {
+              "id": "evidence:0",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null,
+          "valid_to": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:1",
+          "fact_id": "fact:nov",
+          "kind": "Asserted",
+          "subject": { "kind": "person", "key": "alex" },
+          "predicate": "developer_level",
+          "value": { "Text": "senior" },
+          "confidence": 900,
+          "authority": { "level": "high", "issuer": null, "scope": null },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:owner",
+            "actor": "actor:agent",
+            "tool": null,
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 1
+          },
+          "evidence": [
+            {
+              "id": "evidence:1",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null,
+          "valid_to": null
+        },
+        {
+          "event_id": "event:2",
+          "fact_id": "fact:jan",
+          "kind": {
+            "Superseded": {
+              "by": "fact:nov",
+              "reason": "UserCorrection"
+            }
+          },
+          "subject": { "kind": "person", "key": "alex" },
+          "predicate": "developer_level",
+          "value": null,
+          "confidence": 900,
+          "authority": { "level": "high", "issuer": null, "scope": null },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:owner",
+            "actor": "actor:agent",
+            "tool": null,
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 2
+          },
+          "evidence": [
+            {
+              "id": "evidence:2",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null,
+          "valid_to": null
+        }
+      ]
+    }
+  ]
+}

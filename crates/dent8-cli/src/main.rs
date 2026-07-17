@@ -29,6 +29,7 @@ mod capture;
 mod context;
 mod daemon;
 mod doctor;
+mod eval_capture;
 mod hook;
 mod hook_config;
 mod identity;
@@ -111,7 +112,7 @@ fn run_cli(cli: Cli) -> i32 {
         Some(CliCommand::Verify) => cmd_verify(cli.output),
         Some(CliCommand::Snapshot(args)) => snapshot::cmd_snapshot(&args, cli.output),
         Some(CliCommand::Conflicts) => ops::cmd_conflicts(cli.output),
-        Some(CliCommand::Eval) => cmd_eval(cli.output),
+        Some(CliCommand::Eval(args)) => cmd_eval(&args, cli.output),
         Some(CliCommand::Init(args)) => setup::cmd_init(&args, cli.output),
         Some(CliCommand::Agent(args)) => match args.command {
             AgentCommand::Add(args) => setup::cmd_agent_add(&args, cli.output),
@@ -313,8 +314,8 @@ enum CliCommand {
     Snapshot(SnapshotArgs),
     /// List contested facts.
     Conflicts,
-    /// Run the adversarial corpus and Mem0/Zep integrity comparison.
-    Eval,
+    /// Run the adversarial corpus, peer comparison, and optional reviewed session traces.
+    Eval(EvalArgs),
     /// Bootstrap a local dent8 project configuration.
     Init(InitArgs),
     /// Add an agent profile to an existing shared dent8 bundle.
@@ -386,7 +387,7 @@ impl CliCommand {
             Self::Verify => "verify",
             Self::Snapshot(_) => "snapshot",
             Self::Conflicts => "conflicts",
-            Self::Eval => "eval",
+            Self::Eval(_) => "eval",
             Self::Init(_) => "init",
             Self::Agent(_) => "agent",
             Self::Doctor(_) => "doctor",
@@ -629,6 +630,49 @@ struct SnapshotArgs {
     /// Include dent8 internal diagnostic streams in the nested facts list.
     #[arg(long)]
     include_diagnostics: bool,
+}
+
+#[derive(Args, Debug)]
+struct EvalArgs {
+    #[command(subcommand)]
+    command: Option<EvalCommand>,
+    /// Evaluate a human-reviewed legitimate-traffic trace (repeatable).
+    #[arg(long, value_name = "FILE")]
+    trace: Vec<std::path::PathBuf>,
+}
+
+#[derive(Subcommand, Debug)]
+enum EvalCommand {
+    /// Convert a raw capture journal into a non-runnable human-review draft.
+    Prepare(EvalPrepareArgs),
+    /// Validate explicit classifications and produce an evaluable trace.
+    Finalize(EvalFinalizeArgs),
+}
+
+#[derive(Args, Debug)]
+struct EvalPrepareArgs {
+    /// Raw JSONL journal written by `DENT8_EVAL_CAPTURE`.
+    #[arg(value_name = "CAPTURE")]
+    capture: std::path::PathBuf,
+    /// Review-draft output path.
+    #[arg(long, value_name = "FILE")]
+    out: std::path::PathBuf,
+    /// Replace an existing draft.
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(Args, Debug)]
+struct EvalFinalizeArgs {
+    /// Edited dent8.legitimate-trace-review/1 document.
+    #[arg(value_name = "REVIEW")]
+    review: std::path::PathBuf,
+    /// Final dent8.legitimate-trace/1 output path.
+    #[arg(long, value_name = "FILE")]
+    out: std::path::PathBuf,
+    /// Replace an existing trace.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Args, Debug)]
@@ -3821,7 +3865,30 @@ fn cmd_verify(output: CliOutput) -> i32 {
 /// Run the adversarial corpus and the external integrity-axis comparison (modeled
 /// Mem0 / Zep-Graphiti resolution). Exits non-zero if a demonstrative scenario regresses
 /// or the comparison frozen tally drifts.
-fn cmd_eval(output: CliOutput) -> i32 {
+fn cmd_eval(args: &EvalArgs, output: CliOutput) -> i32 {
+    if let Some(command) = &args.command {
+        return cmd_eval_workflow(command, !args.trace.is_empty(), output);
+    }
+    let trace_reports = match load_legitimate_trace_reports(&args.trace) {
+        Ok(reports) => reports,
+        Err(error) => {
+            return match output {
+                CliOutput::Text => {
+                    eprintln!("invalid legitimate-traffic trace: {error}");
+                    2
+                }
+                CliOutput::Json => print_json_stdout_with_code(
+                    &serde_json::json!({
+                        "status": Status::Invalid,
+                        "tool": "eval",
+                        "code": "invalid-argument",
+                        "message": format!("invalid legitimate-traffic trace: {error}"),
+                    }),
+                    2,
+                ),
+            };
+        }
+    };
     let results = dent8_evals::run_corpus();
     let demonstrated = results
         .iter()
@@ -3830,8 +3897,16 @@ fn cmd_eval(output: CliOutput) -> i32 {
     let comparison = dent8_evals::run_comparison();
     let comparison_ok = dent8_evals::comparison_tally_ok(&comparison);
     let (false_positives, benign_writes) = dent8_evals::legitimate_false_positive_rate();
-    let exit_code =
-        i32::from(demonstrated != results.len() || !comparison_ok || false_positives != 0);
+    let observed_false_positives: usize = trace_reports
+        .iter()
+        .map(|report| report.false_positives)
+        .sum();
+    let exit_code = i32::from(
+        demonstrated != results.len()
+            || !comparison_ok
+            || false_positives != 0
+            || observed_false_positives != 0,
+    );
     match output {
         CliOutput::Text => {
             println!(
@@ -3848,6 +3923,7 @@ fn cmd_eval(output: CliOutput) -> i32 {
                 dent8_evals::run_legitimate_corpus().len()
             );
             print!("{}", dent8_evals::legitimate_summary_table());
+            print_legitimate_trace_reports(&trace_reports);
             println!(
                 "\nExternal integrity comparison (modeled peer semantics — not live APIs):\n\
                  dent8 vs Zep/Graphiti-style recency vs Mem0-style mutate-in-place on the same \
@@ -3869,18 +3945,266 @@ fn cmd_eval(output: CliOutput) -> i32 {
                      writes were wrongly rejected — the firewall must not tax legitimate revision"
                 );
             }
+            if observed_false_positives != 0 {
+                eprintln!(
+                    "observed legitimate-traffic regression: {observed_false_positives} \
+                     reviewed operation(s) were wrongly rejected"
+                );
+            }
             exit_code
         }
-        CliOutput::Json => {
-            print_json_stdout_with_code(&eval_json(&results, demonstrated, &comparison), exit_code)
+        CliOutput::Json => print_json_stdout_with_code(
+            &eval_json(&results, demonstrated, &comparison, &trace_reports),
+            exit_code,
+        ),
+    }
+}
+
+fn cmd_eval_workflow(command: &EvalCommand, has_traces: bool, output: CliOutput) -> i32 {
+    if has_traces {
+        return eval_workflow_error(
+            output,
+            "--trace cannot be combined with eval prepare/finalize",
+        );
+    }
+    match command {
+        EvalCommand::Prepare(args) => cmd_eval_prepare(args, output),
+        EvalCommand::Finalize(args) => cmd_eval_finalize(args, output),
+    }
+}
+
+fn cmd_eval_prepare(args: &EvalPrepareArgs, output: CliOutput) -> i32 {
+    let result = (|| {
+        let input = std::fs::read_to_string(&args.capture)
+            .map_err(|error| format!("{}: {error}", args.capture.display()))?;
+        let journal = dent8_evals::parse_capture_journal(&input).map_err(|error| {
+            format!(
+                "invalid capture journal {}: {error}",
+                args.capture.display()
+            )
+        })?;
+        let operation_count = journal.attempts.len();
+        let review = dent8_evals::prepare_trace_review(journal);
+        let json = serde_json::to_string_pretty(&review)
+            .map_err(|error| format!("could not serialize review draft: {error}"))?;
+        write_eval_artifact(&args.out, &format!("{json}\n"), args.force)?;
+        Ok::<_, String>((operation_count, review.trace_id))
+    })();
+
+    match (result, output) {
+        (Ok((operation_count, trace_id)), CliOutput::Text) => {
+            println!(
+                "PREPARED  {operation_count} raw operation(s) for review at {}\n  \
+                 classify every operation as `legitimate` or `exclude`; set review.reviewer and \
+                 review.basis; redact values/evidence before sharing, then set privacy.content to \
+                 `redacted` (or keep `raw` local)\n  finalize with: dent8 eval finalize {} --out \
+                 <trace.json>\n  trace_id={trace_id}",
+                args.out.display(),
+                args.out.display(),
+            );
+            0
+        }
+        (Ok((operation_count, trace_id)), CliOutput::Json) => {
+            print_json_stdout(&serde_json::json!({
+                "status": Status::Ok,
+                "tool": "eval.prepare",
+                "capture": args.capture,
+                "out": args.out,
+                "trace_id": trace_id,
+                "operation_count": operation_count,
+                "privacy": "raw",
+                "review_required": true,
+            }))
+        }
+        (Err(error), output) => eval_workflow_error(output, &error),
+    }
+}
+
+fn cmd_eval_finalize(args: &EvalFinalizeArgs, output: CliOutput) -> i32 {
+    let result = (|| {
+        let input = std::fs::read_to_string(&args.review)
+            .map_err(|error| format!("{}: {error}", args.review.display()))?;
+        let review = dent8_evals::parse_trace_review(&input)
+            .map_err(|error| format!("invalid trace review {}: {error}", args.review.display()))?;
+        let trace = dent8_evals::finalize_trace_review(review)
+            .map_err(|error| format!("trace review is incomplete: {error}"))?;
+        let operation_count = trace.operations.len();
+        let content = trace.privacy.content;
+        let trace_id = trace.trace_id.clone();
+        let json = serde_json::to_string_pretty(&trace)
+            .map_err(|error| format!("could not serialize trace: {error}"))?;
+        dent8_evals::parse_legitimate_trace(&json)
+            .map_err(|error| format!("final trace failed validation: {error}"))?;
+        write_eval_artifact(&args.out, &format!("{json}\n"), args.force)?;
+        Ok::<_, String>((operation_count, content, trace_id))
+    })();
+
+    match (result, output) {
+        (Ok((operation_count, content, trace_id)), CliOutput::Text) => {
+            println!(
+                "FINALIZED  {operation_count} reviewed legitimate operation(s) at {}\n  \
+                 content={}{}\n  evaluate with: dent8 eval --trace {}\n  trace_id={trace_id}",
+                args.out.display(),
+                content.as_str(),
+                if content == dent8_evals::TraceContent::Raw {
+                    " (keep local; raw values are still present)"
+                } else {
+                    ""
+                },
+                args.out.display(),
+            );
+            0
+        }
+        (Ok((operation_count, content, trace_id)), CliOutput::Json) => {
+            print_json_stdout(&serde_json::json!({
+                "status": Status::Ok,
+                "tool": "eval.finalize",
+                "review": args.review,
+                "out": args.out,
+                "trace_id": trace_id,
+                "operation_count": operation_count,
+                "privacy": content.as_str(),
+                "review_required": false,
+            }))
+        }
+        (Err(error), output) => eval_workflow_error(output, &error),
+    }
+}
+
+fn write_eval_artifact(path: &std::path::Path, contents: &str, force: bool) -> Result<(), String> {
+    use std::io::Write;
+
+    if path.exists() && !force {
+        return Err(format!(
+            "{} already exists; pass --force to replace it",
+            path.display()
+        ));
+    }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("trace");
+    let mut nonce = [0u8; 8];
+    getrandom::getrandom(&mut nonce)
+        .map_err(|error| format!("cannot generate artifact nonce: {error}"))?;
+    let tmp = path.with_file_name(format!(".{file_name}.tmp.{}", hex::encode(nonce)));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&tmp)
+        .map_err(|error| format!("cannot create {}: {error}", tmp.display()))?;
+    if let Err(error) = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all())
+    {
+        drop(file);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot write {}: {error}", tmp.display()));
+    }
+    drop(file);
+    if let Err(error) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot install {}: {error}", path.display()));
+    }
+    Ok(())
+}
+
+fn eval_workflow_error(output: CliOutput, message: &str) -> i32 {
+    match output {
+        CliOutput::Text => {
+            eprintln!("invalid eval workflow: {message}");
+            2
+        }
+        CliOutput::Json => print_json_stdout_with_code(
+            &serde_json::json!({
+                "status": Status::Invalid,
+                "tool": "eval",
+                "code": "invalid-argument",
+                "message": message,
+            }),
+            2,
+        ),
+    }
+}
+
+fn print_legitimate_trace_reports(reports: &[dent8_evals::LegitimateTraceReport]) {
+    if reports.is_empty() {
+        return;
+    }
+    println!(
+        "\nReviewed legitimate-traffic traces — atomic attempted operations, classified before \
+         evaluation:"
+    );
+    for report in reports {
+        println!(
+            "{}  agent={}  origin={}  content={}  operations={}  events={}  false positives={}",
+            report.trace_id,
+            report.agent,
+            report.origin.as_str(),
+            report.content.as_str(),
+            report.operation_count,
+            report.event_count,
+            report.false_positives,
+        );
+        for operation in report
+            .operations
+            .iter()
+            .filter(|operation| !operation.admitted)
+        {
+            println!(
+                "  FALSE POSITIVE  {}  event={}  category={}",
+                operation.operation_id,
+                operation.rejected_event_id.as_deref().unwrap_or("unknown"),
+                operation.rejection_category.unwrap_or("unknown"),
+            );
+        }
+        if let Some(warning) = report.privacy_warning {
+            println!("  WARNING: {warning}. dent8 did not echo its values.");
         }
     }
+}
+
+fn load_legitimate_trace_reports(
+    paths: &[std::path::PathBuf],
+) -> Result<Vec<dent8_evals::LegitimateTraceReport>, String> {
+    let mut reports = Vec::with_capacity(paths.len());
+    let mut trace_ids = std::collections::BTreeSet::new();
+    for path in paths {
+        let input = std::fs::read_to_string(path)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let trace = dent8_evals::parse_legitimate_trace(&input)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        if !trace_ids.insert(trace.trace_id.clone()) {
+            return Err(format!(
+                "{}: duplicate trace_id {:?}; each reviewed session may be counted once",
+                path.display(),
+                trace.trace_id
+            ));
+        }
+        reports.push(
+            dent8_evals::evaluate_legitimate_trace(&trace)
+                .map_err(|error| format!("{}: {error}", path.display()))?,
+        );
+    }
+    Ok(reports)
 }
 
 fn eval_json(
     results: &[dent8_evals::AttackResult],
     demonstrated: usize,
     comparison: &[dent8_evals::ComparisonRow],
+    trace_reports: &[dent8_evals::LegitimateTraceReport],
 ) -> serde_json::Value {
     let scenarios = results
         .iter()
@@ -3911,6 +4235,10 @@ fn eval_json(
     let comparison_ok = dent8_evals::comparison_tally_ok(comparison);
     let legitimate = dent8_evals::run_legitimate_corpus();
     let (false_positives, benign_writes) = dent8_evals::legitimate_false_positive_rate();
+    let observed_false_positives: usize = trace_reports
+        .iter()
+        .map(|report| report.false_positives)
+        .sum();
     let legitimate_scenarios = legitimate
         .iter()
         .map(|case| {
@@ -3924,7 +4252,11 @@ fn eval_json(
             })
         })
         .collect::<Vec<_>>();
-    let status = if demonstrated == results.len() && comparison_ok && false_positives == 0 {
+    let status = if demonstrated == results.len()
+        && comparison_ok
+        && false_positives == 0
+        && observed_false_positives == 0
+    {
         "ok"
     } else {
         "failed"
@@ -3941,12 +4273,48 @@ fn eval_json(
             "scenario_count": legitimate.len(),
             "scenarios": legitimate_scenarios,
         },
+        "reviewed_legitimate_traffic": reviewed_legitimate_traffic_json(trace_reports),
         "comparison": {
             "ok": comparison_ok,
             "axis_count": comparison.len(),
             "dent8_hold_count": comparison.iter().filter(|r| r.dent8_holds).count(),
             "axes": axes,
         },
+    })
+}
+
+fn reviewed_legitimate_traffic_json(
+    reports: &[dent8_evals::LegitimateTraceReport],
+) -> serde_json::Value {
+    let captured = |report: &&dent8_evals::LegitimateTraceReport| {
+        report.origin == dent8_evals::TraceOrigin::Captured
+    };
+    let captured_trace_count = reports.iter().filter(captured).count();
+    let operation_count: usize = reports.iter().map(|report| report.operation_count).sum();
+    let captured_operation_count: usize = reports
+        .iter()
+        .filter(captured)
+        .map(|report| report.operation_count)
+        .sum();
+    let event_count: usize = reports.iter().map(|report| report.event_count).sum();
+    let false_positives: usize = reports.iter().map(|report| report.false_positives).sum();
+    let captured_false_positives: usize = reports
+        .iter()
+        .filter(captured)
+        .map(|report| report.false_positives)
+        .sum();
+
+    serde_json::json!({
+        "provided": !reports.is_empty(),
+        "trace_count": reports.len(),
+        "captured_trace_count": captured_trace_count,
+        "synthetic_trace_count": reports.len().saturating_sub(captured_trace_count),
+        "operation_count": operation_count,
+        "captured_operation_count": captured_operation_count,
+        "event_count": event_count,
+        "false_positives": false_positives,
+        "captured_false_positives": captured_false_positives,
+        "traces": reports,
     })
 }
 

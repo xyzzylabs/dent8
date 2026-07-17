@@ -16,12 +16,20 @@
 //! authority-lattice tests in `dent8-core`.
 
 pub mod adversarial;
+pub mod captured_trace;
 pub mod comparison;
 pub mod content_hook;
+pub mod legitimate_trace;
 
 pub use adversarial::{
     AdversarialCase, AttackClass, ClassReport, Disposition, Layer, adversarial_summary_table,
     class_reports, run_adversarial_corpus,
+};
+pub use captured_trace::{
+    CAPTURE_JOURNAL_SCHEMA, CaptureError, CaptureJournal, CaptureJournalRecord, CapturedAttempt,
+    CapturedDecision, CapturedOutcome, LegitimateTraceReview, ReviewClassification,
+    TRACE_REVIEW_SCHEMA, TraceReviewDraft, TraceReviewOperation, finalize_trace_review,
+    parse_capture_journal, parse_trace_review, prepare_trace_review,
 };
 pub use comparison::{
     ComparisonRow, comparison_summary_table, comparison_summary_table_from, comparison_tally_ok,
@@ -30,6 +38,11 @@ pub use comparison::{
 pub use content_hook::{
     HookedCase, HookedClassReport, HookedDisposition, hooked_class_reports, hooked_summary_table,
     run_adversarial_corpus_with_hook,
+};
+pub use legitimate_trace::{
+    LEGITIMATE_TRACE_SCHEMA, LegitimateTrace, LegitimateTraceReport, TraceContent, TraceError,
+    TraceOperationKind, TraceOperationResult, TraceOrigin, TracePrivacy, TraceProvenance,
+    evaluate_legitimate_trace, parse_legitimate_trace,
 };
 
 use dent8_core::{

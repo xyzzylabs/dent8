@@ -61,6 +61,12 @@ Five for five against both peer models. The last one is the tell: retract a pois
 and dent8 flags every fact *derived* from it — a dependency cascade neither recency-only nor
 mutate-in-place memory structurally expresses. Details: [evals.md](docs/evals.md).
 
+To test the false-positive rate on a human-reviewed agent session instead of only the designed
+benign corpus, opt in with `DENT8_EVAL_CAPTURE=<raw.jsonl>`, then run `dent8 eval prepare`, review
+and redact every operation, `dent8 eval finalize`, and finally `dent8 eval --trace <FILE>`. The
+strict formats, privacy checklist, and synthetic example live in
+[`evals/traces/`](evals/traces/); no captured-user tally is claimed yet.
+
 ## See the firewall reject a write
 
 ```sh

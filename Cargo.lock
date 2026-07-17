@@ -752,6 +752,8 @@ version = "0.8.0"
 dependencies = [
  "dent8-core",
  "dent8-store",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
