@@ -1,0 +1,66 @@
+{
+  "schema": "dent8.legitimate-trace/1",
+  "trace_id": "trace:grok-build-dogfood-001",
+  "provenance": {
+    "origin": "captured",
+    "agent": "grok-build",
+    "session": "session:grok-build-redacted-001"
+  },
+  "privacy": {
+    "content": "redacted",
+    "note": "Maintainer dogfood trace; repository key, value, ids, session, timestamp, and evidence locator were pseudonymized and the original attestation was removed."
+  },
+  "review": {
+    "reviewer": "human:maintainer",
+    "basis": "Operator-authorized bounded Grok Build dogfood session; the single captured assertion records successful project MCP integration and is expected to be admitted at the agent tier."
+  },
+  "operations": [
+    {
+      "operation_id": "attempt:grok-build-redacted-001",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:redacted-grok-build-001",
+          "fact_id": "fact:repo:project-a:integration.grok_mcp:redacted-001",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "project-a"
+          },
+          "predicate": "integration.grok_mcp",
+          "value": {
+            "Text": "verified via Grok Build 0.x"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "low",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:grok-build",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 1767225602000
+          },
+          "evidence": [
+            {
+              "id": "evidence:redacted-grok-build-001",
+              "kind": "UserStatement",
+              "locator": "client:grok-build",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    }
+  ]
+}

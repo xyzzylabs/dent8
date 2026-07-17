@@ -1,0 +1,66 @@
+{
+  "schema": "dent8.legitimate-trace/1",
+  "trace_id": "trace:claude-code-dogfood-001",
+  "provenance": {
+    "origin": "captured",
+    "agent": "claude-code",
+    "session": "session:claude-code-redacted-001"
+  },
+  "privacy": {
+    "content": "redacted",
+    "note": "Maintainer dogfood trace; repository key, value, ids, session, timestamp, and evidence locator were pseudonymized and the original attestation was removed."
+  },
+  "review": {
+    "reviewer": "human:maintainer",
+    "basis": "Operator-authorized Claude Code dogfood session against a public repository; the single captured assertion records the repository's configured Rust MSRV and is expected to be admitted at the agent tier."
+  },
+  "operations": [
+    {
+      "operation_id": "attempt:claude-code-redacted-001",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:redacted-claude-001",
+          "fact_id": "fact:repo:project-a:repo.msrv:redacted-001",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "project-a"
+          },
+          "predicate": "repo.msrv",
+          "value": {
+            "Text": "1.xx"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "low",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:claude-code",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 1767225600000
+          },
+          "evidence": [
+            {
+              "id": "evidence:redacted-claude-001",
+              "kind": "UserStatement",
+              "locator": "repo:public-manifest",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    }
+  ]
+}

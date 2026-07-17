@@ -78,6 +78,13 @@ identifiers with consistent pseudonyms, set `privacy.content` to `redacted`, and
 result. A trace marked `raw` is accepted for local analysis but produces a warning and should
 not be committed or uploaded.
 
+The checked-in captured maintainer-dogfood fixtures cover Claude Code
+(`claude-code-msrv.redacted.json`), Cursor (`cursor-roadmap.redacted.json`), and Grok Build
+(`grok-build-mcp.redacted.json`): 3 legitimate writes, 0 false positives. Their project keys,
+values, ids, sessions, timestamps, and evidence locators are pseudonymized, and original event
+attestations were removed after redaction. They are product evidence for those integration paths,
+but not independent external-user evidence.
+
 This v1 lane measures deterministic store arbitration plus the built-in predicate policy applied
 to `assert`/`derive`, matching the captured seam. Authority-ceiling, signed-identity,
 content-check, transport, commit, and custom integration-policy failures occur before or after

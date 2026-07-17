@@ -52,6 +52,31 @@ fn eval_accepts_a_reviewed_legitimate_trace_in_text_and_json() {
 }
 
 #[test]
+fn checked_in_captured_agent_traces_stay_clean() {
+    let trace_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/traces");
+    let traces = [
+        "claude-code-msrv.redacted.json",
+        "cursor-roadmap.redacted.json",
+        "grok-build-mcp.redacted.json",
+    ];
+    let mut args = vec!["eval".to_owned(), "--output".to_owned(), "json".to_owned()];
+    for trace in traces {
+        args.push("--trace".to_owned());
+        args.push(trace_dir.join(trace).to_string_lossy().into_owned());
+    }
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+
+    let output = run_dent8(&args, &[]);
+    assert_success(&output, "eval checked-in captured traces");
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("eval JSON");
+    let traffic = &payload["reviewed_legitimate_traffic"];
+    assert_eq!(traffic["captured_trace_count"], 3);
+    assert_eq!(traffic["captured_operation_count"], 3);
+    assert_eq!(traffic["captured_false_positives"], 0);
+    assert_eq!(traffic["synthetic_trace_count"], 0);
+}
+
+#[test]
 fn eval_refuses_to_count_the_same_trace_twice() {
     let trace = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../evals/traces/synthetic_revision.example.json");

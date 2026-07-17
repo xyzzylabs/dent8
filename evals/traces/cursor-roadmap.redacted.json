@@ -1,0 +1,66 @@
+{
+  "schema": "dent8.legitimate-trace/1",
+  "trace_id": "trace:cursor-dogfood-001",
+  "provenance": {
+    "origin": "captured",
+    "agent": "cursor",
+    "session": "session:cursor-redacted-001"
+  },
+  "privacy": {
+    "content": "redacted",
+    "note": "Maintainer dogfood trace; project key, value, ids, session, timestamp, and evidence locator were pseudonymized and the original attestation was removed."
+  },
+  "review": {
+    "reviewer": "human:maintainer",
+    "basis": "Operator-authorized bounded Cursor dogfood session; the single captured assertion records an explicitly approved active roadmap direction and is expected to be admitted at the agent tier."
+  },
+  "operations": [
+    {
+      "operation_id": "attempt:cursor-redacted-001",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:redacted-cursor-001",
+          "fact_id": "fact:roadmap:project-a:active.directions:redacted-001",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "roadmap",
+            "key": "project-a"
+          },
+          "predicate": "active.directions",
+          "value": {
+            "Text": "Desktop, witness, and evaluation work are active"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "low",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:cursor",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 1767225601000
+          },
+          "evidence": [
+            {
+              "id": "evidence:redacted-cursor-001",
+              "kind": "UserStatement",
+              "locator": "client:cursor",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    }
+  ]
+}
