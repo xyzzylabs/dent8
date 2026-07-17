@@ -75,6 +75,10 @@ jobs:
         run: cargo clippy -p dent8-cli --no-default-features --all-targets -- -D warnings
       - name: Test workspace
         run: cargo test --workspace
+      # Integrity track: designed corpora + every shipped reviewed legitimate-traffic trace.
+      # Keeps the false-positive claim honest without waiting for an external user capture.
+      - name: Integrity check (eval + shipped traces)
+        run: scripts/integrity-check.sh
       # The minimal file-only build (no async backend); its store-selection paths run here.
       - name: Test CLI no default features
         run: cargo test -p dent8-cli --no-default-features

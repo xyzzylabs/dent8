@@ -1,0 +1,461 @@
+{
+  "schema": "dent8.legitimate-trace/1",
+  "trace_id": "trace:cli-integrity-multi-op-001",
+  "provenance": {
+    "origin": "captured",
+    "agent": "cli",
+    "session": "session:integrity-multi-op-001"
+  },
+  "privacy": {
+    "content": "redacted",
+    "note": "Maintainer multi-op CLI capture; subjects/values/ids/timestamps/attestations redacted. Integration evidence, not independent external-user evidence."
+  },
+  "review": {
+    "reviewer": "human:maintainer",
+    "basis": "Scripted CLI legitimate revision: assert, reinforce, supersede, assert second predicate, retract. All expected admit."
+  },
+  "operations": [
+    {
+      "operation_id": "op:00-assert",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:repo:sample:database:0",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": {
+            "Text": "engine-a"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 1
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:01-reinforce",
+      "operation": "reinforce",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:repo:sample:database:0",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": {
+            "Text": "engine-a"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 2
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:1",
+          "fact_id": "fact:repo:sample:database:0",
+          "kind": {
+            "Reinforced": {
+              "by": "fact:repo:sample:database:0"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 3
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:02-supersede",
+      "operation": "supersede",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:repo:sample:database:0",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": {
+            "Text": "engine-a"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 4
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        },
+        {
+          "event_id": "event:1",
+          "fact_id": "fact:repo:sample:database:0",
+          "kind": {
+            "Reinforced": {
+              "by": "fact:repo:sample:database:0"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 5
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:2",
+          "fact_id": "fact:repo:sample:database:2",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": {
+            "Text": "engine-b"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 6
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        },
+        {
+          "event_id": "event:3",
+          "fact_id": "fact:repo:sample:database:0",
+          "kind": {
+            "Superseded": {
+              "by": "fact:repo:sample:database:2",
+              "reason": "UserCorrection"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "database",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 7
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:03-assert",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:4",
+          "fact_id": "fact:repo:sample:test_command:4",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "test_command",
+          "value": {
+            "Text": "test-cmd"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 8
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:04-retract",
+      "operation": "retract",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:4",
+          "fact_id": "fact:repo:sample:test_command:4",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "test_command",
+          "value": {
+            "Text": "test-cmd"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 9
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:5",
+          "fact_id": "fact:repo:sample:test_command:4",
+          "kind": {
+            "Retracted": {
+              "reason": "UserDeleted"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "sample"
+          },
+          "predicate": "test_command",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:human",
+            "actor": "actor:cli",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 10
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    }
+  ]
+}

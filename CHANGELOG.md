@@ -10,6 +10,13 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Integrity track tooling:** `scripts/integrity-check.sh` runs designed corpora plus every
+  shipped reviewed legitimate-traffic trace (CI step); `scripts/capture-legitimate-session.sh`
+  wraps bounded `DENT8_EVAL_CAPTURE` sessions; [docs/integrity-track.md](docs/integrity-track.md)
+  is the production integrity checklist (eval evidence, team identity, operated witness). A
+  multi-op CLI capture fixture (`evals/traces/cli-multi-op.redacted.json`, 5 ops) raises shipped
+  captured evidence to 4 traces / 8 operations / 0 false positives (still maintainer integration
+  evidence, not external-user evidence).
 - **MCP `context` tool (agent inject pack):** exposes CLI `dent8 context` over MCP with
   values, authority, source, and freshness in one call — ending the N+1 `list_facts` +
   `explain` loop for multi-fact grounding. Optional filters (`kind` / `key` / `predicate` /

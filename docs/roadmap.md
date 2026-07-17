@@ -40,6 +40,12 @@ authority + source), snapshot `summary.attention` / witness status (degrades on 
 lag), batch `explain` via `queries[]`, and `detail=summary` for token-sensitive clients.
 Server instructions and Claude-eager tools prefer `context` over `list_facts` (index only).
 
+**Integrity track (in progress):** `scripts/integrity-check.sh` gates designed corpora + every
+shipped reviewed trace (including a multi-op CLI capture); `scripts/capture-legitimate-session.sh`
+and [integrity-track.md](integrity-track.md) document capture → review → finalize and the
+operated-witness checklist. Independent early-user traces and *hosted* witness operation remain
+open; the packaged compose demo is the production shape to run, not reinvent.
+
 Launch feedback remains the product signal, while the active implementation directions below
 can progress in parallel without being mistaken for shipped capabilities.
 
@@ -54,9 +60,10 @@ can progress in parallel without being mistaken for shipped capabilities.
    non-runnable classification/redaction draft;
    `dent8 eval finalize` requires explicit review; and `dent8 eval --trace <FILE>` emits
    privacy-safe text/JSON and fails on any reviewed false positive. Redacted maintainer-dogfood
-   traces now ship for Claude Code, Cursor, and Grok Build (3 legitimate operations,
-   0 false positives). Independent early-user evidence remains to be collected. See
-   [evals.md](evals.md).
+   traces ship for Claude Code, Cursor, Grok Build, and multi-op CLI (**8** legitimate
+   operations, 0 false positives), gated by `scripts/integrity-check.sh` in CI. Independent
+   early-user evidence remains to be collected. See [evals.md](evals.md) and
+   [integrity-track.md](integrity-track.md).
    *(Invariant: the firewall does not tax legitimate revision — measured on designed traffic;
    the observation harness is ready for real traffic.)*
 3. **Concurrency load testing and tuning.** ✅ Both backends: `scripts/load-test.sh` (N

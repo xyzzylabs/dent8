@@ -78,12 +78,28 @@ identifiers with consistent pseudonyms, set `privacy.content` to `redacted`, and
 result. A trace marked `raw` is accepted for local analysis but produces a warning and should
 not be committed or uploaded.
 
-The checked-in captured maintainer-dogfood fixtures cover Claude Code
-(`claude-code-msrv.redacted.json`), Cursor (`cursor-roadmap.redacted.json`), and Grok Build
-(`grok-build-mcp.redacted.json`): 3 legitimate writes, 0 false positives. Their project keys,
-values, ids, sessions, timestamps, and evidence locators are pseudonymized, and original event
-attestations were removed after redaction. They are product evidence for those integration paths,
-but not independent external-user evidence.
+The checked-in captured maintainer-dogfood fixtures cover:
+
+| File | Agent | Operations |
+|------|--------|------------|
+| `claude-code-msrv.redacted.json` | Claude Code | 1 |
+| `cursor-roadmap.redacted.json` | Cursor | 1 |
+| `grok-build-mcp.redacted.json` | Grok Build | 1 |
+| `cli-multi-op.redacted.json` | CLI | 5 (assert → reinforce → supersede → assert → retract) |
+
+**4 traces / 8 legitimate operations / 0 false positives.** Project keys, values, ids, sessions,
+timestamps, and evidence locators are pseudonymized; original event attestations were removed
+after redaction. They are integration evidence for those paths, not independent external-user
+evidence.
+
+Gate them (plus the designed corpus) with:
+
+```sh
+scripts/integrity-check.sh
+```
+
+Capture a new session with `scripts/capture-legitimate-session.sh` (see
+[docs/integrity-track.md](../../docs/integrity-track.md)).
 
 This v1 lane measures deterministic store arbitration plus the built-in predicate policy applied
 to `assert`/`derive`, matching the captured seam. Authority-ceiling, signed-identity,
