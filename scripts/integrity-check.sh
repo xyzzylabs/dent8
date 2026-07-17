@@ -15,17 +15,20 @@ cd "$ROOT"
 
 OPERATED_WITNESS=0
 LOCAL_STORE=0
+MULTI_AGENT=0
 for arg in "$@"; do
   case "$arg" in
     --operated-witness) OPERATED_WITNESS=1 ;;
     --local-store) LOCAL_STORE=1 ;;
+    --multi-agent) MULTI_AGENT=1 ;;
     -h|--help)
       cat <<'HELP'
-Usage: scripts/integrity-check.sh [--local-store] [--operated-witness]
+Usage: scripts/integrity-check.sh [flags]
 
-  (default)     dent8 eval + all evals/traces/*.{redacted,example}.json
-  --local-store also run verify (+ witness verify when DENT8_WITNESS_* is set)
-  --operated-witness  run examples/witness-operated/demo.sh (Docker required)
+  (default)          dent8 eval + all evals/traces/*.{redacted,example}.json
+  --local-store      also run verify (+ witness verify when DENT8_WITNESS_* is set)
+  --multi-agent      hermetic multi-agent doctor --write-check + role-split witness demo
+  --operated-witness run examples/witness-operated/demo.sh (Docker required)
 HELP
       exit 0
       ;;
@@ -123,7 +126,13 @@ if [ "$LOCAL_STORE" -eq 1 ]; then
   fi
 fi
 
-# --- 4: operated witness demo (optional) ------------------------------------------
+# --- 4: multi-agent doctor + local role-split witness (optional) ------------------
+if [ "$MULTI_AGENT" -eq 1 ]; then
+  note "multi-agent doctor write-check + role-split witness"
+  DENT8_BIN="$BIN" ./scripts/integrity-multi-agent.sh
+fi
+
+# --- 5: operated witness Docker demo (optional) -----------------------------------
 if [ "$OPERATED_WITNESS" -eq 1 ]; then
   note "operated witness demo (Docker)"
   if ! command -v docker >/dev/null 2>&1; then

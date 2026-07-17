@@ -97,7 +97,13 @@ run_dent8 \
 
 echo
 echo "# 3. Writer appends an event; signer signs the current tree head"
-run_dent8 DENT8_LOG="$LOG" \
+# Authority is deny-by-default for unlisted sources; grant a writer ceiling for the demo.
+AUTHORITY_REG="$SHARED/authority.json"
+run_dent8 DENT8_AUTHORITY="$AUTHORITY_REG" authority add user:alice low
+run_dent8 \
+  DENT8_LOG="$LOG" \
+  DENT8_AUTHORITY="$AUTHORITY_REG" \
+  DENT8_REQUIRE_AUTHORITY=1 \
   assert person:alice favorite_drink tea --authority low --source user:alice
 run_dent8 \
   DENT8_LOG="$LOG" \

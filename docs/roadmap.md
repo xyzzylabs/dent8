@@ -41,10 +41,11 @@ lag), batch `explain` via `queries[]`, and `detail=summary` for token-sensitive 
 Server instructions and Claude-eager tools prefer `context` over `list_facts` (index only).
 
 **Integrity track (in progress):** `scripts/integrity-check.sh` gates designed corpora + every
-shipped reviewed trace (including a multi-op CLI capture); `scripts/capture-legitimate-session.sh`
-and [integrity-track.md](integrity-track.md) document capture → review → finalize and the
-operated-witness checklist. Independent early-user traces and *hosted* witness operation remain
-open; the packaged compose demo is the production shape to run, not reinvent.
+shipped reviewed trace; `scripts/integrity-multi-agent.sh` hermetically runs
+`doctor --write-check` for four agent profiles + the role-split witness demo (CI); 
+`scripts/dogfood-witness-ops.sh` keeps monorepo dogfood signed and published without a writer
+key. Operated-witness Docker E2E runs on `main`. Independent early-user traces and *hosted*
+witness SaaS remain open — see [integrity-track.md](integrity-track.md).
 
 Launch feedback remains the product signal, while the active implementation directions below
 can progress in parallel without being mistaken for shipped capabilities.

@@ -17,6 +17,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   multi-op CLI capture fixture (`evals/traces/cli-multi-op.redacted.json`, 5 ops) raises shipped
   captured evidence to 4 traces / 8 operations / 0 false positives (still maintainer integration
   evidence, not external-user evidence).
+- **Multi-agent doctor + witness ops:** `scripts/integrity-multi-agent.sh` hermetically inits
+  codex/claude-code/cursor/grok-build on a shared SQLite store, runs `doctor --write-check` per
+  agent and aggregate, then the local role-split witness demo (CI on every PR). 
+  `scripts/dogfood-witness-ops.sh` signs/publishes/verifies monorepo dogfood heads without
+  putting `DENT8_WITNESS_KEY` in the writer env. Operated-witness Docker E2E now runs on
+  pushes to `main` (not only manual dispatch).
 - **MCP `context` tool (agent inject pack):** exposes CLI `dent8 context` over MCP with
   values, authority, source, and freshness in one call — ending the N+1 `list_facts` +
   `explain` loop for multi-fact grounding. Optional filters (`kind` / `key` / `predicate` /

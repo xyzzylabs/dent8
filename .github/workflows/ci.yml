@@ -79,6 +79,10 @@ jobs:
       # Keeps the false-positive claim honest without waiting for an external user capture.
       - name: Integrity check (eval + shipped traces)
         run: scripts/integrity-check.sh
+      # Hermetic multi-agent doctor --write-check for codex/claude/cursor/grok + role-split
+      # witness demo (no Docker). Independent of machine-local .dent8 dogfood state.
+      - name: Integrity multi-agent doctor + witness split
+        run: scripts/integrity-multi-agent.sh
       # The minimal file-only build (no async backend); its store-selection paths run here.
       - name: Test CLI no default features
         run: cargo test -p dent8-cli --no-default-features
@@ -245,15 +249,19 @@ jobs:
           bash -n examples/witness-operated/demo.sh
           docker compose -f examples/witness-operated/compose.yml config --quiet
 
-  # Full live E2E for the operated witness deployment recipe. This builds the packaged image
+  # Full live E2E for the operated witness deployment recipe. Builds the packaged image
   # through Compose, writes one Postgres-backed event, waits until the signer/publisher/monitor
   # split publishes a count-1 head, deletes the event log, and requires the monitor to alarm on
-  # rollback. It is manual because it is heavier and exercises Docker Compose timing.
+  # rollback. Runs on main pushes and manual dispatch (not every PR — Docker timing is heavy).
   operated-witness-demo:
-    name: operated witness rollback E2E (manual)
+    name: operated witness rollback E2E
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.operated_witness_demo }}
+    if: >-
+      ${{
+        github.event_name == 'push' && github.ref == 'refs/heads/main'
+        || (github.event_name == 'workflow_dispatch' && inputs.operated_witness_demo)
+      }}
     steps:
       - uses: actions/checkout@v5
       - name: Run operated-witness rollback demo

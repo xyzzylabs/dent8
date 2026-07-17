@@ -25,12 +25,22 @@ scripts/integrity-check.sh
 # also verify the local dogfood store + witness (no lag)
 scripts/integrity-check.sh --local-store
 
-# also run the Docker operated-witness rollback demo
+# hermetic multi-agent doctor --write-check (codex/claude/cursor/grok) + role-split witness
+scripts/integrity-check.sh --multi-agent
+# or directly:
+scripts/integrity-multi-agent.sh
+
+# local monorepo dogfood: sign (key only for this call), publish, verify-published
+scripts/dogfood-witness-ops.sh
+
+# Docker operated-witness rollback demo (signer/publisher/monitor)
 scripts/integrity-check.sh --operated-witness
 ```
 
 `scripts/integrity-check.sh` exits non-zero on designed or reviewed false positives, a failed
-`verify`, or a lagging/failed local witness when `--local-store` is used.
+`verify`, or a lagging/failed local witness when `--local-store` is used. CI runs the default
+gate plus `scripts/integrity-multi-agent.sh` on every PR; the full Docker operated-witness
+demo runs on pushes to `main`.
 
 ## Checklist (definition of integrity-ready)
 
@@ -102,8 +112,9 @@ Monitors alert on `TAMPER` / `ROLLBACK` and on a growing unwitnessed tail.
 
 ## Recommended sequence
 
-1. Keep `scripts/integrity-check.sh` green in CI / before release.  
-2. Run `--local-store` on every dogfood machine after writes (sign lag if needed).  
+1. Keep `scripts/integrity-check.sh` + `scripts/integrity-multi-agent.sh` green in CI.  
+2. After local writes: `scripts/dogfood-witness-ops.sh` (sign + publish; never put the key in
+   writer env).  
 3. Deploy the operated-witness compose (or systemd units) against the team Postgres store.  
 4. Capture ≥1 early-user legitimate session per agent profile you claim to support.  
 5. Only then claim integrity-ready production for that deployment shape.
