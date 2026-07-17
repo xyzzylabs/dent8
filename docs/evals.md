@@ -96,11 +96,14 @@ recorder is fail-open and stays outside the event log, so eval collection cannot
 production write decision or self-label traffic as legitimate. See the exact workflow and
 redaction checklist in [`evals/traces/`](../evals/traces/).
 
-No captured-user trace ships today, so the observed tally is deliberately **not** presented as
-evidence yet. What remains is collecting and human-reviewing dogfood and early-user traces. This
-v1 lane replays deterministic store arbitration plus the built-in `assert`/`derive` predicate
-policy at the captured seam. Authority-ceiling, identity, content-check, transport, commit, and
-custom integration-policy failures remain separately scoped write-boundary lanes.
+Three reviewed, redacted maintainer-dogfood traces now ship for Claude Code, Cursor, and Grok
+Build: 3 captured legitimate operations, 0 false positives. They show that real sessions in all
+three clients reach the captured arbitration seam under distinct signed source identities. This
+is not independent external-user evidence or a statistically useful false-positive estimate;
+collecting early-user traces remains open. This v1 lane replays deterministic store arbitration
+plus the built-in `assert`/`derive` predicate policy at the captured seam. Authority-ceiling,
+identity, content-check, transport, commit, and custom integration-policy failures remain
+separately scoped write-boundary lanes.
 
 ## Integrity-axis comparison vs Mem0 / Zep (built)
 

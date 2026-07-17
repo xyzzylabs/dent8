@@ -331,9 +331,14 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   relying on durable project facts, and treat rejected writes as safety signals.
   Tool definitions advertise `outputSchema` for every structured result; every input and output
   schema has the MCP 2025-11-25-required top-level `type: object`, with typed success/error
-  variants nested below it. Claude Code 2.1.139 is exercised end-to-end against the project
-  SQLite dogfood store: it loads the generated `.mcp.json`, calls `runtime_status`, and appends
-  a signed Low-authority assertion as `source:claude-code`. Tool calls return
+  variants nested below it. CI launches the real server through the official TypeScript MCP SDK
+  (pinned at 1.29.0), validates `tools/list` with its `ListToolsResultSchema`, and calls
+  `runtime_status` with SDK-enforced structured-output validation. Claude Code 2.1.139, Cursor
+  Agent 2026.07.09, and Grok Build 0.2.101 are exercised end-to-end against the project SQLite
+  dogfood store: each loads its generated project MCP config, calls `runtime_status`, and appends
+  a signed Low-authority assertion under its own source identity. Grok's current `rmcp` client
+  negotiates dent8's supported `2025-06-18` compatibility revision; the official SDK lane and
+  Claude exercise the preferred `2025-11-25` surface. Tool calls return
   human-readable `content` plus MCP 2025-11-25 `structuredContent` with stable agent fields:
   `status`, `accepted_events` (one entry per committed event, including event hash),
   current-state receipt fields (`fact_id`, `event_hash`, `replay_position`, `current_value`,
@@ -810,9 +815,10 @@ subject+predicate.
   CLI/MCP/daemon operation path into a raw mode-0600 JSONL journal. `dent8 eval prepare` emits a
   non-runnable review draft; `dent8 eval finalize` requires explicit per-operation classification,
   reviewer, and basis before producing a trace. Capture is fail-open and outside the event log.
-  The workflow and synthetic example are in [`evals/traces/`](../evals/traces/). **No
-  captured-user trace ships yet**; the published false-positive evidence remains the designed
-  0/22 tally.
+  The workflow and synthetic example are in [`evals/traces/`](../evals/traces/). Three reviewed,
+  redacted maintainer-dogfood traces ship for Claude Code, Cursor, and Grok Build (3 captured
+  legitimate operations, 0 false positives). This is integration evidence, not independent
+  external-user evidence; the designed benign corpus remains the broader 0/22 tally.
 
 ## Remaining Gaps
 
@@ -900,15 +906,20 @@ subject+predicate.
   banner). Light/dark, deep-linkable tabs, click-to-pause poll. Read-only by construction
   (every endpoint is a GET over the same `op_*`/snapshot path as CLI/MCP; 127.0.0.1-bound;
   non-localhost `Host` refused; values HTML-escaped so agent-supplied text cannot execute).
-  That completes the ADR's read/audit-first shape. Remaining from the ADR: the Tauri desktop
-  shell (step 4) and write actions over the signed identity path (step 5). It must not
+  That completes the ADR's read/audit-first shape. The active next increments are the Tauri
+  desktop shell (step 4) and write actions over the signed identity path (step 5). They must not
   become a separate write path or memory provider.
-- **LLM verifier adapters are design-only.** [ADR 0021](decisions/0021-llm-verifier-adapters.md)
+- **LLM verifier adapters are active design work, not shipped.** [ADR 0021](decisions/0021-llm-verifier-adapters.md)
   accepts LLM-as-verifier systems as optional eval/content-check/debugger signals, not as part
   of the deterministic core. No adapter ships today: the built-in evals remain deterministic,
   the content-check hook remains scanner-agnostic, and a model score cannot raise authority,
   canonicalize a fact, or bypass the signed write path.
-- **A *hosted* / operated witness service.** Both anchor primitives —
+- **The training/eval substrate is active product work, not shipped.** The event log, Parquet
+  export, replay fixtures, human-reviewed legitimate-traffic traces, and integrity receipts are
+  useful inputs for verifier training and evaluation. A concrete dataset contract, labeling
+  policy, privacy boundary, and benchmark are still open; this does not make fine-tuning the
+  product lead or move probabilistic judgments into the firewall core.
+- **A *hosted* / operated witness service is active product work.** Both anchor primitives —
   symmetric (`anchor_head`) and asymmetric (`sign_head`, the publicly-verifiable signed tree
   head) — are built and tested (Library, above), and the signed-tree-head primitive is now
   runnable end-to-end as **`dent8 witness keygen | sign | verify | publish | verify-published |
@@ -918,8 +929,8 @@ subject+predicate.
   heads. The operated deployment is **packaged**
   ([`examples/witness-operated/`](../examples/witness-operated/): compose + systemd, with
   event-head and grant-head publication plus key-rotation and publication-channel guidance);
-  what is still design-only is *hosting* it — a managed signer/publication service instead
-  of your own second host.
+  what remains is operating it — a managed signer/publication service instead of your own
+  second host.
 
 ## How to keep this honest
 

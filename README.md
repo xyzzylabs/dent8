@@ -65,7 +65,9 @@ To test the false-positive rate on a human-reviewed agent session instead of onl
 benign corpus, opt in with `DENT8_EVAL_CAPTURE=<raw.jsonl>`, then run `dent8 eval prepare`, review
 and redact every operation, `dent8 eval finalize`, and finally `dent8 eval --trace <FILE>`. The
 strict formats, privacy checklist, and synthetic example live in
-[`evals/traces/`](evals/traces/); no captured-user tally is claimed yet.
+[`evals/traces/`](evals/traces/). Three reviewed, redacted maintainer-dogfood traces now ship
+for Claude Code, Cursor, and Grok Build (3 legitimate operations, 0 false positives); no
+independent captured-user tally is claimed yet.
 
 ## See the firewall reject a write
 
@@ -114,11 +116,11 @@ roadmap — live in the firewall, not in a hand-maintained `CLAUDE.md` that sile
 Rebuild the store from the committed seed, then ask for the context pack:
 
 ```sh
-scripts/dogfood-seed.sh    # rebuilds .dent8/ from scripts/dogfood-facts.jsonl (15 facts, source:human @ High)
+scripts/dogfood-seed.sh    # rebuilds .dent8/ from scripts/dogfood-facts.jsonl (16 facts, source:human @ High)
 dent8 context              # the believed facts, with authority and provenance
 ```
 
-`dent8 context` emits a markdown pack ready to inject at session start. Below is the pack from this repo's own store, curated for the README — 6 of the 15 facts, reordered by relevance, with the trailing `ref:` provenance field trimmed for width. Run `dent8 context` for the verbatim pack (all 15 facts, each with its `ref:`).
+`dent8 context` emits a markdown pack ready to inject at session start. Below is the pack from this repo's own store, curated for the README — 6 of the 16 facts, reordered by relevance, with the trailing `ref:` provenance field trimmed for width. Run `dent8 context` for the verbatim pack (all 16 facts, each with its `ref:`).
 
 ````markdown
 ## Project facts (dent8)

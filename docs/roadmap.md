@@ -33,10 +33,10 @@ All five items of the previous near-term list landed by v0.6.1:
    replay (novelty rank 2), and the docs now live at
    [xyzzylabs.github.io/dent8](https://xyzzylabs.github.io/dent8/).
 
-## Near-term focus (post-v0.6)
+## Near-term focus (post-v0.8)
 
-Priority order. The first item gates the rest — the frozen directions below unfreeze on
-evidence of users, not on more features.
+Launch feedback remains the product signal, while the active implementation directions below
+can progress in parallel without being mistaken for shipped capabilities.
 
 1. **Launch and the feedback loop.** Announce (the release is announceable: 2-minute on-ramp,
    honest evals, three registries, docs site), then treat the first weeks of issues and
@@ -48,9 +48,10 @@ evidence of users, not on more features.
    independent baselines (omitting unrelated store history); `dent8 eval prepare` creates a
    non-runnable classification/redaction draft;
    `dent8 eval finalize` requires explicit review; and `dent8 eval --trace <FILE>` emits
-   privacy-safe text/JSON and fails on any reviewed false positive. What remains is the evidence
-   itself: collecting and reviewing **real agent-session traces** from dogfooding and early
-   users. No captured-user tally is claimed yet. See [evals.md](evals.md).
+   privacy-safe text/JSON and fails on any reviewed false positive. Redacted maintainer-dogfood
+   traces now ship for Claude Code, Cursor, and Grok Build (3 legitimate operations,
+   0 false positives). Independent early-user evidence remains to be collected. See
+   [evals.md](evals.md).
    *(Invariant: the firewall does not tax legitimate revision — measured on designed traffic;
    the observation harness is ready for real traffic.)*
 3. **Concurrency load testing and tuning.** ✅ Both backends: `scripts/load-test.sh` (N
@@ -85,9 +86,10 @@ contested pairs inline; click for the receipt + replay drawer), **Activity** (th
 feed), **What-if** (counterfactual re-fold), and **Health** (a status-page rollup that folds
 doctor, witness coverage/tamper, native audit, and raw runtime detail behind one
 healthy/attention banner). Light/dark, deep-linkable tabs, click-to-pause poll. The **Tauri
-desktop shell** (step 4) and write actions (step 5) remain later packaging over this same
-surface. Still explicitly **frozen until the wedge has users**: operated-witness hosting and
-any training-substrate direction.
+desktop shell** (step 4), signed write actions (step 5), operated-witness hosting, and the
+training/eval substrate are all **active directions**. Their current status differs: the web
+control plane and witness primitives are runnable, while native packaging, managed hosting,
+and training-oriented product surfaces remain unshipped.
 
 ## Where the code actually is
 
@@ -140,7 +142,8 @@ What remains to make it a hardened multi-user product:
 - **Richer protocol/product surfaces.** The v0 MCP server is useful today, the thin
   Python/TS SDKs shipped ([`sdks/`](../sdks/)), `resources/subscribe` pushes fact-change
   notifications on both transports, and **MCP-over-HTTP** ships (`dent8 mcp serve --http`,
-  [ADR 0019](decisions/0019-http-api-mcp-over-http.md)); the official `rmcp` SDK,
+  [ADR 0019](decisions/0019-http-api-mcp-over-http.md)). The stdio surface is independently
+  exercised by the official TypeScript MCP client in CI. The official Rust `rmcp` SDK,
   streamable-HTTP push, prompts, and the `dent8 ui` Tauri shell
   ([ADR 0020](decisions/0020-desktop-debugger-control-plane.md)) are later.
 - **Remaining formal/eval work.** `proptest` suites, golden replay fixtures, scenario-family
@@ -370,7 +373,7 @@ shipped. The next dependency chain is product hardening: identity operations -> 
 witness -> stable daemon/API contracts (started with `snapshot`) -> desktop
 debugger/control plane and production deployment packaging.
 
-## Later
+## Active Product Directions
 
 Postgres multi-tenant partitioning ·
 ATMS-style assumption-environment replay for the debugger (the core shipped as
@@ -387,4 +390,6 @@ witness status, and replay timelines ·
 adapters for existing memory providers · a managed/hosted witness service (publication
 channel, monitoring, key-rotation automation) for non-repudiation — the
 published-signed-tree-head primitive itself (`witness publish` / `verify-published`, plus
-the grant-log `--grants` lane) already ships.
+the grant-log `--grants` lane) already ships ·
+a training/eval substrate derived from provenance-preserving event streams and integrity
+receipts, without moving model judgments into the deterministic write boundary.

@@ -21,7 +21,13 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   `dent8 eval prepare` creates a non-runnable per-operation review/redaction draft and
   `dent8 eval finalize` refuses incomplete classifications before producing an evaluable trace.
   Capture is fail-open and outside the event log. Reports never echo event values. A synthetic
-  template and privacy checklist live in `evals/traces/` — no captured-user result is claimed yet.
+  template, privacy checklist, and reviewed/redacted Claude Code, Cursor, and Grok Build
+  maintainer-dogfood fixtures live in `evals/traces/` (3 legitimate captured operations,
+  0 false positives; not independent-user evidence).
+- **Independent MCP conformance coverage:** the TypeScript SDK CI lane launches the real dent8
+  stdio server through the official MCP SDK 1.29.0, validates all 17 tool definitions with
+  its `ListToolsResultSchema`, then calls `runtime_status` with SDK-enforced structured-output
+  validation.
 - **First-class LlamaIndex tools** (`dent8.llamaindex`, `pip install "dent8[llamaindex]"`).
   Native LlamaIndex `FunctionTool`s over the belief surface, built on the `dent8` SDK — no MCP
   subprocess; `dent8_tools(source=…, authority=…)` returns the same six tools as the LangChain
@@ -39,11 +45,20 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   instructions but rejected all 17 tools at `tools/list` schema validation.
 
 ### Changed
+- **Tauri, operated-witness hosting, and the training/eval substrate are active product
+  directions rather than frozen roadmap items.** Status remains explicit: the browser control
+  plane and witness primitives are runnable; native packaging, managed hosting, and a concrete
+  training dataset/product contract are not shipped yet.
 - **Claude Code keeps dent8's core MCP loop visible.** The `runtime_status`, `list_facts`,
   `assert`, and `explain` definitions carry Claude Code's namespaced per-tool eager-load
   metadata (2.1.121+); the other 13 tools remain deferred through Tool Search. Verified
   end-to-end with Claude Code 2.1.139: `runtime_status` followed by a signed, admitted
   `source:claude-code` assertion against the SQLite dogfood store.
+- **Live client compatibility now covers Claude Code, Cursor, and Grok Build.** Each client
+  loaded dent8's project-scoped MCP config, called `runtime_status`, and made one signed
+  Low-authority write under a distinct source identity. Grok Build 0.2.101 exercised the
+  `2025-06-18` negotiation fallback; dent8 continues to prefer the current stable
+  `2025-11-25` protocol revision.
 - **crates.io now publishes automatically on tag** via Trusted Publishing (OIDC), matching the
   PyPI and npm release jobs — a `crates` job in `release.yml` runs
   `rust-lang/crates-io-auth-action` + `cargo publish --workspace`, which uploads all eight
