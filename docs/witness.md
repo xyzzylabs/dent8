@@ -18,7 +18,9 @@ publisher receives the witness logs and public key read-only, then writes to the
 publication volume. The runnable Compose demo
 ([`examples/witness-operated/demo.sh`](../examples/witness-operated/demo.sh)) starts that split,
 publishes a head for one Postgres-backed write, deletes `dent8_event_log`, and confirms the
-monitor exits on a rollback alarm.
+monitor exits on a rollback alarm. For a long-lived local stack (writer env + host-visible
+published heads + ALERT file), use `scripts/operated-witness-up.sh` /
+`status` / `smoke` / `down` from the repo root.
 
 ## Local Dev Setup
 

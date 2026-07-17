@@ -57,6 +57,44 @@ docker compose logs -f signer publisher monitor
 
 Verify end to end, then tear down with `docker compose down -v`.
 
+## Maintainer scripts (repo root)
+
+For a long-lived local operated stack (not the one-shot rollback demo):
+
+```sh
+# Start Postgres + signer + publisher + monitor; write writer env (no private key)
+scripts/operated-witness-up.sh
+
+# Optional: writer smoke (needs dent8 built with --features postgres)
+scripts/operated-witness-smoke.sh
+
+# Coverage, compose ps, ALERT tail
+scripts/operated-witness-status.sh
+
+# Stop (keep volumes)
+scripts/operated-witness-down.sh
+# Wipe store + keys + published
+scripts/operated-witness-down.sh --volumes
+```
+
+Writer env is written to `.dent8/operated-witness.env` by default:
+
+- `DENT8_STORE_URL=postgres://…@127.0.0.1:55432/dent8`
+- `DENT8_WITNESS_PUBKEY` → host `examples/witness-operated/published/witness.key.pub`
+- **no** `DENT8_WITNESS_KEY`
+
+### Alerting
+
+On `tamper` / `rollback` the monitor:
+
+1. exits non-zero and stays down (`restart: "no"`)
+2. appends a line to `examples/witness-operated/published/ALERT.jsonl` (host-visible)
+3. optionally POSTs `DENT8_WITNESS_ALERT_WEBHOOK` if set and `curl` is available in the image
+
+Wire production alerting to container exit *and* the ALERT file / webhook.
+
+
+
 ## systemd (bare-metal signer/monitor hosts)
 
 [`systemd/`](systemd/) has hardened units for the same roles: the cadence signer as a

@@ -99,16 +99,30 @@ Full schema and privacy rules: [evals.md](evals.md), [evals/traces/README.md](..
 ## Operated witness (I8)
 
 Local `dent8 witness sign` on the writer machine is **dev hygiene**, not resistance.
-Production:
+Production uses the packaged split (signer / publisher / monitor over Postgres).
+
+### Long-lived local stack (this monorepo)
 
 ```sh
-# packaged split (signer / publisher / monitor over Postgres)
+# Start Postgres + signer + publisher + monitor; write .dent8/operated-witness.env
+scripts/operated-witness-up.sh
+
+# Writer smoke (build with --features postgres once)
+scripts/operated-witness-smoke.sh
+
+# compose ps + published heads + ALERT tail + verify-published
+scripts/operated-witness-status.sh
+
+# One-shot rollback alarm E2E (also CI on main)
 ./examples/witness-operated/demo.sh
-# or compose up signer + publisher + monitor, point writers at the shared store
+
+scripts/operated-witness-down.sh            # keep volumes
+scripts/operated-witness-down.sh --volumes  # wipe
 ```
 
-Writers get `DENT8_WITNESS_LOG` + `DENT8_WITNESS_PUBKEY` only — never `DENT8_WITNESS_KEY`.
-Monitors alert on `TAMPER` / `ROLLBACK` and on a growing unwitnessed tail.
+Writers source `.dent8/operated-witness.env` and never receive `DENT8_WITNESS_KEY`.
+On `tamper`/`rollback` the monitor exits non-zero, stays down, and appends
+`examples/witness-operated/published/ALERT.jsonl` (optional `DENT8_WITNESS_ALERT_WEBHOOK`).
 
 ## Recommended sequence
 

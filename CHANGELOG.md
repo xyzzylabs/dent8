@@ -24,6 +24,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   putting `DENT8_WITNESS_KEY` in the writer env. Monorepo path:
   `scripts/dogfood-doctor.sh --write-check --witness-ops`. Multi-agent team capture raises
   shipped evidence to 5 traces / 13 ops / 0 FP. Operated-witness Docker E2E runs on `main`.
+- **Operated witness host tooling:** `scripts/operated-witness-{up,status,down,smoke}.sh` run
+  the Postgres signer/publisher/monitor split as a long-lived local stack; host-visible
+  `examples/witness-operated/published/` carries heads + `ALERT.jsonl` on tamper/rollback;
+  optional `DENT8_WITNESS_ALERT_WEBHOOK`.
 - **MCP `context` tool (agent inject pack):** exposes CLI `dent8 context` over MCP with
   values, authority, source, and freshness in one call — ending the N+1 `list_facts` +
   `explain` loop for multi-fact grounding. Optional filters (`kind` / `key` / `predicate` /

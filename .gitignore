@@ -48,3 +48,6 @@ dist/
 # TypeScript SDK build artifacts (sdks/typescript)
 node_modules/
 announcement-draft.md
+
+# Operated-witness host-visible publication channel (runtime)
+examples/witness-operated/published/

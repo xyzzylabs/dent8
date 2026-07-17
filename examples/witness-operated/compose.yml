@@ -30,7 +30,8 @@ services:
       POSTGRES_PASSWORD: dent8
       POSTGRES_DB: dent8
     ports:
-      - "${DENT8_WITNESS_DB_PORT:-5432}:5432"
+      # Default away from host 5432 so local Postgres installs do not collide.
+      - "${DENT8_WITNESS_DB_PORT:-55432}:5432"
     volumes:
       - store:/var/lib/postgresql/data
     healthcheck:
@@ -76,7 +77,8 @@ services:
     volumes:
       - witness-log:/witness/log:ro
       - witness-public:/witness/public:ro
-      - published:/published
+      # Host-visible publication channel (heads + ALERT). Default: examples/witness-operated/published
+      - ${DENT8_WITNESS_PUBLISHED_DIR:-./published}:/published
       - ./publisher.sh:/opt/dent8/publisher.sh:ro
     depends_on:
       db:
@@ -92,33 +94,31 @@ services:
       PUBLISHED_HEADS: /published/heads.jsonl
       PUBLISHED_GRANTS: /published/grant-heads.jsonl
       MONITOR_INTERVAL_SECONDS: "${MONITOR_INTERVAL_SECONDS:-15}"
+      DENT8_WITNESS_ALERT_FILE: /published/ALERT.jsonl
+      # Optional: https://hooks.slack.com/... or any JSON POST endpoint
+      DENT8_WITNESS_ALERT_WEBHOOK: "${DENT8_WITNESS_ALERT_WEBHOOK:-}"
     volumes:
-      - published:/published:ro
+      # Read-write so ALERT.jsonl can be written next to published heads.
+      - ${DENT8_WITNESS_PUBLISHED_DIR:-./published}:/published
       - ./monitor.sh:/opt/dent8/monitor.sh:ro
     depends_on:
       db:
         condition: service_healthy
     # A tamper/rollback verdict exits the container non-zero and stays down — visible in
-    # `docker compose ps`, and the hook for real alerting.
+    # `docker compose ps`, ALERT.jsonl on the host, and optional webhook.
     restart: "no"
 
-  # Demo lane: one trusted write so the pipeline has an event to witness.
+  # Demo lane: grant authority + one trusted write so the pipeline has an event to witness.
   demo-writer:
     profiles: ["demo"]
     build: ../..
-    command:
-      [
-        "assert",
-        "repo:operated-demo",
-        "database",
-        "postgres",
-        "--authority",
-        "high",
-        "--source",
-        "source:owner",
-      ]
+    entrypoint: ["/bin/sh", "/opt/dent8/demo-writer.sh"]
     environment:
       DENT8_STORE_URL: postgres://postgres:dent8@db:5432/dent8
+      DENT8_AUTHORITY: /tmp/authority.json
+      DENT8_REQUIRE_AUTHORITY: "1"
+    volumes:
+      - ./demo-writer.sh:/opt/dent8/demo-writer.sh:ro
     depends_on:
       db:
         condition: service_healthy
@@ -128,4 +128,3 @@ volumes:
   witness-private:
   witness-log:
   witness-public:
-  published:
