@@ -10,6 +10,10 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **Desktop control-plane shell (ADR 0020 step 4):** `dent8 ui --desktop` (build with
+  `--features desktop`) opens a native `WebView` window via `tao`/`wry` (the Tauri stack)
+  around the same localhost read-only debugger — no separate write path. Stock `dent8 ui`
+  still serves the browser dashboard without the desktop feature.
 - **Integrity track tooling:** `scripts/integrity-check.sh` runs designed corpora plus every
   shipped reviewed legitimate-traffic trace (CI step); `scripts/capture-legitimate-session.sh`
   wraps bounded `DENT8_EVAL_CAPTURE` sessions; [docs/integrity-track.md](docs/integrity-track.md)

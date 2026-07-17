@@ -94,16 +94,12 @@ can progress in parallel without being mistaken for shipped capabilities.
 
 **Unfrozen — the control plane shipped**: `dent8 ui` serves a read-only, human-first memory
 dashboard from the stock binary (ADR 0020 steps 2+3: a stable localhost read/audit API plus
-the web app). Four views organised around the belief base, not the plumbing: **Memory** (a
-headline verdict + stat tiles + the believed facts as cards with values, freshness, and
-contested pairs inline; click for the receipt + replay drawer), **Activity** (the event
-feed), **What-if** (counterfactual re-fold), and **Health** (a status-page rollup that folds
-doctor, witness coverage/tamper, native audit, and raw runtime detail behind one
-healthy/attention banner). Light/dark, deep-linkable tabs, click-to-pause poll. The **Tauri
-desktop shell** (step 4), signed write actions (step 5), operated-witness hosting, and the
-training/eval substrate are all **active directions**. Their current status differs: the web
-control plane and witness primitives are runnable, while native packaging, managed hosting,
-and training-oriented product surfaces remain unshipped.
+the web app). **Step 4** is `dent8 ui --desktop` (`--features desktop`): a native `WebView`
+window via `tao`/`wry` (Tauri stack) around the same surface. Four views organised around the
+belief base, not the plumbing: **Memory**, **Activity**, **What-if**, and **Health**.
+Light/dark, deep-linkable tabs, click-to-pause poll. Remaining active directions: **signed
+write actions** (step 5), operated-witness hosting/productization, and the training/eval
+substrate.
 
 ## Where the code actually is
 

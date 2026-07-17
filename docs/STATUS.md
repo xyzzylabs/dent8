@@ -917,9 +917,11 @@ subject+predicate.
   banner). Light/dark, deep-linkable tabs, click-to-pause poll. Read-only by construction
   (every endpoint is a GET over the same `op_*`/snapshot path as CLI/MCP; 127.0.0.1-bound;
   non-localhost `Host` refused; values HTML-escaped so agent-supplied text cannot execute).
-  That completes the ADR's read/audit-first shape. The active next increments are the Tauri
-  desktop shell (step 4) and write actions over the signed identity path (step 5). They must not
-  become a separate write path or memory provider.
+  That completes the ADR's read/audit-first shape. **Step 4 (desktop shell)** is available as
+  `dent8 ui --desktop` when built with `--features desktop` (native `WebView` via `tao`/`wry`,
+  the Tauri stack, wrapping the same localhost UI — still read-only). The remaining active
+  increment is **step 5: write actions over the signed identity path**. They must not become a
+  separate write path or memory provider.
 - **LLM verifier adapters are active design work, not shipped.** [ADR 0021](decisions/0021-llm-verifier-adapters.md)
   accepts LLM-as-verifier systems as optional eval/content-check/debugger signals, not as part
   of the deterministic core. No adapter ships today: the built-in evals remain deterministic,

@@ -2,8 +2,12 @@
 //! stable localhost read/audit API plus a web debugger served straight from the stock
 //! binary. No separate write path exists by construction — every endpoint is a GET over
 //! the same `op_*`/snapshot code the CLI and MCP use, so the UI can never bypass the
-//! firewall (the ADR's hard constraint). The Tauri desktop shell remains the later
-//! packaging step; it will wrap this same surface.
+//! firewall (the ADR's hard constraint).
+//!
+//! **Desktop shell (step 4):** `dent8 ui --desktop` (feature `desktop`) opens a native
+//! WebView window via `tao`/`wry` (the Tauri stack) around this same localhost surface —
+//! still read-only, still no separate write path. Step 5 (signed write actions) remains
+//! future work and must reuse CLI/MCP identity + `op_*`.
 //!
 //! Transport: a deliberately minimal hand-rolled HTTP/1.1 responder over tokio (the same
 //! zero-new-deps discipline as the MCP server). It binds **127.0.0.1 only**, answers GET
@@ -34,12 +38,9 @@ pub(crate) fn run_ui(path: &str, port: u16, open_browser: bool) -> i32 {
         }
     };
     runtime.block_on(async {
-        let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        let listener = match bind_ui_listener(port).await {
             Ok(listener) => listener,
-            Err(error) => {
-                eprintln!("ui: cannot bind 127.0.0.1:{port}: {error}");
-                return 1;
-            }
+            Err(code) => return code,
         };
         let bound = listener.local_addr().map_or(port, |addr| addr.port());
         let url = format!("http://127.0.0.1:{bound}/");
@@ -50,20 +51,136 @@ pub(crate) fn run_ui(path: &str, port: u16, open_browser: bool) -> i32 {
         if open_browser {
             open_in_browser(&url);
         }
-        loop {
-            let (stream, _peer) = match listener.accept().await {
-                Ok(accepted) => accepted,
+        accept_loop(listener, path).await;
+        0
+    })
+}
+
+/// Native desktop shell (ADR 0020 step 4): same localhost server + a `WebView` window.
+/// The HTTP server runs on a background thread; the window/event loop owns the main thread
+/// (required on macOS). Closing the window exits the process.
+#[cfg(feature = "desktop")]
+pub(crate) fn run_ui_desktop(path: &str, port: u16) -> i32 {
+    use std::sync::mpsc;
+
+    let path_owned = path.to_string();
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<u16, String>>();
+
+    std::thread::Builder::new()
+        .name("dent8-ui-http".into())
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
                 Err(error) => {
-                    eprintln!("ui: accept error: {error}");
-                    continue;
+                    let _ = ready_tx.send(Err(format!("tokio runtime: {error}")));
+                    return;
                 }
             };
-            let store_path = path.to_string();
-            tokio::spawn(async move {
-                serve_connection(stream, &store_path).await;
+            runtime.block_on(async move {
+                let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        let _ = ready_tx.send(Err(format!("cannot bind 127.0.0.1:{port}: {error}")));
+                        return;
+                    }
+                };
+                let bound = listener.local_addr().map_or(port, |addr| addr.port());
+                if ready_tx.send(Ok(bound)).is_err() {
+                    return;
+                }
+                accept_loop(listener, &path_owned).await;
             });
+        })
+        .expect("spawn ui http thread");
+
+    let bound = match ready_rx.recv() {
+        Ok(Ok(port)) => port,
+        Ok(Err(error)) => {
+            eprintln!("ui: {error}");
+            return 1;
         }
-    })
+        Err(_) => {
+            eprintln!("ui: desktop server thread exited before binding");
+            return 1;
+        }
+    };
+    let url = format!("http://127.0.0.1:{bound}/");
+    eprintln!(
+        "dent8 ui desktop serving {url} (read-only WebView; ADR 0020 step 4). Close the \
+         window to stop."
+    );
+    match open_desktop_window(&url) {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("ui: desktop window: {error}");
+            1
+        }
+    }
+}
+
+async fn bind_ui_listener(port: u16) -> Result<tokio::net::TcpListener, i32> {
+    match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(listener) => Ok(listener),
+        Err(error) => {
+            eprintln!("ui: cannot bind 127.0.0.1:{port}: {error}");
+            Err(1)
+        }
+    }
+}
+
+async fn accept_loop(listener: tokio::net::TcpListener, path: &str) {
+    loop {
+        let (stream, _peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                eprintln!("ui: accept error: {error}");
+                continue;
+            }
+        };
+        let store_path = path.to_string();
+        tokio::spawn(async move {
+            serve_connection(stream, &store_path).await;
+        });
+    }
+}
+
+/// Open a native window loading `url` (must be loopback). Blocks until the window closes.
+#[cfg(feature = "desktop")]
+fn open_desktop_window(url: &str) -> Result<(), String> {
+    use tao::{
+        event::{Event, WindowEvent},
+        event_loop::{ControlFlow, EventLoop},
+        window::WindowBuilder,
+    };
+    use wry::WebViewBuilder;
+
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("dent8 — memory control plane")
+        .with_inner_size(tao::dpi::LogicalSize::new(1180.0, 800.0))
+        .build(&event_loop)
+        .map_err(|error| format!("window: {error}"))?;
+
+    let _webview = WebViewBuilder::new()
+        .with_url(url)
+        .build(&window)
+        .map_err(|error| format!("webview: {error}"))?;
+
+    // tao 0.34: run(|event, target, control_flow|)
+    event_loop.run(move |event, _target, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            *control_flow = ControlFlow::Exit;
+        }
+    });
 }
 
 /// Best-effort platform browser launch; failure is a note, never an error.

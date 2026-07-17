@@ -94,7 +94,7 @@ fn operated_witness_example_retains_grant_log_heads() {
     assert!(compose.contains("witness-private:/witness/private"));
     assert!(compose.contains("witness-log:/witness/log:ro"));
     assert!(compose.contains("witness-public:/witness/public:ro"));
-    assert!(compose.contains("${DENT8_WITNESS_DB_PORT:-5432}:5432"));
+    assert!(compose.contains("${DENT8_WITNESS_DB_PORT:-55432}:5432"));
     assert!(compose.contains("${SIGN_INTERVAL_SECONDS:-15}"));
     assert!(compose.contains("${PUBLISH_INTERVAL_SECONDS:-15}"));
     assert!(compose.contains("${MONITOR_INTERVAL_SECONDS:-15}"));

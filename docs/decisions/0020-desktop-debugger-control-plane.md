@@ -13,8 +13,12 @@ localhost read/audit API plus the web debugger, served straight from the stock b
 (read-only by construction: every endpoint reuses the CLI/MCP `op_*`/snapshot path, so no
 separate write path exists). One deliberate deviation from step 3's letter: the debugger is
 a single embedded HTML file rather than a TypeScript build, keeping the binary
-self-contained with zero toolchain — the Tauri shell (step 4) will wrap this same surface.
-Step 5 (write actions over the signed identity path) remains future work.
+self-contained with zero toolchain.
+
+**Update (2026-07-17):** step 4 shipped as **`dent8 ui --desktop`** behind `--features desktop`
+— a native `WebView` window via `tao`/`wry` (the Tauri stack) wrapping the same localhost
+surface. Still read-only; no separate write path. Full `tauri-cli` installer packaging remains
+optional polish. Step 5 (write actions over the signed identity path) remains future work.
 
 ## Context
 

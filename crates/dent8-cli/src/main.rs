@@ -196,6 +196,21 @@ fn run_cli(cli: Cli) -> i32 {
 /// the same op layer as the CLI; there is no write surface at all.
 #[cfg(feature = "async-store")]
 fn cmd_ui(args: &UiArgs) -> i32 {
+    if args.desktop {
+        #[cfg(feature = "desktop")]
+        {
+            return ui::run_ui_desktop(&log_path(), args.port);
+        }
+        #[cfg(not(feature = "desktop"))]
+        {
+            eprintln!(
+                "dent8 ui --desktop requires a build with `--features desktop` \
+                 (cargo build -p dent8-cli --features desktop). That feature adds a native \
+                 WebView shell (tao/wry — the Tauri stack) around the same read-only UI."
+            );
+            return 2;
+        }
+    }
     ui::run_ui(&log_path(), args.port, !args.no_open)
 }
 
@@ -1454,9 +1469,13 @@ struct UiArgs {
     /// Port to bind on 127.0.0.1 ("dent" on a phone keypad). Pass 0 for an ephemeral port.
     #[arg(long, default_value_t = 3368)]
     port: u16,
-    /// Do not open a browser automatically.
+    /// Do not open a browser automatically (ignored with `--desktop`).
     #[arg(long)]
     no_open: bool,
+    /// Open a native desktop window (ADR 0020 step 4) wrapping the same read-only UI.
+    /// Requires a build with `--features desktop` (`WebView` via `tao`/`wry`, the Tauri stack).
+    #[arg(long)]
+    desktop: bool,
 }
 
 #[derive(Subcommand, Debug)]
