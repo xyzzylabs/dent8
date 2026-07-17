@@ -65,9 +65,10 @@ To test the false-positive rate on a human-reviewed agent session instead of onl
 benign corpus, opt in with `DENT8_EVAL_CAPTURE=<raw.jsonl>`, then run `dent8 eval prepare`, review
 and redact every operation, `dent8 eval finalize`, and finally `dent8 eval --trace <FILE>`. The
 strict formats, privacy checklist, and synthetic example live in
-[`evals/traces/`](evals/traces/). Three reviewed, redacted maintainer-dogfood traces now ship
-for Claude Code, Cursor, and Grok Build (3 legitimate operations, 0 false positives); no
-independent captured-user tally is claimed yet.
+[`evals/traces/`](evals/traces/). Four reviewed, redacted maintainer-dogfood traces now ship
+for Claude Code, Cursor, Grok Build, and multi-op CLI (8 legitimate operations, 0 false
+positives); no independent captured-user tally is claimed yet. Gate with
+`scripts/integrity-check.sh` ([integrity-track.md](docs/integrity-track.md)).
 
 ## See the firewall reject a write
 
