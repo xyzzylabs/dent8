@@ -32,6 +32,7 @@ pub(crate) fn snapshot_text_and_json(
         &verify,
         &conflicts,
         &witness_status,
+        witness_unwitnessed,
     );
     let summary = json!({
         "runtime_status": runtime_status["status"].as_str().unwrap_or(Status::Degraded.as_str()),
@@ -196,17 +197,22 @@ fn snapshot_status(
     verify: &Value,
     conflicts: &Value,
     witness_status: &str,
+    witness_unwitnessed: Option<u64>,
 ) -> &'static str {
     if verify["status"] == Status::IntegrityIssues.as_str() {
         return Status::IntegrityIssues.as_str();
     }
+    // Align with runtime_status: only witness *failure* degrades the top-level status.
+    // Hygiene WARNs (e.g. co-located DENT8_WITNESS_KEY) stay in summary.attention.
+    // Real lag (unwitnessed events) also degrades so agents cannot miss an open tail.
+    let witness_degraded =
+        witness_status == "failed" || witness_unwitnessed.is_some_and(|count| count > 0);
     if runtime_status["status"] == Status::Degraded.as_str()
         || facts["status"] != Status::Ok.as_str()
         || conflicts["status"] == Status::Invalid.as_str()
         || conflicts["status"] == Status::Rejected.as_str()
         || conflicts["status"] == Status::Failed.as_str()
-        || witness_status == "failed"
-        || witness_status == "warn"
+        || witness_degraded
     {
         return Status::Degraded.as_str();
     }

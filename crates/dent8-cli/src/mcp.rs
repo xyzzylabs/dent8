@@ -183,15 +183,18 @@ fn store_head(path: &str) -> Result<usize, String> {
 
 /// True when this frame (a single request or a batch) contains a write tool call — the
 /// serve loops kick their notifier right after such a frame so own-write notifications do
-/// not wait out a poll tick.
+/// not wait out a poll tick. Includes `context` with `record_retrieval=true` (audit writes).
 fn contains_write_tool_call(message: &Value) -> bool {
     let is_write_call = |request: &Value| {
-        request.get("method").and_then(Value::as_str) == Some("tools/call")
-            && request
-                .get("params")
-                .and_then(|params| params.get("name"))
-                .and_then(Value::as_str)
-                .is_some_and(is_write_tool)
+        if request.get("method").and_then(Value::as_str) != Some("tools/call") {
+            return false;
+        }
+        let params = request.get("params");
+        let name = params
+            .and_then(|params| params.get("name"))
+            .and_then(Value::as_str);
+        let arguments = params.and_then(|params| params.get("arguments"));
+        name.is_some_and(|name| tool_persists(name, arguments))
     };
     message.as_array().map_or_else(
         || is_write_call(message),
@@ -1245,6 +1248,21 @@ fn is_write_tool(name: &str) -> bool {
     )
 }
 
+/// Tools that append to the store (belief writes, or `context` with `record_retrieval`).
+/// Used for notifier kicks; the [`Access::ReadOnly`] gate still uses [`is_write_tool`] for
+/// belief mutations, while `context` enforces retrieval audits inside the tool (like
+/// `resources/read`).
+fn tool_persists(name: &str, arguments: Option<&Value>) -> bool {
+    if is_write_tool(name) {
+        return true;
+    }
+    name == "context"
+        && arguments
+            .and_then(|args| args.get("record_retrieval"))
+            .and_then(Value::as_bool)
+            == Some(true)
+}
+
 /// The access a request identity grants, derived so the write gate and the identity seam can
 /// never disagree: a proven identity (the CLI/stdio env, or a daemon connection) is [`Full`];
 /// an unauthenticated daemon connection is [`ReadOnly`]. There is no way to be `Full` without a
@@ -1809,7 +1827,7 @@ fn dispatch_tool(
             );
             Ok(ToolOutput::new(text, structured))
         }
-        "context" => context_tool(path, arguments),
+        "context" => context_tool(path, arguments, identity),
         "list_facts" => list_facts(path, arguments),
         // `verify_log` returns Err for integrity *findings* (taint, lineage, a corrupt log) as
         // well as for a genuine couldn't-run — but for an MCP agent those findings are the
@@ -2664,7 +2682,13 @@ fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
 }
 
 /// Agent inject pack: believed facts with value + authority + source (CLI `dent8 context`).
-fn context_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
+/// `record_retrieval` is a store write: requires write-capable access and attests under the
+/// connection identity (same backstop as MCP `resources/read`, ADR 0018).
+fn context_tool(
+    path: &str,
+    arguments: &Value,
+    identity: &WriteIdentity,
+) -> Result<ToolOutput, ToolError> {
     let detail = arg_detail(arguments)?;
     let record_retrieval = optional_bool(arguments, "record_retrieval")?;
     let purpose = optional_string(arguments, "purpose")?.unwrap_or_else(|| {
@@ -2679,6 +2703,12 @@ fn context_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
             "purpose must not be empty when provided",
         ));
     }
+    if record_retrieval && access_for(identity) != Access::Full {
+        return Err(ToolError::invalid(
+            "record_retrieval requires a write-capable connection (prove a source identity; \
+             unauthenticated connections may read context but cannot append retrieval audits)",
+        ));
+    }
     let args = crate::ContextArgs {
         kind: optional_string(arguments, "kind")?,
         key: optional_string(arguments, "key")?,
@@ -2690,8 +2720,13 @@ fn context_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
     };
     let mut outcome = crate::context::context_outcome(path, &args).map_err(into_tool_error)?;
     if args.record_retrieval {
-        let count = crate::context::record_pack_retrievals_for_path(path, &outcome, &args.purpose)
-            .map_err(into_tool_error)?;
+        let count = crate::context::record_pack_retrievals_for_path(
+            path,
+            &outcome,
+            &args.purpose,
+            identity,
+        )
+        .map_err(into_tool_error)?;
         outcome.set_recorded_retrievals(count);
     }
     let mut structured = crate::context::context_json(&outcome);
@@ -2706,6 +2741,7 @@ fn context_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
 }
 
 /// Single-stream or batch explain, with optional `detail=summary` for shorter agent text.
+#[allow(clippy::too_many_lines)] // single vs batch + partial-error paths share one dispatch
 fn explain_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
     let detail = arg_detail(arguments)?;
     let clock = arg_read_clock(arguments)?;
@@ -2726,6 +2762,8 @@ fn explain_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
         let mut results = Vec::with_capacity(list.len());
         let mut text_parts = Vec::with_capacity(list.len());
         let mut any_contested = false;
+        let mut any_ok = false;
+        let mut any_failed = false;
         for (index, entry) in list.iter().enumerate() {
             let object = entry.as_object().ok_or_else(|| {
                 ToolError::invalid(format!(
@@ -2744,18 +2782,44 @@ fn explain_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
                 .ok_or_else(|| {
                     ToolError::invalid(format!("queries[{index}].predicate is required"))
                 })?;
-            let (kind, key) = parse_subject_str(subject, "subject")?;
-            let receipt =
-                op_explain_receipt(path, &kind, &key, predicate, clock).map_err(into_tool_error)?;
-            if receipt.lifecycle == FactLifecycle::Contested {
-                any_contested = true;
-            }
-            let item = explain_item_structured(&receipt, detail);
-            text_parts.push(explain_item_text(&receipt, detail));
+            // Per-item errors: one missing stream must not drop successful receipts.
+            let item = match parse_subject_str(subject, "subject") {
+                Err(error) => {
+                    any_failed = true;
+                    text_parts.push(format!(
+                        "explain {subject} {predicate}: {}",
+                        error.message()
+                    ));
+                    explain_batch_error_item(subject, predicate, &error)
+                }
+                Ok((kind, key)) => match op_explain_receipt(path, &kind, &key, predicate, clock) {
+                    Ok(receipt) => {
+                        any_ok = true;
+                        if receipt.lifecycle == FactLifecycle::Contested {
+                            any_contested = true;
+                        }
+                        text_parts.push(explain_item_text(&receipt, detail));
+                        explain_item_structured(&receipt, detail)
+                    }
+                    Err(error) => {
+                        any_failed = true;
+                        let tool_err = into_tool_error(error);
+                        text_parts.push(format!(
+                            "explain {subject} {predicate}: {}",
+                            tool_err.message()
+                        ));
+                        explain_batch_error_item(subject, predicate, &tool_err)
+                    }
+                },
+            };
             results.push(item);
         }
         let status = if any_contested {
             Status::Contested.as_str()
+        } else if any_ok {
+            Status::Ok.as_str()
+        } else if any_failed {
+            Status::Failed.as_str()
         } else {
             Status::Ok.as_str()
         };
@@ -2771,6 +2835,8 @@ fn explain_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> 
                 "mode": "batch",
                 "detail": detail.as_str(),
                 "count": results.len(),
+                "ok_count": results.iter().filter(|r| r.get("error_reason").is_none()).count(),
+                "failed_count": results.iter().filter(|r| r.get("error_reason").is_some()).count(),
                 "results": results,
             }),
         ));
@@ -2829,6 +2895,17 @@ fn explain_item_structured(receipt: &IntegrityReceipt, detail: DetailLevel) -> V
             "event_hash_short": short(&receipt.event_hash),
         }),
     }
+}
+
+fn explain_batch_error_item(subject: &str, predicate: &str, error: &ToolError) -> Value {
+    let (kind, key) = subject.split_once(':').unwrap_or((subject, ""));
+    json!({
+        "status": error.status(),
+        "code": error.code().as_str(),
+        "subject": { "kind": kind, "key": key },
+        "predicate": predicate,
+        "error_reason": error.message(),
+    })
 }
 
 fn explain_item_text(receipt: &IntegrityReceipt, detail: DetailLevel) -> String {
@@ -3872,7 +3949,7 @@ fn context_output_schema() -> Value {
 fn explain_output_schema() -> Value {
     object_schema(
         json!({
-            "status": { "enum": ["ok", "contested"] },
+            "status": { "enum": ["ok", "contested", "failed"] },
             "tool": { "const": "explain" },
             "mode": { "enum": ["single", "batch"] },
             "detail": { "enum": ["full", "summary"] },
@@ -3890,6 +3967,8 @@ fn explain_output_schema() -> Value {
             "fresh": { "type": "boolean" },
             "lifecycle": { "type": "string" },
             "count": { "type": "integer", "minimum": 0 },
+            "ok_count": { "type": "integer", "minimum": 0 },
+            "failed_count": { "type": "integer", "minimum": 0 },
             "results": {
                 "type": "array",
                 "items": { "type": "object", "additionalProperties": true },
@@ -5513,6 +5592,80 @@ mod tests {
         assert_eq!(single["structuredContent"]["detail"], "summary");
         assert!(single["structuredContent"].get("receipt").is_none());
         assert_eq!(single["structuredContent"]["authority"], "high");
+
+        // Partial batch: one hit + one miss still returns the successful receipt.
+        let mixed = call_tool_result(
+            &path,
+            "explain",
+            json!({
+                "detail": "summary",
+                "queries": [
+                    { "subject": "repo:a", "predicate": "db" },
+                    { "subject": "repo:missing", "predicate": "db" },
+                ],
+            }),
+        );
+        assert_eq!(mixed["isError"], false);
+        assert_eq!(mixed["structuredContent"]["mode"], "batch");
+        assert_eq!(mixed["structuredContent"]["ok_count"], 1);
+        assert_eq!(mixed["structuredContent"]["failed_count"], 1);
+        assert_eq!(
+            mixed["structuredContent"]["results"][0]["current_value"]["text"],
+            "postgres"
+        );
+        assert!(
+            mixed["structuredContent"]["results"][1]
+                .get("error_reason")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty()),
+            "missing stream should be a per-item error: {}",
+            mixed["structuredContent"]["results"][1]
+        );
+    }
+
+    #[test]
+    fn context_record_retrieval_requires_write_capable_identity() {
+        let (_dir, path) = temp_log();
+        call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo:p", "predicate": "db", "value": "postgres",
+                "authority": "high", "source": "u",
+            }),
+        );
+        let before = std::fs::metadata(&path).map_or(0, |m| m.len());
+
+        // Plain context is a pure read under unauthenticated access.
+        let read = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "context", "arguments": {} },
+        });
+        let ok = raw_dispatch(&read, &path, &WriteIdentity::Unauthenticated).expect("read");
+        assert!(ok.get("error").is_none(), "{ok}");
+        assert_eq!(ok["result"]["isError"], false);
+        assert_eq!(ok["result"]["structuredContent"]["count"], 1);
+
+        // record_retrieval is a store write — rejected without a proven identity.
+        let audit = json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": { "name": "context", "arguments": { "record_retrieval": true } },
+        });
+        let refused =
+            raw_dispatch(&audit, &path, &WriteIdentity::Unauthenticated).expect("refused");
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let text = refused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("");
+        assert!(
+            text.contains("write-capable") || text.contains("record_retrieval"),
+            "{text}"
+        );
+        let after = std::fs::metadata(&path).map_or(0, |m| m.len());
+        assert_eq!(
+            before, after,
+            "readonly record_retrieval must not append events"
+        );
     }
 
     #[test]
@@ -5544,6 +5697,12 @@ mod tests {
             snap["structuredContent"]["context"]["facts"][0]["authority"],
             "high"
         );
+        // Clean store with no witness config is healthy (not degraded by ambient env).
+        assert_eq!(
+            snap["structuredContent"]["summary"]["witness_status"],
+            "unconfigured"
+        );
+        assert_eq!(snap["structuredContent"]["status"], "ok");
     }
 
     #[test]

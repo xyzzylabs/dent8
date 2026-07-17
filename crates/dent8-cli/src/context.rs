@@ -229,22 +229,25 @@ pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextO
 }
 
 /// Record one `fact.retrieved` audit event per fact the pack emitted (`--record-retrieval`).
-/// Identity resolves like unattributed capture: the active signed grant's source/authority
-/// when configured, else the agent tier — a retrieval audit enters at the bottom of the
-/// trust ordering instead of minting authority. All-or-nothing: a failure is surfaced (the
-/// caller asked for the audit) rather than silently skipped.
+/// Identity is the caller's write identity (CLI env, or MCP connection) — never silently the
+/// process env when a connection identity was proven (ADR 0018). When no defaults resolve,
+/// falls back to the agent tier so a retrieval audit enters at the bottom of the trust
+/// ordering instead of minting authority. All-or-nothing: a failure is surfaced (the caller
+/// asked for the audit) rather than silently skipped.
 pub(crate) fn record_pack_retrievals_for_path(
     path: &str,
     outcome: &ContextOutcome,
     purpose: &str,
+    identity: &WriteIdentity,
 ) -> Result<usize, OpError> {
-    record_pack_retrievals(path, outcome, purpose)
+    record_pack_retrievals(path, outcome, purpose, identity)
 }
 
 fn record_pack_retrievals(
     path: &str,
     outcome: &ContextOutcome,
     purpose: &str,
+    identity: &WriteIdentity,
 ) -> Result<usize, OpError> {
     let retrieved: Vec<AuditFactRef> = outcome
         .facts
@@ -256,10 +259,7 @@ fn record_pack_retrievals(
             predicate: fact.predicate.clone(),
         })
         .collect();
-    let defaults = crate::identity::IdentityContext::from_env()
-        .map_err(OpError::invalid)?
-        .write_defaults()
-        .map_err(OpError::invalid)?;
+    let defaults = pack_write_defaults(identity)?;
     let (authority, source) = defaults.map_or_else(
         || {
             (
@@ -269,14 +269,25 @@ fn record_pack_retrievals(
         },
         |defaults| (defaults.authority, defaults.source),
     );
-    op_record_retrievals(
-        path,
-        &retrieved,
-        purpose,
-        authority,
-        &source,
-        &WriteIdentity::Env,
-    )
+    op_record_retrievals(path, &retrieved, purpose, authority, &source, identity)
+}
+
+/// Resolve write defaults for a pack retrieval audit under the given identity — mirrors the
+/// MCP `resources/read` / write-tool path so stdio env and daemon connection grants agree.
+fn pack_write_defaults(
+    identity: &WriteIdentity,
+) -> Result<Option<crate::identity::WriteDefaults>, OpError> {
+    match identity {
+        WriteIdentity::Env => crate::identity::IdentityContext::from_env()
+            .map_err(OpError::invalid)?
+            .write_defaults()
+            .map_err(OpError::invalid),
+        #[cfg(all(unix, feature = "async-store"))]
+        WriteIdentity::Connection(ctx) => ctx.write_defaults().map_err(OpError::invalid),
+        #[cfg(test)]
+        WriteIdentity::TestSigned(ctx) => ctx.write_defaults().map_err(OpError::invalid),
+        WriteIdentity::Unauthenticated => Ok(None),
+    }
 }
 
 /// The provenance annotation appended to each markdown fact line. Deliberately compact —
@@ -315,13 +326,17 @@ pub(crate) fn format_context_summary(outcome: &ContextOutcome) -> String {
     )];
     for fact in &outcome.facts {
         let source = fact.source.as_deref().unwrap_or("-");
-        let contested = if fact.contested_by > 0 {
-            " [contested]"
-        } else {
-            ""
-        };
+        let mut markers = String::new();
+        if fact.contested_by > 0 {
+            markers.push_str(" [contested]");
+        }
+        match fact.freshness {
+            FactFreshness::Stale => markers.push_str(" [stale]"),
+            FactFreshness::NotYetValid => markers.push_str(" [not_yet_valid]"),
+            FactFreshness::Fresh | FactFreshness::NoLongerBelieved => {}
+        }
         lines.push(format!(
-            "- {}:{} {} = {} (authority={}, source={source}){contested}",
+            "- {}:{} {} = {} (authority={}, source={source}){markers}",
             fact.subject_kind,
             fact.subject_key,
             fact.predicate,
@@ -431,8 +446,12 @@ pub(crate) fn cmd_context(args: &ContextArgs, output: CliOutput) -> i32 {
         // never un-audited; a recording failure fails the command (the caller explicitly
         // asked for the audit) instead of injecting silently-unaudited context.
         if args.record_retrieval {
-            outcome.recorded_retrievals =
-                Some(record_pack_retrievals(&path, &outcome, &args.purpose)?);
+            outcome.recorded_retrievals = Some(record_pack_retrievals(
+                &path,
+                &outcome,
+                &args.purpose,
+                &WriteIdentity::Env,
+            )?);
         }
         Ok(outcome)
     });

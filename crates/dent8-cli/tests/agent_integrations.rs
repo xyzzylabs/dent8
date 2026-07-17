@@ -346,20 +346,16 @@ fn assert_verify_structured(response: &Value) {
 
 fn assert_snapshot_structured(response: &Value, expected_facts: i64) {
     let structured = tool_structured(response);
-    // Without a configured witness, status stays ok; warn/fail degrade.
-    assert!(
-        matches!(
-            structured["status"].as_str(),
-            Some("ok" | "degraded" | "contested")
-        ),
-        "unexpected snapshot status: {}",
-        structured["status"]
+    // Integration MCP runs strip ambient witness env, so a clean temp store is healthy.
+    assert_eq!(
+        structured["status"], "ok",
+        "clean store snapshot must be ok (not degraded by hygiene WARNs): {structured}"
     );
     assert_eq!(structured["tool"], "snapshot");
     assert_eq!(structured["summary"]["facts"], expected_facts);
     assert_eq!(structured["summary"]["integrity_verified"], true);
     assert_eq!(structured["summary"]["conflicts"], 0);
-    assert!(structured["summary"]["witness_status"].is_string());
+    assert_eq!(structured["summary"]["witness_status"], "unconfigured");
     assert!(structured["summary"]["attention"].is_array());
     assert_eq!(structured["summary"]["include_context"], false);
     assert_eq!(structured["runtime_status"]["tool"], "runtime_status");
@@ -577,6 +573,10 @@ fn run_mcp_server(input: &str, envs: &[(&str, String)]) -> String {
     command
         .args(["mcp", "serve"])
         .env_remove("DENT8_STORE_URL")
+        // Isolate from ambient dogfood witness config so snapshot status is deterministic.
+        .env_remove("DENT8_WITNESS_LOG")
+        .env_remove("DENT8_WITNESS_PUBKEY")
+        .env_remove("DENT8_WITNESS_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
