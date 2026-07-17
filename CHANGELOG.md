@@ -12,9 +12,12 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ### Added
 - **Human-reviewed legitimate-session evals:** `dent8 eval --trace <FILE>` (repeatable) accepts
   the strict `dent8.legitimate-trace/1` format, atomically replays independent expected-admit
-  operation scenarios against their exact trusted pre-write baselines, and reports reviewed false
-  positives separately from the designed 0/22 corpus. `DENT8_EVAL_CAPTURE` now records admitted
-  and rejected store decisions from the shared CLI/MCP/daemon path into raw mode-0600 JSONL;
+  operation scenarios against decision-complete trusted pre-write baselines, and reports reviewed
+  false positives separately from the designed 0/22 corpus. The recorder retains candidate
+  subject+predicate history, own fact streams, supersession targets, and event-id collisions in
+  global order while omitting unrelated store history; parity tests cover every dependency class.
+  `DENT8_EVAL_CAPTURE` now records admitted and rejected store decisions from the shared
+  CLI/MCP/daemon path into raw mode-0600 JSONL;
   `dent8 eval prepare` creates a non-runnable per-operation review/redaction draft and
   `dent8 eval finalize` refuses incomplete classifications before producing an evaluable trace.
   Capture is fail-open and outside the event log. Reports never echo event values. A synthetic

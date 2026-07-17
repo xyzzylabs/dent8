@@ -156,6 +156,18 @@ fn eval_capture_requires_review_and_preserves_rejected_attempts() {
 
     let mut review: Value =
         serde_json::from_str(&fs::read_to_string(&draft).expect("draft")).expect("draft JSON");
+    assert_eq!(
+        review["operations"][0]["baseline_events"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+    assert_eq!(
+        review["operations"][1]["baseline_events"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
     review["review"]["reviewer"] = Value::String("human:owner".to_string());
     review["review"]["basis"] = Value::String("normal branch-status updates".to_string());
     for operation in review["operations"]

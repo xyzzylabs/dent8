@@ -44,8 +44,9 @@ evidence of users, not on more features.
    nothing.)*
 2. **Legitimate-traffic evaluation.** ◑ The designed corpus reports **0 false positives across
    22 benign writes / 7 scenarios**. The captured-data path is now end-to-end:
-   `DENT8_EVAL_CAPTURE` records admitted and rejected store decisions with exact independent
-   baselines; `dent8 eval prepare` creates a non-runnable classification/redaction draft;
+   `DENT8_EVAL_CAPTURE` records admitted and rejected store decisions with decision-complete
+   independent baselines (omitting unrelated store history); `dent8 eval prepare` creates a
+   non-runnable classification/redaction draft;
    `dent8 eval finalize` requires explicit review; and `dent8 eval --trace <FILE>` emits
    privacy-safe text/JSON and fails on any reviewed false positive. What remains is the evidence
    itself: collecting and reviewing **real agent-session traces** from dogfooding and early

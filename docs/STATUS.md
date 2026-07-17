@@ -795,8 +795,10 @@ subject+predicate.
 - **Reviewed legitimate-traffic traces** (`dent8 eval --trace <FILE>`): the strict
   `dent8.legitimate-trace/1` lane evaluates human-reviewed expected-admit operation batches
   atomically through the same store-level firewall as the designed benign corpus. Every operation
-  is an independent scenario with its exact trusted pre-write baseline, so rejected writes and
-  reused reserved ids replay honestly. It rejects duplicate ids within a scenario and
+  is an independent scenario with a decision-complete trusted pre-write baseline (candidate
+  subject+predicate, own fact streams, supersession targets, and event-id collisions, in global
+  order), so rejected writes and reused reserved ids replay honestly without copying unrelated
+  store history. It rejects duplicate ids within a scenario and
   unannotated/persisted-log input as malformed evidence, requires explicit
   captured/synthetic and raw/redacted metadata, never echoes event values in reports, aggregates
   repeated `--trace` inputs in text/JSON, and exits non-zero on a reviewed false positive. The

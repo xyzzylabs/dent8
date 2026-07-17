@@ -28,8 +28,8 @@ pub use adversarial::{
 pub use captured_trace::{
     CAPTURE_JOURNAL_SCHEMA, CaptureError, CaptureJournal, CaptureJournalRecord, CapturedAttempt,
     CapturedDecision, CapturedOutcome, LegitimateTraceReview, ReviewClassification,
-    TRACE_REVIEW_SCHEMA, TraceReviewDraft, TraceReviewOperation, finalize_trace_review,
-    parse_capture_journal, parse_trace_review, prepare_trace_review,
+    TRACE_REVIEW_SCHEMA, TraceReviewDraft, TraceReviewOperation, decision_complete_baseline,
+    finalize_trace_review, parse_capture_journal, parse_trace_review, prepare_trace_review,
 };
 pub use comparison::{
     ComparisonRow, comparison_summary_table, comparison_summary_table_from, comparison_tally_ok,

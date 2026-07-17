@@ -137,8 +137,9 @@ pub struct LegitimateTraceOperation {
     /// predicate-policy seam as the operational path.
     pub operation: TraceOperationKind,
     pub expected: TraceExpectation,
-    /// Already-admitted store state immediately before this operation. The baseline is
-    /// trusted setup and is not counted or re-arbitrated by the eval.
+    /// Decision-complete already-admitted state immediately before this operation. It contains
+    /// every prior event that can affect this candidate batch, in original order; the baseline
+    /// is trusted setup and is not counted or re-arbitrated by the eval.
     #[serde(default)]
     pub baseline_events: Vec<FactEvent>,
     /// The exact event batch attempted by one logical operation. Multi-event writes are

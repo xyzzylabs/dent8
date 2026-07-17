@@ -12,7 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use dent8_core::FactEvent;
 use dent8_evals::{
     CAPTURE_JOURNAL_SCHEMA, CaptureJournalRecord, CapturedDecision, CapturedOutcome, TraceContent,
-    TraceOperationKind, TraceOrigin, TracePrivacy, TraceProvenance,
+    TraceOperationKind, TraceOrigin, TracePrivacy, TraceProvenance, decision_complete_baseline,
 };
 use dent8_store::{EventFilter, EventStore, InMemoryEventStore};
 
@@ -45,11 +45,12 @@ impl EvalCapture {
         operation: TraceOperationKind,
         source: &str,
         store: &InMemoryEventStore,
+        events: &[FactEvent],
     ) -> Self {
         let Some(path) = capture_path() else {
             return Self { active: None };
         };
-        match Self::try_begin(&path, operation, source, store) {
+        match Self::try_begin(&path, operation, source, store, events) {
             Ok(capture) => capture,
             Err(error) => {
                 eprintln!("warning: dent8 eval capture disabled for this write: {error}");
@@ -63,6 +64,7 @@ impl EvalCapture {
         operation: TraceOperationKind,
         source: &str,
         store: &InMemoryEventStore,
+        events: &[FactEvent],
     ) -> Result<Self, String> {
         if let Some(parent) = path.parent()
             && !parent.as_os_str().is_empty()
@@ -127,9 +129,10 @@ impl EvalCapture {
             validate_existing_header(&file, &provenance)?;
         }
 
-        let baseline_events = store
+        let full_baseline = store
             .scan_events(&EventFilter::default())
             .map_err(|error| format!("cannot snapshot capture baseline: {error}"))?;
+        let baseline_events = decision_complete_baseline(&full_baseline, events);
         let recorded_at = unix_millis();
         Ok(Self {
             active: Some(ActiveCapture {

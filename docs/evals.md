@@ -67,11 +67,13 @@ This avoids a circular result: a normal persisted store log contains only admitt
 cannot reveal writes the firewall rejected. Each trace must explicitly declare captured vs
 synthetic provenance, agent/integration, raw vs redacted content, a reviewer and review basis,
 and `expected: "admit"` on every operation. Each operation is an independent scenario with its
-own trusted pre-write `baseline_events`; its candidate batch is replayed atomically. A rejection
-counts once at the operation boundary, cannot contaminate another scenario, and event ids may be
-reused across scenarios exactly as the CLI reuses a reserved id after a rejected write. Duplicate
-trace/operation ids, duplicate ids within one scenario, or structurally invalid events invalidate
-the evidence instead of distorting the rate.
+own trusted, decision-complete pre-write `baseline_events`; its candidate batch is replayed
+atomically. The recorder preserves every event for the candidate subject+predicate, its own fact
+streams, supersession targets, and colliding event ids, in global order, while omitting unrelated
+history. A rejection counts once at the operation boundary, cannot contaminate another scenario,
+and event ids may be reused across scenarios exactly as the CLI reuses a reserved id after a
+rejected write. Duplicate trace/operation ids, duplicate ids within one scenario, or structurally
+invalid events invalidate the evidence instead of distorting the rate.
 
 Reports expose ids, counts, and typed rejection categories but never echo fact values, evidence
 locators, review notes, or error strings. A `raw` trace is accepted for local analysis with a
@@ -83,13 +85,16 @@ positive makes the command exit non-zero.
 
 The collection workflow is built. `DENT8_EVAL_CAPTURE=<FILE>` records completed arbitration
 attempts (admitted and rejected) from the shared CLI/MCP/daemon `op_*` path into a raw mode-0600
-JSONL journal, with the exact pre-operation baseline for every case. `dent8 eval prepare` converts
-that journal to the deliberately non-runnable `dent8.legitimate-trace-review/1` draft; every
-operation remains `review_required` until a human classifies it, supplies reviewer/basis, and
-redacts it. `dent8 eval finalize` rejects incomplete reviews and emits the only schema accepted by
-`--trace`. The recorder is fail-open and stays outside the event log, so eval collection cannot
-change a production write decision or self-label traffic as legitimate. See the exact workflow
-and redaction checklist in [`evals/traces/`](../evals/traces/).
+JSONL journal, with a decision-complete independent baseline for every case. The baseline reducer
+is parity-tested against full-snapshot replay for uniqueness, lifecycle arbitration,
+supersession anti-laundering, and duplicate event ids; it reduces review size and raw-data
+exposure without changing the decision. `dent8 eval prepare` converts that journal to the
+deliberately non-runnable `dent8.legitimate-trace-review/1` draft; every operation remains
+`review_required` until a human classifies it, supplies reviewer/basis, and redacts it. `dent8 eval
+finalize` rejects incomplete reviews and emits the only schema accepted by `--trace`. The
+recorder is fail-open and stays outside the event log, so eval collection cannot change a
+production write decision or self-label traffic as legitimate. See the exact workflow and
+redaction checklist in [`evals/traces/`](../evals/traces/).
 
 No captured-user trace ships today, so the observed tally is deliberately **not** presented as
 evidence yet. What remains is collecting and human-reviewing dogfood and early-user traces. This

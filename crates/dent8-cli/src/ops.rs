@@ -700,8 +700,12 @@ pub(crate) fn op_assert(
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
     attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::invalid)?;
-    let capture =
-        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Assert, source, &store);
+    let capture = crate::eval_capture::EvalCapture::begin(
+        TraceOperationKind::Assert,
+        source,
+        &store,
+        std::slice::from_ref(&event),
+    );
     let receipt = match admit(&mut store, &registry, event.clone(), now) {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -825,8 +829,12 @@ pub(crate) fn op_derive(
     // Attest before `admit` so the receipt hash is computed over the exact (attested) bytes
     // that will be persisted; the deterministic re-sign inside `append_events` is a no-op.
     attest_events(std::slice::from_mut(&mut event), identity).map_err(OpError::invalid)?;
-    let capture =
-        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Derive, source, &store);
+    let capture = crate::eval_capture::EvalCapture::begin(
+        TraceOperationKind::Derive,
+        source,
+        &store,
+        std::slice::from_ref(&event),
+    );
     let receipt = match admit(&mut store, &registry, event.clone(), now) {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -1403,8 +1411,12 @@ pub(crate) fn op_supersede(
         }
     }
 
-    let capture =
-        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Supersede, source, &store);
+    let capture = crate::eval_capture::EvalCapture::begin(
+        TraceOperationKind::Supersede,
+        source,
+        &store,
+        &events,
+    );
     // Apply all in memory first (replacement, then each supersession); persist only if
     // every one is admitted, so a rejected revision leaves no orphan in the durable log.
     for event in &events {
@@ -1547,8 +1559,12 @@ pub(crate) fn op_retract(
         now_millis(),
     )
     .map_err(|error| OpError::invalid(format!("invalid retraction: {error}")))?;
-    let capture =
-        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Retract, source, &store);
+    let capture = crate::eval_capture::EvalCapture::begin(
+        TraceOperationKind::Retract,
+        source,
+        &store,
+        &events,
+    );
     // Apply all in memory first (each authority-gated); persist only if all are admitted.
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
@@ -1780,6 +1796,7 @@ pub(crate) fn op_record_retrievals(
         TraceOperationKind::RecordRetrievals,
         source,
         &store,
+        &events,
     );
     // Apply all in memory first; persist only if every record is admitted.
     for event in &events {
@@ -1850,7 +1867,7 @@ pub(crate) fn build_per_incumbent(
         .map_err(|error| OpError::invalid(format!("invalid {verb}: {error}")))?;
         events.push(event);
     }
-    let capture = crate::eval_capture::EvalCapture::begin(operation, source, &store);
+    let capture = crate::eval_capture::EvalCapture::begin(operation, source, &store, &events);
     for event in &events {
         if let Err(error) = store.append(event.clone()) {
             let code = ErrorCode::for_store_error(&error);
@@ -2027,8 +2044,12 @@ pub(crate) fn op_contradict(
     // opposing fact carries the new content; the contradiction marker is value-less.
     enforce_content_check(&mut events)?;
 
-    let capture =
-        crate::eval_capture::EvalCapture::begin(TraceOperationKind::Contradict, source, &store);
+    let capture = crate::eval_capture::EvalCapture::begin(
+        TraceOperationKind::Contradict,
+        source,
+        &store,
+        &events,
+    );
     // Apply both in memory first; persist only if both admit (a Canonical incumbent makes
     // the contradiction hard-alarm, rejecting the whole operation with nothing persisted).
     for event in &events {

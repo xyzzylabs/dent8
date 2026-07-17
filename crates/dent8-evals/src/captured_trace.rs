@@ -1,14 +1,16 @@
 //! Opt-in operation capture and explicit review into legitimate-traffic traces.
 //!
-//! Capture records are raw evidence, not labels. Each attempted operation carries the exact
-//! trusted store baseline that preceded it, so attempts can be evaluated independently without
-//! assuming that an earlier rejected write changed state. A separate draft schema forces a
-//! reviewer to classify every operation before it can become a `dent8.legitimate-trace/1`.
+//! Capture records are raw evidence, not labels. Each attempted operation carries a
+//! decision-complete trusted baseline: every prior event that can affect replay of that candidate
+//! batch, in original order, with unrelated fact streams omitted. Attempts can therefore be
+//! evaluated independently without copying the whole store or assuming that an earlier rejected
+//! write changed state. A separate draft schema forces a reviewer to classify every operation
+//! before it can become a `dent8.legitimate-trace/1`.
 
 use std::collections::BTreeSet;
 use std::fmt;
 
-use dent8_core::FactEvent;
+use dent8_core::{FactEvent, FactEventKind};
 use serde::{Deserialize, Serialize};
 
 use crate::legitimate_trace::{
@@ -20,6 +22,56 @@ use crate::legitimate_trace::{
 pub const CAPTURE_JOURNAL_SCHEMA: &str = "dent8.eval-capture/1";
 /// JSON schema for a capture that still requires human classification.
 pub const TRACE_REVIEW_SCHEMA: &str = "dent8.legitimate-trace-review/1";
+
+/// Reduce a full pre-operation store snapshot to the events that can affect replay of
+/// `candidates` through the legitimate-traffic evaluator.
+///
+/// The current decision seam reads only:
+///
+/// - all facts for each candidate's `(subject, predicate)` when enforcing uniqueness;
+/// - the candidate's own fact stream for core lifecycle arbitration;
+/// - a `Superseded` candidate's replacement fact stream for anti-laundering; and
+/// - any prior event with a candidate event id for global duplicate-id detection.
+///
+/// Filtering the already ordered snapshot preserves relative/global order. Keep this closure in
+/// sync with `legitimate_trace::append_candidate`, `dent8_store::enforce_policy`, and
+/// `dent8_store::arbitrate_events`; parity tests cover each dependency class.
+#[must_use]
+pub fn decision_complete_baseline(
+    baseline: &[FactEvent],
+    candidates: &[FactEvent],
+) -> Vec<FactEvent> {
+    let mut fact_ids = BTreeSet::new();
+    let mut event_ids = BTreeSet::new();
+    let mut subject_predicates = BTreeSet::new();
+
+    for candidate in candidates {
+        fact_ids.insert(candidate.fact_id.as_str());
+        event_ids.insert(candidate.event_id.as_str());
+        subject_predicates.insert((
+            candidate.subject.kind(),
+            candidate.subject.key(),
+            candidate.predicate.as_str(),
+        ));
+        if let FactEventKind::Superseded { by, .. } = &candidate.kind {
+            fact_ids.insert(by.as_str());
+        }
+    }
+
+    baseline
+        .iter()
+        .filter(|event| {
+            fact_ids.contains(event.fact_id.as_str())
+                || event_ids.contains(event.event_id.as_str())
+                || subject_predicates.contains(&(
+                    event.subject.kind(),
+                    event.subject.key(),
+                    event.predicate.as_str(),
+                ))
+        })
+        .cloned()
+        .collect()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -51,8 +103,8 @@ pub enum CaptureJournalRecord {
         operation_id: String,
         operation: TraceOperationKind,
         recorded_at: i64,
-        /// Already-admitted state immediately before this operation. It is trusted setup,
-        /// never counted as legitimate traffic or re-arbitrated by the eval.
+        /// Decision-complete already-admitted state immediately before this operation. It is
+        /// trusted setup, never counted as legitimate traffic or re-arbitrated by the eval.
         baseline_events: Vec<FactEvent>,
         /// Exact candidate batch submitted to the store-level firewall.
         events: Vec<FactEvent>,
@@ -441,7 +493,7 @@ mod tests {
     use dent8_core::{
         ActorId, Authority, AuthorityLevel, Confidence, Evidence, EvidenceId, EvidenceKind,
         FactEventId, FactEventKind, FactId, FactValue, Predicate, Provenance, SourceId, Subject,
-        TimestampMillis, Ttl,
+        SupersessionReason, TimestampMillis, Ttl,
     };
 
     use super::*;
@@ -519,6 +571,224 @@ mod tests {
             .map(|record| serde_json::to_string(record).expect("serialize"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn at(mut event: FactEvent, kind: &str, key: &str, predicate: &str) -> FactEvent {
+        event.subject = Subject::new(kind, key).expect("subject");
+        event.predicate = Predicate::new(predicate).expect("predicate");
+        event
+    }
+
+    fn replay_outcome(
+        baseline_events: Vec<FactEvent>,
+        events: Vec<FactEvent>,
+        operation: TraceOperationKind,
+    ) -> String {
+        let trace = LegitimateTrace {
+            schema: LEGITIMATE_TRACE_SCHEMA.to_string(),
+            trace_id: "trace:baseline-parity".to_string(),
+            provenance: TraceProvenance {
+                origin: TraceOrigin::Synthetic,
+                agent: "test".to_string(),
+                session: None,
+            },
+            privacy: TracePrivacy {
+                content: TraceContent::Redacted,
+                note: None,
+            },
+            review: TraceReview {
+                reviewer: "test".to_string(),
+                basis: "baseline reduction parity".to_string(),
+            },
+            operations: vec![LegitimateTraceOperation {
+                operation_id: "operation:one".to_string(),
+                operation,
+                expected: TraceExpectation::Admit,
+                baseline_events,
+                events,
+            }],
+        };
+        match crate::evaluate_legitimate_trace(&trace) {
+            Ok(report) => {
+                let result = &report.operations[0];
+                format!(
+                    "decision:admitted={}:category={:?}",
+                    result.admitted, result.rejection_category
+                )
+            }
+            Err(error) => format!("invalid:{error}"),
+        }
+    }
+
+    #[test]
+    fn decision_complete_baseline_keeps_only_decision_dependencies_in_order() {
+        let unrelated_before = at(
+            event("event:unrelated-before", "fact:unrelated-before"),
+            "repo",
+            "other",
+            "note",
+        );
+        let same_subject_predicate = event("event:same-pair", "fact:same-pair");
+        let same_kind_predicate_other_key = at(
+            event("event:other-key", "fact:other-key"),
+            "shopper",
+            "bob",
+            "shopping_item",
+        );
+        let own_stream = at(
+            event("event:own", "fact:candidate"),
+            "repo",
+            "malformed-history",
+            "other",
+        );
+        let replacement_stream = at(
+            event("event:replacement", "fact:replacement"),
+            "repo",
+            "other",
+            "other",
+        );
+        let event_id_collision = at(
+            event("event:candidate", "fact:collision"),
+            "repo",
+            "other",
+            "other",
+        );
+        let unrelated_after = at(
+            event("event:unrelated-after", "fact:unrelated-after"),
+            "repo",
+            "other",
+            "note",
+        );
+        let mut candidate = event("event:candidate", "fact:candidate");
+        candidate.kind = FactEventKind::Superseded {
+            by: FactId::new("fact:replacement").expect("fact id"),
+            reason: SupersessionReason::NewerObservation,
+        };
+        candidate.value = None;
+
+        let reduced = decision_complete_baseline(
+            &[
+                unrelated_before,
+                same_subject_predicate,
+                same_kind_predicate_other_key,
+                own_stream,
+                replacement_stream,
+                event_id_collision,
+                unrelated_after,
+            ],
+            &[candidate],
+        );
+        assert_eq!(
+            reduced
+                .iter()
+                .map(|event| event.event_id.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "event:same-pair",
+                "event:own",
+                "event:replacement",
+                "event:candidate"
+            ]
+        );
+    }
+
+    #[test]
+    fn reduced_baselines_preserve_replay_decisions() {
+        let unrelated = at(
+            event("event:unrelated", "fact:unrelated"),
+            "repo",
+            "other",
+            "note",
+        );
+
+        let incumbent = at(
+            event("event:incumbent", "fact:incumbent"),
+            "repo",
+            "app",
+            "database",
+        );
+        let candidate = at(
+            event("event:candidate", "fact:candidate"),
+            "repo",
+            "app",
+            "database",
+        );
+        let full = vec![unrelated.clone(), incumbent.clone()];
+        let reduced = decision_complete_baseline(&full, std::slice::from_ref(&candidate));
+        assert_eq!(
+            replay_outcome(full, vec![candidate.clone()], TraceOperationKind::Assert),
+            replay_outcome(reduced, vec![candidate], TraceOperationKind::Assert),
+            "registered uniqueness must see every fact for the candidate pair"
+        );
+
+        let mut weak_replacement = at(
+            event("event:replacement", "fact:replacement"),
+            "repo",
+            "app",
+            "database",
+        );
+        weak_replacement.authority.level = AuthorityLevel::Low;
+        let mut supersede = at(
+            event("event:supersede", "fact:incumbent"),
+            "repo",
+            "app",
+            "database",
+        );
+        supersede.kind = FactEventKind::Superseded {
+            by: FactId::new("fact:replacement").expect("fact id"),
+            reason: SupersessionReason::NewerObservation,
+        };
+        supersede.value = None;
+        let supersession_events = vec![weak_replacement, supersede];
+        let full = vec![unrelated.clone(), incumbent.clone()];
+        let reduced = decision_complete_baseline(&full, &supersession_events);
+        assert_eq!(
+            replay_outcome(
+                full,
+                supersession_events.clone(),
+                TraceOperationKind::Supersede,
+            ),
+            replay_outcome(reduced, supersession_events, TraceOperationKind::Supersede,),
+            "anti-laundering must resolve the supersession target"
+        );
+
+        let mut reinforce = at(
+            event("event:reinforce", "fact:incumbent"),
+            "repo",
+            "app",
+            "database",
+        );
+        reinforce.kind = FactEventKind::Reinforced {
+            by: FactId::new("fact:incumbent").expect("fact id"),
+        };
+        reinforce.value = None;
+        let full = vec![unrelated.clone(), incumbent];
+        let reduced = decision_complete_baseline(&full, std::slice::from_ref(&reinforce));
+        assert_eq!(
+            replay_outcome(full, vec![reinforce.clone()], TraceOperationKind::Reinforce,),
+            replay_outcome(reduced, vec![reinforce], TraceOperationKind::Reinforce),
+            "lifecycle arbitration must retain the candidate fact stream"
+        );
+
+        let collision = at(
+            event("event:duplicate", "fact:unrelated"),
+            "repo",
+            "other",
+            "note",
+        );
+        let duplicate = at(
+            event("event:duplicate", "fact:new"),
+            "diagnostic",
+            "capture",
+            "status",
+        );
+        let full = vec![collision, unrelated];
+        let reduced = decision_complete_baseline(&full, std::slice::from_ref(&duplicate));
+        assert_eq!(
+            replay_outcome(full, vec![duplicate.clone()], TraceOperationKind::Assert,),
+            replay_outcome(reduced, vec![duplicate], TraceOperationKind::Assert),
+            "global event-id conflicts must remain reproducible"
+        );
     }
 
     #[test]

@@ -12,8 +12,8 @@ The schema is `dent8.legitimate-trace/1`. Each file must declare:
 - whether embedded content is `redacted` or `raw`;
 - a reviewer and review basis establishing that every operation is legitimate traffic;
 - one or more independent operation scenarios, each naming its operation, explicitly declaring
-  `expected: "admit"`, carrying the trusted `baseline_events` that preceded it, and containing
-  the exact attempted `FactEvent` batch.
+  `expected: "admit"`, carrying the trusted, decision-complete `baseline_events` that preceded
+  it, and containing the exact attempted `FactEvent` batch.
 
 Multi-event operations are atomic: if one event is rejected, the operation counts as one false
 positive. Operations are evaluated independently against their own baseline, so a rejected write
@@ -54,13 +54,16 @@ dent8 eval finalize .dent8/evals/codex-session.review.json \
 dent8 eval --trace .dent8/evals/codex-session.trace.json
 ```
 
-The recorder creates raw JSONL with mode `0600` on Unix and includes the full pre-operation
-baseline in each scenario. Recording is fail-open: an artifact failure warns on stderr but never
-changes a write decision. A journal captures completed store arbitration decisions, including
-rejections; it does not label any operation legitimate and does not enter the dent8 event log.
-Use a separate capture file per agent/session. For a long-running daemon, configure the variables
-in the daemon environment and restart it; setting them only in a proxy client cannot alter the
-already-running server process.
+The recorder creates raw JSONL with mode `0600` on Unix and includes a decision-complete
+pre-operation baseline in each scenario: prior events for the candidate subject+predicate, each
+candidate's own fact stream, supersession targets, and event-id collisions, all in original
+global order. Unrelated fact streams are omitted to reduce review size and raw-data exposure; the
+closure is parity-tested against full-snapshot replay. Recording is fail-open: an artifact
+failure warns on stderr but never changes a write decision. A journal captures completed store
+arbitration decisions, including rejections; it does not label any operation legitimate and does
+not enter the dent8 event log. Use a separate capture file per agent/session. For a long-running
+daemon, configure the variables in the daemon environment and restart it; setting them only in a
+proxy client cannot alter the already-running server process.
 
 Run the synthetic format example:
 
