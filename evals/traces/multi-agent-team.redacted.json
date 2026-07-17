@@ -1,0 +1,461 @@
+{
+  "schema": "dent8.legitimate-trace/1",
+  "trace_id": "trace:multi-agent-team-revision-001",
+  "provenance": {
+    "origin": "captured",
+    "agent": "multi-agent",
+    "session": "session:team-revision-001"
+  },
+  "privacy": {
+    "content": "redacted",
+    "note": "Maintainer multi-agent capture (codex assert, claude reinforce, cursor supersede, codex assert, cursor retract). Integration evidence for shared-store multi-source revision, not independent external-user evidence."
+  },
+  "review": {
+    "reviewer": "human:maintainer",
+    "basis": "Scripted multi-agent legitimate revision on one SQLite store with per-agent signed identities. All expected admit."
+  },
+  "operations": [
+    {
+      "operation_id": "op:00-assert",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:repo:team:stack:0",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": {
+            "Text": "lang-a"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-a",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 1
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:01-reinforce",
+      "operation": "reinforce",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:repo:team:stack:0",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": {
+            "Text": "lang-a"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-a",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 2
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:1",
+          "fact_id": "fact:repo:team:stack:0",
+          "kind": {
+            "Reinforced": {
+              "by": "fact:repo:team:stack:0"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-b",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 3
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:02-supersede",
+      "operation": "supersede",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:0",
+          "fact_id": "fact:repo:team:stack:0",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": {
+            "Text": "lang-a"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-a",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 4
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        },
+        {
+          "event_id": "event:1",
+          "fact_id": "fact:repo:team:stack:0",
+          "kind": {
+            "Reinforced": {
+              "by": "fact:repo:team:stack:0"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-b",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 5
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:2",
+          "fact_id": "fact:repo:team:stack:2",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": {
+            "Text": "lang-a+rt"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-c",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 6
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        },
+        {
+          "event_id": "event:3",
+          "fact_id": "fact:repo:team:stack:0",
+          "kind": {
+            "Superseded": {
+              "by": "fact:repo:team:stack:2",
+              "reason": "UserCorrection"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "stack",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-c",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 7
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:03-assert",
+      "operation": "assert",
+      "expected": "admit",
+      "baseline_events": [],
+      "events": [
+        {
+          "event_id": "event:4",
+          "fact_id": "fact:repo:team:ci_command:4",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "ci_command",
+          "value": {
+            "Text": "test-cmd"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-a",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 8
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    },
+    {
+      "operation_id": "op:04-retract",
+      "operation": "retract",
+      "expected": "admit",
+      "baseline_events": [
+        {
+          "event_id": "event:4",
+          "fact_id": "fact:repo:team:ci_command:4",
+          "kind": "Asserted",
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "ci_command",
+          "value": {
+            "Text": "test-cmd"
+          },
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-a",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 9
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ],
+      "events": [
+        {
+          "event_id": "event:5",
+          "fact_id": "fact:repo:team:ci_command:4",
+          "kind": {
+            "Retracted": {
+              "reason": "UserDeleted"
+            }
+          },
+          "subject": {
+            "kind": "repo",
+            "key": "team"
+          },
+          "predicate": "ci_command",
+          "value": null,
+          "confidence": 900,
+          "authority": {
+            "level": "high",
+            "issuer": null,
+            "scope": null
+          },
+          "ttl": "Never",
+          "provenance": {
+            "source": "source:agent-c",
+            "actor": "actor:agent",
+            "tool": "dent8",
+            "run_id": null,
+            "input_digest": null,
+            "recorded_at": 10
+          },
+          "evidence": [
+            {
+              "id": "evidence:cli",
+              "kind": "UserStatement",
+              "locator": "redacted",
+              "digest": null,
+              "summary": null
+            }
+          ],
+          "observed_at": null,
+          "valid_from": null
+        }
+      ]
+    }
+  ]
+}

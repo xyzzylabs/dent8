@@ -59,6 +59,7 @@ fn checked_in_captured_agent_traces_stay_clean() {
         "cursor-roadmap.redacted.json",
         "grok-build-mcp.redacted.json",
         "cli-multi-op.redacted.json",
+        "multi-agent-team.redacted.json",
     ];
     let mut args = vec!["eval".to_owned(), "--output".to_owned(), "json".to_owned()];
     for trace in traces {
@@ -71,9 +72,9 @@ fn checked_in_captured_agent_traces_stay_clean() {
     assert_success(&output, "eval checked-in captured traces");
     let payload: Value = serde_json::from_slice(&output.stdout).expect("eval JSON");
     let traffic = &payload["reviewed_legitimate_traffic"];
-    // 3 single-op agent dogfood traces + 1 multi-op CLI capture (5 ops) = 4 traces / 8 ops.
-    assert_eq!(traffic["captured_trace_count"], 4);
-    assert_eq!(traffic["captured_operation_count"], 8);
+    // 3 single-op agent traces + CLI multi-op (5) + multi-agent team (5) = 5 traces / 13 ops.
+    assert_eq!(traffic["captured_trace_count"], 5);
+    assert_eq!(traffic["captured_operation_count"], 13);
     assert_eq!(traffic["captured_false_positives"], 0);
     assert_eq!(traffic["synthetic_trace_count"], 0);
 }

@@ -61,8 +61,9 @@ can progress in parallel without being mistaken for shipped capabilities.
    non-runnable classification/redaction draft;
    `dent8 eval finalize` requires explicit review; and `dent8 eval --trace <FILE>` emits
    privacy-safe text/JSON and fails on any reviewed false positive. Redacted maintainer-dogfood
-   traces ship for Claude Code, Cursor, Grok Build, and multi-op CLI (**8** legitimate
-   operations, 0 false positives), gated by `scripts/integrity-check.sh` in CI. Independent
+   traces ship for Claude Code, Cursor, Grok Build, multi-op CLI, and multi-agent team
+   (**13** legitimate operations, 0 false positives), gated by `scripts/integrity-check.sh`
+   in CI. Monorepo dogfood: `scripts/dogfood-doctor.sh --write-check --witness-ops`. Independent
    early-user evidence remains to be collected. See [evals.md](evals.md) and
    [integrity-track.md](integrity-track.md).
    *(Invariant: the firewall does not tax legitimate revision — measured on designed traffic;

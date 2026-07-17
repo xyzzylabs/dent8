@@ -19,10 +19,11 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   evidence, not external-user evidence).
 - **Multi-agent doctor + witness ops:** `scripts/integrity-multi-agent.sh` hermetically inits
   codex/claude-code/cursor/grok-build on a shared SQLite store, runs `doctor --write-check` per
-  agent and aggregate, then the local role-split witness demo (CI on every PR). 
+  agent and aggregate, then the local role-split witness demo (CI on every PR).
   `scripts/dogfood-witness-ops.sh` signs/publishes/verifies monorepo dogfood heads without
-  putting `DENT8_WITNESS_KEY` in the writer env. Operated-witness Docker E2E now runs on
-  pushes to `main` (not only manual dispatch).
+  putting `DENT8_WITNESS_KEY` in the writer env. Monorepo path:
+  `scripts/dogfood-doctor.sh --write-check --witness-ops`. Multi-agent team capture raises
+  shipped evidence to 5 traces / 13 ops / 0 FP. Operated-witness Docker E2E runs on `main`.
 - **MCP `context` tool (agent inject pack):** exposes CLI `dent8 context` over MCP with
   values, authority, source, and freshness in one call — ending the N+1 `list_facts` +
   `explain` loop for multi-fact grounding. Optional filters (`kind` / `key` / `predicate` /

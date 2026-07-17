@@ -113,10 +113,12 @@ Monitors alert on `TAMPER` / `ROLLBACK` and on a growing unwitnessed tail.
 ## Recommended sequence
 
 1. Keep `scripts/integrity-check.sh` + `scripts/integrity-multi-agent.sh` green in CI.  
-2. After local writes: `scripts/dogfood-witness-ops.sh` (sign + publish; never put the key in
-   writer env).  
+2. On this monorepo after agent sessions:  
+   `scripts/dogfood-doctor.sh --write-check --witness-ops`  
 3. Deploy the operated-witness compose (or systemd units) against the team Postgres store.  
-4. Capture ≥1 early-user legitimate session per agent profile you claim to support.  
+4. Capture ≥1 **independent** early-user legitimate session per agent profile you claim to
+   support (`scripts/capture-legitimate-session.sh`). Maintainer multi-agent traces are
+   integration evidence only.  
 5. Only then claim integrity-ready production for that deployment shape.
 
 Control-plane (Tauri) and launch marketing are **product** tracks — they help adoption but

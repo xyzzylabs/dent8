@@ -96,10 +96,11 @@ recorder is fail-open and stays outside the event log, so eval collection cannot
 production write decision or self-label traffic as legitimate. See the exact workflow and
 redaction checklist in [`evals/traces/`](../evals/traces/).
 
-Four reviewed, redacted maintainer-dogfood traces now ship for Claude Code, Cursor, Grok Build,
-and multi-op CLI: **8** captured legitimate operations, 0 false positives (gated by
-`scripts/integrity-check.sh` and [integrity-track.md](integrity-track.md)). They show that real
-sessions and scripted CLI revision reach the captured arbitration seam under signed identities.
+Five reviewed, redacted maintainer-dogfood traces now ship (Claude Code, Cursor, Grok Build,
+multi-op CLI, multi-agent team): **13** captured legitimate operations, 0 false positives
+(gated by `scripts/integrity-check.sh` and [integrity-track.md](integrity-track.md)). They show
+that real sessions and multi-source revision reach the captured arbitration seam under signed
+identities.
 This is not independent external-user evidence or a statistically useful false-positive estimate;
 collecting early-user traces remains open. This v1 lane replays deterministic store arbitration
 plus the built-in `assert`/`derive` predicate policy at the captured seam. Authority-ceiling,

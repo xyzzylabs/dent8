@@ -1,13 +1,33 @@
 #!/usr/bin/env bash
 # Validate this repo's ignored .dent8 dogfood bundle before agents trust it.
 #
-# This is deliberately read-only. It does not rebuild or reseed the store; it fails with
-# concrete repair hints when the local wrapper is stale, the env points at an empty/wrong
-# store, or the committed seed facts are not visible through `dent8 context`.
+# By default this is read-only: wrapper version, context fact count, verify.
+# Optional:
+#   --write-check  doctor --agent all --write-check (MCP accept/reject probe per agent)
+#   --witness-ops  scripts/dogfood-witness-ops.sh (sign + publish + verify-published)
+#
+# Usage: scripts/dogfood-doctor.sh [--write-check] [--witness-ops]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
+
+WRITE_CHECK=0
+WITNESS_OPS=0
+for arg in "$@"; do
+  case "$arg" in
+    --write-check) WRITE_CHECK=1 ;;
+    --witness-ops) WITNESS_OPS=1 ;;
+    -h|--help)
+      sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *)
+      echo "dogfood doctor: unknown flag: $arg (try --help)" >&2
+      exit 2
+      ;;
+  esac
+done
 
 DIR="${DENT8_DOGFOOD_DIR:-$ROOT/.dent8}"
 ENV_FILE="$DIR/env"
@@ -86,3 +106,19 @@ note "context ok: $count fact(s)"
 
 run_dent8 verify >/dev/null
 note "verify ok"
+
+if [ "$WRITE_CHECK" -eq 1 ]; then
+  note "doctor --agent all --write-check"
+  if ! run_dent8 doctor --agent all --dir "$DIR" --write-check; then
+    fail "doctor --agent all --write-check failed"
+  fi
+  note "write-check ok (4 primary agents expected when fully installed)"
+fi
+
+if [ "$WITNESS_OPS" -eq 1 ]; then
+  note "dogfood witness ops (sign + publish; key not in writer env)"
+  DENT8_DOGFOOD_DIR="$DIR" DENT8_BIN="$(command -v true >/dev/null; echo "${DENT8_CMD[0]}")" \
+    "$ROOT/scripts/dogfood-witness-ops.sh"
+fi
+
+note "PASS"

@@ -86,8 +86,9 @@ The checked-in captured maintainer-dogfood fixtures cover:
 | `cursor-roadmap.redacted.json` | Cursor | 1 |
 | `grok-build-mcp.redacted.json` | Grok Build | 1 |
 | `cli-multi-op.redacted.json` | CLI | 5 (assert → reinforce → supersede → assert → retract) |
+| `multi-agent-team.redacted.json` | multi-agent | 5 (codex assert → claude reinforce → cursor supersede → codex assert → cursor retract) |
 
-**4 traces / 8 legitimate operations / 0 false positives.** Project keys, values, ids, sessions,
+**5 traces / 13 legitimate operations / 0 false positives.** Project keys, values, ids, sessions,
 timestamps, and evidence locators are pseudonymized; original event attestations were removed
 after redaction. They are integration evidence for those paths, not independent external-user
 evidence.

@@ -823,12 +823,13 @@ subject+predicate.
   CLI/MCP/daemon operation path into a raw mode-0600 JSONL journal. `dent8 eval prepare` emits a
   non-runnable review draft; `dent8 eval finalize` requires explicit per-operation classification,
   reviewer, and basis before producing a trace. Capture is fail-open and outside the event log.
-  The workflow and synthetic example are in [`evals/traces/`](../evals/traces/). Four reviewed,
-  redacted maintainer-dogfood traces ship for Claude Code, Cursor, Grok Build, and multi-op CLI
-  (8 captured legitimate operations, 0 false positives). This is integration evidence, not
-  independent external-user evidence; the designed benign corpus remains the broader 0/22 tally.
-  Gate with [`scripts/integrity-check.sh`](../scripts/integrity-check.sh); capture workflow and
-  production integrity checklist live in [integrity-track.md](integrity-track.md).
+  The workflow and synthetic example are in [`evals/traces/`](../evals/traces/). Five reviewed,
+  redacted maintainer-dogfood traces ship (Claude Code, Cursor, Grok Build, multi-op CLI,
+  multi-agent team): **13** captured legitimate operations, 0 false positives. This is
+  integration evidence, not independent external-user evidence; the designed benign corpus
+  remains the broader 0/22 tally. Gate with [`scripts/integrity-check.sh`](../scripts/integrity-check.sh);
+  monorepo dogfood write-check via `scripts/dogfood-doctor.sh --write-check`; checklist in
+  [integrity-track.md](integrity-track.md).
 
 ## Remaining Gaps
 
