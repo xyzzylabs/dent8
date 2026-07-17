@@ -156,8 +156,12 @@ fn dispatch_api(request: &Request, store_path: &str) -> (u16, Value) {
     match request.path.as_str() {
         "/api/snapshot" => {
             let include_diagnostics = request.query_flag("include_diagnostics");
-            let (_text, structured) =
-                crate::snapshot::snapshot_text_and_json(store_path, include_diagnostics, "ui");
+            let (_text, structured) = crate::snapshot::snapshot_text_and_json(
+                store_path,
+                include_diagnostics,
+                false,
+                "ui",
+            );
             (200, structured)
         }
         "/api/explain" => match request.subject_and_predicate() {

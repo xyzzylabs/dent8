@@ -574,25 +574,25 @@ struct FactsListArgs {
 pub(crate) struct ContextArgs {
     /// Only include facts with this subject kind.
     #[arg(long, value_name = "KIND", value_parser = parse_non_empty_filter)]
-    kind: Option<String>,
+    pub(crate) kind: Option<String>,
     /// Only include facts with this subject key.
     #[arg(long, value_name = "KEY", value_parser = parse_non_empty_filter)]
-    key: Option<String>,
+    pub(crate) key: Option<String>,
     /// Only include facts with this predicate.
     #[arg(long, value_name = "PREDICATE", value_parser = parse_predicate)]
-    predicate: Option<String>,
+    pub(crate) predicate: Option<String>,
     /// Include believed-but-stale (and not-yet-valid) facts, annotated as such.
     #[arg(long)]
-    include_stale: bool,
+    pub(crate) include_stale: bool,
     /// Include dent8 internal diagnostic streams, such as doctor write-check facts.
     #[arg(long)]
-    include_diagnostics: bool,
+    pub(crate) include_diagnostics: bool,
     /// Record a `fact.retrieved` audit event for every fact the pack emits (the read half
     /// of the read-audit loop). Recorded as the active signed grant's source when
     /// configured, else the agent tier (`source:agent` at `low`), through the normal
     /// write boundary.
     #[arg(long)]
-    record_retrieval: bool,
+    pub(crate) record_retrieval: bool,
     /// Purpose stamped on recorded retrieval events.
     #[arg(
         long,
@@ -600,7 +600,7 @@ pub(crate) struct ContextArgs {
         default_value = "context-pack",
         requires = "record_retrieval"
     )]
-    purpose: String,
+    pub(crate) purpose: String,
 }
 
 #[derive(Args, Debug)]
@@ -626,10 +626,13 @@ pub(crate) struct CaptureArgs {
 }
 
 #[derive(Args, Debug)]
-struct SnapshotArgs {
+pub(crate) struct SnapshotArgs {
     /// Include dent8 internal diagnostic streams in the nested facts list.
     #[arg(long)]
-    include_diagnostics: bool,
+    pub(crate) include_diagnostics: bool,
+    /// Also nest a context pack (values + authority + source) under `context`.
+    #[arg(long)]
+    pub(crate) include_context: bool,
 }
 
 #[derive(Args, Debug)]

@@ -52,7 +52,7 @@ test("official MCP SDK accepts dent8 tools and structured output", { skip, timeo
     // independent contract under test stays visible and reviewable at this call site.
     const listed = await client.listTools();
     ListToolsResultSchema.parse(listed);
-    assert.equal(listed.tools.length, 17);
+    assert.equal(listed.tools.length, 18);
     assert.ok(listed.tools.every((tool) => tool.inputSchema.type === "object"));
     assert.ok(listed.tools.every((tool) => tool.outputSchema?.type === "object"));
 

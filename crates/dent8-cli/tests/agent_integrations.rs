@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 const MCP_TOOLS: &[&str] = &[
     "runtime_status",
     "snapshot",
+    "context",
     "list_facts",
     "verify",
     "conflicts",
@@ -194,9 +195,11 @@ fn mcp_server_enforces_agent_authority_and_exposes_read_audit_tools() {
         .expect("server instructions");
     assert!(instructions.contains("memory integrity firewall"));
     assert!(instructions.contains("runtime_status"));
+    assert!(instructions.contains("context"));
     assert!(instructions.contains("snapshot"));
     assert!(instructions.contains("list_facts"));
     assert!(instructions.contains("native_scan"));
+    assert!(instructions.contains("native_reconcile"));
 
     let tools = response_with_id(&responses, 2)["result"]["tools"]
         .as_array()
@@ -343,11 +346,22 @@ fn assert_verify_structured(response: &Value) {
 
 fn assert_snapshot_structured(response: &Value, expected_facts: i64) {
     let structured = tool_structured(response);
-    assert_eq!(structured["status"], "ok");
+    // Without a configured witness, status stays ok; warn/fail degrade.
+    assert!(
+        matches!(
+            structured["status"].as_str(),
+            Some("ok" | "degraded" | "contested")
+        ),
+        "unexpected snapshot status: {}",
+        structured["status"]
+    );
     assert_eq!(structured["tool"], "snapshot");
     assert_eq!(structured["summary"]["facts"], expected_facts);
     assert_eq!(structured["summary"]["integrity_verified"], true);
     assert_eq!(structured["summary"]["conflicts"], 0);
+    assert!(structured["summary"]["witness_status"].is_string());
+    assert!(structured["summary"]["attention"].is_array());
+    assert_eq!(structured["summary"]["include_context"], false);
     assert_eq!(structured["runtime_status"]["tool"], "runtime_status");
     assert_eq!(structured["verify"]["tool"], "verify");
     assert_eq!(structured["conflicts"]["tool"], "conflicts");

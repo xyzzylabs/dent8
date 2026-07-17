@@ -104,12 +104,16 @@ impl ContextOutcome {
         self.facts.iter().any(|fact| fact.contested_by > 0)
     }
 
-    fn omitted(&self) -> usize {
+    pub(crate) fn omitted(&self) -> usize {
         self.omitted_stale + self.omitted_not_yet_valid
     }
 
     pub(crate) fn facts(&self) -> &[ContextFact] {
         &self.facts
+    }
+
+    pub(crate) fn set_recorded_retrievals(&mut self, count: usize) {
+        self.recorded_retrievals = Some(count);
     }
 }
 
@@ -229,6 +233,14 @@ pub(crate) fn context_outcome(path: &str, args: &ContextArgs) -> Result<ContextO
 /// when configured, else the agent tier — a retrieval audit enters at the bottom of the
 /// trust ordering instead of minting authority. All-or-nothing: a failure is surfaced (the
 /// caller asked for the audit) rather than silently skipped.
+pub(crate) fn record_pack_retrievals_for_path(
+    path: &str,
+    outcome: &ContextOutcome,
+    purpose: &str,
+) -> Result<usize, OpError> {
+    record_pack_retrievals(path, outcome, purpose)
+}
+
 fn record_pack_retrievals(
     path: &str,
     outcome: &ContextOutcome,
@@ -290,6 +302,40 @@ fn markdown_annotation(fact: &ContextFact) -> String {
         _ => {}
     }
     format!("{markers}  ({})", parts.join(", "))
+}
+
+/// Compact one-line-per-fact pack for token-sensitive MCP clients (`detail=summary`).
+pub(crate) fn format_context_summary(outcome: &ContextOutcome) -> String {
+    if outcome.facts.is_empty() {
+        return "dent8 context: 0 believed fact(s)".to_string();
+    }
+    let mut lines = vec![format!(
+        "dent8 context: {} believed fact(s) — weight High human/CI above Low agent",
+        outcome.facts.len()
+    )];
+    for fact in &outcome.facts {
+        let source = fact.source.as_deref().unwrap_or("-");
+        let contested = if fact.contested_by > 0 {
+            " [contested]"
+        } else {
+            ""
+        };
+        lines.push(format!(
+            "- {}:{} {} = {} (authority={}, source={source}){contested}",
+            fact.subject_kind,
+            fact.subject_key,
+            fact.predicate,
+            display_value(&fact.value),
+            fact.authority.name(),
+        ));
+    }
+    if outcome.omitted() > 0 {
+        lines.push(format!(
+            "_{} omitted (stale/not-yet-valid); pass include_stale=true to show_",
+            outcome.omitted()
+        ));
+    }
+    lines.join("\n")
 }
 
 /// Render the context pack as markdown for CLAUDE.md/AGENTS.md-style inclusion. Facts are

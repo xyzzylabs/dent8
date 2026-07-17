@@ -5,8 +5,8 @@
 //! It speaks just enough MCP to be useful:
 //! - `initialize`, `tools/list`, and `tools/call` for the full belief surface — `assert` /
 //!   `supersede` / `retract` / `contradict` / `explain` / `replay` — plus read/audit tools
-//!   (`runtime_status`, `snapshot`, `list_facts`, `verify`, `conflicts`, `native_scan`,
-//!   `native_reconcile`) which dispatch to the same shared `op_*`
+//!   (`runtime_status`, `snapshot`, `context`, `list_facts`, `verify`, `conflicts`,
+//!   `native_scan`, `native_reconcile`) which dispatch to the same shared `op_*`
 //!   functions the CLI uses, so the firewall decision is identical on both surfaces;
 //! - `resources/list` / `resources/read`, exposing each believed fact stream as a readable
 //!   resource at `dent8://{kind}/{key}/{predicate}` (read returns the integrity receipt and,
@@ -47,14 +47,18 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &[LATEST_PROTOCOL_VERSION, "2025-06
 /// Server-wide guidance consumed by MCP clients that support `instructions` (including Codex).
 const SERVER_INSTRUCTIONS: &str = "\
 dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, \
-call snapshot (or runtime_status/list_facts for narrower checks), then explain as needed. Record stable facts with assert using truthful source and authority. \
-When the connection has a signed source grant, write tools may omit source and authority. \
+call context (belief pack: values + authority + source) or snapshot (health + fact index + verify); \
+use runtime_status when debugging the live server/store wiring. \
+Weight High human/CI facts above Low agent facts. list_facts is an index only (no values/authority); \
+use explain for a single stream's receipt, or pass queries[] to explain several at once. \
+detail=summary shortens explain/context text. Record stable facts with assert using truthful source \
+and authority. When the connection has a signed source grant, write tools may omit source and authority. \
 Use supersede for corrections, contradict for disputes, derive for facts based on other facts. \
 Use whatif to preview what would be believed under a different trust policy (distrust a source, \
 raise the authority floor) without changing anything. \
 Subscribe to a dent8:// resource (resources/subscribe) to be pushed \
 notifications/resources/updated when that fact stream changes, instead of re-polling. \
-Use native_scan/native_reconcile to audit provider-native memory/rules files when available. \
+Use native_scan/native_reconcile when provider-native rules/export may disagree with the store. \
 Treat rejected writes as safety signals; do not silently overwrite.";
 
 /// How often a transport's notifier re-checks the store for changes made by *other*
@@ -1796,10 +1800,16 @@ fn dispatch_tool(
         "runtime_status" => Ok(runtime_status(path)),
         "snapshot" => {
             let include_diagnostics = optional_bool(arguments, "include_diagnostics")?;
-            let (text, structured) =
-                crate::snapshot::snapshot_text_and_json(path, include_diagnostics, "snapshot");
+            let include_context = optional_bool(arguments, "include_context")?;
+            let (text, structured) = crate::snapshot::snapshot_text_and_json(
+                path,
+                include_diagnostics,
+                include_context,
+                "snapshot",
+            );
             Ok(ToolOutput::new(text, structured))
         }
+        "context" => context_tool(path, arguments),
         "list_facts" => list_facts(path, arguments),
         // `verify_log` returns Err for integrity *findings* (taint, lineage, a corrupt log) as
         // well as for a genuine couldn't-run — but for an MCP agent those findings are the
@@ -2062,17 +2072,7 @@ fn dispatch_tool(
                 },
             )
         }
-        "explain" => {
-            let (kind, key, predicate) = (kind()?, key()?, predicate()?);
-            let clock = arg_read_clock(arguments)?;
-            let text = op_explain(path, &kind, &key, &predicate, clock).map_err(into_tool_error)?;
-            let receipt = op_explain_receipt(path, &kind, &key, &predicate, clock)
-                .map_err(into_tool_error)?;
-            Ok(ToolOutput::new(
-                text,
-                explain_structured("explain", &receipt),
-            ))
-        }
+        "explain" => explain_tool(path, arguments),
         "replay" => {
             let (kind, key, predicate) = (kind()?, key()?, predicate()?);
             let clock = arg_read_clock(arguments)?;
@@ -2663,6 +2663,241 @@ fn list_facts(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
     ))
 }
 
+/// Agent inject pack: believed facts with value + authority + source (CLI `dent8 context`).
+fn context_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
+    let detail = arg_detail(arguments)?;
+    let record_retrieval = optional_bool(arguments, "record_retrieval")?;
+    let purpose = optional_string(arguments, "purpose")?.unwrap_or_else(|| {
+        if record_retrieval {
+            "mcp:context".to_string()
+        } else {
+            "context-pack".to_string()
+        }
+    });
+    if purpose.trim().is_empty() {
+        return Err(ToolError::invalid(
+            "purpose must not be empty when provided",
+        ));
+    }
+    let args = crate::ContextArgs {
+        kind: optional_string(arguments, "kind")?,
+        key: optional_string(arguments, "key")?,
+        predicate: optional_string(arguments, "predicate")?,
+        include_stale: optional_bool(arguments, "include_stale")?,
+        include_diagnostics: optional_bool(arguments, "include_diagnostics")?,
+        record_retrieval,
+        purpose,
+    };
+    let mut outcome = crate::context::context_outcome(path, &args).map_err(into_tool_error)?;
+    if args.record_retrieval {
+        let count = crate::context::record_pack_retrievals_for_path(path, &outcome, &args.purpose)
+            .map_err(into_tool_error)?;
+        outcome.set_recorded_retrievals(count);
+    }
+    let mut structured = crate::context::context_json(&outcome);
+    if let Some(object) = structured.as_object_mut() {
+        object.insert("detail".to_string(), json!(detail.as_str()));
+    }
+    let text = match detail {
+        DetailLevel::Summary => crate::context::format_context_summary(&outcome),
+        DetailLevel::Full => crate::context::format_context_markdown(&outcome),
+    };
+    Ok(ToolOutput::new(text, structured))
+}
+
+/// Single-stream or batch explain, with optional `detail=summary` for shorter agent text.
+fn explain_tool(path: &str, arguments: &Value) -> Result<ToolOutput, ToolError> {
+    let detail = arg_detail(arguments)?;
+    let clock = arg_read_clock(arguments)?;
+    if let Some(queries) = arguments.get("queries") {
+        let list = queries.as_array().ok_or_else(|| {
+            ToolError::invalid("argument queries must be an array of {subject, predicate} objects")
+        })?;
+        if list.is_empty() {
+            return Err(ToolError::invalid(
+                "argument queries must contain at least one {{subject, predicate}} entry",
+            ));
+        }
+        if arguments.get("subject").is_some() || arguments.get("predicate").is_some() {
+            return Err(ToolError::invalid(
+                "explain accepts either subject+predicate or queries[], not both",
+            ));
+        }
+        let mut results = Vec::with_capacity(list.len());
+        let mut text_parts = Vec::with_capacity(list.len());
+        let mut any_contested = false;
+        for (index, entry) in list.iter().enumerate() {
+            let object = entry.as_object().ok_or_else(|| {
+                ToolError::invalid(format!(
+                    "queries[{index}] must be an object with subject and predicate"
+                ))
+            })?;
+            let subject = object
+                .get("subject")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ToolError::invalid(format!("queries[{index}].subject is required"))
+                })?;
+            let predicate = object
+                .get("predicate")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    ToolError::invalid(format!("queries[{index}].predicate is required"))
+                })?;
+            let (kind, key) = parse_subject_str(subject, "subject")?;
+            let receipt =
+                op_explain_receipt(path, &kind, &key, predicate, clock).map_err(into_tool_error)?;
+            if receipt.lifecycle == FactLifecycle::Contested {
+                any_contested = true;
+            }
+            let item = explain_item_structured(&receipt, detail);
+            text_parts.push(explain_item_text(&receipt, detail));
+            results.push(item);
+        }
+        let status = if any_contested {
+            Status::Contested.as_str()
+        } else {
+            Status::Ok.as_str()
+        };
+        let text = match detail {
+            DetailLevel::Summary => text_parts.join("\n"),
+            DetailLevel::Full => text_parts.join("\n\n"),
+        };
+        return Ok(ToolOutput::new(
+            text,
+            json!({
+                "status": status,
+                "tool": "explain",
+                "mode": "batch",
+                "detail": detail.as_str(),
+                "count": results.len(),
+                "results": results,
+            }),
+        ));
+    }
+
+    let (kind, key) = arg_subject(arguments, "subject")?;
+    let predicate = arg(arguments, "predicate")?;
+    let receipt =
+        op_explain_receipt(path, &kind, &key, &predicate, clock).map_err(into_tool_error)?;
+    let text = match detail {
+        DetailLevel::Summary => explain_item_text(&receipt, detail),
+        DetailLevel::Full => {
+            op_explain(path, &kind, &key, &predicate, clock).map_err(into_tool_error)?
+        }
+    };
+    let mut structured = explain_structured("explain", &receipt);
+    if let Some(object) = structured.as_object_mut() {
+        object.insert("mode".to_string(), json!("single"));
+        object.insert("detail".to_string(), json!(detail.as_str()));
+        if detail == DetailLevel::Summary {
+            // Drop the duplicated full receipt bodies for token-sensitive clients.
+            object.remove("current_receipt");
+            object.remove("receipt");
+            object.insert("authority".to_string(), json!(receipt.authority.name()));
+            object.insert("fresh".to_string(), json!(receipt.fresh));
+            object.insert(
+                "lifecycle".to_string(),
+                json!(lifecycle_name(receipt.lifecycle)),
+            );
+        }
+    }
+    Ok(ToolOutput::new(text, structured))
+}
+
+fn explain_item_structured(receipt: &IntegrityReceipt, detail: DetailLevel) -> Value {
+    match detail {
+        DetailLevel::Full => {
+            let mut item = explain_structured("explain", receipt);
+            if let Some(object) = item.as_object_mut() {
+                object.remove("tool");
+            }
+            item
+        }
+        DetailLevel::Summary => json!({
+            "status": receipt_status(receipt),
+            "subject": {
+                "kind": receipt.subject.kind(),
+                "key": receipt.subject.key(),
+            },
+            "predicate": receipt.predicate.as_str(),
+            "fact_id": receipt.fact_id.as_str(),
+            "current_value": fact_value_structured(&receipt.value),
+            "authority": receipt.authority.name(),
+            "lifecycle": lifecycle_name(receipt.lifecycle),
+            "fresh": receipt.fresh,
+            "event_hash_short": short(&receipt.event_hash),
+        }),
+    }
+}
+
+fn explain_item_text(receipt: &IntegrityReceipt, detail: DetailLevel) -> String {
+    let subject = format!("{}:{}", receipt.subject.kind(), receipt.subject.key());
+    let value = display_value(&receipt.value);
+    match detail {
+        DetailLevel::Summary => format!(
+            "explain {subject} {} = {value} (authority={}, lifecycle={}, fresh={})",
+            receipt.predicate.as_str(),
+            receipt.authority.name(),
+            lifecycle_name(receipt.lifecycle),
+            receipt.fresh,
+        ),
+        DetailLevel::Full => format!(
+            "explain {subject} {}\n    value         : {value}\n    lifecycle     : {}\n    authority     : {}\n    fresh         : {}\n    event_hash    : {}",
+            receipt.predicate.as_str(),
+            lifecycle_name(receipt.lifecycle),
+            receipt.authority.name(),
+            receipt.fresh,
+            short(&receipt.event_hash),
+        ),
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DetailLevel {
+    Full,
+    Summary,
+}
+
+impl DetailLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Summary => "summary",
+        }
+    }
+}
+
+fn arg_detail(arguments: &Value) -> Result<DetailLevel, ToolError> {
+    match arguments.get("detail") {
+        None | Some(Value::Null) => Ok(DetailLevel::Full),
+        Some(Value::String(raw)) => match raw.as_str() {
+            "full" => Ok(DetailLevel::Full),
+            "summary" => Ok(DetailLevel::Summary),
+            other => Err(ToolError::invalid(format!(
+                "invalid detail '{other}' (expected: full | summary)"
+            ))),
+        },
+        Some(_) => Err(ToolError::invalid(
+            "optional argument detail must be a string",
+        )),
+    }
+}
+
+fn parse_subject_str(raw: &str, name: &str) -> Result<(String, String), ToolError> {
+    let Some((kind, key)) = raw.split_once(':') else {
+        return Err(ToolError::invalid(format!(
+            "invalid {name} '{raw}' (expected <kind>:<key>, e.g. person:alice)"
+        )));
+    };
+    dent8_core::Subject::new(kind, key).map_err(|error| {
+        ToolError::invalid(format!(
+            "invalid {name} '{raw}' (expected <kind>:<key>): {error}"
+        ))
+    })?;
+    Ok((kind.to_string(), key.to_string()))
+}
+
 #[derive(Clone, Copy)]
 struct WriteContext<'a> {
     subject_kind: &'a str,
@@ -3149,6 +3384,50 @@ fn tool_list() -> Vec<Value> {
             "description": "include internal diagnostic fact streams such as doctor write-check probes"
         },
     });
+    let snapshot_props = merge(
+        &list_facts,
+        &json!({
+            "include_context": {
+                "type": "boolean",
+                "description": "also nest a context pack (values + authority + source) under context"
+            },
+        }),
+    );
+    let context_props = json!({
+        "kind": {
+            "type": "string",
+            "description": "only include facts with this subject kind"
+        },
+        "key": {
+            "type": "string",
+            "description": "only include facts with this subject key"
+        },
+        "predicate": {
+            "type": "string",
+            "description": "only include facts with this predicate"
+        },
+        "include_stale": {
+            "type": "boolean",
+            "description": "include believed-but-stale and not-yet-valid facts, annotated as such"
+        },
+        "include_diagnostics": {
+            "type": "boolean",
+            "description": "include internal diagnostic fact streams such as doctor write-check probes"
+        },
+        "record_retrieval": {
+            "type": "boolean",
+            "description": "record fact.retrieved audit events for every fact the pack emits"
+        },
+        "purpose": {
+            "type": "string",
+            "description": "purpose stamped on recorded retrieval events (default mcp:context when recording)"
+        },
+        "detail": {
+            "type": "string",
+            "enum": ["full", "summary"],
+            "description": "full markdown pack (default) or one-line-per-fact summary text"
+        },
+    });
     let subject = json!({
         "subject": { "type": "string", "description": "subject as <kind>:<key>, e.g. repo:myproj" },
         "predicate": { "type": "string", "description": "fact name, e.g. database" },
@@ -3189,6 +3468,29 @@ fn tool_list() -> Vec<Value> {
     // via `valued_vt`, and derive via `derive_props` (which merges it in) — matching the CLI's
     // --valid-from/--valid-to on all four (ADR 0016).
     let valued_vt = merge(&valued, &validity);
+    let explain_props = merge(
+        &merge(&subject, &clock),
+        &json!({
+            "detail": {
+                "type": "string",
+                "enum": ["full", "summary"],
+                "description": "full receipt text (default) or one-line summary; summary also trims structured receipt bodies"
+            },
+            "queries": {
+                "type": "array",
+                "description": "batch mode: explain several subject+predicate streams in one call (do not also pass top-level subject/predicate)",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "subject": { "type": "string", "description": "subject as <kind>:<key>" },
+                        "predicate": { "type": "string", "description": "fact name" }
+                    },
+                    "required": ["subject", "predicate"],
+                    "additionalProperties": false
+                }
+            },
+        }),
+    );
     let read_props = merge(&subject, &clock);
     let write_only = merge(&subject, &write);
     let basis = json!({
@@ -3232,13 +3534,19 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "snapshot",
-            "Return one stable read/audit payload for debugger and control-plane clients: runtime status, facts, integrity verify, and conflicts.",
-            &list_facts,
+            "Debugger/control-plane aggregate: runtime status, fact index (no values), integrity verify, conflicts, and attention (witness lag). Optional include_context nests a full belief pack.",
+            &snapshot_props,
+            &[],
+        ),
+        tool(
+            "context",
+            "Agent inject pack of currently believed facts with values, authority, and source. Prefer this over list_facts when grounding on project memory; weight High human/CI above Low agent.",
+            &context_props,
             &[],
         ),
         tool(
             "list_facts",
-            "List known dent8 fact streams and their dent8:// resource URIs. Use before relying on project memory.",
+            "Index of known dent8 fact streams and dent8:// URIs with freshness only — no values or authority. Use context for belief packs; use explain for a single receipt.",
             &list_facts,
             &[],
         ),
@@ -3256,13 +3564,13 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "native_scan",
-            "Read-only audit of provider-native memory/rules files, including guard status and dent8 receipt markers.",
+            "Read-only audit of provider-native memory/rules files, including guard status and dent8 receipt markers. Call when native rules may disagree with the store.",
             &native_common,
             &["agent"],
         ),
         tool(
             "native_reconcile",
-            "Read-only audit that reconciles dent8:// receipt references in provider-native memory/rules files against current dent8 state. Optional as_of/valid_at time-travel the read.",
+            "Read-only audit that reconciles dent8:// receipt references in provider-native memory/rules files against current dent8 state. Optional as_of/valid_at time-travel the read. Call when export/rules may disagree with the live store.",
             &native_reconcile_props,
             &["agent"],
         ),
@@ -3310,9 +3618,9 @@ fn tool_list() -> Vec<Value> {
         ),
         tool(
             "explain",
-            "Explain the currently believed (or terminal) fact for a subject+predicate, with its integrity receipt. Optional as_of/valid_at time-travel the read.",
-            &read_props,
-            &read,
+            "Single-stream integrity receipt for subject+predicate, or batch via queries[]. Prefer context for multi-fact grounding. detail=summary shortens text and structured receipt bodies. Optional as_of/valid_at time-travel the read.",
+            &explain_props,
+            &[],
         ),
         tool(
             "replay",
@@ -3342,9 +3650,9 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
         "outputSchema": output_schema_for(name),
     });
     // Claude Code defers MCP tools behind Tool Search by default. Keep only the smallest
-    // complete read/assert/explain loop visible up front; eager-loading all 17 schemas would
+    // complete read/assert/explain loop visible up front; eager-loading all schemas would
     // consume more than 100 KiB of context. Other clients ignore namespaced MCP metadata.
-    if matches!(name, "runtime_status" | "list_facts" | "assert" | "explain") {
+    if matches!(name, "runtime_status" | "context" | "assert" | "explain") {
         definition["_meta"] = json!({ "anthropic/alwaysLoad": true });
     }
     definition
@@ -3354,6 +3662,7 @@ fn output_schema_for(name: &str) -> Value {
     match name {
         "runtime_status" => with_tool_error_schema(name, runtime_status_output_schema()),
         "snapshot" => with_tool_error_schema(name, snapshot_output_schema()),
+        "context" => with_tool_error_schema(name, context_output_schema()),
         "list_facts" => with_tool_error_schema(name, list_facts_output_schema()),
         "verify" => with_tool_error_schema(name, verify_output_schema()),
         "conflicts" => with_tool_error_schema(name, conflicts_output_schema()),
@@ -3364,7 +3673,8 @@ fn output_schema_for(name: &str) -> Value {
         }
         "derive" => with_tool_error_schema(name, write_output_schema(name, &["accepted"])),
         "contradict" => with_tool_error_schema(name, write_output_schema(name, &["contested"])),
-        "explain" | "replay" => with_tool_error_schema(name, read_output_schema(name)),
+        "explain" => with_tool_error_schema(name, explain_output_schema()),
+        "replay" => with_tool_error_schema(name, read_output_schema(name)),
         "whatif" => with_tool_error_schema(name, whatif_output_schema()),
         _ => with_tool_error_schema(name, generic_output_schema(name)),
     }
@@ -3456,6 +3766,10 @@ fn snapshot_output_schema() -> Value {
                 "type": "object",
                 "additionalProperties": true,
             },
+            "context": {
+                "type": "object",
+                "additionalProperties": true,
+            },
             "summary": object_schema(
                 json!({
                     "runtime_status": { "enum": ["ok", "degraded"] },
@@ -3464,6 +3778,15 @@ fn snapshot_output_schema() -> Value {
                     "integrity_verified": { "type": "boolean" },
                     "conflicts": { "type": "integer", "minimum": 0 },
                     "include_diagnostics": { "type": "boolean" },
+                    "include_context": { "type": "boolean" },
+                    "witness_status": { "type": "string" },
+                    "witness_unwitnessed_events": {
+                        "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
+                    },
+                    "attention": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                    },
                 }),
                 &[
                     "runtime_status",
@@ -3472,6 +3795,10 @@ fn snapshot_output_schema() -> Value {
                     "integrity_verified",
                     "conflicts",
                     "include_diagnostics",
+                    "include_context",
+                    "witness_status",
+                    "witness_unwitnessed_events",
+                    "attention",
                 ],
             ),
         }),
@@ -3484,6 +3811,91 @@ fn snapshot_output_schema() -> Value {
             "conflicts",
             "summary",
         ],
+    )
+}
+
+fn context_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "contested"] },
+            "tool": { "const": "context" },
+            "detail": { "enum": ["full", "summary"] },
+            "generated_at": { "type": "integer" },
+            "count": { "type": "integer", "minimum": 0 },
+            "facts": {
+                "type": "array",
+                "items": object_schema(
+                    json!({
+                        "uri": { "type": "string" },
+                        "subject": subject_output_schema(),
+                        "predicate": { "type": "string" },
+                        "value": fact_value_output_schema(),
+                        "authority": authority_schema(),
+                        "source": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                        "freshness": { "enum": ["fresh", "stale", "not_yet_valid", "no_longer_believed"] },
+                        "contested_by": { "type": "integer", "minimum": 0 },
+                        "expires_at": { "anyOf": [{ "type": "integer" }, { "type": "null" }] },
+                    }),
+                    &[
+                        "uri",
+                        "subject",
+                        "predicate",
+                        "value",
+                        "authority",
+                        "freshness",
+                        "contested_by",
+                    ],
+                ),
+            },
+            "omitted": object_schema(
+                json!({
+                    "stale": { "type": "integer", "minimum": 0 },
+                    "not_yet_valid": { "type": "integer", "minimum": 0 },
+                }),
+                &["stale", "not_yet_valid"],
+            ),
+            "recorded_retrievals": {
+                "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }]
+            },
+        }),
+        &[
+            "status",
+            "tool",
+            "generated_at",
+            "count",
+            "facts",
+            "omitted",
+        ],
+    )
+}
+
+fn explain_output_schema() -> Value {
+    object_schema(
+        json!({
+            "status": { "enum": ["ok", "contested"] },
+            "tool": { "const": "explain" },
+            "mode": { "enum": ["single", "batch"] },
+            "detail": { "enum": ["full", "summary"] },
+            "subject": subject_output_schema(),
+            "predicate": { "type": "string" },
+            "fact_id": { "type": "string" },
+            "current_value": fact_value_output_schema(),
+            "event_hash": digest_schema(),
+            "event_hash_short": { "type": "string" },
+            "replay_position": { "type": "integer", "minimum": 0 },
+            "receipt_kind": { "const": "current_state" },
+            "current_receipt": receipt_output_schema(),
+            "receipt": receipt_output_schema(),
+            "authority": authority_schema(),
+            "fresh": { "type": "boolean" },
+            "lifecycle": { "type": "string" },
+            "count": { "type": "integer", "minimum": 0 },
+            "results": {
+                "type": "array",
+                "items": { "type": "object", "additionalProperties": true },
+            },
+        }),
+        &["status", "tool", "mode"],
     )
 }
 
@@ -4457,8 +4869,10 @@ mod tests {
             .as_str()
             .expect("server instructions");
         assert!(instructions.contains("memory integrity firewall"));
+        assert!(instructions.contains("context"));
         assert!(instructions.contains("snapshot"));
         assert!(instructions.contains("list_facts"));
+        assert!(instructions.contains("native_reconcile"));
     }
 
     #[test]
@@ -4907,8 +5321,8 @@ mod tests {
             .filter(|tool| tool["_meta"]["anthropic/alwaysLoad"] == true)
             .map(|tool| tool["name"].as_str().expect("tool name"))
             .collect::<Vec<_>>();
-        assert_eq!(eager, ["runtime_status", "list_facts", "assert", "explain"]);
-        assert_eq!(tools.len(), 17, "metadata must not remove deferred tools");
+        assert_eq!(eager, ["runtime_status", "context", "assert", "explain"]);
+        assert_eq!(tools.len(), 18, "metadata must not remove deferred tools");
     }
 
     #[test]
@@ -4970,6 +5384,165 @@ mod tests {
             window["name"].as_str().unwrap().contains("[stale]"),
             "{}",
             window["name"]
+        );
+    }
+
+    #[test]
+    fn context_pack_exposes_values_and_authority_for_agent_ranking() {
+        let (_dir, path) = temp_log();
+        call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "roadmap:demo",
+                "predicate": "next.work",
+                "value": "low-agent guess: rewrite the core",
+                "authority": "low",
+                "source": "source:agent",
+            }),
+        );
+        call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo:demo",
+                "predicate": "product.next_arc",
+                "value": "ship Tauri shell over dent8 ui",
+                "authority": "high",
+                "source": "source:human",
+            }),
+        );
+
+        // list_facts is an index only — no values or authority for ranking.
+        let index = call_tool_result(&path, "list_facts", json!({}));
+        let index_fact = &index["structuredContent"]["facts"][0];
+        assert!(index_fact.get("value").is_none());
+        assert!(index_fact.get("authority").is_none());
+
+        let pack = assert_tool_output_matches_schema(&path, "context", json!({}));
+        let facts = pack["structuredContent"]["facts"]
+            .as_array()
+            .expect("context facts");
+        assert_eq!(facts.len(), 2);
+        let high = facts
+            .iter()
+            .find(|f| f["predicate"] == "product.next_arc")
+            .expect("high fact");
+        let low = facts
+            .iter()
+            .find(|f| f["predicate"] == "next.work")
+            .expect("low fact");
+        assert_eq!(high["authority"], "high");
+        assert_eq!(low["authority"], "low");
+        assert_eq!(high["value"]["text"], "ship Tauri shell over dent8 ui");
+        assert_eq!(high["source"], "source:human");
+        // Agents must prefer the High human fact over the Low agent guess.
+        assert_ne!(high["authority"], low["authority"]);
+
+        let summary = call_tool_result(
+            &path,
+            "context",
+            json!({ "detail": "summary", "kind": "repo" }),
+        );
+        let text = summary["content"][0]["text"].as_str().expect("text");
+        assert!(text.contains("product.next_arc"), "{text}");
+        assert!(!text.contains("next.work"), "{text}");
+        assert_eq!(summary["structuredContent"]["count"], 1);
+        assert_eq!(summary["structuredContent"]["detail"], "summary");
+    }
+
+    #[test]
+    fn explain_supports_batch_queries_and_summary_detail() {
+        let (_dir, path) = temp_log();
+        call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo:a", "predicate": "db", "value": "postgres",
+                "authority": "high", "source": "source:human",
+            }),
+        );
+        call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo:b", "predicate": "db", "value": "sqlite",
+                "authority": "medium", "source": "source:ci",
+            }),
+        );
+
+        let batch = assert_tool_output_matches_schema(
+            &path,
+            "explain",
+            json!({
+                "detail": "summary",
+                "queries": [
+                    { "subject": "repo:a", "predicate": "db" },
+                    { "subject": "repo:b", "predicate": "db" },
+                ],
+            }),
+        );
+        assert_eq!(batch["structuredContent"]["mode"], "batch");
+        assert_eq!(batch["structuredContent"]["count"], 2);
+        assert_eq!(
+            batch["structuredContent"]["results"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            batch["structuredContent"]["results"][0]["current_value"]["text"],
+            "postgres"
+        );
+        assert_eq!(
+            batch["structuredContent"]["results"][1]["authority"],
+            "medium"
+        );
+
+        let single = assert_tool_output_matches_schema(
+            &path,
+            "explain",
+            json!({
+                "subject": "repo:a",
+                "predicate": "db",
+                "detail": "summary",
+            }),
+        );
+        assert_eq!(single["structuredContent"]["mode"], "single");
+        assert_eq!(single["structuredContent"]["detail"], "summary");
+        assert!(single["structuredContent"].get("receipt").is_none());
+        assert_eq!(single["structuredContent"]["authority"], "high");
+    }
+
+    #[test]
+    fn snapshot_summary_exposes_attention_and_optional_context() {
+        let (_dir, path) = temp_log();
+        call_tool(
+            &path,
+            "assert",
+            json!({
+                "subject": "repo:p", "predicate": "db", "value": "postgres",
+                "authority": "high", "source": "u",
+            }),
+        );
+        let snap = assert_tool_output_matches_schema(
+            &path,
+            "snapshot",
+            json!({ "include_context": true }),
+        );
+        let summary = &snap["structuredContent"]["summary"];
+        assert!(summary["witness_status"].is_string());
+        assert!(summary["attention"].is_array());
+        assert_eq!(summary["include_context"], true);
+        assert_eq!(summary["facts"], 1);
+        assert_eq!(
+            snap["structuredContent"]["context"]["facts"][0]["value"]["text"],
+            "postgres"
+        );
+        assert_eq!(
+            snap["structuredContent"]["context"]["facts"][0]["authority"],
+            "high"
         );
     }
 
@@ -5518,6 +6091,7 @@ mod tests {
             [
                 "runtime_status",
                 "snapshot",
+                "context",
                 "list_facts",
                 "verify",
                 "conflicts",
