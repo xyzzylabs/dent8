@@ -25,7 +25,9 @@ instead. It uses `${CLAUDE_PROJECT_DIR:-.}` and `${DENT8_BIN:-dent8}` placeholde
 developer's absolute `.dent8` paths are not committed for everyone else.
 
 Claude Code prompts before using project-scoped MCP servers from `.mcp.json`; approve dent8
-when it asks.
+when it asks. dent8 marks the four-tool core loop (`runtime_status`, `list_facts`, `assert`,
+`explain`) for eager loading in Claude Code 2.1.121+, while leaving the larger lifecycle and
+debugger surface discoverable through Tool Search. Older clients should be upgraded.
 
 ## Prompt Claude Code
 

@@ -32,7 +32,18 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
   first-class coverage of the major agent frameworks — LangChain (Python), LlamaIndex (Python),
   the Vercel AI SDK, and LangChain.js.
 
+### Fixed
+- **Strict MCP clients can now load dent8's complete tool surface.** Every `outputSchema` has
+  the MCP 2025-11-25-required top-level `"type": "object"` while retaining the typed
+  success/error `oneOf`. Claude Code 2.1.139 previously accepted dent8's resources and server
+  instructions but rejected all 17 tools at `tools/list` schema validation.
+
 ### Changed
+- **Claude Code keeps dent8's core MCP loop visible.** The `runtime_status`, `list_facts`,
+  `assert`, and `explain` definitions carry Claude Code's namespaced per-tool eager-load
+  metadata (2.1.121+); the other 13 tools remain deferred through Tool Search. Verified
+  end-to-end with Claude Code 2.1.139: `runtime_status` followed by a signed, admitted
+  `source:claude-code` assertion against the SQLite dogfood store.
 - **crates.io now publishes automatically on tag** via Trusted Publishing (OIDC), matching the
   PyPI and npm release jobs — a `crates` job in `release.yml` runs
   `rust-lang/crates-io-auth-action` + `cargo publish --workspace`, which uploads all eight

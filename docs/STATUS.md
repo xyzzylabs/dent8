@@ -329,7 +329,11 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   initialize response includes server instructions that tell MCP-aware agents to call
   `snapshot` (or `runtime_status`/`list_facts` for narrower checks), inspect dent8 before
   relying on durable project facts, and treat rejected writes as safety signals.
-  Tool definitions advertise `outputSchema` for every structured result. Tool calls return
+  Tool definitions advertise `outputSchema` for every structured result; every input and output
+  schema has the MCP 2025-11-25-required top-level `type: object`, with typed success/error
+  variants nested below it. Claude Code 2.1.139 is exercised end-to-end against the project
+  SQLite dogfood store: it loads the generated `.mcp.json`, calls `runtime_status`, and appends
+  a signed Low-authority assertion as `source:claude-code`. Tool calls return
   human-readable `content` plus MCP 2025-11-25 `structuredContent` with stable agent fields:
   `status`, `accepted_events` (one entry per committed event, including event hash),
   current-state receipt fields (`fact_id`, `event_hash`, `replay_position`, `current_value`,

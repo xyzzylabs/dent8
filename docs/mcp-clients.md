@@ -72,10 +72,11 @@ a low-authority override, run [`examples/mcp/demo.sh`](../examples/mcp/demo.sh).
 
 ## Client config matrix
 
-Each block below is **config per that client's docs; the dent8 server side verified above is
-what's exercised here — the client picking up the config is not exercised in this environment**
-(no client installs; first-party doc hosts were egress-blocked, so syntax follows public docs).
-Verify against the client version your team runs.
+Each block below follows that client's documented config shape. The Claude Code project config
+is also exercised end-to-end with Claude Code 2.1.139 (`runtime_status` plus a signed `assert`
+against the SQLite dogfood store). Other clients in the matrix are covered by config/stdio
+contract tests rather than a live installed-client run; verify against the version your team
+runs.
 
 ### 1. Standard `mcpServers` JSON — Cursor, Windsurf, Cline, Claude Desktop/Code
 
@@ -96,9 +97,13 @@ Code global storage (Cline), the client's MCP config (Claude Desktop/Code).
 ```
 
 Cline adds two optional keys per entry — `"alwaysAllow": []` and `"disabled": false`.
+Claude Code 2.1.121+ honors per-tool `_meta["anthropic/alwaysLoad"]`; dent8 marks only
+`runtime_status`, `list_facts`, `assert`, and `explain`, keeping the core memory loop visible
+without loading the full 17-tool schema surface into every prompt.
 Docs: [Cursor](https://cursor.com/docs/mcp) ·
 [Windsurf](https://docs.windsurf.com/windsurf/cascade/mcp) ·
-[Cline](https://docs.cline.bot/mcp/configuring-mcp-servers).
+[Cline](https://docs.cline.bot/mcp/configuring-mcp-servers) ·
+[Claude Code](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral).
 
 ### 2. Zed — top-level `context_servers` (NOT `mcpServers`)
 

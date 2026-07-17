@@ -3330,7 +3330,7 @@ fn tool_list() -> Vec<Value> {
 }
 
 fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) -> Value {
-    json!({
+    let mut definition = json!({
         "name": name,
         "description": description,
         "inputSchema": {
@@ -3340,7 +3340,14 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
             "additionalProperties": false,
         },
         "outputSchema": output_schema_for(name),
-    })
+    });
+    // Claude Code defers MCP tools behind Tool Search by default. Keep only the smallest
+    // complete read/assert/explain loop visible up front; eager-loading all 17 schemas would
+    // consume more than 100 KiB of context. Other clients ignore namespaced MCP metadata.
+    if matches!(name, "runtime_status" | "list_facts" | "assert" | "explain") {
+        definition["_meta"] = json!({ "anthropic/alwaysLoad": true });
+    }
+    definition
 }
 
 fn output_schema_for(name: &str) -> Value {
@@ -3369,6 +3376,10 @@ fn with_tool_error_schema(tool: &str, success: Value) -> Value {
         "$schema".to_string(),
         json!("https://json-schema.org/draft/2020-12/schema"),
     );
+    // MCP 2025-11-25 restricts tool output schemas to an object at the root. Keep the
+    // success/error union below, but advertise the mandatory root type so strict clients
+    // (including Claude Code) do not reject the entire tools/list response.
+    schema.insert("type".to_string(), json!("object"));
     // Every emitted `structuredContent` is stamped with `schema_version` by
     // `crate::stamp_schema_version`; advertise it (required, fixed value) on both result arms so
     // the payload still conforms to the tool's `additionalProperties: false` output schema.
@@ -4882,6 +4893,36 @@ mod tests {
         // Writes do not advertise the read clock, reads do not advertise validity.
         assert!(props("assert")["as_of"].is_null());
         assert!(props("explain")["valid_from"].is_null());
+    }
+
+    #[test]
+    fn claude_eager_loads_only_the_core_memory_loop() {
+        let list = json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/list" });
+        let tools = handle(&list, "/tmp/unused.jsonl").expect("response")["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .clone();
+        let eager = tools
+            .iter()
+            .filter(|tool| tool["_meta"]["anthropic/alwaysLoad"] == true)
+            .map(|tool| tool["name"].as_str().expect("tool name"))
+            .collect::<Vec<_>>();
+        assert_eq!(eager, ["runtime_status", "list_facts", "assert", "explain"]);
+        assert_eq!(tools.len(), 17, "metadata must not remove deferred tools");
+    }
+
+    #[test]
+    fn every_tool_schema_has_the_mcp_required_object_root() {
+        let list = json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/list" });
+        let tools = handle(&list, "/tmp/unused.jsonl").expect("response")["result"]["tools"]
+            .as_array()
+            .expect("tools")
+            .clone();
+        for tool in tools {
+            let name = tool["name"].as_str().expect("tool name");
+            assert_eq!(tool["inputSchema"]["type"], "object", "{name} input");
+            assert_eq!(tool["outputSchema"]["type"], "object", "{name} output");
+        }
     }
 
     #[test]
