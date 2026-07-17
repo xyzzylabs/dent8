@@ -68,6 +68,7 @@ Current v0 MCP tools:
 
 - `runtime_status`
 - `snapshot`
+- `context`
 - `list_facts`
 - `verify`
 - `conflicts`
@@ -89,10 +90,23 @@ URL/path, event count, authority registry, signed identity, and witness configur
 It exists so agents can detect stale MCP subprocesses or wrong stores before relying on
 project memory.
 
+`context` is the agent inject pack (same shape as CLI `dent8 context -o json`): currently
+believed facts with **value, authority, source, and freshness**. Prefer it when grounding on
+project memory. Weight High human/CI facts above Low agent facts. `detail=summary` shortens
+the text half; optional filters mirror the CLI (`kind` / `key` / `predicate` /
+`include_stale` / `include_diagnostics` / `record_retrieval`).
+
+`list_facts` remains a lightweight stream **index** (uri + freshness only — no values or
+authority). Use it for discovery/polling, not for ranking belief.
+
 `snapshot` is the stable read/audit aggregate for debugger and control-plane clients. It
 combines `runtime_status`, fact-stream browsing, `verify`, and `conflicts` into one
-structured payload with summary counts. Use it for polling or status panes; use the
-individual tools when a client needs a narrower result or lower-cost refresh.
+structured payload with summary counts, including **`witness_status`**,
+**`witness_unwitnessed_events`**, and **`attention`** so agents cannot miss witness lag or
+integrity noise behind a nested `ok`. Optional `include_context` nests a full belief pack.
+Witness `warn`/`failed` degrades the snapshot status. Use it for health polling or status
+panes; use `context` for multi-fact grounding and `explain` (single or `queries[]` batch,
+optional `detail=summary`) for receipts.
 
 Tool definitions advertise `outputSchema` for every `structuredContent` shape. Tool results
 keep human-readable `content`, and also return MCP 2025-11-25 `structuredContent` for
@@ -123,8 +137,12 @@ known. The MCP `outputSchema` advertises the closed enum of codes this build can
 Recommended behavior:
 
 - Treat writes as candidate events through the firewall.
-- Call `snapshot` first for a complete read/audit view, or `runtime_status` when debugging
-  just the live server/store wiring before trusting a long-running MCP server.
+- Call `context` first when relying on believed project facts; call `snapshot` for health
+  (verify + conflicts + witness attention), or `runtime_status` when debugging just the live
+  server/store wiring before trusting a long-running MCP server.
+- Weight High human/CI facts above Low agent facts when ranking what to trust.
+- Use `native_reconcile` when provider-native rules or an export block may disagree with the
+  live store (export markers are not a second belief base).
 - Carry evidence/provenance fields for assertions; signed identity may provide source and
   authority defaults, but explicit fields must still satisfy the same grant/ceiling checks.
 - Make stale, contested, expired, or superseded facts visible to clients.

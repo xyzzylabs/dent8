@@ -10,6 +10,14 @@ minor versions. See [docs/STATUS.md](docs/STATUS.md) for what is built versus de
 ## [Unreleased]
 
 ### Added
+- **MCP `context` tool (agent inject pack):** exposes CLI `dent8 context` over MCP with
+  values, authority, source, and freshness in one call — ending the N+1 `list_facts` +
+  `explain` loop for multi-fact grounding. Optional filters (`kind` / `key` / `predicate` /
+  `include_stale` / `include_diagnostics`), `record_retrieval`, and `detail=summary|full`.
+  Server instructions and Claude-eager tools now prefer `context` over `list_facts` (which
+  remains the lightweight stream index). Snapshot gains top-level `summary.attention`,
+  `witness_status`, and `witness_unwitnessed_events` (witness warn/fail degrades status) plus
+  optional `include_context`. `explain` accepts `queries[]` batch mode and `detail=summary`.
 - **Human-reviewed legitimate-session evals:** `dent8 eval --trace <FILE>` (repeatable) accepts
   the strict `dent8.legitimate-trace/1` format, atomically replays independent expected-admit
   operation scenarios against decision-complete trusted pre-write baselines, and reports reviewed

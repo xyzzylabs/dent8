@@ -279,12 +279,15 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   back instead of truncated away, so a failed proposal survives for inspection/retry rather
   than only in hook logs. Supports `--output json` with per-line results and `kept_failed`.
   See [context-capture.md](context-capture.md) for Claude Code hook wiring.
-- **`dent8 snapshot [--include-diagnostics]`** — emits one debugger/control-plane read/audit
-  payload over the same durable store: live runtime status, fact-stream browsing, `verify`,
-  `conflicts`, and summary counts. In text mode it is a compact operator status; in
-  `--output json` it is the stable polling shape for local dashboards and daemon/MCP
-  clients. It exits nonzero for integrity issues or degraded runtime inspection, but a
-  merely contested belief base stays a successful read with `status: "contested"`.
+- **`dent8 snapshot [--include-diagnostics] [--include-context]`** — emits one
+  debugger/control-plane read/audit payload over the same durable store: live runtime status,
+  fact-stream browsing (index only), `verify`, `conflicts`, and summary counts that promote
+  **witness status**, **unwitnessed tail**, and **attention** strings so operators/agents do
+  not miss nested WARNs. Optional `--include-context` nests a full belief pack (values +
+  authority + source). In text mode it is a compact operator status; in `--output json` it is
+  the stable polling shape for local dashboards and daemon/MCP clients. It exits nonzero for
+  integrity issues, degraded runtime inspection, or witness warn/fail; a merely contested
+  belief base stays a successful read with `status: "contested"`.
 - **`dent8 verify`** — on-demand integrity check. On **Postgres** it re-verifies the *stored*
   global hash chain (a mutated row → `INTEGRITY FAILURE`; CI-exercised); on the file dev store
   it checks *structural* integrity (uniqueness + lineage + canonicalization) and says plainly
@@ -318,17 +321,22 @@ matters most is *"a tested function exists"* vs *"a user can run it"*:
   binary — for offline forensics/audit/replay. Read-only export; the log stays the source of
   truth. ([examples/duckdb/](../examples/duckdb/), [storage.md](storage.md#analytical-lane-export-only-not-a-runtime-store)).
 - **`dent8 mcp serve`** — a stdio JSON-RPC 2.0 **MCP server** exposing read/audit tools
-  (`runtime_status` / `snapshot` / `list_facts` / `verify` / `conflicts` / `native_scan` /
-  `native_reconcile`) and the
+  (`runtime_status` / `snapshot` / `context` / `list_facts` / `verify` / `conflicts` /
+  `native_scan` / `native_reconcile`) and the
   **full belief surface** as tools to agent
   clients — `assert` / `supersede` / `retract` / `contradict` / `reinforce` / `expire` /
   `derive` / `explain` / `replay` (`initialize` / `tools/list` / `tools/call`).
-  `runtime_status` reports the live server binary, cwd, selected store URL/path, event count,
-  authority registry, signed identity, and witness configuration, while `snapshot` combines
-  that runtime view with facts, `verify`, and `conflicts` for polling/debugger clients. The
-  initialize response includes server instructions that tell MCP-aware agents to call
-  `snapshot` (or `runtime_status`/`list_facts` for narrower checks), inspect dent8 before
-  relying on durable project facts, and treat rejected writes as safety signals.
+  **`context`** is the agent inject pack (CLI `dent8 context` parity: values + authority +
+  source; optional filters, `detail=summary`, `record_retrieval`). `list_facts` remains the
+  lightweight stream index. `runtime_status` reports the live server binary, cwd, selected
+  store URL/path, event count, authority registry, signed identity, and witness configuration,
+  while `snapshot` combines that runtime view with the fact index, `verify`, `conflicts`, and
+  attention/witness summary fields (`include_context` nests a belief pack). **`explain`**
+  accepts a single subject+predicate or a `queries[]` batch, with optional `detail=summary`.
+  The initialize response instructs agents to call **`context`** (or `snapshot` for health)
+  before relying on project facts, weight High human/CI above Low agent, use
+  `native_reconcile` when export/rules may drift, and treat rejected writes as safety signals.
+  Claude-eager tools are `runtime_status` / `context` / `assert` / `explain`.
   Tool definitions advertise `outputSchema` for every structured result; every input and output
   schema has the MCP 2025-11-25-required top-level `type: object`, with typed success/error
   variants nested below it. CI launches the real server through the official TypeScript MCP SDK

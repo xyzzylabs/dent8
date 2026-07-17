@@ -35,6 +35,11 @@ All five items of the previous near-term list landed by v0.6.1:
 
 ## Near-term focus (post-v0.8)
 
+**Agent-read ergonomics (shipped on main):** MCP `context` (belief pack with value +
+authority + source), snapshot `summary.attention` / witness status (degrades on witness
+lag), batch `explain` via `queries[]`, and `detail=summary` for token-sensitive clients.
+Server instructions and Claude-eager tools prefer `context` over `list_facts` (index only).
+
 Launch feedback remains the product signal, while the active implementation directions below
 can progress in parallel without being mistaken for shipped capabilities.
 

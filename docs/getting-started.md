@@ -410,10 +410,12 @@ jobs:
 ```
 
 **(d) MCP — live tool-mediated access.** For any MCP-capable client, `dent8 mcp serve` exposes
-the belief surface over JSON-RPC 2.0 stdio (17 tools; the 7 write tools go through the same
-firewall as the CLI). Reading a fact via `resources/read` also records a `fact.retrieved`
-audit event by default (opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`) — so MCP retrieval is
-replayable like `dent8 context --record-retrieval`. The canonical `mcpServers` block:
+the belief surface over JSON-RPC 2.0 stdio (18 tools; the 7 write tools go through the same
+firewall as the CLI). Prefer the **`context`** tool for multi-fact grounding (values +
+authority + source); `list_facts` is an index only. Reading a fact via `resources/read` also
+records a `fact.retrieved` audit event by default (opt out with `DENT8_MCP_RECORD_RETRIEVAL=0`)
+— so MCP retrieval is replayable like `dent8 context --record-retrieval`. The canonical
+`mcpServers` block:
 
 ```json
 {

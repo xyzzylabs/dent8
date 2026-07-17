@@ -17,13 +17,14 @@ workspace — fine for one intentional personal store, wrong for multi-agent rep
 
 ## Tools and access
 
-The server exposes **17 tools** plus readable `dent8://{kind}/{key}/{predicate}` resources.
+The server exposes **18 tools** plus readable `dent8://{kind}/{key}/{predicate}` resources.
 **7 are write tools** and are gated off under read-only access (an unauthenticated daemon
 connection): `assert`, `supersede`, `retract`, `contradict`, `derive`, `reinforce`, `expire`.
-The other 10 are read/audit and always available: `runtime_status`, `snapshot`, `list_facts`,
-`verify`, `conflicts`, `native_scan`, `native_reconcile`, `explain`, `replay`, `whatif`. A stdio server
-(the configs below) runs with full access; a rejected write comes back as a tool **error with
-the reason**, so the agent learns *why*.
+The other 11 are read/audit and always available: `runtime_status`, `snapshot`, `context`,
+`list_facts`, `verify`, `conflicts`, `native_scan`, `native_reconcile`, `explain`, `replay`,
+`whatif`. Prefer **`context`** for belief packs (values + authority + source); `list_facts` is
+an index only. A stdio server (the configs below) runs with full access; a rejected write
+comes back as a tool **error with the reason**, so the agent learns *why*.
 
 ## Verify it yourself
 
@@ -50,18 +51,21 @@ The `initialize` response (id 1) — verbatim, pretty-printed:
       "resources": {},
       "tools": { "listChanged": false }
     },
-    "instructions": "dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, call snapshot (or runtime_status/list_facts for narrower checks), then explain as needed. Record stable facts with assert using truthful source and authority. When the connection has a signed source grant, write tools may omit source and authority. Use supersede for corrections, contradict for disputes, derive for facts based on other facts. Use native_scan/native_reconcile to audit provider-native memory/rules files when available. Treat rejected writes as safety signals; do not silently overwrite.",
+    "instructions": "dent8 is a memory integrity firewall for durable agent facts. Before relying on project facts, call context (belief pack: values + authority + source) or snapshot (health + fact index + verify). Weight High human/CI facts above Low agent facts. …",
     "protocolVersion": "2025-06-18",
     "serverInfo": { "name": "dent8", "version": "0.8.0" }
   }
 }
 ```
 
+(The full `instructions` string is longer; it also covers `list_facts` as index-only, batch
+`explain`, `whatif`, `resources/subscribe`, and `native_reconcile` for export/store drift.)
+
 The `notifications/initialized` notification produces no response, as expected. The `tools/list`
-response (id 2) returns all **17** tools, in this order:
+response (id 2) returns all **18** tools, in this order:
 
 ```text
-runtime_status  snapshot  list_facts  verify  conflicts  native_scan  native_reconcile
+runtime_status  snapshot  context  list_facts  verify  conflicts  native_scan  native_reconcile
 assert  supersede  retract  contradict  reinforce  expire  derive  explain  replay  whatif
 ```
 
@@ -98,8 +102,8 @@ Code global storage (Cline), the client's MCP config (Claude Desktop/Code).
 
 Cline adds two optional keys per entry — `"alwaysAllow": []` and `"disabled": false`.
 Claude Code 2.1.121+ honors per-tool `_meta["anthropic/alwaysLoad"]`; dent8 marks only
-`runtime_status`, `list_facts`, `assert`, and `explain`, keeping the core memory loop visible
-without loading the full 17-tool schema surface into every prompt.
+`runtime_status`, `context`, `assert`, and `explain`, keeping the core memory loop visible
+without loading the full 18-tool schema surface into every prompt.
 Docs: [Cursor](https://cursor.com/docs/mcp) ·
 [Windsurf](https://docs.windsurf.com/windsurf/cascade/mcp) ·
 [Cline](https://docs.cline.bot/mcp/configuring-mcp-servers) ·

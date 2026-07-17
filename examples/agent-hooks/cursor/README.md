@@ -88,7 +88,7 @@ other AGENTS.md-aware tool at once). See [`../generic/`](../generic/).
 **Verified locally in this repo** (re-run against the built `dent8 0.8.0` binary):
 
 - The dent8 MCP server stdio handshake — `initialize` (protocolVersion `2025-06-18`) returns
-  `serverInfo {"name":"dent8","version":"0.8.0"}` and `tools/list` returns all 17 tools. Full
+  `serverInfo {"name":"dent8","version":"0.8.0"}` and `tools/list` returns all 18 tools. Full
   transcript in [`docs/mcp-clients.md`](../../../docs/mcp-clients.md#verify-it-yourself).
 - `dent8 capture … --consume --keep-failed` accepts good proposals and keeps failed lines for
   retry (the `stop`-hook command).
