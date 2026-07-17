@@ -81,6 +81,7 @@ jobs:
           "target/${{ matrix.target }}/release/dent8" --version
       - name: Smoke the binary (windows)
         if: matrix.os == 'windows-latest'
+        shell: pwsh
         run: |
           & "target/${{ matrix.target }}/release/dent8.exe" --version
       # Upload only for real tag pushes; a workflow_dispatch run is a build smoke.
