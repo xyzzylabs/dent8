@@ -121,32 +121,32 @@ export class Dent8 {
 
   /** Assert a fact through the firewall. */
   assertFact(subject: string, predicate: string, value: string, options: WriteOptions = {}): Payload {
-    return this.run(["assert", subject, predicate, value], options);
+    return this.run(["assert"], [subject, predicate, value], options);
   }
 
   /** Revise the believed fact via the sanctioned supersession path. */
   supersede(subject: string, predicate: string, value: string, options: WriteOptions = {}): Payload {
-    return this.run(["supersede", subject, predicate, value], options);
+    return this.run(["supersede"], [subject, predicate, value], options);
   }
 
   /** Record dissent: keep both facts, mark the pair contested. */
   contradict(subject: string, predicate: string, value: string, options: WriteOptions = {}): Payload {
-    return this.run(["contradict", subject, predicate, value], options);
+    return this.run(["contradict"], [subject, predicate, value], options);
   }
 
   /** Retract the believed fact (terminal; taints derivatives). */
   retract(subject: string, predicate: string, options: WriteOptions = {}): Payload {
-    return this.run(["retract", subject, predicate], options);
+    return this.run(["retract"], [subject, predicate], options);
   }
 
   /** Corroborate the believed fact from another source (earned entrenchment). */
   reinforce(subject: string, predicate: string, options: WriteOptions = {}): Payload {
-    return this.run(["reinforce", subject, predicate], options);
+    return this.run(["reinforce"], [subject, predicate], options);
   }
 
   /** Expire the believed fact (terminal). */
   expire(subject: string, predicate: string, options: WriteOptions = {}): Payload {
-    return this.run(["expire", subject, predicate], options);
+    return this.run(["expire"], [subject, predicate], options);
   }
 
   /**
@@ -161,26 +161,24 @@ export class Dent8 {
     options: WriteOptions & { basis: [string, string] },
   ): Payload {
     const { basis, ...write } = options;
-    return this.run(["derive", subject, predicate, value, "--basis", basis[0], basis[1]], write);
+    return this.run(["derive"], [subject, predicate, value], { ...write, basis });
   }
 
   // ---- reads / audit ----------------------------------------------------------
 
   /** The believed (or terminal) fact with its integrity receipt. */
   explain(subject: string, predicate: string, options: ReadOptions = {}): Payload {
-    return this.run(["explain", subject, predicate], options);
+    return this.run(["explain"], [subject, predicate], options);
   }
 
   /** The full event history behind a fact — why it is believed. */
   replay(subject: string, predicate: string, options: ReadOptions = {}): Payload {
-    return this.run(["replay", subject, predicate], options);
+    return this.run(["replay"], [subject, predicate], options);
   }
 
   /** Every known fact stream, with freshness flags. */
   facts(options: { includeDiagnostics?: boolean } = {}): Payload {
-    const args = ["facts", "list"];
-    if (options.includeDiagnostics) args.push("--include-diagnostics");
-    return this.run(args, {});
+    return this.run(["facts", "list"], [], options);
   }
 
   /**
@@ -190,7 +188,7 @@ export class Dent8 {
    */
   verify(): Payload {
     try {
-      return this.run(["verify"], {});
+      return this.run(["verify"], [], {});
     } catch (error) {
       if (error instanceof Dent8Rejected) return error.payload;
       throw error;
@@ -199,18 +197,28 @@ export class Dent8 {
 
   /** Contested facts: `status` is `contested` when disputes exist, `ok` otherwise. */
   conflicts(): Payload {
-    return this.run(["conflicts"], {});
+    return this.run(["conflicts"], [], {});
   }
 
   // ---- plumbing ---------------------------------------------------------------
 
-  private run(args: string[], flags: object): Payload {
-    const command = [...args];
+  /**
+   * One subprocess per call: `<verb> <flags…> -- <positionals…>`. The flags are emitted
+   * *before* `--` so that option parsing is already over by the time the positionals are
+   * read — a value that legitimately begins with a hyphen (`-Werror`, `--strict`) is then
+   * a value, not an unknown flag the CLI would refuse with exit 2.
+   */
+  private run(verb: string[], positionals: string[], flags: object): Payload {
+    const command = [...verb];
     for (const [name, value] of Object.entries(flags as Record<string, unknown>)) {
-      if (value === undefined || value === null) continue;
+      if (value === undefined || value === null || value === false) continue;
       command.push("--" + name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase()));
-      command.push(String(value));
+      // `true` is a bare switch (`--include-diagnostics`); an array is a multi-value flag
+      // (`--basis <subject> <predicate>`).
+      if (value === true) continue;
+      for (const item of Array.isArray(value) ? value : [value]) command.push(String(item));
     }
+    if (positionals.length > 0) command.push("--", ...positionals);
     const completed = spawnSync(this.binary, ["--output", "json", ...command], {
       encoding: "utf8",
       timeout: this.timeoutMs,

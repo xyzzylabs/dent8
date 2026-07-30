@@ -125,6 +125,22 @@ test("invalid input is invalid, not rejected", { skip }, () => {
   );
 });
 
+test("a value beginning with a hyphen is a value, not a flag", { skip }, () => {
+  // The SDK emits the option flags before `--`, so a compiler-flag-shaped value reaches the
+  // CLI's positional as text; without the separator clap reads it as an unknown flag (exit 2)
+  // and nothing is written.
+  const d8 = store().plain();
+  const written = d8.assertFact("repo:acme", "build_flag", "-Werror", {
+    authority: "low",
+    source: "source:agent",
+  });
+  assert.equal(written.status, "accepted");
+  assert.equal(d8.explain("repo:acme", "build_flag").value.text, "-Werror");
+
+  d8.supersede("repo:acme", "build_flag", "--strict", { authority: "low", source: "source:agent" });
+  assert.equal(d8.explain("repo:acme", "build_flag").value.text, "--strict");
+});
+
 test("derive -> retract -> taint flow", { skip }, () => {
   // `repo.database` is High-floored, so every write here is an above-agent signed write.
   const d8 = store().signed("source:alice");
@@ -147,10 +163,14 @@ test("reads, human time grammar, and conflicts", { skip }, () => {
   const st = store();
   const alice = st.signed("source:alice");
   const bob = st.signed("source:bob");
+  // A bare UTC date is one of the human time grammars; it is computed 30 days out so the
+  // freshness it claims stays inside `repo.database`'s retention ceiling (a far-future
+  // valid_to reaches too far and is rejected, not clamped).
+  const validTo = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   alice.assertFact("repo:myproj", "database", "postgres", {
     authority: "high",
     source: "source:alice",
-    validTo: "2036-01-01",
+    validTo,
   });
   assert.equal(alice.facts().count, 1);
   assert.equal(alice.replay("repo:myproj", "database").events[0].kind, "fact.asserted");

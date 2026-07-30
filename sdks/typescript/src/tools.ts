@@ -16,7 +16,7 @@
  * the identity instead.)
  */
 
-import { Dent8, Dent8Error, type Payload } from "./index.js";
+import { Dent8, Dent8Invalid, Dent8Rejected, type Payload } from "./index.js";
 
 /** Options shared by every framework adapter. */
 export interface Dent8ToolsOptions {
@@ -95,6 +95,20 @@ export function describeReceipt(payload: Payload): string {
 const asString = (args: Record<string, unknown>, key: string): string => String(args[key] ?? "");
 
 /**
+ * Report a failed operation back to the model as a tool result. Only a firewall refusal is
+ * described as one (`refusal` is the tool's own wording); a malformed request is the model's
+ * own argument bug, and saying "refused" there would teach it the wrong lesson. Anything that
+ * is not a dent8 error (a missing binary, a timeout) still throws.
+ */
+function describeFailure(error: unknown, refusal: string): string {
+  if (error instanceof Dent8Rejected) return `${refusal}: ${error.message}`;
+  if (error instanceof Dent8Invalid) {
+    return `invalid arguments: ${error.message} — fix the subject/predicate/value format and retry`;
+  }
+  throw error;
+}
+
+/**
  * Build the dent8 belief-surface tool specs. The per-framework adapters call this and wrap
  * each spec; call it yourself to target a framework there's no adapter for yet.
  *
@@ -128,8 +142,7 @@ export function dent8ToolSpecs(options: Dent8ToolsOptions = {}): Dent8ToolSpec[]
           )
         );
       } catch (error) {
-        if (error instanceof Dent8Error) return `refused by the firewall: ${error.message}`;
-        throw error;
+        return describeFailure(error, "refused by the firewall");
       }
     },
   };
@@ -154,8 +167,7 @@ export function dent8ToolSpecs(options: Dent8ToolsOptions = {}): Dent8ToolSpec[]
           )
         );
       } catch (error) {
-        if (error instanceof Dent8Error) return `refused by the firewall: ${error.message}`;
-        throw error;
+        return describeFailure(error, "refused by the firewall");
       }
     },
   };
@@ -179,8 +191,7 @@ export function dent8ToolSpecs(options: Dent8ToolsOptions = {}): Dent8ToolSpec[]
           )
         );
       } catch (error) {
-        if (error instanceof Dent8Error) return `could not record the dispute: ${error.message}`;
-        throw error;
+        return describeFailure(error, "could not record the dispute");
       }
     },
   };
@@ -198,10 +209,10 @@ export function dent8ToolSpecs(options: Dent8ToolsOptions = {}): Dent8ToolSpec[]
       try {
         return describeReceipt(d8.explain(asString(args, "subject"), asString(args, "predicate")));
       } catch (error) {
-        if (error instanceof Dent8Error) {
-          return `no believed fact for ${asString(args, "subject")} ${asString(args, "predicate")}: ${error.message}`;
-        }
-        throw error;
+        return describeFailure(
+          error,
+          `no believed fact for ${asString(args, "subject")} ${asString(args, "predicate")}`,
+        );
       }
     },
   };

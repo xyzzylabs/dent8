@@ -100,6 +100,19 @@ test("record then explain round-trips through the firewall", { skip }, async () 
   assert.match(explained, /fly\.io/);
 });
 
+test("a malformed call reads as invalid arguments, not a refusal", { skip }, async () => {
+  // Exit 2 is the model's own argument bug, not a firewall decision — telling it the firewall
+  // refused would teach the wrong lesson about a mistake it can simply fix.
+  const tools = dent8Tools({ binary: BINARY, ...store(), source: "source:agent", authority: "low" });
+  const invalid = await byName(tools, "dent8_record_fact").invoke({
+    subject: "no-colon",
+    predicate: "deploy_target",
+    value: "fly.io",
+  });
+  assert.match(invalid, /^invalid arguments:/);
+  assert.doesNotMatch(invalid, /refused by the firewall/);
+});
+
 test("a refused write comes back as a tool result, not a throw", { skip }, async () => {
   const shared = store();
   // A signed human writes the incumbent at high authority, out of band.

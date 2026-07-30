@@ -97,6 +97,34 @@ test("record then explain round-trips through the firewall", { skip }, async () 
   assert.match(explained, /fly\.io/);
 });
 
+test("a hyphen-leading value survives the tool boundary", { skip }, async () => {
+  // What an LLM records is often flag-shaped (`-Werror`, `--strict`); the value must reach the
+  // firewall as a value rather than tripping the CLI's option parser.
+  const tools = dent8Tools({ binary: BINARY, ...store(), source: "source:agent", authority: "low" });
+  const recorded = await tools.dent8_record_fact.execute(
+    { subject: "repo:acme", predicate: "build_flag", value: "-Werror" },
+    {},
+  );
+  assert.match(recorded, /^recorded:/);
+  const explained = await tools.dent8_explain_fact.execute(
+    { subject: "repo:acme", predicate: "build_flag" },
+    {},
+  );
+  assert.match(explained, /-Werror/);
+});
+
+test("a malformed call reads as invalid arguments, not a refusal", { skip }, async () => {
+  // Exit 2 is the model's own argument bug, not a firewall decision — telling it the firewall
+  // refused would teach the wrong lesson about a mistake it can simply fix.
+  const tools = dent8Tools({ binary: BINARY, ...store(), source: "source:agent", authority: "low" });
+  const invalid = await tools.dent8_record_fact.execute(
+    { subject: "no-colon", predicate: "deploy_target", value: "fly.io" },
+    {},
+  );
+  assert.match(invalid, /^invalid arguments:/);
+  assert.doesNotMatch(invalid, /refused by the firewall/);
+});
+
 test("a refused write comes back as a tool result, not a throw", { skip }, async () => {
   const shared = store();
   // A signed human writes the incumbent at high authority, out of band.
