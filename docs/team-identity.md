@@ -2,7 +2,7 @@
 
 How a team shares one firewalled belief base without ever moving a private key. Every
 mechanism here already exists (`dent8 identity …`, [ADR 0013](decisions/0013-signed-write-attestation.md),
-[ADR 0014](decisions/0014-grant-revocation-and-history.md)); this page is the operational
+[ADR 0014](decisions/0014-grant-history-and-revocation.md)); this page is the operational
 pattern.
 
 ## The split: what is public, what is secret
@@ -103,7 +103,7 @@ is for keys that must be born on someone else's machine.
 - **Rotate** (new key, replacement grant, history preserved):
   `dent8 identity rotate-source --source source:alice` — then commit the changed grant
   artifacts. The old key stops verifying; the grant log records the succession.
-- **Revoke without replacement** ([ADR 0014](decisions/0014-grant-revocation-and-history.md)):
+- **Revoke without replacement** ([ADR 0014](decisions/0014-grant-history-and-revocation.md)):
   `dent8 identity revoke --source source:alice` — commit. Every clone's verification
   refuses the source from the revocation record onward;
   `dent8 identity backfill-grant-log` seeds history for grants that predate the log.

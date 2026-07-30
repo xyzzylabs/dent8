@@ -39,19 +39,21 @@ use crate::{EventFilter, EventStore, StoreError, replay_subject};
 /// A coding-agent fact is a working belief about a codebase — a database choice, a test
 /// command, a dependency pin. Such facts drift; a freshness window measured in months, not
 /// years, keeps the store honest without churning the common case (every predicate default
-/// TTL is far below this). The ceiling bounds how far a *caller-supplied finite* TTL may
-/// reach: an assertion whose bounded TTL exceeds the effective ceiling is **rejected, not
-/// clamped** (see [`enforce_policy`]). It is a policy default, not a security invariant, so
-/// it is overridable — globally via [`PredicateRegistry::with_max_ttl`] /
-/// [`PredicateRegistry::set_max_ttl`], or per predicate via [`PredicatePolicy::max_ttl`].
+/// TTL is far below this). The ceiling bounds how far a *caller-supplied finite* freshness
+/// claim — a TTL or a `valid_to` — may reach: an assertion whose bounded claim exceeds the
+/// effective ceiling is **rejected, not clamped** (see [`enforce_policy`]). It is a policy
+/// default, not a security invariant, so it is overridable — globally via
+/// [`PredicateRegistry::with_max_ttl`] / [`PredicateRegistry::set_max_ttl`], or per predicate
+/// via [`PredicatePolicy::max_ttl`].
 pub const DEFAULT_MAX_TTL_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
 /// The retention ceiling a `Volatile` predicate imposes on caller-supplied freshness:
 /// **7 days**. A volatile fact is a working belief that changes often (a branch status, a
 /// dependency pin) — one no caller should be able to pin *fresh* for months. This bounds a
-/// caller-supplied finite TTL for a volatile predicate the way the registry-wide
-/// [`DEFAULT_MAX_TTL_MS`] bounds everything else, only tighter. It is overridable per
-/// predicate via [`PredicatePolicy::max_ttl`] (an explicit override wins over volatility).
+/// caller-supplied finite freshness claim (a TTL or a `valid_to`) for a volatile predicate the
+/// way the registry-wide [`DEFAULT_MAX_TTL_MS`] bounds everything else, only tighter. It is
+/// overridable per predicate via [`PredicatePolicy::max_ttl`] (an explicit override wins over
+/// volatility).
 pub const VOLATILE_RETENTION_CEILING_MS: u64 = 7 * 24 * 60 * 60 * 1000;
 
 /// How often a fact of a given predicate is expected to change. **Functional, not advisory:**
@@ -242,6 +244,25 @@ fn bounded_ttl_ms(candidate: &FactEvent) -> Option<u64> {
     }
 }
 
+/// The bounded freshness an assertion's `valid_to` claims, in milliseconds, or `None` when it
+/// makes *no such claim* (`valid_to` unset). `valid_to` is an upper bound on freshness of the
+/// same kind as the TTL — a folded fact expires at the *earliest* of the two
+/// (`FactState::expires_at`) — so a far-future `valid_to` buys exactly the reach a far-future
+/// TTL would, and the retention ceiling must bound both. The window is measured from the
+/// fact's freshness anchor, using the precedence the core folds with (`valid_from`, else
+/// `observed_at`, else the recorded-at timestamp); an instant at or before the anchor yields 0.
+fn bounded_valid_to_ms(candidate: &FactEvent) -> Option<u64> {
+    let valid_to = candidate.valid_to?;
+    let anchor = candidate
+        .valid_from
+        .or(candidate.observed_at)
+        .unwrap_or(candidate.provenance.recorded_at);
+    let delta = valid_to
+        .as_unix_millis()
+        .saturating_sub(anchor.as_unix_millis());
+    Some(u64::try_from(delta).unwrap_or(0))
+}
+
 /// The finite cap a retention ceiling imposes, in milliseconds, or `None` for "no cap". A
 /// ceiling is expressed as a duration (`DurationMillis`); `Ttl::Never` disables the cap, and
 /// an absolute-instant ceiling (`ExpiresAt`) is not a meaningful reach bound and is treated
@@ -270,9 +291,10 @@ pub fn apply_policy_defaults(registry: &PredicateRegistry, candidate: &mut FactE
 ///
 /// - **Authority floor** — an *assertion* below the predicate's floor is rejected.
 ///   Contradiction and reinforcement are *not* gated (dissent must always be possible).
-/// - **Retention ceiling** — an *assertion* whose caller-supplied *bounded* (finite) TTL
-///   reaches further than the effective ceiling (per-predicate [`PredicatePolicy::max_ttl`]
-///   else the registry global) is **rejected, not clamped**. `Ttl::Never` is out of scope.
+/// - **Retention ceiling** — an *assertion* whose caller-supplied *bounded* (finite) freshness
+///   claim — its TTL **or** its `valid_to`, which bound freshness alike — reaches further than
+///   the effective ceiling (per-predicate [`PredicatePolicy::max_ttl`] else the registry
+///   global) is **rejected, not clamped**. `Ttl::Never` with no `valid_to` is out of scope.
 /// - **Uniqueness** — a new assertion may not create a second *fresh* believed fact for
 ///   the same subject+predicate; stale (TTL-expired at `now`) facts do not block it.
 ///
@@ -307,16 +329,18 @@ where
         });
     }
 
-    // Retention ceiling: reject (never clamp) an assertion whose *bounded* TTL reaches
-    // further than the effective ceiling. Precedence, most specific first:
+    // Retention ceiling: reject (never clamp) an assertion whose *bounded* freshness claim
+    // (TTL or `valid_to`) reaches further than the effective ceiling. Precedence, most
+    // specific first:
     //   1. the predicate's explicit `max_ttl` override (an operator's deliberate choice),
     //   2. its **volatility** ceiling — a `Volatile` predicate caps at 7 days so a working
     //      belief cannot be claimed fresh for months (the classification made functional),
     //   3. the registry-wide global ceiling.
     // Registered predicates only reach (1)/(2); an unregistered predicate falls straight to
     // (3). Runs on assertions only; predicate-default TTLs are all below every ceiling, so
-    // only a caller-supplied finite TTL can trip this. `Ttl::Never` is out of scope (see
-    // `bounded_ttl_ms`), and a `Never` ceiling disables the cap at whichever level sets it.
+    // only a caller-supplied finite claim can trip this. `Ttl::Never` and an absent `valid_to`
+    // are out of scope (see `bounded_ttl_ms` / `bounded_valid_to_ms`), and a `Never` ceiling
+    // disables the cap at whichever level sets it.
     if matches!(candidate.kind, FactEventKind::Asserted) {
         let effective_ceiling = policy
             .and_then(|policy| policy.max_ttl.clone())
@@ -329,6 +353,32 @@ where
             return Err(StoreError::TtlCeilingExceeded {
                 predicate: display_key(&candidate.subject, &candidate.predicate),
                 ttl_ms,
+                ceiling_ms,
+            });
+        }
+        // `valid_to` bounds folded freshness too (`FactState::expires_at` takes the earliest of
+        // the two), so an unset TTL plus a far-future `valid_to` would otherwise buy exactly
+        // the reach the ceiling denies. But the two claims are not the same kind of thing: a
+        // TTL says "believe this is fresh for N days", while `valid_to` says something about
+        // the *world* — a contract that runs to 2036, an API removed in 2030 — and the
+        // registry-wide retention *default* has no standing to call that dishonest. So only a
+        // deliberate policy bounds a validity window: an operator's per-predicate `max_ttl`, or
+        // a `Volatile` classification, which exists precisely to stop a working belief being
+        // claimed good for months. Unregistered predicates keep their `valid_to` untouched —
+        // rejecting every window past the 90-day default would tax ordinary honest writes,
+        // which is the one thing this firewall must not do.
+        if let Some(policy) = policy
+            && let Some(ceiling) = policy
+                .max_ttl
+                .clone()
+                .or_else(|| policy.volatility.retention_ceiling())
+            && let (Some(ceiling_ms), Some(reach_ms)) =
+                (ceiling_ms(&ceiling), bounded_valid_to_ms(candidate))
+            && reach_ms > ceiling_ms
+        {
+            return Err(StoreError::TtlCeilingExceeded {
+                predicate: display_key(&candidate.subject, &candidate.predicate),
+                ttl_ms: reach_ms,
                 ceiling_ms,
             });
         }
@@ -1130,6 +1180,105 @@ mod tests {
             NOW,
         )
         .expect("an explicit per-predicate max_ttl override beats the volatility ceiling");
+        assert_eq!(store.len(), 1);
+    }
+
+    const THREE_DAYS_MS: u64 = 3 * 24 * 60 * 60 * 1000;
+
+    fn with_valid_to(mut event: FactEvent, reach_ms: u64) -> FactEvent {
+        // The freshness claim rides entirely on `valid_to`, measured from the event's
+        // freshness anchor (here its recorded-at timestamp: no valid_from, no observed_at).
+        let anchor = event.provenance.recorded_at.as_unix_millis();
+        event.valid_to = Some(TimestampMillis::from_unix_millis(
+            anchor + i64::try_from(reach_ms).expect("reach fits"),
+        ));
+        event
+    }
+
+    #[test]
+    fn a_volatile_predicate_caps_a_valid_to_freshness_claim() {
+        // Regression: the ceiling used to bound the TTL only, so a caller could buy the same
+        // 30-day freshness under another name — omit the TTL and assert a far-future
+        // `valid_to`, which the fold honours as the earliest of the two upper bounds.
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        let error = admit(
+            &mut store,
+            &registry,
+            with_valid_to(volatile_assertion(Ttl::Never), THIRTY_DAYS_MS),
+            NOW,
+        )
+        .expect_err("a volatile predicate rejects a 30-day valid_to");
+        assert!(
+            matches!(
+                error,
+                StoreError::TtlCeilingExceeded { ttl_ms, ceiling_ms, .. }
+                    if ttl_ms == THIRTY_DAYS_MS
+                        && ceiling_ms == super::VOLATILE_RETENTION_CEILING_MS
+            ),
+            "expected the 7-day volatility ceiling on the valid_to reach, got {error:?}"
+        );
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn a_volatile_predicate_admits_a_valid_to_within_the_ceiling() {
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            with_valid_to(volatile_assertion(Ttl::Never), THREE_DAYS_MS),
+            NOW,
+        )
+        .expect("a valid_to within the 7-day volatility ceiling is admitted");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_stable_predicate_is_not_bound_by_the_volatile_ceiling_on_valid_to() {
+        // repo.database is Stable: a 30-day validity window is fine (the 90-day global applies).
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(
+            &mut store,
+            &registry,
+            with_valid_to(
+                timed_assertion("e1", "fact:A", Ttl::Never, NOW),
+                THIRTY_DAYS_MS,
+            ),
+            NOW,
+        )
+        .expect("a stable predicate admits a 30-day valid_to");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn an_absent_valid_to_makes_no_freshness_claim() {
+        // The complement: no TTL and no `valid_to` is an unbounded belief, out of scope for the
+        // ceiling even on a volatile predicate — the log keeps it regardless.
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        admit(&mut store, &registry, volatile_assertion(Ttl::Never), NOW)
+            .expect("an absent valid_to claims no finite freshness");
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn a_valid_to_reach_is_measured_from_valid_from() {
+        // The window is anchored the way the core folds it (`valid_from`, else `observed_at`,
+        // else recorded-at), so a 3-day window opening far in the future stays within the
+        // volatility ceiling even though `valid_to` itself is months out.
+        let registry = PredicateRegistry::coding_agent();
+        let mut store = InMemoryEventStore::new();
+        let from = TimestampMillis::from_unix_millis(i64::try_from(THIRTY_DAYS_MS).unwrap());
+        let mut candidate = volatile_assertion(Ttl::Never);
+        candidate.valid_from = Some(from);
+        candidate.valid_to = Some(TimestampMillis::from_unix_millis(
+            from.as_unix_millis() + i64::try_from(THREE_DAYS_MS).unwrap(),
+        ));
+        admit(&mut store, &registry, candidate, NOW)
+            .expect("a 3-day window anchored at valid_from is within the volatility ceiling");
         assert_eq!(store.len(), 1);
     }
 
