@@ -71,6 +71,14 @@ class Store:
         env.update(_signing_env(self.dir, source))
         return Dent8(binary=BINARY, cwd=str(self.dir), env=env)
 
+    def unreadable(self):
+        """A client on a store that cannot be loaded at all — the log path is a directory, so
+        every read fails at the store boundary."""
+        broken = self.dir / "not-a-log"
+        broken.mkdir(exist_ok=True)
+        env = dict(self.base, DENT8_LOG=str(broken))
+        return Dent8(binary=BINARY, cwd=str(self.dir), env=env)
+
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
@@ -127,6 +135,30 @@ def test_low_authority_revision_comes_back_as_a_refusal_not_an_exception(store):
     assert "postgres" in _run(
         agent["dent8_explain_fact"], subject="repo:myproj", predicate="database"
     )
+
+
+def test_an_unreadable_store_comes_back_as_a_tool_result_not_an_exception(store):
+    # The read tools have to degrade like the write ones: a store that cannot be loaded is a
+    # condition the agent reads, not an exception that takes the whole run down.
+    tools = _by_name(store.unreadable(), source="source:agent", authority="low")
+    listed = _run(tools["dent8_list_facts"])
+    assert isinstance(listed, str)
+    assert "could not read the fact list" in listed
+    verified = _run(tools["dent8_verify"])
+    assert isinstance(verified, str)
+    assert "is a directory" in verified.lower()
+
+
+def test_verify_reports_an_unusable_binary_instead_of_raising(store):
+    # `Dent8.verify()` folds an integrity *rejection* into its payload but still raises on an
+    # invalid one — e.g. a shimmed `dent8` that yields no JSON at all. That reaches the agent too.
+    stub = store.dir / "stub-dent8"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    tools = _by_name(Dent8(binary=str(stub)), source="source:agent", authority="low")
+    verified = _run(tools["dent8_verify"])
+    assert isinstance(verified, str)
+    assert "could not verify the store" in verified
 
 
 def test_the_agent_tools_do_not_expose_source_or_authority(store):

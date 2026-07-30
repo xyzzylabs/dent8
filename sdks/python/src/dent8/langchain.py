@@ -125,7 +125,10 @@ def dent8_tools(
 
     def list_facts() -> str:
         """List every known fact stream (subject + predicate) with its freshness flag."""
-        payload = dent8.facts()
+        try:
+            payload = dent8.facts()
+        except Dent8Error as error:
+            return f"could not read the fact list: {error}"
         rows = payload.get("facts", [])
         if not rows:
             return "no facts recorded yet"
@@ -138,7 +141,10 @@ def dent8_tools(
     def verify_integrity() -> str:
         """Verify store integrity: the hash chain, lineage, and retraction taint. Returns the
         status and any findings."""
-        payload = dent8.verify()
+        try:
+            payload = dent8.verify()
+        except Dent8Error as error:
+            return f"could not verify the store: {error}"
         summary = payload.get("report") or payload.get("summary") or ""
         return f"status={payload.get('status', '?')}; {summary}".strip()
 
